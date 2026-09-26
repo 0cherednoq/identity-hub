@@ -12,6 +12,7 @@ from identity_hub._space import SpaceBase
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
+from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
@@ -81,6 +82,8 @@ class IdentityHub:
         self.proxy_health = proxy_health or ProxyHealthPolicy()
         # sink ih_lease_logs (FR-12.2): подключить `logging.getLogger().addHandler(hub.lease_log_sink)`
         self.lease_log_sink = LeaseLogSink(lease_logs)
+        self.dispatcher = Dispatcher(self)
+        self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}
         for service in services:

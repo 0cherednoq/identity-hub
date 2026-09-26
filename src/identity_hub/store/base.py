@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -17,9 +18,13 @@ from uuid import UUID
 
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.events import EventDraft
+from identity_hub.events import Event, EventDraft
+
+NOTIFY_CHANNEL = "ih_events"
+"""Канал NOTIFY внешних событий: будит диспетчер при коммите (FR-13.6)."""
 
 __all__ = [
+    "NOTIFY_CHANNEL",
     "CandidateQuery",
     "ChallengeRow",
     "ChargeOutcome",
@@ -696,3 +701,24 @@ class Store(ABC):
 
     @abstractmethod
     async def get_space(self, slug: str) -> SpaceRef | None: ...
+
+    # --------------------------------------------------------- журнал событий (P8.1)
+
+    @abstractmethod
+    async def process_events(
+        self,
+        consumer: str,
+        handler: Callable[[list[Event]], Awaitable[None]],
+        *,
+        limit: int,
+    ) -> int | None:
+        """Обработать пачку внешних событий потребителя (G-5.2, G-5.5).
+
+        Строка курсора блокируется `FOR UPDATE SKIP LOCKED` на время пачки (None — занята другим
+        экземпляром). Читаются события по `(tx_id, id)` строго после курсора и ниже горизонта
+        `pg_snapshot_xmin`. Курсор продвигается только если `handler` завершился без ошибки.
+        """
+
+    @abstractmethod
+    def listen(self, channel: str) -> AbstractAsyncContextManager[asyncio.Event | None]:
+        """Подписка на NOTIFY: событие взводится при уведомлении; None — LISTEN недоступен (опрос)."""

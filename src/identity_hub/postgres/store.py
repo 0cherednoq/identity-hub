@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import fields
 from datetime import datetime, timedelta
@@ -42,14 +44,23 @@ from sqlalchemy.sql import Executable, Select
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, Lifecycle, ProxyStatus
+from identity_hub.enums import (
+    AuthState,
+    Availability,
+    ChangeSource,
+    LeaseEndReason,
+    Lifecycle,
+    ProxyStatus,
+    Severity,
+)
 from identity_hub.errors import LeaseUnavailable, SpaceMismatch
-from identity_hub.events import EventDraft
+from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
     BindingRecord,
     ChallengeRecord,
     CredentialsRecord,
+    EventCursorRecord,
     EventRecord,
     IdentityDataRecord,
     IdentityLinkRecord,
@@ -67,6 +78,7 @@ from identity_hub.postgres.models import (
     VerificationRecord,
 )
 from identity_hub.store.base import (
+    NOTIFY_CHANNEL,
     CandidateQuery,
     ChallengeRow,
     ChargeOutcome,
@@ -107,13 +119,15 @@ PROXIES = cast(Table, ProxyRecord.__table__)
 BINDINGS = cast(Table, BindingRecord.__table__)
 CHALLENGES = cast(Table, ChallengeRecord.__table__)
 VERIFICATIONS = cast(Table, VerificationRecord.__table__)
+EVENTS = cast(Table, EventRecord.__table__)
+CURSORS = cast(Table, EventCursorRecord.__table__)
+SPACES = cast(Table, SpaceRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 LEASE_HISTORY_FIELDS = tuple(f.name for f in fields(LeaseHistoryRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
 SESSION_SPACE_KEY = "identity_hub.space"
-NOTIFY_CHANNEL = "ih_events"
 
 
 class PgTx(StoreTx):
@@ -1504,6 +1518,24 @@ class PgTx(StoreTx):
         return [IdentityRow(**{f: r[f] for f in IDENTITY_FIELDS}) for r in rows.mappings()]
 
 
+def _event(row: Any) -> Event:
+    return Event(
+        id=row["id"],
+        event_id=row["event_id"],
+        type=row["type"],
+        severity=Severity(row["severity"]),
+        occurred_at=row["occurred_at"],
+        space=row["slug"],
+        service=row["service"],
+        identity_id=row["identity_id"],
+        proxy_id=row["proxy_id"],
+        lease_id=row["lease_id"],
+        sequence=row["sequence"],
+        actor=row["actor"],
+        data=row["data"],
+    )
+
+
 def _challenge_row(row: Any) -> ChallengeRow:
     return ChallengeRow(
         id=row["id"],
@@ -1625,6 +1657,103 @@ class PgStore(Store):
                 )
             ).one_or_none()
         return SpaceRef(row.id, row.slug, row.title) if row else None
+
+    # --------------------------------------------------------- журнал событий
+
+    async def process_events(
+        self,
+        consumer: str,
+        handler: Callable[[list[Event]], Awaitable[None]],
+        *,
+        limit: int,
+    ) -> int | None:
+        opts = self.options
+        async with self._own() as session:
+            await session.execute(
+                insert(CURSORS).values(consumer=consumer, last_id=0).on_conflict_do_nothing(),
+                execution_options=opts,
+            )
+        async with self._own() as session:
+            locked = (
+                await session.execute(
+                    select(CURSORS.c.consumer)
+                    .where(CURSORS.c.consumer == consumer)
+                    .with_for_update(skip_locked=True),
+                    execution_options=opts,
+                )
+            ).scalar_one_or_none()
+            if locked is None:
+                return None  # пачку этого потребителя обрабатывает другой экземпляр (G-5.5)
+            cursor = (
+                select(CURSORS.c.last_tx_id, CURSORS.c.last_id)
+                .where(CURSORS.c.consumer == consumer)
+                .subquery()
+            )
+            horizon = func.pg_snapshot_xmin(func.pg_current_snapshot())
+            e = EVENTS.c
+            stmt = (
+                select(e, SPACES.c.slug)
+                .join(SPACES, SPACES.c.id == e.space_id)
+                .join(cursor, tuple_(e.tx_id, e.id) > tuple_(cursor.c.last_tx_id, cursor.c.last_id))
+                .where(
+                    e.external.is_(True),
+                    e.tx_id < horizon,
+                )
+                .order_by(e.tx_id, e.id)
+                .limit(limit)
+            )
+            rows = list((await session.execute(stmt, execution_options=opts)).mappings())
+            if not rows:
+                return 0
+            events = [_event(r) for r in rows]
+            await handler(events)
+            last_id = rows[-1]["id"]
+            await session.execute(
+                update(CURSORS)
+                .where(CURSORS.c.consumer == consumer)
+                .values(
+                    last_tx_id=select(e.tx_id).where(e.id == last_id).scalar_subquery(),
+                    last_id=last_id,
+                    updated_at=func.now(),
+                ),
+                execution_options=opts,
+            )
+            return len(events)
+
+    @asynccontextmanager
+    async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:
+        engine = self.sessionmaker.kw.get("bind")
+        signal = asyncio.Event()
+        if engine is None:
+            yield None
+            return
+        try:
+            conn = await engine.connect()
+        except Exception:
+            yield None
+            return
+        try:
+            raw = await conn.get_raw_connection()
+            driver = raw.driver_connection
+            if driver is None or not hasattr(driver, "add_listener"):
+                yield None
+                return
+
+            def notified(*_: Any) -> None:
+                signal.set()
+
+            try:
+                await driver.add_listener(channel, notified)
+            except Exception:  # PgBouncer в transaction mode и т.п. — режим опроса (ТЗ §8.7)
+                yield None
+                return
+            try:
+                yield signal
+            finally:
+                with contextlib.suppress(Exception):
+                    await driver.remove_listener(channel, notified)
+        finally:
+            await conn.close()
 
     async def ensure_space(
         self, slug: str, title: str | None = None, space_id: UUID | None = None

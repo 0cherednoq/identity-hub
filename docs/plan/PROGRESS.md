@@ -8,12 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P8.1 Диспетчер
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: process_events (курсор FOR UPDATE SKIP LOCKED, горизонт pg_snapshot_xmin, продвижение курсора), listen (LISTEN через asyncpg)
-  - [ ] dispatch/dispatcher.py: Dispatcher (consumers, run_once, run, running), hub.events.subscribe
-  - [ ] pg-тесты: поздний коммит ранней транзакции не пропущен, два диспетчера не дублируют, ошибка потребителя → повтор, LISTEN будит
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -55,7 +53,7 @@
 | P6.2 | Карточки и статистика | P6.1 | done |  |  |
 | P7.1 | Контекст логов | P3.3 | done |  |  |
 | P7.2 | Sink ih_lease_logs | P7.1 | done |  |  |
-| P8.1 | Диспетчер | P2.2 | in_progress |  |  |
+| P8.1 | Диспетчер | P2.2 | done |  |  |
 | P8.2 | Агрегированные события | P8.1, P3.3 | todo | | |
 | P8.3 | Исходящие вебхуки | P8.1 | todo | | |
 | P8.4 | Telegram-уведомления | P8.3 | todo | | |
@@ -68,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 35 / 47 done
+**Итого:** 36 / 47 done
 
 ## Журнал сессий
 
@@ -110,3 +108,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P6.2 · done · identity_card (регионы, верификации, связи, аренда без token, прокси без секрета, квоты, неймспейсы, challenge, ссылка в админку), pool_summary, lease_history, lease_stats (утилизация, причины, операции), reindex_search · фаза 6 закрыта, дальше P7.1
 2026-09-27 · P7.1 · done · structlog_processor и LeaseContextFilter с полями аренды · дальше P7.2
 2026-09-27 · P7.2 · done · LeaseLogSink (уровень, лимит на аренду) в hub.lease_log_sink, сброс в ih_lease_logs на heartbeat и release, ошибки подавляются · фаза 7 закрыта, дальше P8.1
+2026-09-27 · P8.1 · done · process_events (курсор FOR UPDATE SKIP LOCKED, горизонт pg_snapshot_xmin, at-least-once), listen (asyncpg LISTEN, фолбэк опрос), Dispatcher (subscribe с масками, run_once/drain/run/running), hub.events; NOTIFY_CHANNEL в порт · дальше P8.2
