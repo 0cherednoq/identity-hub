@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P1.7 Криптография
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] EncryptedPayload, Envelope: seal/open, AAD, rewrap
-  - [ ] seal_model/open_model с SecretStr
-  - [ ] SecretsProvider: Env, File, Static; Keyring
-  - [ ] юнит-тесты: roundtrip, подмена AAD, ротация, repr
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -31,7 +28,7 @@
 | P1.4 | Декларация Service и протоколы | P1.1 | done |  |  |
 | P1.5 | Вычисление допустимости операции | P1.4 | done |  |  |
 | P1.6 | Данные аккаунта, search_text, парсер поиска | P1.1 | done |  |  |
-| P1.7 | Криптография | P1.1 | in_progress |  |  |
+| P1.7 | Криптография | P1.1 | done |  |  |
 | P1.8 | Каталог событий | P1.1 | todo | | |
 | P2.1 | IdentityHub, SpaceHandle, транзакции | P0.4, P1.2, P1.4, P1.7, P1.8 | todo | | |
 | P2.2 | Outbox событий | P2.1 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 10 / 47 done
+**Итого:** 11 / 47 done
 
 ## Журнал сессий
 
@@ -85,3 +82,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P1.4 · done · Service/Quota/Pacing/OperationRule/ProxyPolicy, протоколы расширения, ImportRecord, FAKE_TG/FAKE_EXCHANGE · дальше P1.5
 2026-09-26 · P1.5 · done · evaluate() → blockers (lifecycle/standing/auth/availability lazy/verification+tiers/quota), compile_rule → RuleFilter · дальше P1.6
 2026-09-26 · P1.6 · done · validate_labels/tags/model, split_profile, build_search_text, parse_query (D-105, D-106) · дальше P1.7
+2026-09-26 · P1.7 · done · Envelope AES-256-GCM (DEK на запись, AAD, rewrap, sibling-поля), seal_model/open_model, Env/File/Static провайдеры · дальше P1.8
