@@ -11,15 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import Any
 from uuid import UUID, uuid4
-
-try:  # Python 3.14+
-    from uuid import uuid7 as new_id
-except ImportError:  # uv add uuid-utils
-    try:
-        from uuid_utils.compat import uuid7 as new_id
-    except ImportError:
-        new_id = uuid4  # запасной вариант: без упорядоченности по времени
 
 from sqlalchemy import (
     BigInteger,
@@ -42,17 +35,60 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
 
+from identity_hub._ids import new_id
+from identity_hub.enums import (
+    AuthState,
+    Availability,
+    ChangeSource,
+    DeliveryStatus,
+    LeaseEndReason,
+    Lifecycle,
+    ProxyStatus,
+    SessionStatus,
+    Severity,
+    Standing,
+)
 
-class XID8(UserDefinedType):
+__all__ = [
+    "BindingRecord",
+    "ChallengeRecord",
+    "CredentialsRecord",
+    "EncryptedPayloadMixin",
+    "EventCursorRecord",
+    "EventRecord",
+    "IdentityDataRecord",
+    "IdentityHubBase",
+    "IdentityLinkRecord",
+    "IdentityRecord",
+    "LeaseHistoryRecord",
+    "LeaseLogRecord",
+    "LeaseRecord",
+    "NotificationChannelRecord",
+    "NotificationRecord",
+    "NotificationRuleRecord",
+    "OperationKeyRecord",
+    "ProxyRecord",
+    "QuotaUsageRecord",
+    "RegionStateRecord",
+    "ServiceRecord",
+    "SessionRecord",
+    "SpaceRecord",
+    "VerificationRecord",
+    "WebhookDeliveryRecord",
+    "WebhookEndpointRecord",
+]
+
+
+class XID8(UserDefinedType[str]):
     """Тип Postgres xid8 (PG13+): 64-битный идентификатор транзакции."""
 
     cache_ok = True
 
-    def get_col_spec(self, **kw: object) -> str:
+    def get_col_spec(self, **kw: Any) -> str:
         return "XID8"
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class IdentityHubBase(DeclarativeBase):
@@ -67,76 +103,10 @@ class IdentityHubBase(DeclarativeBase):
     )
 
 
-# ---------------------------------------------------------------- статусы
-
-# Состояние аккаунта — пять ортогональных регионов, а не один статус.
+# Состояние аккаунта — пять ортогональных регионов, а не один статус (enums.py).
 # Синхронизируемые с внешним миром (standing, auth, verification, proxy) имеют
 # служебную запись в ih_region_states; на ih_identities — денормализованные
 # значения для быстрой выборки аренды.
-
-class Lifecycle(StrEnum):
-    """Решения владельца. Не синхронизируется: наблюдать нечего."""
-    PROVISIONING = "provisioning"   # регистрируется / импортирован и не проверен
-    READY = "ready"                 # в парке
-    RETIRED = "retired"             # выведен
-
-
-class Standing(StrEnum):
-    """Положение у платформы. Только наблюдения, команды и ручные правки."""
-    GOOD = "good"
-    LIMITED = "limited"             # временные ограничения: spam restriction, action block
-    FROZEN = "frozen"
-    APPEALING = "appealing"
-    BANNED = "banned"
-    DELETED = "deleted"
-
-
-class AuthState(StrEnum):
-    NO_SESSION = "no_session"
-    LOGGING_IN = "logging_in"
-    CHALLENGE = "challenge"         # платформа ждёт ответа человека
-    AUTHENTICATED = "authenticated"
-    SESSION_INVALID = "session_invalid"
-
-
-class Availability(StrEnum):
-    """Внутреннее планирование библиотеки. Не синхронизируется."""
-    AVAILABLE = "available"
-    PAUSED = "paused"               # pacing
-    COOLING = "cooling"             # rate limit / flood-wait
-    QUARANTINED = "quarantined"     # error_score превысил порог
-
-
-class ChangeSource(StrEnum):
-    COMMAND = "command"             # наше намерение, прошло guard-ы
-    PROBE = "probe"                 # мы спросили платформу
-    ERROR = "error"                 # классификатор увидел ошибку во время операции
-    WEBHOOK = "webhook"             # платформа сообщила сама
-    OVERRIDE = "override"           # ручная правка человеком
-    TIMER = "timer"                 # истёк срок
-    IMPORT = "import"
-
-
-class SessionStatus(StrEnum):
-    VALID = "valid"
-    INVALID = "invalid"
-    EXPIRED = "expired"
-
-
-class VerificationState(StrEnum):
-    MISSING = "missing"
-    PENDING = "pending"            # процесс начат: код отправлен, форма открыта
-    UNDER_REVIEW = "under_review"  # данные отправлены, ждём решения платформы
-    VERIFIED = "verified"
-    REJECTED = "rejected"
-    EXPIRED = "expired"
-    REVOKED = "revoked"            # платформа сбросила подтверждение
-
-
-class ProxyStatus(StrEnum):
-    ALIVE = "alive"
-    QUARANTINED = "quarantined"
-    DEAD = "dead"
 
 
 def _enum_check(column: str, enum: type[StrEnum]) -> CheckConstraint:
@@ -145,6 +115,7 @@ def _enum_check(column: str, enum: type[StrEnum]) -> CheckConstraint:
 
 
 # ---------------------------------------------------------------- шифрование
+
 
 class EncryptedPayloadMixin:
     """Envelope encryption: DEK на запись, зашифрованный мастер-ключом key_id.
@@ -160,6 +131,7 @@ class EncryptedPayloadMixin:
 
 
 # ---------------------------------------------------------------- пространства и сервисы
+
 
 class SpaceRecord(IdentityHubBase):
     """Граница изоляции: проект или человек. Всё остальное принадлежит пространству."""
@@ -185,19 +157,22 @@ class ServiceRecord(IdentityHubBase):
 
 # ---------------------------------------------------------------- идентичности
 
+
 class IdentityRecord(IdentityHubBase):
     __tablename__ = "ih_identities"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="RESTRICT"))
     service: Mapped[str] = mapped_column(ForeignKey("ih_services.name", ondelete="RESTRICT"))
-    external_ref: Mapped[str] = mapped_column(String(256))       # телефон, логин, email
+    external_ref: Mapped[str] = mapped_column(String(256))  # телефон, логин, email
 
     # --- регионы состояния (денормализовано для выборки; источник правды для
     #     синхронизируемых регионов — ih_region_states)
     lifecycle: Mapped[str] = mapped_column(String(16), default=Lifecycle.PROVISIONING)
     standing: Mapped[str] = mapped_column(String(16), default=Standing.GOOD)
-    standing_code: Mapped[str | None] = mapped_column(String(64))       # код платформы: spam_restricted, checkpoint
+    standing_code: Mapped[str | None] = mapped_column(
+        String(64)
+    )  # код платформы: spam_restricted, checkpoint
     standing_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     auth_state: Mapped[str] = mapped_column(String(24), default=AuthState.NO_SESSION)
     availability: Mapped[str] = mapped_column(String(16), default=Availability.AVAILABLE)
@@ -205,13 +180,19 @@ class IdentityRecord(IdentityHubBase):
 
     # Что платформа требует сейчас (по образцу Stripe requirements):
     # [{"code": "phone_verification", "deadline": "...", "since": "..."}]
-    requirements: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    requirements: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
 
     tags: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=text("'{}'"))
-    attributes: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # техника: device, UA
-    profile: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))     # персона: имя, ДР, страна
-    labels: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))      # плоские key→scalar для фильтров
-    note: Mapped[str | None] = mapped_column(Text)                                       # заметка из админки
+    attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )  # техника: device, UA
+    profile: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )  # персона: имя, ДР, страна
+    labels: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )  # плоские key→scalar для фильтров
+    note: Mapped[str | None] = mapped_column(Text)  # заметка из админки
 
     # Денормализованная строка для текстового поиска: external_ref, короткий id,
     # поля profile, объявленные сервисом как searchable, значения labels, note.
@@ -223,8 +204,8 @@ class IdentityRecord(IdentityHubBase):
     verified_factors: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=text("'{}'"))
 
     error_score: Mapped[float] = mapped_column(Float, default=0.0)
-    fencing_seq: Mapped[int] = mapped_column(BigInteger, default=0)   # растёт с каждой арендой
-    event_seq: Mapped[int] = mapped_column(BigInteger, default=0)     # номер последнего события аккаунта
+    fencing_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # растёт с каждой арендой
+    event_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # номер последнего события аккаунта
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -243,30 +224,49 @@ class IdentityRecord(IdentityHubBase):
         # выборка аренды: только готовые, авторизованные, не забаненные
         Index(
             "ix_ih_identities_pick",
-            "space_id", "service", "availability",
+            "space_id",
+            "service",
+            "availability",
             postgresql_where=text(
-                "lifecycle = 'ready' AND auth_state = 'authenticated' "
-                "AND standing IN ('good', 'limited')"
+                "lifecycle = 'ready' AND auth_state = 'authenticated' AND standing IN ('good', 'limited')"
             ),
         ),
         Index("ix_ih_identities_regions", "space_id", "service", "lifecycle", "standing", "auth_state"),
         Index("ix_ih_identities_tags", "tags", postgresql_using="gin"),
         Index("ix_ih_identities_verified", "verified_factors", postgresql_using="gin"),
         # точные фильтры: labels @> '{"farm": "3"}', profile @> '{"country": "UA"}'
-        Index("ix_ih_identities_labels", "labels", postgresql_using="gin",
-              postgresql_ops={"labels": "jsonb_path_ops"}),
-        Index("ix_ih_identities_profile", "profile", postgresql_using="gin",
-              postgresql_ops={"profile": "jsonb_path_ops"}),
+        Index(
+            "ix_ih_identities_labels",
+            "labels",
+            postgresql_using="gin",
+            postgresql_ops={"labels": "jsonb_path_ops"},
+        ),
+        Index(
+            "ix_ih_identities_profile",
+            "profile",
+            postgresql_using="gin",
+            postgresql_ops={"profile": "jsonb_path_ops"},
+        ),
         # подстрочный поиск: search_text ILIKE '%olena%'
-        Index("ix_ih_identities_search", "search_text", postgresql_using="gin",
-              postgresql_ops={"search_text": "gin_trgm_ops"}),
+        Index(
+            "ix_ih_identities_search",
+            "search_text",
+            postgresql_using="gin",
+            postgresql_ops={"search_text": "gin_trgm_ops"},
+        ),
         # keyset-пагинация списка в админке
         Index("ix_ih_identities_list", "space_id", "created_at", "id"),
         # ленивое снятие временных состояний
-        Index("ix_ih_identities_availability_until", "availability_until",
-              postgresql_where=text("availability_until IS NOT NULL")),
-        Index("ix_ih_identities_standing_until", "standing_until",
-              postgresql_where=text("standing_until IS NOT NULL")),
+        Index(
+            "ix_ih_identities_availability_until",
+            "availability_until",
+            postgresql_where=text("availability_until IS NOT NULL"),
+        ),
+        Index(
+            "ix_ih_identities_standing_until",
+            "standing_until",
+            postgresql_where=text("standing_until IS NOT NULL"),
+        ),
     )
 
 
@@ -279,6 +279,7 @@ def _identity_fk() -> ForeignKeyConstraint:
 
 
 # ---------------------------------------------------------------- состояния регионов
+
 
 class RegionStateRecord(IdentityHubBase):
     """Служебная запись синхронизируемого региона: источник правды и метаданные сверки.
@@ -303,14 +304,14 @@ class RegionStateRecord(IdentityHubBase):
 
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     change_source: Mapped[str] = mapped_column(String(16), default=ChangeSource.COMMAND)
-    changed_by: Mapped[str | None] = mapped_column(String(256))           # воркер или пользователь админки
-    change_reason: Mapped[str | None] = mapped_column(Text)               # обязательно для override
+    changed_by: Mapped[str | None] = mapped_column(String(256))  # воркер или пользователь админки
+    change_reason: Mapped[str | None] = mapped_column(Text)  # обязательно для override
 
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    raw_status: Mapped[str | None] = mapped_column(String(128))           # как сказала платформа
+    raw_status: Mapped[str | None] = mapped_column(String(128))  # как сказала платформа
     observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    pending_observation: Mapped[str | None] = mapped_column(String(32))   # для confirm_leaving
-    pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))   # после override
+    pending_observation: Mapped[str | None] = mapped_column(String(32))  # для confirm_leaving
+    pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # после override
 
     version: Mapped[int] = mapped_column(BigInteger, default=1)
 
@@ -327,12 +328,14 @@ class RegionStateRecord(IdentityHubBase):
         Index("ix_ih_region_states_state", "space_id", "region", "key", "state"),
         # кандидаты на сверку: давно не сверялись
         Index("ix_ih_region_states_synced", "region", "synced_at"),
-        Index("ix_ih_region_states_pinned", "pinned_until",
-              postgresql_where=text("pinned_until IS NOT NULL")),
+        Index(
+            "ix_ih_region_states_pinned", "pinned_until", postgresql_where=text("pinned_until IS NOT NULL")
+        ),
     )
 
 
 # ---------------------------------------------------------------- связи между аккаунтами
+
 
 class IdentityLinkRecord(IdentityHubBase):
     """Направленная связь аккаунт → аккаунт с ролью.
@@ -343,10 +346,10 @@ class IdentityLinkRecord(IdentityHubBase):
 
     __tablename__ = "ih_identity_links"
 
-    identity_id: Mapped[UUID] = mapped_column(primary_key=True)          # зависимый
-    role: Mapped[str] = mapped_column(String(64), primary_key=True)      # recovery_email, registered_phone
+    identity_id: Mapped[UUID] = mapped_column(primary_key=True)  # зависимый
+    role: Mapped[str] = mapped_column(String(64), primary_key=True)  # recovery_email, registered_phone
     space_id: Mapped[UUID]
-    linked_identity_id: Mapped[UUID]                                     # тот, от кого зависят
+    linked_identity_id: Mapped[UUID]  # тот, от кого зависят
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -358,11 +361,12 @@ class IdentityLinkRecord(IdentityHubBase):
             ondelete="RESTRICT",
         ),
         CheckConstraint("identity_id <> linked_identity_id", name="not_self"),
-        Index("ix_ih_identity_links_linked", "linked_identity_id"),     # «кто зависит от этой почты»
+        Index("ix_ih_identity_links_linked", "linked_identity_id"),  # «кто зависит от этой почты»
     )
 
 
 # ---------------------------------------------------------------- пользовательские данные
+
 
 class IdentityDataRecord(IdentityHubBase):
     """Произвольные данные пользователя библиотеки, по неймспейсам.
@@ -375,11 +379,11 @@ class IdentityDataRecord(IdentityHubBase):
     __tablename__ = "ih_identity_data"
 
     identity_id: Mapped[UUID] = mapped_column(primary_key=True)
-    namespace: Mapped[str] = mapped_column(String(128), primary_key=True)   # "farm.hamster", "farm.notcoin"
+    namespace: Mapped[str] = mapped_column(String(128), primary_key=True)  # "farm.hamster", "farm.notcoin"
     space_id: Mapped[UUID]
-    data: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     schema_version: Mapped[int] = mapped_column(Integer, default=1)
-    version: Mapped[int] = mapped_column(BigInteger, default=1)            # оптимистическая блокировка
+    version: Mapped[int] = mapped_column(BigInteger, default=1)  # оптимистическая блокировка
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -408,8 +412,8 @@ class VerificationRecord(IdentityHubBase):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    via_identity_id: Mapped[UUID | None]          # чем подтверждено: связанная почта или номер
-    details: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))   # не секретное
+    via_identity_id: Mapped[UUID | None]  # чем подтверждено: связанная почта или номер
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # не секретное
 
     # секретные доказательства (номер документа и т.п.), если сервис их объявил
     evidence_key_id: Mapped[str | None] = mapped_column(String(64))
@@ -428,6 +432,7 @@ class VerificationRecord(IdentityHubBase):
 
 
 # ---------------------------------------------------------------- авторизация
+
 
 class CredentialsRecord(EncryptedPayloadMixin, IdentityHubBase):
     """Как войти: пароль, телефон, TOTP-секрет. Одна запись на идентичность."""
@@ -457,7 +462,7 @@ class SessionRecord(EncryptedPayloadMixin, IdentityHubBase):
     status: Mapped[str] = mapped_column(String(16), default=SessionStatus.VALID)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1)
-    written_by_fencing: Mapped[int] = mapped_column(BigInteger)   # запись отклоняется, если меньше текущего
+    written_by_fencing: Mapped[int] = mapped_column(BigInteger)  # запись отклоняется, если меньше текущего
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -480,7 +485,7 @@ class ChallengeRecord(IdentityHubBase):
     identity_id: Mapped[UUID]
     space_id: Mapped[UUID]
 
-    kind: Mapped[str] = mapped_column(String(32))                 # sms_code, captcha, email_confirm
+    kind: Mapped[str] = mapped_column(String(32))  # sms_code, captcha, email_confirm
     hint: Mapped[str] = mapped_column(Text)
 
     # context (phone_code_hash и т.п.) и answer — секреты, храним зашифрованными
@@ -510,6 +515,7 @@ class ChallengeRecord(IdentityHubBase):
 
 # ---------------------------------------------------------------- аренда
 
+
 class LeaseRecord(IdentityHubBase):
     """Эксклюзивная аренда. PK = identity_id: у аккаунта не больше одной строки.
 
@@ -522,11 +528,11 @@ class LeaseRecord(IdentityHubBase):
     identity_id: Mapped[UUID] = mapped_column(primary_key=True)
     space_id: Mapped[UUID]
 
-    lease_id: Mapped[UUID] = mapped_column(unique=True)          # публичный id = ih_lease_history.lease_id
-    token: Mapped[UUID] = mapped_column(unique=True, default=uuid4)   # приватный: только для extend/release
+    lease_id: Mapped[UUID] = mapped_column(unique=True)  # публичный id = ih_lease_history.lease_id
+    token: Mapped[UUID] = mapped_column(unique=True, default=uuid4)  # приватный: только для extend/release
     fencing: Mapped[int] = mapped_column(BigInteger)
-    pool: Mapped[str] = mapped_column(String(128))                # для админки: кто и зачем держит
-    holder: Mapped[str] = mapped_column(String(256))              # hostname:pid:worker
+    pool: Mapped[str] = mapped_column(String(128))  # для админки: кто и зачем держит
+    holder: Mapped[str] = mapped_column(String(256))  # hostname:pid:worker
     idempotency_key: Mapped[str | None] = mapped_column(String(256))
 
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -545,14 +551,6 @@ class LeaseRecord(IdentityHubBase):
     )
 
 
-class LeaseEndReason(StrEnum):
-    RELEASED = "released"      # воркер вышел из блока lease() штатно
-    FAILED = "failed"          # вышел с исключением
-    LOST = "lost"              # воркер сам признал аренду потерянной (heartbeat не прошёл)
-    EXPIRED = "expired"        # TTL истёк, аренду перезаписал следующий арендатор или чистильщик
-    REVOKED = "revoked"        # отозвана из админки
-
-
 class LeaseHistoryRecord(IdentityHubBase):
     """Одна строка на одну аренду: когда взяли, кто, сколько держал, чем закончилось.
 
@@ -563,15 +561,15 @@ class LeaseHistoryRecord(IdentityHubBase):
 
     __tablename__ = "ih_lease_history"
 
-    lease_id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)   # публичный id аренды
+    lease_id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)  # публичный id аренды
     space_id: Mapped[UUID]
     identity_id: Mapped[UUID]
-    token: Mapped[UUID] = mapped_column(unique=True)             # связь с ih_leases.token
+    token: Mapped[UUID] = mapped_column(unique=True)  # связь с ih_leases.token
     fencing: Mapped[int] = mapped_column(BigInteger)
 
     pool: Mapped[str] = mapped_column(String(128))
     holder: Mapped[str] = mapped_column(String(256))
-    proxy_id: Mapped[UUID | None]                                # через какой прокси работали
+    proxy_id: Mapped[UUID | None]  # через какой прокси работали
 
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -582,15 +580,16 @@ class LeaseHistoryRecord(IdentityHubBase):
     end_reason: Mapped[str | None] = mapped_column(String(16))
 
     # счётчики копятся в памяти воркера и сбрасываются вместе с heartbeat
-    operations: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # {"resolve": 12}
+    operations: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )  # {"resolve": 12}
     succeeded: Mapped[int] = mapped_column(Integer, default=0)
     failed: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint(
-            "end_reason IS NULL OR end_reason IN ("
-            + ", ".join(f"'{r.value}'" for r in LeaseEndReason) + ")",
+            "end_reason IS NULL OR end_reason IN (" + ", ".join(f"'{r.value}'" for r in LeaseEndReason) + ")",
             name="end_reason_valid",
         ),
         Index("ix_ih_lease_history_identity", "identity_id", "acquired_at"),
@@ -617,19 +616,20 @@ class LeaseLogRecord(IdentityHubBase):
     lease_id: Mapped[UUID]
     identity_id: Mapped[UUID]
     space_id: Mapped[UUID]
-    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))       # время на воркере
-    level: Mapped[int] = mapped_column(Integer)                         # logging.INFO = 20
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # время на воркере
+    level: Mapped[int] = mapped_column(Integer)  # logging.INFO = 20
     message: Mapped[str] = mapped_column(Text)
-    fields: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    fields: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
 
     __table_args__ = (
         Index("ix_ih_lease_logs_lease", "lease_id", "id"),
         Index("ix_ih_lease_logs_identity_ts", "identity_id", "ts"),
-        Index("ix_ih_lease_logs_ts", "ts"),                               # для чистки по сроку хранения
+        Index("ix_ih_lease_logs_ts", "ts"),  # для чистки по сроку хранения
     )
 
 
 # ---------------------------------------------------------------- квоты и операции
+
 
 class QuotaUsageRecord(IdentityHubBase):
     """Счётчик фиксированного окна. window_seconds в ключе, потому что у одного
@@ -649,7 +649,7 @@ class QuotaUsageRecord(IdentityHubBase):
 
     __table_args__ = (
         _identity_fk(),
-        Index("ix_ih_quota_usage_window_start", "window_start"),   # для чистки старых окон
+        Index("ix_ih_quota_usage_window_start", "window_start"),  # для чистки старых окон
     )
 
 
@@ -662,7 +662,7 @@ class OperationKeyRecord(IdentityHubBase):
     identity_id: Mapped[UUID]
     space_id: Mapped[UUID]
     kind: Mapped[str] = mapped_column(String(64))
-    outcome: Mapped[str | None] = mapped_column(String(32))      # None — в процессе
+    outcome: Mapped[str | None] = mapped_column(String(32))  # None — в процессе
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -673,6 +673,7 @@ class OperationKeyRecord(IdentityHubBase):
 
 # ---------------------------------------------------------------- прокси
 
+
 class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
     """Прокси. host/port открыто (для админки и дедупликации),
     логин и пароль — в зашифрованном payload."""
@@ -681,11 +682,11 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="RESTRICT"))
-    pool: Mapped[str] = mapped_column(String(128))                # residential-ua, datacenter-de
-    scheme: Mapped[str] = mapped_column(String(16))               # socks5, http, mtproxy
+    pool: Mapped[str] = mapped_column(String(128))  # residential-ua, datacenter-de
+    scheme: Mapped[str] = mapped_column(String(16))  # socks5, http, mtproxy
     host: Mapped[str] = mapped_column(String(256))
     port: Mapped[int] = mapped_column(Integer)
-    fingerprint: Mapped[str] = mapped_column(String(64))          # hash(scheme, host, port, username)
+    fingerprint: Mapped[str] = mapped_column(String(64))  # hash(scheme, host, port, username)
 
     status: Mapped[str] = mapped_column(String(16), default=ProxyStatus.ALIVE)
     error_score: Mapped[float] = mapped_column(Float, default=0.0)
@@ -705,8 +706,7 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
         UniqueConstraint("id", "space_id", name="uq_ih_proxies_id_space"),
         _enum_check("status", ProxyStatus),
         Index("ix_ih_proxies_pick", "space_id", "pool", "status"),
-        Index("ix_ih_proxies_host", "host", postgresql_using="gin",
-              postgresql_ops={"host": "gin_trgm_ops"}),
+        Index("ix_ih_proxies_host", "host", postgresql_using="gin", postgresql_ops={"host": "gin_trgm_ops"}),
     )
 
 
@@ -728,16 +728,11 @@ class BindingRecord(IdentityHubBase):
             ["ih_proxies.id", "ih_proxies.space_id"],
             ondelete="RESTRICT",
         ),
-        Index("ix_ih_bindings_proxy_id", "proxy_id"),                # загрузка прокси
+        Index("ix_ih_bindings_proxy_id", "proxy_id"),  # загрузка прокси
     )
 
 
 # ---------------------------------------------------------------- события
-
-class Severity(StrEnum):
-    INFO = "info"
-    WARNING = "warning"
-    CRITICAL = "critical"
 
 
 class EventRecord(IdentityHubBase):
@@ -751,20 +746,20 @@ class EventRecord(IdentityHubBase):
     __tablename__ = "ih_events"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    event_id: Mapped[UUID] = mapped_column(unique=True, default=new_id)       # ключ идемпотентности получателей
+    event_id: Mapped[UUID] = mapped_column(unique=True, default=new_id)  # ключ идемпотентности получателей
     tx_id: Mapped[str] = mapped_column(XID8, server_default=text("pg_current_xact_id()"))
 
-    type: Mapped[str] = mapped_column(String(64))            # identity.standing.changed
+    type: Mapped[str] = mapped_column(String(64))  # identity.standing.changed
     severity: Mapped[str] = mapped_column(String(16), default=Severity.INFO)
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
     service: Mapped[str | None] = mapped_column(String(64))
-    identity_id: Mapped[UUID | None]                         # без FK: журнал переживает удаление
+    identity_id: Mapped[UUID | None]  # без FK: журнал переживает удаление
     proxy_id: Mapped[UUID | None]
     lease_id: Mapped[UUID | None]
-    sequence: Mapped[int | None] = mapped_column(BigInteger) # event_seq аккаунта на момент события
-    actor: Mapped[str] = mapped_column(String(256))          # воркер, пользователь админки, platform
-    data: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))   # без секретов
-    external: Mapped[bool] = mapped_column(default=True)     # False — только журнал (lease.*, operation.*)
+    sequence: Mapped[int | None] = mapped_column(BigInteger)  # event_seq аккаунта на момент события
+    actor: Mapped[str] = mapped_column(String(256))  # воркер, пользователь админки, platform
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # без секретов
+    external: Mapped[bool] = mapped_column(default=True)  # False — только журнал (lease.*, operation.*)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -782,19 +777,15 @@ class EventCursorRecord(IdentityHubBase):
 
     __tablename__ = "ih_event_cursors"
 
-    consumer: Mapped[str] = mapped_column(String(128), primary_key=True)   # webhooks, notifications, callbacks:<name>
+    consumer: Mapped[str] = mapped_column(
+        String(128), primary_key=True
+    )  # webhooks, notifications, callbacks:<name>
     last_tx_id: Mapped[str] = mapped_column(XID8, server_default=text("'0'::xid8"))
     last_id: Mapped[int] = mapped_column(BigInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ---------------------------------------------------------------- исходящие вебхуки
-
-class DeliveryStatus(StrEnum):
-    PENDING = "pending"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"          # попытка неудачна, будет повтор
-    DEAD = "dead"              # попытки исчерпаны
 
 
 class WebhookEndpointRecord(EncryptedPayloadMixin, IdentityHubBase):
@@ -806,8 +797,10 @@ class WebhookEndpointRecord(EncryptedPayloadMixin, IdentityHubBase):
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
     url: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
-    event_types: Mapped[list[str]] = mapped_column(ARRAY(String(64)))     # поддерживает маски: pool.capacity.*
-    filter: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))   # service, labels
+    event_types: Mapped[list[str]] = mapped_column(ARRAY(String(64)))  # поддерживает маски: pool.capacity.*
+    filter: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb")
+    )  # service, labels
     min_severity: Mapped[str] = mapped_column(String(16), default=Severity.INFO)
 
     enabled: Mapped[bool] = mapped_column(default=True)
@@ -838,12 +831,16 @@ class WebhookDeliveryRecord(IdentityHubBase):
     __table_args__ = (
         UniqueConstraint("endpoint_id", "event_id", name="uq_ih_webhook_deliveries_endpoint_event"),
         _enum_check("status", DeliveryStatus),
-        Index("ix_ih_webhook_deliveries_due", "next_attempt_at",
-              postgresql_where=text("status IN ('pending', 'failed')")),
+        Index(
+            "ix_ih_webhook_deliveries_due",
+            "next_attempt_at",
+            postgresql_where=text("status IN ('pending', 'failed')"),
+        ),
     )
 
 
 # ---------------------------------------------------------------- уведомления (Telegram)
+
 
 class NotificationChannelRecord(EncryptedPayloadMixin, IdentityHubBase):
     """Канал доставки уведомлений. v1: только Telegram-бот; токен — в зашифрованном payload."""
@@ -854,7 +851,7 @@ class NotificationChannelRecord(EncryptedPayloadMixin, IdentityHubBase):
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(String(32), default="telegram")
     title: Mapped[str] = mapped_column(String(200))
-    config: Mapped[dict] = mapped_column(JSONB)              # {"chat_id": -100..., "thread_id": 12}
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB)  # {"chat_id": -100..., "thread_id": 12}
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -876,17 +873,16 @@ class NotificationRuleRecord(IdentityHubBase):
     min_severity: Mapped[str] = mapped_column(String(16), default=Severity.WARNING)
     # декларативный фильтр, без кода: {"service": ["telegram"], "data.to": ["frozen", "banned"],
     #                                   "labels": {"farm": "3"}}
-    filter: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
-    digest_seconds: Mapped[int | None] = mapped_column(Integer)          # None — сразу, иначе окно сводки
-    template: Mapped[str | None] = mapped_column(Text)                   # None — шаблон по умолчанию для типа
+    filter: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    digest_seconds: Mapped[int | None] = mapped_column(Integer)  # None — сразу, иначе окно сводки
+    template: Mapped[str | None] = mapped_column(Text)  # None — шаблон по умолчанию для типа
 
     created_by: Mapped[str] = mapped_column(String(256))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         _enum_check("min_severity", Severity),
-        CheckConstraint("digest_seconds IS NULL OR digest_seconds BETWEEN 10 AND 86400",
-                        name="digest_range"),
+        CheckConstraint("digest_seconds IS NULL OR digest_seconds BETWEEN 10 AND 86400", name="digest_range"),
         Index("ix_ih_notification_rules_space", "space_id", postgresql_where=text("enabled")),
     )
 
@@ -899,19 +895,26 @@ class NotificationRecord(IdentityHubBase):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     rule_id: Mapped[UUID] = mapped_column(ForeignKey("ih_notification_rules.id", ondelete="CASCADE"))
     channel_id: Mapped[UUID]
-    digest_key: Mapped[str | None] = mapped_column(String(128))          # rule_id + начало окна
+    digest_key: Mapped[str | None] = mapped_column(String(128))  # rule_id + начало окна
     event_ids: Mapped[list[UUID]] = mapped_column(ARRAY(PGUUID(as_uuid=True)))
     status: Mapped[str] = mapped_column(String(16), default=DeliveryStatus.PENDING)
     attempt: Mapped[int] = mapped_column(Integer, default=0)
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))   # когда отправлять
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # когда отправлять
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         _enum_check("status", DeliveryStatus),
         # одно открытое окно дайджеста на правило
-        Index("uq_ih_notifications_open_digest", "digest_key", unique=True,
-              postgresql_where=text("digest_key IS NOT NULL AND status = 'pending'")),
-        Index("ix_ih_notifications_due", "scheduled_at",
-              postgresql_where=text("status IN ('pending', 'failed')")),
+        Index(
+            "uq_ih_notifications_open_digest",
+            "digest_key",
+            unique=True,
+            postgresql_where=text("digest_key IS NOT NULL AND status = 'pending'"),
+        ),
+        Index(
+            "ix_ih_notifications_due",
+            "scheduled_at",
+            postgresql_where=text("status IN ('pending', 'failed')"),
+        ),
     )

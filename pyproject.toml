@@ -43,10 +43,14 @@ packages = ["src/identity_hub"]
 line-length = 110
 target-version = "py312"
 src = ["src", "tests"]
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]  # кириллица в строках и комментариях
+
+[tool.ruff.lint.per-file-ignores]
+"src/identity_hub/postgres/models.py" = ["E501"]  # выровненные комментарии к колонкам
 
 [tool.mypy]
 python_version = "3.12"
