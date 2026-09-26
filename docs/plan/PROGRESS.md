@@ -8,17 +8,11 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P10.1 MemoryStore
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] выделить общий conformance-набор из pg-сценариев
-  - [ ] реализовать транзакционный снимок/lock и базовые identity/region/event API
-  - [ ] реализовать leases/quotas/proxies/auth/verifications
-  - [ ] реализовать search/read/dispatch/webhook/notification API
-  - [ ] реализовать maintenance/doctor/metrics и упрощённый поиск
-  - [ ] прогнать conformance против memory и pg
-  - [ ] прогнать полный scripts/check.sh и закрыть задачу
-- **Заметки для следующей сессии:** P10.1 начата после зелёных P8.3–P9.3; Store-контракт содержит 106 методов, готового conformance-набора пока нет. Нужны MemoryStore/MemoryTx в identity_hub.testing и параметризация ключевых pg-сценариев; пользовательские admin/.github/.gitignore изменения не включать.
+  - [ ] —
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
@@ -66,13 +60,13 @@
 | P9.1 | Maintenance | P5.4, P3.3 | done |  |  |
 | P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | done |  |  |
 | P9.3 | Метрики | P4.2 | done |  |  |
-| P10.1 | MemoryStore | P2–P9 | in_progress |  |  |
+| P10.1 | MemoryStore | P2–P9 | done |  |  |
 | P10.2 | identity_hub.testing | P10.1 | todo | | |
 | P10.3 | Нагрузочные тесты | P10.2 | todo | | |
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 42 / 47 done
+**Итого:** 43 / 47 done
 
 ## Журнал сессий
 
@@ -121,3 +115,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P9.1 · done · MaintenanceSchedule/Report и pump диспетчера; таймеры standing/availability, verification/challenge, закрытие аренд по expires_at, агрегаты потерь; часовая очистка квот/ключей и суточный retention логов/истории/events/webhook/notification; 379 тестов зелёные · дальше P9.2
 2026-09-27 · P9.2 · done · CLI migrate/dispatcher/maintenance/doctor/rotate-key через app factory; doctor проверяет и чинит регионы, verified_factors, event_seq и proxy.bound_count; rotate-key пакетно переоборачивает credentials/session/challenge/evidence/proxy/webhook/bot/profile; 387 тестов зелёные · дальше P9.3
 2026-09-27 · P9.3 · done · MetricsHook/NullMetrics/RecordingMetrics без Prometheus; histogram lease/operation, failure counters, pool availability, cursor lag и webhook/notification queue gauges; backend метрик изолирован; 389 тестов зелёные · фаза 9 закрыта, дальше P10.1
+2026-09-27 · P10.1 · done · MemoryStore с rollback, полным Store-контрактом и общим conformance-набором для memory/pg; 407 тестов зелёные · дальше P10.2 identity_hub.testing
