@@ -8,10 +8,13 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P5.4 Верификации в БД
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] store: load/save_verification, due_regions (истёкшие until)
+  - [ ] verifications.py: lease.verification(factor): start(evidence)/submit/approve/reject/abandon/reconcile/status; verified_factors в той же tx
+  - [ ] space.expire_verifications, требования платформы add/resolve_requirement
+  - [ ] pg-тесты: цикл KYC, зависимости, лимит попыток, evidence зашифрован, отзыв, истечение
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -45,7 +48,7 @@
 | P5.1 | Прокси и их здоровье | P4.2 | done |  |  |
 | P5.2 | Привязка прокси | P5.1 | done |  |  |
 | P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | done |  |  |
-| P5.4 | Верификации в БД | P1.3, P3.4 | todo | | |
+| P5.4 | Верификации в БД | P1.3, P3.4 | in_progress |  |  |
 | P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | todo | | |
 | P5.6 | Секреты для админки | P3.4 | todo | | |
 | P5.7 | import_many | P5.2, P5.4, P2.6 | todo | | |
