@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P1.3 VerificationFlow / Spec / Tier
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] VerificationSpec, VerificationTier, вычисление tiers
-  - [ ] спецификация региона verification + нормализация
-  - [ ] VerificationFlow: start/submit/approve/reject/abandon/reconcile/expire
-  - [ ] юнит-тесты
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -27,7 +24,7 @@
 | P0.4 | Миграции Alembic, exclude_identity_hub | P0.3 | done |  |  |
 | P1.1 | Ошибки и примитивы | P0.2 | done |  |  |
 | P1.2 | RegionMachine | P1.1 | done |  |  |
-| P1.3 | VerificationFlow / Spec / Tier | P1.1 | in_progress |  |  |
+| P1.3 | VerificationFlow / Spec / Tier | P1.1 | done |  |  |
 | P1.4 | Декларация Service и протоколы | P1.1 | todo | | |
 | P1.5 | Вычисление допустимости операции | P1.4 | todo | | |
 | P1.6 | Данные аккаунта, search_text, парсер поиска | P1.1 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 6 / 47 done
+**Итого:** 7 / 47 done
 
 ## Журнал сессий
 
@@ -81,3 +78,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P0.4 · done · ветка миграций (ih_alembic_version), 0001 с pg_trgm, migrate(engine, db_schema), exclude_identity_hub, тест отсутствия дрейфа · дальше P1.1
 2026-09-26 · P1.1 · done · иерархия исключений (picklable), Blocker, Clock/SystemClock/FakeClock · дальше P1.2
 2026-09-26 · P1.2 · done · RegionSpec/apply: команды, наблюдения (stale, unknown, pin/drift, confirm_leaving, sticky), override, таймер; спецификации 6 регионов; D-102..D-104 · дальше P1.3
+2026-09-26 · P1.3 · done · VerificationSpec/Tier, регион VERIFICATION (нормализация verified→missing⇒revoked), VerificationFlow, хелперы факторов · дальше P1.4
