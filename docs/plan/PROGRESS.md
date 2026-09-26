@@ -8,10 +8,14 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P2.1 IdentityHub, SpaceHandle, транзакции
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] store/base.py: Store, StoreTx, SpaceRef
+  - [ ] postgres/store.py: PgStore — своя транзакция / savepoint, set_config ih.space, SpaceMismatch
+  - [ ] hub.py: IdentityHub(start, space, service), Retention; SpaceHandle(using)
+  - [ ] фикстуры hub/space
+  - [ ] pg-тесты: ih_services, пространства, T-1, T-3
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -30,7 +34,7 @@
 | P1.6 | Данные аккаунта, search_text, парсер поиска | P1.1 | done |  |  |
 | P1.7 | Криптография | P1.1 | done |  |  |
 | P1.8 | Каталог событий | P1.1 | done |  |  |
-| P2.1 | IdentityHub, SpaceHandle, транзакции | P0.4, P1.2, P1.4, P1.7, P1.8 | todo | | |
+| P2.1 | IdentityHub, SpaceHandle, транзакции | P0.4, P1.2, P1.4, P1.7, P1.8 | in_progress |  |  |
 | P2.2 | Outbox событий | P2.1 | todo | | |
 | P2.3 | Регионы в БД | P2.2 | todo | | |
 | P2.4 | register | P2.3, P1.6 | todo | | |
