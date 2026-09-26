@@ -8,11 +8,17 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P10.1 MemoryStore
+- **Начата:** 2026-09-27
 - **Шаги:**
-  - [ ] —
-- **Заметки для следующей сессии:** —
+  - [ ] выделить общий conformance-набор из pg-сценариев
+  - [ ] реализовать транзакционный снимок/lock и базовые identity/region/event API
+  - [ ] реализовать leases/quotas/proxies/auth/verifications
+  - [ ] реализовать search/read/dispatch/webhook/notification API
+  - [ ] реализовать maintenance/doctor/metrics и упрощённый поиск
+  - [ ] прогнать conformance против memory и pg
+  - [ ] прогнать полный scripts/check.sh и закрыть задачу
+- **Заметки для следующей сессии:** P10.1 начата после зелёных P8.3–P9.3; Store-контракт содержит 106 методов, готового conformance-набора пока нет. Нужны MemoryStore/MemoryTx в identity_hub.testing и параметризация ключевых pg-сценариев; пользовательские admin/.github/.gitignore изменения не включать.
 
 ## Статус задач
 
@@ -60,7 +66,7 @@
 | P9.1 | Maintenance | P5.4, P3.3 | done |  |  |
 | P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | done |  |  |
 | P9.3 | Метрики | P4.2 | done |  |  |
-| P10.1 | MemoryStore | P2–P9 | todo | | |
+| P10.1 | MemoryStore | P2–P9 | in_progress |  |  |
 | P10.2 | identity_hub.testing | P10.1 | todo | | |
 | P10.3 | Нагрузочные тесты | P10.2 | todo | | |
 | P10.4 | Документация и примеры | P10.3 | todo | | |
