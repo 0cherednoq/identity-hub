@@ -30,6 +30,7 @@ dev = [
     "respx>=0.21",
     "ruff>=0.6",
     "mypy>=1.11",
+    "pytest-timeout>=2.4.0",
 ]
 
 [build-system]
@@ -74,3 +75,4 @@ markers = [
     "load: нагрузочные, запускаются явно",
 ]
 addopts = "-ra --strict-markers"
+timeout = 120  # зависший тест не блокирует автономный цикл

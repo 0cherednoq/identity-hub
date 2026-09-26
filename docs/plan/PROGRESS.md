@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P5.3 Оркестрация входа, challenge
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: CandidateQuery.lifecycles/auth_states; open/get/answer/resolve challenge, просроченные challenge
-  - [ ] auth.py: LoginContext, LinkedIdentity (аренда связанного: зависимый → связанный), run_logins
-  - [ ] LoginChallenge → challenge (зашифрованный контекст, один открытый), answer_challenge, expire_challenges, события
-  - [ ] pg-тесты: успех, ошибка, challenge → ответ, повторный challenge, связанный аккаунт, истечение
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -47,7 +44,7 @@
 | P4.2 | lease.operation | P4.1 | done |  |  |
 | P5.1 | Прокси и их здоровье | P4.2 | done |  |  |
 | P5.2 | Привязка прокси | P5.1 | done |  |  |
-| P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | in_progress |  |  |
+| P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | done |  |  |
 | P5.4 | Верификации в БД | P1.3, P3.4 | todo | | |
 | P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | todo | | |
 | P5.6 | Секреты для админки | P3.4 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 26 / 47 done
+**Итого:** 27 / 47 done
 
 ## Журнал сессий
 
@@ -102,3 +99,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P4.2 · done · lease.operation: свежий снимок + fencing, evaluate, списание до вызова, классификация вины (identity/session_invalid/banned/request), cool_down, error_score/карантин (D-115) · фаза 4 закрыта, дальше P5.1
 2026-09-26 · P5.1 · done · add_proxy/add_proxies (fingerprint, шифрование), URL, здоровье: карантин по порогу, перепроверка с backoff ×2, dead, подтверждение выхода, override, вина прокси из операции; миграция 0003 (D-116) · дальше P5.2
 2026-09-26 · P5.2 · done · sticky-привязка к наименее загруженному, ёмкость через bound_count (D-117, миграция 0004), wait/rebind, non-sticky, proxy.binding.changed/pool.exhausted, lease.proxy, proxy_id в истории · дальше P5.3
+2026-09-26 · P5.3 · done · run_logins (одна попытка на аккаунт за прогон), LoginContext/linked (аренда связанного), challenge: открытие (зашифрованный контекст, один открытый), answer_challenge, expire_challenges; pytest-timeout 120 с · дальше P5.4

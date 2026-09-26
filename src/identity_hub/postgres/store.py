@@ -41,12 +41,13 @@ from sqlalchemy.sql import Executable, Select
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, Lifecycle, ProxyStatus
+from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, ProxyStatus
 from identity_hub.errors import LeaseUnavailable, SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
     BindingRecord,
+    ChallengeRecord,
     CredentialsRecord,
     EventRecord,
     IdentityDataRecord,
@@ -64,6 +65,7 @@ from identity_hub.postgres.models import (
 )
 from identity_hub.store.base import (
     CandidateQuery,
+    ChallengeRow,
     ChargeOutcome,
     DataRow,
     IdentityRow,
@@ -95,6 +97,7 @@ QUOTAS = cast(Table, QuotaUsageRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
 BINDINGS = cast(Table, BindingRecord.__table__)
+CHALLENGES = cast(Table, ChallengeRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
@@ -551,7 +554,7 @@ class PgTx(StoreTx):
         conditions: list[Any] = [
             i.space_id == self.space.id,
             i.service == query.service,
-            i.lifecycle == Lifecycle.READY,
+            i.lifecycle.in_(sorted(query.lifecycles)),
             i.standing.in_(sorted(query.standing)),
             or_(
                 i.availability == Availability.AVAILABLE,
@@ -561,7 +564,9 @@ class PgTx(StoreTx):
                 ),
             ),
         ]
-        if query.needs_auth:
+        if query.auth_states is not None:
+            conditions.append(i.auth_state.in_(sorted(query.auth_states)))
+        elif query.needs_auth:
             conditions.append(i.auth_state == AuthState.AUTHENTICATED)
         if query.required_factors:
             conditions.append(i.verified_factors.contains(sorted(query.required_factors)))
@@ -1121,6 +1126,113 @@ class PgTx(StoreTx):
             .limit(limit)
         )
         return list(rows.scalars())
+
+    # --------------------------------------------------------- challenge
+
+    async def open_challenge(
+        self,
+        challenge_id: UUID,
+        identity_id: UUID,
+        kind: str,
+        hint: str,
+        context: EncryptedPayload,
+        expires_at: datetime | None,
+    ) -> bool:
+        stmt = (
+            insert(CHALLENGES)
+            .values(
+                id=challenge_id,
+                identity_id=identity_id,
+                space_id=self.space.id,
+                kind=kind,
+                hint=hint,
+                expires_at=expires_at,
+                **context.columns("context_"),
+            )
+            .on_conflict_do_nothing()
+        )
+        return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    async def get_challenge(self, challenge_id: UUID) -> ChallengeRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(CHALLENGES).where(
+                        CHALLENGES.c.id == challenge_id, CHALLENGES.c.space_id == self.space.id
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _challenge_row(row) if row else None
+
+    async def open_challenge_of(self, identity_id: UUID) -> ChallengeRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(CHALLENGES).where(
+                        CHALLENGES.c.identity_id == identity_id,
+                        CHALLENGES.c.space_id == self.space.id,
+                        CHALLENGES.c.resolved_at.is_(None),
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _challenge_row(row) if row else None
+
+    async def answer_challenge(self, challenge_id: UUID, nonce: bytes, ciphertext: bytes) -> bool:
+        result = await self.execute(
+            update(CHALLENGES)
+            .where(
+                CHALLENGES.c.id == challenge_id,
+                CHALLENGES.c.space_id == self.space.id,
+                CHALLENGES.c.resolved_at.is_(None),
+            )
+            .values(answer_nonce=nonce, answer_ciphertext=ciphertext, answered_at=func.now())
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def resolve_challenge(self, challenge_id: UUID) -> bool:
+        result = await self.execute(
+            update(CHALLENGES)
+            .where(CHALLENGES.c.id == challenge_id, CHALLENGES.c.resolved_at.is_(None))
+            .values(resolved_at=func.now())
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def expired_challenges(self, limit: int) -> list[ChallengeRow]:
+        rows = await self.execute(
+            select(CHALLENGES)
+            .where(
+                CHALLENGES.c.space_id == self.space.id,
+                CHALLENGES.c.resolved_at.is_(None),
+                CHALLENGES.c.expires_at <= func.now(),
+            )
+            .order_by(CHALLENGES.c.expires_at)
+            .limit(limit)
+        )
+        return [_challenge_row(r) for r in rows.mappings()]
+
+
+def _challenge_row(row: Any) -> ChallengeRow:
+    return ChallengeRow(
+        id=row["id"],
+        identity_id=row["identity_id"],
+        kind=row["kind"],
+        hint=row["hint"],
+        context=EncryptedPayload(
+            row["context_key_id"], row["context_wrapped_dek"], row["context_nonce"], row["context_ciphertext"]
+        ),
+        answer_nonce=row["answer_nonce"],
+        answer_ciphertext=row["answer_ciphertext"],
+        created_at=row["created_at"],
+        expires_at=row["expires_at"],
+        answered_at=row["answered_at"],
+        resolved_at=row["resolved_at"],
+    )
 
 
 def _proxy_row(row: Any) -> ProxyRow:

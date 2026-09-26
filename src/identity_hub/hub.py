@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
 from identity_hub.errors import NotFound, ValidationFailed
@@ -112,7 +113,9 @@ class IdentityHub:
         return ref
 
 
-class SpaceHandle(IdentitiesMixin, IdentityDataMixin, LinksMixin, PoolsMixin, ProxiesMixin, StateMixin):
+class SpaceHandle(
+    IdentitiesMixin, IdentityDataMixin, LinksMixin, LoginMixin, PoolsMixin, ProxiesMixin, StateMixin
+):
     """Пространство (ТЗ §5.1). `.using(session)` — работа в общей транзакции пользователя.
 
     Операции разложены по миксинам: регионы — `state.StateMixin`, далее по задачам плана.

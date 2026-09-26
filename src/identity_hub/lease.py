@@ -28,7 +28,7 @@ from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing
 from identity_hub.events import EventDraft
 from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
-from identity_hub.store.base import IdentityRow, LeaseCounters, LeaseRow, ProxyRow, StoreTx
+from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseCounters, LeaseRow, ProxyRow, StoreTx
 
 if TYPE_CHECKING:
     from identity_hub.operation import Operation
@@ -408,15 +408,22 @@ async def acquire(
     exclude: Iterable[UUID] = (),
     wait: timedelta | float | None = None,
     idempotency_key: str | None = None,
+    query: CandidateQuery | None = None,
 ) -> Lease:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
     `wait` — ждать освобождения подходящего аккаунта; по истечении — `LeaseUnavailable`.
     Повтор с тем же `idempotency_key`, пока аренда жива, возвращает ту же аренду (FR-6.5).
     """
-    query = pool.candidate_query(
-        for_operation=for_operation, tags=tags, labels=labels, profile=profile, among=among, exclude=exclude
-    )
+    if query is None:  # готовый запрос — внутренние выборки библиотеки (вход, сверка)
+        query = pool.candidate_query(
+            for_operation=for_operation,
+            tags=tags,
+            labels=labels,
+            profile=profile,
+            among=among,
+            exclude=exclude,
+        )
     space = pool.space
     clock = space.hub.clock
     wait_seconds = wait.total_seconds() if isinstance(wait, timedelta) else float(wait or 0)

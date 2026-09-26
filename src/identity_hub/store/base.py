@@ -21,6 +21,7 @@ from identity_hub.events import EventDraft
 
 __all__ = [
     "CandidateQuery",
+    "ChallengeRow",
     "ChargeOutcome",
     "DataRow",
     "IdentityRow",
@@ -138,6 +139,8 @@ class CandidateQuery:
     exclude: frozenset[UUID] = frozenset()
     shared: bool = False  # FR-6.6: живая аренда не исключает аккаунт
     proxy_wait: bool = False  # FR-8.3 on_proxy_down=wait: аккаунт с прокси не в alive недоступен
+    lifecycles: frozenset[str] = frozenset({"ready"})
+    auth_states: frozenset[str] | None = None  # задано — вместо needs_auth (выборка для входа, FR-5.4)
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +243,21 @@ class ProxyRow:
     max_identities: int
     created_at: datetime
     secret: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeRow:
+    id: UUID
+    identity_id: UUID
+    kind: str
+    hint: str
+    context: EncryptedPayload
+    answer_nonce: bytes | None
+    answer_ciphertext: bytes | None
+    created_at: datetime
+    expires_at: datetime | None
+    answered_at: datetime | None
+    resolved_at: datetime | None
 
 
 class StoreTx(ABC):
@@ -479,6 +497,36 @@ class StoreTx(ABC):
     @abstractmethod
     async def due_proxies(self, limit: int) -> list[UUID]:
         """Прокси в карантине, у которых наступил `next_check_at` (перепроверка по расписанию)."""
+
+    # --------------------------------------------------------- challenge (P5.3)
+
+    @abstractmethod
+    async def open_challenge(
+        self,
+        challenge_id: UUID,
+        identity_id: UUID,
+        kind: str,
+        hint: str,
+        context: EncryptedPayload,
+        expires_at: datetime | None,
+    ) -> bool:
+        """False — у аккаунта уже открыт challenge (FR-5.5, уникальный частичный индекс)."""
+
+    @abstractmethod
+    async def get_challenge(self, challenge_id: UUID) -> ChallengeRow | None: ...
+
+    @abstractmethod
+    async def open_challenge_of(self, identity_id: UUID) -> ChallengeRow | None: ...
+
+    @abstractmethod
+    async def answer_challenge(self, challenge_id: UUID, nonce: bytes, ciphertext: bytes) -> bool:
+        """Сохранить зашифрованный ответ; False — challenge уже закрыт."""
+
+    @abstractmethod
+    async def resolve_challenge(self, challenge_id: UUID) -> bool: ...
+
+    @abstractmethod
+    async def expired_challenges(self, limit: int) -> list[ChallengeRow]: ...
 
     # --------------------------------------------------------- секреты (P3.4)
 
