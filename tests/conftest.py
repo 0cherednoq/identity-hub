@@ -7,7 +7,10 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+
+from identity_hub.crypto import StaticSecretsProvider
+from identity_hub.hub import IdentityHub, SpaceHandle
 
 
 @pytest.fixture(scope="session")
@@ -52,3 +55,31 @@ async def db(prepared_db: AsyncEngine) -> AsyncIterator[AsyncEngine]:
     async with prepared_db.begin() as conn:
         await conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
     yield prepared_db
+
+
+TEST_KEYS = {"k1": b"\x11" * 32, "k2": b"\x22" * 32}
+
+
+@pytest.fixture
+def sessionmaker(db: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(db, expire_on_commit=False)
+
+
+@pytest.fixture
+async def hub(sessionmaker: async_sessionmaker[AsyncSession]) -> IdentityHub:
+    from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG
+
+    instance = IdentityHub(
+        sessionmaker,
+        StaticSecretsProvider(TEST_KEYS, "k1"),
+        [FAKE_TG, FAKE_EXCHANGE],
+        admin_base_url="https://admin.test",
+        strict_events=True,
+    )
+    await instance.start()
+    return instance
+
+
+@pytest.fixture
+def space(hub: IdentityHub) -> SpaceHandle:
+    return hub.space("tennet", "Tennet")
