@@ -19,7 +19,7 @@ from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.events import EventDraft
 
-__all__ = ["IdentityRow", "NewIdentity", "ServiceRow", "SpaceRef", "Store", "StoreTx"]
+__all__ = ["DataRow", "IdentityRow", "NewIdentity", "ServiceRow", "SpaceRef", "Store", "StoreTx"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +82,16 @@ class NewIdentity:
     note: str | None
     search_text: str
     profile_secret: EncryptedPayload | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DataRow:
+    """Строка ih_identity_data."""
+
+    data: dict[str, Any]
+    schema_version: int
+    version: int
+    updated_at: datetime
 
 
 class StoreTx(ABC):
@@ -156,6 +166,35 @@ class StoreTx(ABC):
     @abstractmethod
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
         """False — связь с этой ролью уже есть (FR-4.1)."""
+
+    # --------------------------------------------------------- данные аккаунта (P2.5)
+
+    @abstractmethod
+    async def get_profile_secret(self, identity_id: UUID) -> EncryptedPayload | None: ...
+
+    @abstractmethod
+    async def set_profile_secret(self, identity_id: UUID, payload: EncryptedPayload | None) -> None: ...
+
+    @abstractmethod
+    async def incoming_links(self, identity_id: UUID) -> list[tuple[UUID, str]]:
+        """(зависимый аккаунт, роль) для связей, указывающих на этот аккаунт."""
+
+    @abstractmethod
+    async def delete_identity(self, identity_id: UUID) -> bool: ...
+
+    @abstractmethod
+    async def load_data(self, identity_id: UUID, namespace: str) -> DataRow | None: ...
+
+    @abstractmethod
+    async def save_data(
+        self,
+        identity_id: UUID,
+        namespace: str,
+        data: dict[str, Any],
+        schema_version: int,
+        expected_version: int | None,
+    ) -> int | None:
+        """Новая версия или None при конфликте (expected_version=None — только вставка новой строки)."""
 
 
 class Store(ABC):

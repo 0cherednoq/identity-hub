@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -25,7 +25,7 @@ from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT
-from identity_hub.store.base import NewIdentity
+from identity_hub.store.base import IdentityRow, NewIdentity
 
 __all__ = ["IdentitiesMixin", "PreparedIdentity", "RegisterResult"]
 
@@ -239,3 +239,153 @@ class IdentitiesMixin(SpaceBase):
                 raise NotFound("identity", ", ".join(sorted(map(str, missing))))
             for role, target in prepared.links.items():
                 await tx.insert_link(identity_id, role, target)
+
+    # --------------------------------------------------------- изменение данных (FR-3, общая транзакция)
+
+    async def set_labels(
+        self, identity_id: UUID, labels: Mapping[str, Any], *, merge: bool = False, actor: str = "system"
+    ) -> IdentityRow:
+        """Метки для фильтров (FR-3.3). `merge=True` — дополнить; значение None удаляет ключ."""
+
+        def mutate(row: IdentityRow, _: dict[str, Any]) -> dict[str, Any]:
+            base = dict(row.labels) if merge else {}
+            for key, value in labels.items():
+                if value is None:
+                    base.pop(key, None)
+                else:
+                    base[key] = value
+            return {"labels": dict(validate_labels(base))}
+
+        return await self._mutate(identity_id, actor, mutate)
+
+    async def set_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> IdentityRow:
+        return await self._mutate(identity_id, actor, lambda row, _: {"tags": validate_tags(tags)})
+
+    async def add_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> IdentityRow:
+        return await self._mutate(
+            identity_id, actor, lambda row, _: {"tags": validate_tags([*row.tags, *tags])}
+        )
+
+    async def remove_tags(
+        self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system"
+    ) -> IdentityRow:
+        drop = set(tags)
+        return await self._mutate(
+            identity_id, actor, lambda row, _: {"tags": validate_tags(t for t in row.tags if t not in drop)}
+        )
+
+    async def set_attributes(
+        self, identity_id: UUID, attributes: BaseModel | Mapping[str, Any], *, actor: str = "system"
+    ) -> IdentityRow:
+        """Технические параметры, валидируются схемой сервиса (FR-3.1)."""
+
+        def mutate(row: IdentityRow, _: dict[str, Any]) -> dict[str, Any]:
+            schema = self.hub.service(row.service).attributes
+            return {"attributes": validate_model(schema, attributes, "attributes").model_dump(mode="json")}
+
+        return await self._mutate(identity_id, actor, mutate)
+
+    async def update_profile(
+        self,
+        identity_id: UUID,
+        changes: BaseModel | Mapping[str, Any],
+        *,
+        replace: bool = False,
+        actor: str = "system",
+    ) -> IdentityRow:
+        """Профиль персоны (FR-3.2): слияние с текущим (или замена), валидация схемой сервиса."""
+
+        def mutate(row: IdentityRow, current: dict[str, Any]) -> dict[str, Any]:
+            service = self.hub.service(row.service)
+            incoming = (
+                changes.model_dump(exclude_unset=True) if isinstance(changes, BaseModel) else dict(changes)
+            )
+            merged = incoming if replace else {**current, **incoming}
+            merged = {k: v for k, v in merged.items() if v is not None}
+            model = validate_model(service.profile, merged, "profile")
+            open_part, secret = split_profile(service, model)
+            payload = (
+                self.hub.envelope.seal_model(secret, associated_data("ih_identities", row.id, "profile"))
+                if secret
+                else None
+            )
+            return {"profile": open_part, _PROFILE_SECRET: payload}
+
+        return await self._mutate(identity_id, actor, mutate, need_profile=True)
+
+    async def set_note(self, identity_id: UUID, note: str | None, *, actor: str = "system") -> IdentityRow:
+        """Свободная заметка из админки (FR-3.5)."""
+        return await self._mutate(identity_id, actor, lambda row, _: {"note": note or None})
+
+    async def delete(self, identity_id: UUID, *, actor: str = "system") -> None:
+        """Удалить аккаунт. Нельзя, пока на него ссылаются связи (FR-4.2); журналы переживают удаление."""
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            incoming = await tx.incoming_links(identity_id)
+            if incoming:
+                refs = [f"{dependent} ({role})" for dependent, role in incoming]
+                raise ValidationFailed("на аккаунт ссылаются связи — сначала удалите их", refs)
+            await self._emit(
+                tx,
+                EventDraft(
+                    "identity.deleted",
+                    actor=actor,
+                    service=row.service,
+                    identity_id=identity_id,
+                    data={"external_ref": row.external_ref},
+                ),
+            )
+            await tx.delete_identity(identity_id)
+
+    async def _mutate(
+        self,
+        identity_id: UUID,
+        actor: str,
+        mutate: Callable[[IdentityRow, dict[str, Any]], dict[str, Any]],
+        *,
+        need_profile: bool = False,
+    ) -> IdentityRow:
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            profile = dict(row.profile)
+            if need_profile:
+                secret = await tx.get_profile_secret(identity_id)
+                if secret is not None:
+                    aad = associated_data("ih_identities", identity_id, "profile")
+                    profile |= self.hub.envelope.open_json(secret, aad)
+            values = mutate(row, profile)
+            has_secret = _PROFILE_SECRET in values
+            secret_payload = values.pop(_PROFILE_SECRET, None)
+            changed = sorted(k for k, v in values.items() if getattr(row, k) != v)
+            if has_secret:
+                await tx.set_profile_secret(identity_id, secret_payload)
+                if "profile" not in changed:
+                    changed.append("profile")
+            if not changed:
+                return row
+            service = self.hub.service(row.service)
+            merged = {**_row_values(row), **values}
+            values["search_text"] = build_search_text(
+                service, identity_id, row.external_ref, merged["profile"], merged["labels"], merged["note"]
+            )
+            await tx.update_identity(identity_id, values)
+            data: dict[str, Any] = {"fields": changed}
+            for public in ("labels", "tags"):
+                if public in changed:
+                    data[public] = values[public]
+            await self._emit(
+                tx,
+                EventDraft(
+                    "identity.updated", actor=actor, service=row.service, identity_id=identity_id, data=data
+                ),
+            )
+            updated = await tx.get_identity(identity_id)
+            assert updated is not None
+            return updated
+
+
+_PROFILE_SECRET = "__profile_secret__"
+
+
+def _row_values(row: IdentityRow) -> dict[str, Any]:
+    return {"profile": row.profile, "labels": row.labels, "note": row.note}

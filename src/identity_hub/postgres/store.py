@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Table, and_, func, or_, select, text, update
+from sqlalchemy import Table, and_, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Result
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,6 +31,7 @@ from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
     CredentialsRecord,
     EventRecord,
+    IdentityDataRecord,
     IdentityLinkRecord,
     IdentityRecord,
     RegionStateRecord,
@@ -38,7 +39,15 @@ from identity_hub.postgres.models import (
     SessionRecord,
     SpaceRecord,
 )
-from identity_hub.store.base import IdentityRow, NewIdentity, ServiceRow, SpaceRef, Store, StoreTx
+from identity_hub.store.base import (
+    DataRow,
+    IdentityRow,
+    NewIdentity,
+    ServiceRow,
+    SpaceRef,
+    Store,
+    StoreTx,
+)
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
 
@@ -47,6 +56,7 @@ REGION_STATES = cast(Table, RegionStateRecord.__table__)
 CREDENTIALS = cast(Table, CredentialsRecord.__table__)
 SESSIONS = cast(Table, SessionRecord.__table__)
 LINKS = cast(Table, IdentityLinkRecord.__table__)
+DATA = cast(Table, IdentityDataRecord.__table__)
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -290,6 +300,102 @@ class PgTx(StoreTx):
             .on_conflict_do_nothing()
         )
         return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    # --------------------------------------------------------- данные аккаунта
+
+    async def get_profile_secret(self, identity_id: UUID) -> EncryptedPayload | None:
+        c = IDENTITIES.c
+        row = (
+            await self.execute(
+                select(c.profile_key_id, c.profile_wrapped_dek, c.profile_nonce, c.profile_ciphertext).where(
+                    c.id == identity_id, c.space_id == self.space.id
+                )
+            )
+        ).one_or_none()
+        if row is None or row.profile_ciphertext is None:
+            return None
+        return EncryptedPayload(
+            row.profile_key_id, row.profile_wrapped_dek, row.profile_nonce, row.profile_ciphertext
+        )
+
+    async def set_profile_secret(self, identity_id: UUID, payload: EncryptedPayload | None) -> None:
+        values: dict[str, Any] = (
+            payload.columns("profile_")
+            if payload
+            else dict.fromkeys(
+                ("profile_key_id", "profile_wrapped_dek", "profile_nonce", "profile_ciphertext")
+            )
+        )
+        await self.update_identity(identity_id, values)
+
+    async def incoming_links(self, identity_id: UUID) -> list[tuple[UUID, str]]:
+        rows = await self.execute(
+            select(LINKS.c.identity_id, LINKS.c.role).where(
+                LINKS.c.linked_identity_id == identity_id, LINKS.c.space_id == self.space.id
+            )
+        )
+        return [(r.identity_id, r.role) for r in rows]
+
+    async def delete_identity(self, identity_id: UUID) -> bool:
+        result = await self.execute(
+            delete(IDENTITIES).where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def load_data(self, identity_id: UUID, namespace: str) -> DataRow | None:
+        row = (
+            await self.execute(
+                select(DATA.c.data, DATA.c.schema_version, DATA.c.version, DATA.c.updated_at).where(
+                    DATA.c.identity_id == identity_id,
+                    DATA.c.namespace == namespace,
+                    DATA.c.space_id == self.space.id,
+                )
+            )
+        ).one_or_none()
+        return DataRow(row.data, row.schema_version, row.version, row.updated_at) if row else None
+
+    async def save_data(
+        self,
+        identity_id: UUID,
+        namespace: str,
+        data: dict[str, Any],
+        schema_version: int,
+        expected_version: int | None,
+    ) -> int | None:
+        stmt: Executable
+        if expected_version is None:
+            stmt = (
+                insert(DATA)
+                .values(
+                    identity_id=identity_id,
+                    namespace=namespace,
+                    space_id=self.space.id,
+                    data=data,
+                    schema_version=schema_version,
+                    version=1,
+                )
+                .on_conflict_do_nothing()
+                .returning(DATA.c.version)
+            )
+        else:
+            stmt = (
+                update(DATA)
+                .where(
+                    DATA.c.identity_id == identity_id,
+                    DATA.c.namespace == namespace,
+                    DATA.c.space_id == self.space.id,
+                    DATA.c.version == expected_version,
+                )
+                .values(
+                    data=data,
+                    schema_version=schema_version,
+                    version=DATA.c.version + 1,
+                    updated_at=func.now(),
+                )
+                .returning(DATA.c.version)
+            )
+        version: int | None = (await self.execute(stmt)).scalar_one_or_none()
+        return version
 
 
 class PgStore(Store):

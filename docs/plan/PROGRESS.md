@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P2.5 Изменение данных аккаунта, identity_data
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: секрет профиля, входящие связи, удаление, identity_data с версией
-  - [ ] set_labels/set_tags/update_profile/set_attributes/set_note/delete с пересчётом search_text и событиями
-  - [ ] identity_data: load/save с версией схемы и оптимистической блокировкой
-  - [ ] pg-тесты
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -37,7 +34,7 @@
 | P2.2 | Outbox событий | P2.1 | done |  |  |
 | P2.3 | Регионы в БД | P2.2 | done |  |  |
 | P2.4 | register | P2.3, P1.6 | done |  |  |
-| P2.5 | Изменение данных аккаунта, identity_data | P2.4 | in_progress |  |  |
+| P2.5 | Изменение данных аккаунта, identity_data | P2.4 | done |  |  |
 | P2.6 | Связи и read-модели связей | P2.4 | todo | | |
 | P3.1 | Pool и SQL выборки кандидатов | P1.5, P2.4 | todo | | |
 | P3.2 | Захват аренды | P3.1 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 16 / 47 done
+**Итого:** 17 / 47 done
 
 ## Журнал сессий
 
@@ -91,3 +88,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P2.2 · done · outbox: emit() с event_seq/sequence, pg_notify при коммите, scrub в SpaceHandle._emit · дальше P2.3
 2026-09-26 · P2.3 · done · apply_region_change (CAS/version, ретрай, денормализация, события), StateMixin: set_lifecycle/retire/override/_observe/_command/_expire; SpaceBase в _space.py; D-107, D-108 · дальше P2.4
 2026-09-26 · P2.4 · done · register: prepare_identity (валидация+шифрование до tx), идемпотентность, глобальная уникальность, связи, начальные регионы, profile_encrypted (миграция 0002); scripts/check.sh; D-109..D-111 · дальше P2.5
+2026-09-26 · P2.5 · done · set_labels/set_tags/add_tags/remove_tags/set_attributes/update_profile (в т.ч. зашифрованный)/set_note/delete (RESTRICT), identity_data load/save с версией · дальше P2.6
