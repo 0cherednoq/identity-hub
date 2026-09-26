@@ -8,10 +8,13 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P1.3 VerificationFlow / Spec / Tier
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] VerificationSpec, VerificationTier, вычисление tiers
+  - [ ] спецификация региона verification + нормализация
+  - [ ] VerificationFlow: start/submit/approve/reject/abandon/reconcile/expire
+  - [ ] юнит-тесты
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -24,7 +27,7 @@
 | P0.4 | Миграции Alembic, exclude_identity_hub | P0.3 | done |  |  |
 | P1.1 | Ошибки и примитивы | P0.2 | done |  |  |
 | P1.2 | RegionMachine | P1.1 | done |  |  |
-| P1.3 | VerificationFlow / Spec / Tier | P1.1 | todo | | |
+| P1.3 | VerificationFlow / Spec / Tier | P1.1 | in_progress |  |  |
 | P1.4 | Декларация Service и протоколы | P1.1 | todo | | |
 | P1.5 | Вычисление допустимости операции | P1.4 | todo | | |
 | P1.6 | Данные аккаунта, search_text, парсер поиска | P1.1 | todo | | |
