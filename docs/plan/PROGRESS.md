@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P8.2 Агрегированные события
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: count_candidates
-  - [ ] pool.check_capacity: low/empty при смене состояния; empty при LeaseUnavailable
-  - [ ] worker.leases_lost: счётчик потерь в hub, flush_lease_losses
-  - [ ] pg-тесты
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -57,7 +54,7 @@
 | P7.1 | Контекст логов | P3.3 | done |  |  |
 | P7.2 | Sink ih_lease_logs | P7.1 | done |  |  |
 | P8.1 | Диспетчер | P2.2 | done |  |  |
-| P8.2 | Агрегированные события | P8.1, P3.3 | in_progress |  |  |
+| P8.2 | Агрегированные события | P8.1, P3.3 | done |  |  |
 | P8.3 | Исходящие вебхуки | P8.1 | todo | | |
 | P8.4 | Telegram-уведомления | P8.3 | todo | | |
 | P9.1 | Maintenance | P5.4, P3.3 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 36 / 47 done
+**Итого:** 37 / 47 done
 
 ## Журнал сессий
 
@@ -112,3 +109,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P7.1 · done · structlog_processor и LeaseContextFilter с полями аренды · дальше P7.2
 2026-09-27 · P7.2 · done · LeaseLogSink (уровень, лимит на аренду) в hub.lease_log_sink, сброс в ih_lease_logs на heartbeat и release, ошибки подавляются · фаза 7 закрыта, дальше P8.1
 2026-09-27 · P8.1 · done · process_events (курсор FOR UPDATE SKIP LOCKED, горизонт pg_snapshot_xmin, at-least-once), listen (asyncpg LISTEN, фолбэк опрос), Dispatcher (subscribe с масками, run_once/drain/run/running), hub.events; NOTIFY_CHANNEL в порт · дальше P8.2
+2026-09-27 · P8.2 · done · pool.check_capacity (low/empty при смене состояния, авто при LeaseUnavailable), worker.leases_lost через hub.flush_lease_losses (D-119) · дальше P8.3

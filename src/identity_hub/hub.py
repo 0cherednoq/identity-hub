@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -14,6 +15,7 @@ from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
 from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.events import EventDraft
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
 from identity_hub.importing import ImportingMixin
@@ -89,6 +91,7 @@ class IdentityHub:
         for service in services:
             self.register_service(service)
         self._spaces: dict[str, SpaceRef] = {}
+        self._lease_losses: Counter[tuple[str, str]] = Counter()
 
     # --------------------------------------------------------- сервисы
 
@@ -117,6 +120,23 @@ class IdentityHub:
     def space(self, slug: str, title: str | None = None, *, space_id: UUID | None = None) -> SpaceHandle:
         """Пространство создаётся при первом обращении к БД."""
         return SpaceHandle(self, slug, title=title, space_id=space_id)
+
+    # --------------------------------------------------------- агрегаты событий
+
+    def _record_lease_loss(self, space_slug: str, holder: str) -> None:
+        self._lease_losses[(space_slug, holder)] += 1
+
+    async def flush_lease_losses(self) -> int:
+        """`worker.leases_lost`: одно событие на воркера за период (D-119). Возвращает число событий."""
+        losses, self._lease_losses = self._lease_losses, Counter()
+        for (slug, holder), count in losses.items():
+            space = self.space(slug)
+            async with space._tx(own=True) as tx:
+                await space._emit(
+                    tx,
+                    EventDraft("worker.leases_lost", actor=holder, data={"holder": holder, "count": count}),
+                )
+        return len(losses)
 
     async def _space_ref(self, slug: str, title: str | None, space_id: UUID | None) -> SpaceRef:
         ref = self._spaces.get(slug)

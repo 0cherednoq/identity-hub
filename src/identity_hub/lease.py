@@ -230,9 +230,12 @@ class Lease:
 
     async def _fire_on_lost(self) -> None:
         """Вызвать on_lost ровно один раз, каким бы путём ни обнаружилась потеря (heartbeat или check())."""
-        if self._on_lost_fired or self._on_lost is None:
+        if self._on_lost_fired:
             return
         self._on_lost_fired = True
+        self.pool.space.hub._record_lease_loss(self.pool.space.slug, self.holder)
+        if self._on_lost is None:
+            return
         try:
             result = self._on_lost()
             if inspect.isawaitable(result):
@@ -449,6 +452,7 @@ async def acquire(
     `wait` — ждать освобождения подходящего аккаунта; по истечении — `LeaseUnavailable`.
     Повтор с тем же `idempotency_key`, пока аренда жива, возвращает ту же аренду (FR-6.5).
     """
+    explicit_query = query
     if query is None:  # готовый запрос — внутренние выборки библиотеки (вход, сверка)
         query = pool.candidate_query(
             for_operation=for_operation,
@@ -505,6 +509,9 @@ async def acquire(
             await _pool_exhausted(pool)
         remaining = deadline - clock.monotonic()
         if remaining <= 0:
+            if explicit_query is None:  # внутренние выборки (вход, сверка) ёмкость пула не оценивают
+                with contextlib.suppress(Exception):
+                    await pool.check_capacity()
             raise LeaseUnavailable(f"пул {pool.name}: нет свободного аккаунта")
         await asyncio.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)

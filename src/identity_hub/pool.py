@@ -65,6 +65,7 @@ class Pool:
     timing: LeaseTiming = field(default_factory=LeaseTiming)
     holder: str = field(default_factory=default_holder)
     capacity_low: int | None = None  # порог события pool.capacity.low (P8.2)
+    _capacity_state: str = field(default="ok", init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.name or len(self.name) > 128:
@@ -126,6 +127,26 @@ class Pool:
         from identity_hub.lease import acquire
 
         return await acquire(self, **kwargs)
+
+    async def check_capacity(self) -> int:
+        """Свободная ёмкость пула; `pool.capacity.low/empty` — при смене состояния (FR-13.3, D-119)."""
+        threshold = self.capacity_low or 0
+        async with self.space._tx(own=True) as tx:
+            available = await tx.count_candidates(self.candidate_query(), threshold + 1)
+            state = "empty" if available == 0 else ("low" if available <= threshold else "ok")
+            if state != self._capacity_state:
+                if state != "ok":
+                    await self.space._emit(
+                        tx,
+                        EventDraft(
+                            f"pool.capacity.{state}",
+                            actor=self.holder,
+                            service=self.service.name,
+                            data={"pool": self.name, "available": available, "threshold": self.capacity_low},
+                        ),
+                    )
+                self._capacity_state = state
+        return available
 
     async def _pick(self, **filters: Any) -> IdentityRow | None:
         """Выбрать кандидата в короткой транзакции (без захвата аренды) — для проверки фильтров."""

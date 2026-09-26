@@ -583,7 +583,7 @@ class PgTx(StoreTx):
 
     # --------------------------------------------------------- аренда
 
-    async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
+    def _candidate_conditions(self, query: CandidateQuery) -> list[Any]:
         i, lease = IDENTITIES.c, LEASES.c
         now = func.now()
         conditions: list[Any] = [
@@ -625,6 +625,11 @@ class PgTx(StoreTx):
                 .where(BINDINGS.c.identity_id == i.id, PROXIES.c.status != ProxyStatus.ALIVE)
             )
             conditions.append(~down.exists())
+        return conditions
+
+    async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
+        i, lease = IDENTITIES.c, LEASES.c
+        conditions = self._candidate_conditions(query)
         stmt = (
             select(IDENTITIES)
             .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
@@ -635,6 +640,17 @@ class PgTx(StoreTx):
         )
         row = (await self.execute(stmt)).mappings().one_or_none()
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
+
+    async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
+        i, lease = IDENTITIES.c, LEASES.c
+        capped = (
+            select(i.id)
+            .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
+            .where(*self._candidate_conditions(query))
+            .limit(limit)
+            .subquery()
+        )
+        return int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
 
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
         row = (

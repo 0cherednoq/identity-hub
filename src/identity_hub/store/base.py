@@ -462,6 +462,10 @@ class StoreTx(ABC):
         """
 
     @abstractmethod
+    async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
+        """Сколько аккаунтов сейчас можно выдать под запрос (до `limit`) — ёмкость пула."""
+
+    @abstractmethod
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
         """Живая аренда с этим ключом идемпотентности (FR-6.5)."""
 
