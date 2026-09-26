@@ -21,6 +21,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    case,
     delete,
     func,
     literal,
@@ -925,6 +926,45 @@ class PgTx(StoreTx):
             update(OPERATION_KEYS)
             .where(OPERATION_KEYS.c.key == key, OPERATION_KEYS.c.space_id == self.space.id)
             .values(outcome=outcome)
+        )
+
+    # --------------------------------------------------------- здоровье аккаунта
+
+    async def add_error_score(self, identity_id: UUID, delta: float) -> float:
+        score: float = (
+            await self.execute(
+                update(IDENTITIES)
+                .where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
+                .values(error_score=func.greatest(0.0, IDENTITIES.c.error_score + delta))
+                .returning(IDENTITIES.c.error_score)
+            )
+        ).scalar_one()
+        return score
+
+    async def decay_error_score(self, identity_id: UUID, factor: float) -> None:
+        await self.execute(
+            update(IDENTITIES)
+            .where(
+                IDENTITIES.c.id == identity_id,
+                IDENTITIES.c.space_id == self.space.id,
+                IDENTITIES.c.error_score > 0,
+            )
+            .values(
+                error_score=case(
+                    (IDENTITIES.c.error_score * factor < 0.01, 0.0), else_=IDENTITIES.c.error_score * factor
+                )
+            )
+        )
+
+    async def set_session_status(self, identity_id: UUID, slot: str, status: str) -> None:
+        await self.execute(
+            update(SESSIONS)
+            .where(
+                SESSIONS.c.identity_id == identity_id,
+                SESSIONS.c.slot == slot,
+                SESSIONS.c.space_id == self.space.id,
+            )
+            .values(status=status, updated_at=func.now())
         )
 
 

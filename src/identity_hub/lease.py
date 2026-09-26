@@ -30,6 +30,7 @@ from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import IdentityRow, LeaseCounters, LeaseRow, StoreTx
 
 if TYPE_CHECKING:
+    from identity_hub.operation import Operation
     from identity_hub.pool import Pool
 
 __all__ = ["Lease", "OnLost", "acquire", "lease_scope"]
@@ -214,6 +215,16 @@ class Lease:
         else:
             self._counters.failed += 1
             self._counters.last_error = error
+
+    # --------------------------------------------------------- операции (FR-7)
+
+    def operation(
+        self, kind: str, *, key: str | None = None
+    ) -> contextlib.AbstractAsyncContextManager[Operation]:
+        """`async with lease.operation("send") as op:` — проверка, квота до вызова платформы, результат."""
+        from identity_hub.operation import operation_scope
+
+        return operation_scope(self, kind, key)
 
     # --------------------------------------------------------- секреты и сессии (FR-5.2, 5.3, 5.6)
 

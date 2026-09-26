@@ -393,6 +393,19 @@ class StoreTx(ABC):
     @abstractmethod
     async def finish_operation_key(self, key: str, outcome: str) -> None: ...
 
+    # --------------------------------------------------------- здоровье аккаунта (P4.2)
+
+    @abstractmethod
+    async def add_error_score(self, identity_id: UUID, delta: float) -> float:
+        """error_score += delta (не ниже 0); вернуть новое значение."""
+
+    @abstractmethod
+    async def decay_error_score(self, identity_id: UUID, factor: float) -> None:
+        """error_score *= factor, только если он > 0 (без лишней записи на каждую успешную операцию)."""
+
+    @abstractmethod
+    async def set_session_status(self, identity_id: UUID, slot: str, status: str) -> None: ...
+
     # --------------------------------------------------------- секреты (P3.4)
 
     @abstractmethod

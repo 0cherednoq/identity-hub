@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P4.2 lease.operation
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: adjust_error_score (рост/затухание), статус сессии invalid
-  - [ ] operation.py: Operation, проверка допустимости по свежему снимку + fencing, списание до вызова
-  - [ ] выход: успех (затухание error_score) / исключение → ErrorClassifier → наблюдение региона, cool_down, карантин
-  - [ ] pg-тесты: все ветки вины, квота не откатывается, дубликат ключа, cool_down только удлиняет
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -44,7 +41,7 @@
 | P3.3 | Жизненный цикл Lease (heartbeat, fencing) | P3.2 | done |  |  |
 | P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | done |  |  |
 | P4.1 | Квоты, pacing, ключи операций | P3.3 | done |  |  |
-| P4.2 | lease.operation | P4.1 | in_progress |  |  |
+| P4.2 | lease.operation | P4.1 | done |  |  |
 | P5.1 | Прокси и их здоровье | P4.2 | todo | | |
 | P5.2 | Привязка прокси | P5.1 | todo | | |
 | P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 23 / 47 done
+**Итого:** 24 / 47 done
 
 ## Журнал сессий
 
@@ -99,3 +96,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P3.3 · fix · коммит P3.3 прошёл при нестабильном падении (tail глотал код возврата); найден баг: on_lost не вызывался, если потерю первым заметил check(). Исправлено + регрессионный тест; протокол уточнён
 2026-09-26 · P3.4 · done · lease.credentials()/session()/save_session() (fencing, StaleFencing), mark_authenticated, space.revoke_lease (fencing+1, история revoked, heartbeat → LeaseLost revoked) · фаза 3 закрыта, дальше P4.1
 2026-09-26 · P4.1 · done · charge_quotas (savepoint, date_bin, WHERE used<limit), ключ операции в той же точке сохранения (D-114), pacing со сбросом (D-113), quota.exhausted раз за окно · дальше P4.2
+2026-09-26 · P4.2 · done · lease.operation: свежий снимок + fencing, evaluate, списание до вызова, классификация вины (identity/session_invalid/banned/request), cool_down, error_score/карантин (D-115) · фаза 4 закрыта, дальше P5.1
