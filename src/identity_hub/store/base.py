@@ -21,12 +21,15 @@ from identity_hub.events import EventDraft
 
 __all__ = [
     "CandidateQuery",
+    "ChargeOutcome",
     "DataRow",
     "IdentityRow",
     "LeaseCounters",
     "LeaseRow",
     "LinkRow",
     "NewIdentity",
+    "QuotaCharge",
+    "QuotaWindow",
     "ServiceRow",
     "SpaceRef",
     "Store",
@@ -166,6 +169,37 @@ class LeaseCounters:
     @property
     def is_empty(self) -> bool:
         return not self.operations and not self.succeeded and not self.failed and self.last_error is None
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaCharge:
+    """Одно окно квоты: вид операции, длина окна, начало отсчёта, лимит (FR-7.2)."""
+
+    kind: str
+    window_seconds: int
+    origin: datetime
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaWindow:
+    kind: str
+    window_seconds: int
+    window_start: datetime
+    used: int
+
+
+@dataclass(frozen=True, slots=True)
+class ChargeOutcome:
+    """Результат списания: `duplicate` — ключ операции уже был (FR-7.5); `exhausted` — окно без единиц."""
+
+    duplicate: bool = False
+    exhausted: QuotaWindow | None = None
+    reached: tuple[QuotaWindow, ...] = ()  # окна, израсходованные этой операцией до конца
+
+    @property
+    def ok(self) -> bool:
+        return self.exhausted is None
 
 
 class StoreTx(ABC):
@@ -339,6 +373,25 @@ class StoreTx(ABC):
     @abstractmethod
     async def revoke_lease(self, identity_id: UUID) -> LeaseRow | None:
         """Отозвать живую аренду: fencing + 1, строка ih_leases освобождена, история закрыта как revoked."""
+
+    # --------------------------------------------------------- квоты (P4.1)
+
+    @abstractmethod
+    async def charge_quotas(
+        self, identity_id: UUID, charges: Sequence[QuotaCharge], *, operation_key: str | None, kind: str
+    ) -> ChargeOutcome:
+        """Атомарно списать по всем окнам (savepoint, G-2.2) и занять ключ операции (D-114)."""
+
+    @abstractmethod
+    async def bump_pacing(self, identity_id: UUID, charge: QuotaCharge) -> bool:
+        """+1 к счётчику pacing; True — достигнут порог (счётчик обнулён), нужна пауза (D-113)."""
+
+    @abstractmethod
+    async def quota_usage(self, identity_id: UUID) -> list[QuotaWindow]:
+        """Окна квот аккаунта, актуальные на now() (для карточки и проверки допустимости)."""
+
+    @abstractmethod
+    async def finish_operation_key(self, key: str, outcome: str) -> None: ...
 
     # --------------------------------------------------------- секреты (P3.4)
 

@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P4.1 Квоты, pacing, ключи операций
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: charge_quotas (savepoint, ON CONFLICT WHERE used < limit, date_bin), ключ операции в той же точке сохранения
-  - [ ] store: bump_pacing (сброс при достижении), quota_usage, finish_operation_key
-  - [ ] quotas.py: charge() → ChargeResult, событие identity.quota.exhausted раз за окно
-  - [ ] pg-тесты: гонка за последнюю единицу, повтор ключа, час+сутки, pacing
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -43,7 +40,7 @@
 | P3.2 | Захват аренды | P3.1 | done |  |  |
 | P3.3 | Жизненный цикл Lease (heartbeat, fencing) | P3.2 | done |  |  |
 | P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | done |  |  |
-| P4.1 | Квоты, pacing, ключи операций | P3.3 | in_progress |  |  |
+| P4.1 | Квоты, pacing, ключи операций | P3.3 | done |  |  |
 | P4.2 | lease.operation | P4.1 | todo | | |
 | P5.1 | Прокси и их здоровье | P4.2 | todo | | |
 | P5.2 | Привязка прокси | P5.1 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 22 / 47 done
+**Итого:** 23 / 47 done
 
 ## Журнал сессий
 
@@ -98,3 +95,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P3.3 · done · pool.lease(): heartbeat на своей tx, самоограждение по monotonic (D-112), on_lost sync/async, LeaseLost, check(), release идемпотентный по token, счётчики в историю, LeaseContext · дальше P3.4
 2026-09-26 · P3.3 · fix · коммит P3.3 прошёл при нестабильном падении (tail глотал код возврата); найден баг: on_lost не вызывался, если потерю первым заметил check(). Исправлено + регрессионный тест; протокол уточнён
 2026-09-26 · P3.4 · done · lease.credentials()/session()/save_session() (fencing, StaleFencing), mark_authenticated, space.revoke_lease (fencing+1, история revoked, heartbeat → LeaseLost revoked) · фаза 3 закрыта, дальше P4.1
+2026-09-26 · P4.1 · done · charge_quotas (savepoint, date_bin, WHERE used<limit), ключ операции в той же точке сохранения (D-114), pacing со сбросом (D-113), quota.exhausted раз за окно · дальше P4.2

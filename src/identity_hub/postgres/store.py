@@ -15,7 +15,20 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Table, Text, and_, delete, func, literal, or_, select, text, update
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Table,
+    Text,
+    and_,
+    delete,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -39,6 +52,8 @@ from identity_hub.postgres.models import (
     IdentityRecord,
     LeaseHistoryRecord,
     LeaseRecord,
+    OperationKeyRecord,
+    QuotaUsageRecord,
     RegionStateRecord,
     ServiceRecord,
     SessionRecord,
@@ -46,12 +61,15 @@ from identity_hub.postgres.models import (
 )
 from identity_hub.store.base import (
     CandidateQuery,
+    ChargeOutcome,
     DataRow,
     IdentityRow,
     LeaseCounters,
     LeaseRow,
     LinkRow,
     NewIdentity,
+    QuotaCharge,
+    QuotaWindow,
     ServiceRow,
     SpaceRef,
     Store,
@@ -68,6 +86,8 @@ LINKS = cast(Table, IdentityLinkRecord.__table__)
 DATA = cast(Table, IdentityDataRecord.__table__)
 LEASES = cast(Table, LeaseRecord.__table__)
 HISTORY = cast(Table, LeaseHistoryRecord.__table__)
+QUOTAS = cast(Table, QuotaUsageRecord.__table__)
+OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -789,6 +809,123 @@ class PgTx(StoreTx):
         if row is None:
             return None
         return EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext), row.status
+
+    # --------------------------------------------------------- квоты
+
+    async def charge_quotas(
+        self, identity_id: UUID, charges: Sequence[QuotaCharge], *, operation_key: str | None, kind: str
+    ) -> ChargeOutcome:
+        savepoint = await self.session.begin_nested()
+        try:
+            if operation_key is not None:
+                claimed = await self.execute(
+                    insert(OPERATION_KEYS)
+                    .values(key=operation_key, identity_id=identity_id, space_id=self.space.id, kind=kind)
+                    .on_conflict_do_nothing()
+                )
+                if not claimed.rowcount:  # type: ignore[attr-defined]
+                    await savepoint.rollback()
+                    return ChargeOutcome(duplicate=True)
+            reached: list[QuotaWindow] = []
+            for charge in charges:
+                window_start = func.date_bin(
+                    timedelta(seconds=charge.window_seconds),
+                    func.now(),
+                    sa_cast(charge.origin, DateTime(timezone=True)),
+                )
+                stmt = insert(QUOTAS).values(
+                    identity_id=identity_id,
+                    kind=charge.kind,
+                    window_seconds=charge.window_seconds,
+                    window_start=window_start,
+                    space_id=self.space.id,
+                    used=1,
+                )
+                upsert = stmt.on_conflict_do_update(
+                    index_elements=[
+                        QUOTAS.c.identity_id,
+                        QUOTAS.c.kind,
+                        QUOTAS.c.window_seconds,
+                        QUOTAS.c.window_start,
+                    ],
+                    set_={"used": QUOTAS.c.used + 1},
+                    where=QUOTAS.c.used < charge.limit,
+                ).returning(QUOTAS.c.used, QUOTAS.c.window_start)
+                row = (await self.execute(upsert)).one_or_none()
+                if row is None:
+                    start = (await self.execute(select(window_start))).scalar_one()
+                    await savepoint.rollback()
+                    return ChargeOutcome(
+                        exhausted=QuotaWindow(charge.kind, charge.window_seconds, start, charge.limit)
+                    )
+                if row.used >= charge.limit:
+                    reached.append(
+                        QuotaWindow(charge.kind, charge.window_seconds, row.window_start, row.used)
+                    )
+            await savepoint.commit()
+            return ChargeOutcome(reached=tuple(reached))
+        except BaseException:
+            if savepoint.is_active:
+                await savepoint.rollback()
+            raise
+
+    async def bump_pacing(self, identity_id: UUID, charge: QuotaCharge) -> bool:
+        window_start = func.date_bin(
+            timedelta(seconds=charge.window_seconds),
+            func.now(),
+            sa_cast(charge.origin, DateTime(timezone=True)),
+        )
+        stmt = insert(QUOTAS).values(
+            identity_id=identity_id,
+            kind=charge.kind,
+            window_seconds=charge.window_seconds,
+            window_start=window_start,
+            space_id=self.space.id,
+            used=1,
+        )
+        upsert = stmt.on_conflict_do_update(
+            index_elements=[
+                QUOTAS.c.identity_id,
+                QUOTAS.c.kind,
+                QUOTAS.c.window_seconds,
+                QUOTAS.c.window_start,
+            ],
+            set_={"used": QUOTAS.c.used + 1},
+        ).returning(QUOTAS.c.used, QUOTAS.c.window_start)
+        row = (await self.execute(upsert)).one()
+        if row.used < charge.limit:
+            return False
+        await self.execute(
+            update(QUOTAS)
+            .where(
+                QUOTAS.c.identity_id == identity_id,
+                QUOTAS.c.kind == charge.kind,
+                QUOTAS.c.window_seconds == charge.window_seconds,
+                QUOTAS.c.window_start == row.window_start,
+            )
+            .values(used=0)
+        )
+        return True
+
+    async def quota_usage(self, identity_id: UUID) -> list[QuotaWindow]:
+        rows = await self.execute(
+            select(QUOTAS.c.kind, QUOTAS.c.window_seconds, QUOTAS.c.window_start, QUOTAS.c.used)
+            .where(
+                QUOTAS.c.identity_id == identity_id,
+                QUOTAS.c.space_id == self.space.id,
+                QUOTAS.c.window_start + func.make_interval(0, 0, 0, 0, 0, 0, QUOTAS.c.window_seconds)
+                > func.now(),
+            )
+            .order_by(QUOTAS.c.kind, QUOTAS.c.window_seconds)
+        )
+        return [QuotaWindow(r.kind, r.window_seconds, r.window_start, r.used) for r in rows]
+
+    async def finish_operation_key(self, key: str, outcome: str) -> None:
+        await self.execute(
+            update(OPERATION_KEYS)
+            .where(OPERATION_KEYS.c.key == key, OPERATION_KEYS.c.space_id == self.space.id)
+            .values(outcome=outcome)
+        )
 
 
 def _counter_values(counters: LeaseCounters) -> dict[str, Any]:
