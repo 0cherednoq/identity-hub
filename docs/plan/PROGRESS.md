@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P1.8 Каталог событий
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] каталог FR-13.3 с external и severity
-  - [ ] EventDraft, Event, маски типов, ранги severity
-  - [ ] scrubber секретов (S-8)
-  - [ ] юнит-тесты
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -32,7 +29,7 @@
 | P1.5 | Вычисление допустимости операции | P1.4 | done |  |  |
 | P1.6 | Данные аккаунта, search_text, парсер поиска | P1.1 | done |  |  |
 | P1.7 | Криптография | P1.1 | done |  |  |
-| P1.8 | Каталог событий | P1.1 | in_progress |  |  |
+| P1.8 | Каталог событий | P1.1 | done |  |  |
 | P2.1 | IdentityHub, SpaceHandle, транзакции | P0.4, P1.2, P1.4, P1.7, P1.8 | todo | | |
 | P2.2 | Outbox событий | P2.1 | todo | | |
 | P2.3 | Регионы в БД | P2.2 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 11 / 47 done
+**Итого:** 12 / 47 done
 
 ## Журнал сессий
 
@@ -86,3 +83,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P1.5 · done · evaluate() → blockers (lifecycle/standing/auth/availability lazy/verification+tiers/quota), compile_rule → RuleFilter · дальше P1.6
 2026-09-26 · P1.6 · done · validate_labels/tags/model, split_profile, build_search_text, parse_query (D-105, D-106) · дальше P1.7
 2026-09-26 · P1.7 · done · Envelope AES-256-GCM (DEK на запись, AAD, rewrap, sibling-поля), seal_model/open_model, Env/File/Static провайдеры · дальше P1.8
+2026-09-26 · P1.8 · done · каталог FR-13.3 (30 внешних + журнал), EventDraft/Event, маски, severity_at_least, scrub (S-8, строгий режим) · фаза 1 закрыта, дальше P2.1
