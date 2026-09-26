@@ -208,6 +208,12 @@ class IdentityRecord(IdentityHubBase):
     # Поддерживается библиотекой при каждом переходе в ih_verifications.
     verified_factors: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=text("'{}'"))
 
+    # нефильтруемая часть профиля при Service.profile_encrypted (D-109, миграция 0002)
+    profile_key_id: Mapped[str | None] = mapped_column(String(64))
+    profile_wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary)
+    profile_nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    profile_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+
     error_score: Mapped[float] = mapped_column(Float, default=0.0)
     fencing_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # растёт с каждой арендой
     event_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # номер последнего события аккаунта

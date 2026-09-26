@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P2.4 register
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] миграция 0002: зашифрованная часть профиля (D-109)
-  - [ ] store: поиск конфликта, вставка аккаунта, credentials, sessions, регионов, связей
-  - [ ] identities.py: IdentitiesMixin.register (валидация и шифрование до транзакции)
-  - [ ] pg-тесты: идемпотентность, глобальная уникальность, связи, шифрование, общая транзакция
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -36,7 +33,7 @@
 | P2.1 | IdentityHub, SpaceHandle, транзакции | P0.4, P1.2, P1.4, P1.7, P1.8 | done |  |  |
 | P2.2 | Outbox событий | P2.1 | done |  |  |
 | P2.3 | Регионы в БД | P2.2 | done |  |  |
-| P2.4 | register | P2.3, P1.6 | in_progress |  |  |
+| P2.4 | register | P2.3, P1.6 | done |  |  |
 | P2.5 | Изменение данных аккаунта, identity_data | P2.4 | todo | | |
 | P2.6 | Связи и read-модели связей | P2.4 | todo | | |
 | P3.1 | Pool и SQL выборки кандидатов | P1.5, P2.4 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 15 / 47 done
+**Итого:** 16 / 47 done
 
 ## Журнал сессий
 
@@ -90,3 +87,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P2.1 · done · Store/StoreTx/SpaceRef, PgStore (своя tx / savepoint, set_config, SpaceMismatch), IdentityHub/SpaceHandle/Retention, фикстуры hub/space · дальше P2.2
 2026-09-26 · P2.2 · done · outbox: emit() с event_seq/sequence, pg_notify при коммите, scrub в SpaceHandle._emit · дальше P2.3
 2026-09-26 · P2.3 · done · apply_region_change (CAS/version, ретрай, денормализация, события), StateMixin: set_lifecycle/retire/override/_observe/_command/_expire; SpaceBase в _space.py; D-107, D-108 · дальше P2.4
+2026-09-26 · P2.4 · done · register: prepare_identity (валидация+шифрование до tx), идемпотентность, глобальная уникальность, связи, начальные регионы, profile_encrypted (миграция 0002); scripts/check.sh; D-109..D-111 · дальше P2.5

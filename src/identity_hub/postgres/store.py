@@ -15,31 +15,38 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Table, func, select, text, update
+from sqlalchemy import Table, and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Result
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable
 
 from identity_hub._ids import new_id
+from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import ChangeSource
 from identity_hub.errors import SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
+    CredentialsRecord,
     EventRecord,
+    IdentityLinkRecord,
     IdentityRecord,
     RegionStateRecord,
     ServiceRecord,
+    SessionRecord,
     SpaceRecord,
 )
-from identity_hub.store.base import IdentityRow, ServiceRow, SpaceRef, Store, StoreTx
+from identity_hub.store.base import IdentityRow, NewIdentity, ServiceRow, SpaceRef, Store, StoreTx
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
 
 IDENTITIES = cast(Table, IdentityRecord.__table__)
 REGION_STATES = cast(Table, RegionStateRecord.__table__)
+CREDENTIALS = cast(Table, CredentialsRecord.__table__)
+SESSIONS = cast(Table, SessionRecord.__table__)
+LINKS = cast(Table, IdentityLinkRecord.__table__)
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -178,6 +185,111 @@ class PgTx(StoreTx):
             .values(**values)
         )
         return bool((await self.execute(stmt_upd)).rowcount)  # type: ignore[attr-defined]
+
+    # --------------------------------------------------------- регистрация
+
+    async def find_identity(
+        self, identity_id: UUID, service: str, external_ref: str
+    ) -> tuple[UUID, UUID] | None:
+        row = (
+            await self.execute(
+                select(IDENTITIES.c.id, IDENTITIES.c.space_id)
+                .where(
+                    or_(
+                        IDENTITIES.c.id == identity_id,
+                        and_(IDENTITIES.c.service == service, IDENTITIES.c.external_ref == external_ref),
+                    )
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        return (row.id, row.space_id) if row else None
+
+    async def insert_identity(self, row: NewIdentity) -> bool:
+        values: dict[str, Any] = {
+            "id": row.id,
+            "space_id": self.space.id,
+            "service": row.service,
+            "external_ref": row.external_ref,
+            "lifecycle": row.lifecycle,
+            "standing": row.standing,
+            "auth_state": row.auth_state,
+            "tags": row.tags,
+            "attributes": row.attributes,
+            "profile": row.profile,
+            "labels": row.labels,
+            "note": row.note,
+            "search_text": row.search_text,
+        }
+        if row.profile_secret is not None:
+            values |= row.profile_secret.columns("profile_")
+        stmt = insert(IDENTITIES).values(**values).on_conflict_do_nothing()
+        return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
+        if not ids:
+            return set()
+        rows = await self.execute(
+            select(IDENTITIES.c.id).where(
+                IDENTITIES.c.id.in_(list(ids)), IDENTITIES.c.space_id == self.space.id
+            )
+        )
+        return set(rows.scalars())
+
+    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
+        stmt = insert(CREDENTIALS).values(
+            identity_id=identity_id, space_id=self.space.id, **payload.columns()
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[CREDENTIALS.c.identity_id],
+            set_={**payload.columns(), "version": CREDENTIALS.c.version + 1, "updated_at": func.now()},
+        )
+        await self.execute(stmt)
+
+    async def put_session(
+        self,
+        identity_id: UUID,
+        slot: str,
+        payload: EncryptedPayload,
+        *,
+        fencing: int,
+        expires_at: datetime | None = None,
+    ) -> bool:
+        stmt = insert(SESSIONS).values(
+            identity_id=identity_id,
+            space_id=self.space.id,
+            slot=slot,
+            status="valid",
+            expires_at=expires_at,
+            written_by_fencing=fencing,
+            **payload.columns(),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[SESSIONS.c.identity_id, SESSIONS.c.slot],
+            set_={
+                **payload.columns(),
+                "status": "valid",
+                "expires_at": expires_at,
+                "written_by_fencing": fencing,
+                "version": SESSIONS.c.version + 1,
+                "updated_at": func.now(),
+            },
+            where=SESSIONS.c.written_by_fencing <= fencing,
+        )
+        return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
+        stmt = (
+            insert(LINKS)
+            .values(
+                identity_id=identity_id,
+                role=role,
+                space_id=self.space.id,
+                linked_identity_id=linked_identity_id,
+            )
+            .on_conflict_do_nothing()
+        )
+        return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
 
 
 class PgStore(Store):

@@ -15,10 +15,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.events import EventDraft
 
-__all__ = ["IdentityRow", "ServiceRow", "SpaceRef", "Store", "StoreTx"]
+__all__ = ["IdentityRow", "NewIdentity", "ServiceRow", "SpaceRef", "Store", "StoreTx"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +65,25 @@ class IdentityRow:
     updated_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class NewIdentity:
+    """Вставка аккаунта: данные уже провалидированы, секреты зашифрованы."""
+
+    id: UUID
+    service: str
+    external_ref: str
+    lifecycle: str
+    standing: str
+    auth_state: str
+    tags: list[str]
+    attributes: dict[str, Any]
+    profile: dict[str, Any]
+    labels: dict[str, Any]
+    note: str | None
+    search_text: str
+    profile_secret: EncryptedPayload | None = None
+
+
 class StoreTx(ABC):
     """Единица работы в рамках одного пространства (своя транзакция или savepoint пользователя)."""
 
@@ -101,6 +121,41 @@ class StoreTx(ABC):
         self, identity_id: UUID, region: str, key: str, previous: RegionState | None, new: RegionState
     ) -> bool:
         """Записать регион с проверкой `version` (previous=None — вставка). False — гонка."""
+
+    # --------------------------------------------------------- регистрация (P2.4)
+
+    @abstractmethod
+    async def find_identity(
+        self, identity_id: UUID, service: str, external_ref: str
+    ) -> tuple[UUID, UUID] | None:
+        """(id, space_id) аккаунта с этим id или (service, external_ref) — во всех пространствах (FR-2.2)."""
+
+    @abstractmethod
+    async def insert_identity(self, row: NewIdentity) -> bool:
+        """False — конфликт уникальности (параллельная регистрация)."""
+
+    @abstractmethod
+    async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
+        """Какие из аккаунтов есть в этом пространстве."""
+
+    @abstractmethod
+    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None: ...
+
+    @abstractmethod
+    async def put_session(
+        self,
+        identity_id: UUID,
+        slot: str,
+        payload: EncryptedPayload,
+        *,
+        fencing: int,
+        expires_at: datetime | None = None,
+    ) -> bool:
+        """Записать сессию слота; отклоняется, если записана более новой арендой (G-1.4)."""
+
+    @abstractmethod
+    async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
+        """False — связь с этой ролью уже есть (FR-4.1)."""
 
 
 class Store(ABC):
