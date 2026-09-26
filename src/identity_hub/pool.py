@@ -16,6 +16,7 @@ from identity_hub.domain.data import validate_labels
 from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
+from identity_hub.metrics import record_metric
 from identity_hub.service import LeaseMode, Pacing, ProxyDownPolicy, ProxyPolicy, Service
 from identity_hub.store.base import CandidateQuery, IdentityRow
 
@@ -146,6 +147,15 @@ class Pool:
                         ),
                     )
                 self._capacity_state = state
+        record_metric(
+            self.space.hub.metrics,
+            "gauge",
+            "identity_hub_pool_available",
+            available,
+            space=self.space.slug,
+            service=self.service.name,
+            pool=self.name,
+        )
         return available
 
     async def _pick(self, **filters: Any) -> IdentityRow | None:

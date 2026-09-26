@@ -8,15 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P9.3 Метрики
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] определить MetricsHook и встроенный no-op/recording hook
-  - [ ] инструментировать lease, operation и capacity
-  - [ ] добавить gauges cursor lag и delivery queue
-  - [ ] написать unit/pg-тесты вызовов hook
-  - [ ] прогнать полный scripts/check.sh
-  - [ ] обновить прогресс и закрыть задачу
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -64,14 +59,14 @@
 | P8.4 | Telegram-уведомления | P8.3 | done |  |  |
 | P9.1 | Maintenance | P5.4, P3.3 | done |  |  |
 | P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | done |  |  |
-| P9.3 | Метрики | P4.2 | in_progress |  |  |
+| P9.3 | Метрики | P4.2 | done |  |  |
 | P10.1 | MemoryStore | P2–P9 | todo | | |
 | P10.2 | identity_hub.testing | P10.1 | todo | | |
 | P10.3 | Нагрузочные тесты | P10.2 | todo | | |
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 41 / 47 done
+**Итого:** 42 / 47 done
 
 ## Журнал сессий
 
@@ -119,3 +114,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P8.4 · done · CRUD Telegram-каналов/правил, зашифрованный bot token, фильтры service/data.*/labels, немедленная и digest-очередь, шаблоны и ссылки на карточки, aiogram-транспорт, exp+jitter и retry_after 429; 377 тестов зелёные · дальше P9.1
 2026-09-27 · P9.1 · done · MaintenanceSchedule/Report и pump диспетчера; таймеры standing/availability, verification/challenge, закрытие аренд по expires_at, агрегаты потерь; часовая очистка квот/ключей и суточный retention логов/истории/events/webhook/notification; 379 тестов зелёные · дальше P9.2
 2026-09-27 · P9.2 · done · CLI migrate/dispatcher/maintenance/doctor/rotate-key через app factory; doctor проверяет и чинит регионы, verified_factors, event_seq и proxy.bound_count; rotate-key пакетно переоборачивает credentials/session/challenge/evidence/proxy/webhook/bot/profile; 387 тестов зелёные · дальше P9.3
+2026-09-27 · P9.3 · done · MetricsHook/NullMetrics/RecordingMetrics без Prometheus; histogram lease/operation, failure counters, pool availability, cursor lag и webhook/notification queue gauges; backend метрик изолирован; 389 тестов зелёные · фаза 9 закрыта, дальше P10.1

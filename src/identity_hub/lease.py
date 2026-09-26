@@ -27,6 +27,7 @@ from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
 from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing
 from identity_hub.events import EventDraft
+from identity_hub.metrics import record_metric
 from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseCounters, LeaseRow, ProxyRow, StoreTx
@@ -64,6 +65,7 @@ class Lease:
         self._lost: str | None = None
         self._closed = False
         self._last_ok = pool.space.hub.clock.monotonic()
+        self._started_at = self._last_ok
         self._owner: asyncio.Task[Any] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._on_lost: OnLost | None = None
@@ -359,6 +361,25 @@ class Lease:
         if self._released:
             return
         self._released = True
+        metric_reason = str(reason)
+        record_metric(
+            self.pool.space.hub.metrics,
+            "histogram",
+            "identity_hub_lease_duration_seconds",
+            max(0.0, self.pool.space.hub.clock.monotonic() - self._started_at),
+            service=self.service,
+            pool=self.pool.name,
+            reason=metric_reason,
+        )
+        if LeaseEndReason(reason) is not LeaseEndReason.RELEASED:
+            record_metric(
+                self.pool.space.hub.metrics,
+                "counter",
+                "identity_hub_failures_total",
+                service=self.service,
+                scope="lease",
+                reason=metric_reason,
+            )
         await self._flush_logs(final=True)
         counters, self._counters = self._counters, LeaseCounters.empty()
         if error is not None:

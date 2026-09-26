@@ -58,6 +58,7 @@ from identity_hub.errors import LeaseUnavailable, SpaceMismatch
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
+    XID8,
     BindingRecord,
     ChallengeRecord,
     CredentialsRecord,
@@ -96,6 +97,7 @@ from identity_hub.store.base import (
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
+    MetricsSnapshot,
     NewIdentity,
     NewNotificationChannel,
     NewNotificationRule,
@@ -2781,6 +2783,47 @@ class PgStore(Store):
                     counts[name] = len(rows)
                     remaining -= len(rows)
         return counts
+
+    async def metrics_snapshot(self) -> MetricsSnapshot:
+        cursor_lag: dict[str, int] = {}
+        async with self.sessionmaker() as session:
+            cursors = await session.execute(
+                select(CURSORS.c.consumer, CURSORS.c.last_tx_id, CURSORS.c.last_id),
+                execution_options=self.options,
+            )
+            horizon = func.pg_snapshot_xmin(func.pg_current_snapshot())
+            for cursor in cursors:
+                lag = await session.execute(
+                    select(func.count())
+                    .select_from(EVENTS)
+                    .where(
+                        EVENTS.c.external.is_(True),
+                        EVENTS.c.tx_id < horizon,
+                        tuple_(EVENTS.c.tx_id, EVENTS.c.id)
+                        > tuple_(sa_cast(literal(str(cursor.last_tx_id)), XID8()), cursor.last_id),
+                    ),
+                    execution_options=self.options,
+                )
+                cursor_lag[cursor.consumer] = int(lag.scalar_one())
+            webhook_queue = await session.execute(
+                select(func.count())
+                .select_from(WEBHOOK_DELIVERIES)
+                .where(WEBHOOK_DELIVERIES.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED])),
+                execution_options=self.options,
+            )
+            notification_queue = await session.execute(
+                select(func.count())
+                .select_from(NOTIFICATIONS)
+                .where(NOTIFICATIONS.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED])),
+                execution_options=self.options,
+            )
+        return MetricsSnapshot(
+            cursor_lag,
+            {
+                "webhooks": int(webhook_queue.scalar_one()),
+                "notifications": int(notification_queue.scalar_one()),
+            },
+        )
 
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:

@@ -36,6 +36,7 @@ __all__ = [
     "LeaseRow",
     "LeaseStatsRow",
     "LinkRow",
+    "MetricsSnapshot",
     "NewIdentity",
     "NewNotificationChannel",
     "NewNotificationRule",
@@ -75,6 +76,12 @@ class DoctorIssue:
     entity_id: UUID
     expected: Any
     actual: Any
+
+
+@dataclass(frozen=True, slots=True)
+class MetricsSnapshot:
+    cursor_lag: dict[str, int]
+    delivery_queue: dict[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1005,3 +1012,8 @@ class Store(ABC):
 
     @abstractmethod
     async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]: ...
+
+    # --------------------------------------------------------- метрики (P9.3)
+
+    @abstractmethod
+    async def metrics_snapshot(self) -> MetricsSnapshot: ...

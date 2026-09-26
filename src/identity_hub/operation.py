@@ -23,6 +23,7 @@ from identity_hub.domain.regions import Command, Observation, Timer
 from identity_hub.enums import AuthState, Availability, ChangeSource, SessionStatus, Standing
 from identity_hub.errors import OperationNotAllowed, StaleFencing, TransitionNotAllowed
 from identity_hub.events import EventDraft
+from identity_hub.metrics import record_metric
 from identity_hub.protocols import Blame, Fault
 from identity_hub.quotas import charge
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
@@ -62,6 +63,7 @@ class Operation:
 
 @asynccontextmanager
 async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> AsyncIterator[Operation]:
+    started = lease.pool.space.hub.clock.monotonic()
     lease.check()
     space = lease.pool.space
     service = lease.pool.service
@@ -80,6 +82,16 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
         )
         blockers = evaluate(service, kind, snapshot, await tx.now())
         if blockers:
+            for blocker in blockers:
+                record_metric(
+                    space.hub.metrics,
+                    "counter",
+                    "identity_hub_failures_total",
+                    service=service.name,
+                    scope="operation",
+                    reason=blocker.code,
+                )
+            _observe_operation(lease, kind, started, "rejected")
             raise OperationNotAllowed(kind, blockers)
         result = await charge(
             space,
@@ -96,10 +108,20 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
     try:
         yield op
     except asyncio.CancelledError:
+        _observe_operation(lease, kind, started, "cancelled")
         raise  # потеря аренды или отмена — не вина аккаунта
     except Exception as exc:
         lease._count(kind, ok=False, error=f"{type(exc).__name__}: {exc}"[:2000])
         await _on_failure(lease, op, exc)
+        record_metric(
+            space.hub.metrics,
+            "counter",
+            "identity_hub_failures_total",
+            service=service.name,
+            scope="operation",
+            reason=type(exc).__name__,
+        )
+        _observe_operation(lease, kind, started, "failed")
         raise
     else:
         lease._count(kind, ok=True)
@@ -107,6 +129,20 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
             await tx.decay_error_score(lease.identity_id, SUCCESS_DECAY)
             if key is not None and not op.duplicate:
                 await tx.finish_operation_key(key, "succeeded")
+        _observe_operation(lease, kind, started, "succeeded")
+
+
+def _observe_operation(lease: Lease, kind: str, started: float, status: str) -> None:
+    hub = lease.pool.space.hub
+    record_metric(
+        hub.metrics,
+        "histogram",
+        "identity_hub_operation_duration_seconds",
+        max(0.0, hub.clock.monotonic() - started),
+        service=lease.service,
+        operation=kind,
+        status=status,
+    )
 
 
 async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
