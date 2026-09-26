@@ -15,8 +15,11 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import Table, and_, delete, func, or_, select, text, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Table, Text, and_, delete, func, literal, or_, select, text, update
+from sqlalchemy import cast as sa_cast
+from sqlalchemy.dialects.postgresql import ARRAY, insert
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.engine import Result
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable
@@ -42,6 +45,7 @@ from identity_hub.postgres.models import (
 from identity_hub.store.base import (
     DataRow,
     IdentityRow,
+    LinkRow,
     NewIdentity,
     ServiceRow,
     SpaceRef,
@@ -396,6 +400,108 @@ class PgTx(StoreTx):
             )
         version: int | None = (await self.execute(stmt)).scalar_one_or_none()
         return version
+
+    # --------------------------------------------------------- связи
+
+    async def delete_link(self, identity_id: UUID, role: str) -> UUID | None:
+        result = await self.execute(
+            delete(LINKS)
+            .where(
+                LINKS.c.identity_id == identity_id, LINKS.c.role == role, LINKS.c.space_id == self.space.id
+            )
+            .returning(LINKS.c.linked_identity_id)
+        )
+        linked: UUID | None = result.scalar_one_or_none()
+        return linked
+
+    async def links_of(self, identity_id: UUID) -> tuple[list[LinkRow], list[LinkRow]]:
+        other = IDENTITIES.alias("other")
+        out_rows = await self.execute(
+            select(LINKS, other.c.service, other.c.external_ref)
+            .join(other, other.c.id == LINKS.c.linked_identity_id)
+            .where(LINKS.c.identity_id == identity_id, LINKS.c.space_id == self.space.id)
+            .order_by(LINKS.c.role)
+        )
+        in_rows = await self.execute(
+            select(LINKS, other.c.service, other.c.external_ref)
+            .join(other, other.c.id == LINKS.c.identity_id)
+            .where(LINKS.c.linked_identity_id == identity_id, LINKS.c.space_id == self.space.id)
+            .order_by(LINKS.c.role, LINKS.c.identity_id)
+        )
+
+        def build(rows: Any) -> list[LinkRow]:
+            return [
+                LinkRow(r.identity_id, r.role, r.linked_identity_id, r.service, r.external_ref, r.created_at)
+                for r in rows
+            ]
+
+        return build(out_rows), build(in_rows)
+
+    async def link_counts(self, ids: Sequence[UUID]) -> dict[UUID, tuple[int, int, list[str]]]:
+        if not ids:
+            return {}
+        id_list = list(ids)
+        outgoing = (
+            select(
+                LINKS.c.identity_id.label("id"),
+                func.count().label("n"),
+                func.array_agg(LINKS.c.role).label("roles"),
+            )
+            .where(LINKS.c.identity_id.in_(id_list), LINKS.c.space_id == self.space.id)
+            .group_by(LINKS.c.identity_id)
+            .subquery()
+        )
+        incoming = (
+            select(LINKS.c.linked_identity_id.label("id"), func.count().label("n"))
+            .where(LINKS.c.linked_identity_id.in_(id_list), LINKS.c.space_id == self.space.id)
+            .group_by(LINKS.c.linked_identity_id)
+            .subquery()
+        )
+        ids_values = select(func.unnest(cast_uuid_array(id_list)).label("id")).subquery()
+        rows = await self.execute(
+            select(ids_values.c.id, outgoing.c.n, outgoing.c.roles, incoming.c.n.label("incoming"))
+            .outerjoin(outgoing, outgoing.c.id == ids_values.c.id)
+            .outerjoin(incoming, incoming.c.id == ids_values.c.id)
+        )
+        return {r.id: (r.n or 0, r.incoming or 0, sorted(r.roles or [])) for r in rows}
+
+    async def dependents(self, identity_id: UUID, max_depth: int) -> list[tuple[UUID, int, list[str]]]:
+        base = (
+            select(
+                LINKS.c.identity_id.label("id"),
+                literal(1).label("depth"),
+                pg_array([sa_cast(LINKS.c.role, Text)]).label("path"),
+                pg_array([LINKS.c.identity_id]).label("seen"),
+            )
+            .where(LINKS.c.linked_identity_id == identity_id, LINKS.c.space_id == self.space.id)
+            .cte("impact", recursive=True)
+        )
+        step = (
+            select(
+                LINKS.c.identity_id,
+                base.c.depth + 1,
+                base.c.path.op("||")(pg_array([sa_cast(LINKS.c.role, Text)])),
+                base.c.seen.op("||")(pg_array([LINKS.c.identity_id])),
+            )
+            .join(base, LINKS.c.linked_identity_id == base.c.id)
+            .where(
+                base.c.depth < max_depth,
+                LINKS.c.space_id == self.space.id,
+                ~(LINKS.c.identity_id == func.any(base.c.seen)),
+                LINKS.c.identity_id != identity_id,
+            )
+        )
+        impact = base.union_all(step)
+        rows = await self.execute(select(impact.c.id, impact.c.depth, impact.c.path).order_by(impact.c.depth))
+        best: dict[UUID, tuple[UUID, int, list[str]]] = {}
+        for r in rows:
+            best.setdefault(r.id, (r.id, r.depth, list(r.path)))
+        result = list(best.values())
+        return sorted(result, key=lambda item: (item[1], str(item[0])))
+
+
+def cast_uuid_array(ids: list[UUID]) -> Any:
+    return sa_cast(ids, ARRAY(PGUUID(as_uuid=True)))
 
 
 class PgStore(Store):

@@ -14,6 +14,7 @@ from identity_hub.crypto import Envelope
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
+from identity_hub.links import LinksMixin
 from identity_hub.protocols import SecretsProvider
 from identity_hub.service import Service
 from identity_hub.state import StateMixin
@@ -107,7 +108,7 @@ class IdentityHub:
         return ref
 
 
-class SpaceHandle(IdentitiesMixin, IdentityDataMixin, StateMixin):
+class SpaceHandle(IdentitiesMixin, IdentityDataMixin, LinksMixin, StateMixin):
     """Пространство (ТЗ §5.1). `.using(session)` — работа в общей транзакции пользователя.
 
     Операции разложены по миксинам: регионы — `state.StateMixin`, далее по задачам плана.

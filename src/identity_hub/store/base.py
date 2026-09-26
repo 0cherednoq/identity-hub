@@ -19,7 +19,16 @@ from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.events import EventDraft
 
-__all__ = ["DataRow", "IdentityRow", "NewIdentity", "ServiceRow", "SpaceRef", "Store", "StoreTx"]
+__all__ = [
+    "DataRow",
+    "IdentityRow",
+    "LinkRow",
+    "NewIdentity",
+    "ServiceRow",
+    "SpaceRef",
+    "Store",
+    "StoreTx",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +101,18 @@ class DataRow:
     schema_version: int
     version: int
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class LinkRow:
+    """Связь `identity_id --role--> linked_identity_id` с данными другой стороны для read-моделей."""
+
+    identity_id: UUID
+    role: str
+    linked_identity_id: UUID
+    other_service: str
+    other_external_ref: str
+    created_at: datetime
 
 
 class StoreTx(ABC):
@@ -195,6 +216,24 @@ class StoreTx(ABC):
         expected_version: int | None,
     ) -> int | None:
         """Новая версия или None при конфликте (expected_version=None — только вставка новой строки)."""
+
+    # --------------------------------------------------------- связи (P2.6)
+
+    @abstractmethod
+    async def delete_link(self, identity_id: UUID, role: str) -> UUID | None:
+        """Удалить связь; вернуть linked_identity_id или None, если связи не было."""
+
+    @abstractmethod
+    async def links_of(self, identity_id: UUID) -> tuple[list[LinkRow], list[LinkRow]]:
+        """(исходящие, входящие); `other_*` — данные противоположной стороны."""
+
+    @abstractmethod
+    async def link_counts(self, ids: Sequence[UUID]) -> dict[UUID, tuple[int, int, list[str]]]:
+        """id → (исходящих, входящих, роли исходящих) — одним запросом для страницы списка."""
+
+    @abstractmethod
+    async def dependents(self, identity_id: UUID, max_depth: int) -> list[tuple[UUID, int, list[str]]]:
+        """Транзитивно зависящие аккаунты: (id, глубина, цепочка ролей) — анализ последствий."""
 
 
 class Store(ABC):
