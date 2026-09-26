@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import fields
 from datetime import datetime, timedelta
@@ -1803,6 +1803,80 @@ class PgTx(StoreTx):
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
+    # --------------------------------------------------------- обслуживание
+
+    async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
+        rows = (
+            await self.execute(
+                select(
+                    IDENTITIES.c.id,
+                    (IDENTITIES.c.availability_until <= func.now()).label("availability_due"),
+                    (IDENTITIES.c.standing_until <= func.now()).label("standing_due"),
+                )
+                .where(
+                    IDENTITIES.c.space_id == self.space.id,
+                    or_(
+                        IDENTITIES.c.availability_until <= func.now(),
+                        IDENTITIES.c.standing_until <= func.now(),
+                    ),
+                )
+                .order_by(
+                    func.least(IDENTITIES.c.availability_until, IDENTITIES.c.standing_until)
+                    .asc()
+                    .nulls_last()
+                )
+                .limit(limit)
+            )
+        ).mappings()
+        result: list[tuple[UUID, str]] = []
+        for row in rows:
+            if row["availability_due"]:
+                result.append((row["id"], "availability"))
+            if row["standing_due"]:
+                result.append((row["id"], "standing"))
+        return result
+
+    async def expire_leases(self, limit: int) -> int:
+        rows = list(
+            (
+                await self.execute(
+                    select(LEASES, IDENTITIES.c.service)
+                    .join(IDENTITIES, IDENTITIES.c.id == LEASES.c.identity_id)
+                    .where(
+                        LEASES.c.space_id == self.space.id,
+                        LEASES.c.expires_at <= func.now(),
+                    )
+                    .order_by(LEASES.c.expires_at)
+                    .limit(limit)
+                    .with_for_update(of=LEASES, skip_locked=True)
+                )
+            ).mappings()
+        )
+        drafts: list[EventDraft] = []
+        for row in rows:
+            closed = await self.execute(
+                update(HISTORY)
+                .where(HISTORY.c.lease_id == row["lease_id"], HISTORY.c.released_at.is_(None))
+                .values(released_at=row["expires_at"], end_reason=LeaseEndReason.EXPIRED)
+            )
+            if not closed.rowcount:  # type: ignore[attr-defined]
+                continue
+            await self.execute(
+                update(LEASES).where(LEASES.c.identity_id == row["identity_id"]).values(idempotency_key=None)
+            )
+            drafts.append(
+                EventDraft(
+                    "lease.expired",
+                    actor="maintenance",
+                    service=row["service"],
+                    identity_id=row["identity_id"],
+                    lease_id=row["lease_id"],
+                    data={"pool": row["pool"], "expired_at": row["expires_at"].isoformat()},
+                )
+            )
+        await self.emit(drafts)
+        return len(drafts)
+
 
 def _event(row: Any) -> Event:
     return Event(
@@ -2469,6 +2543,52 @@ class PgStore(Store):
                 execution_options=self.options,
             )
             return True
+
+    # --------------------------------------------------------- обслуживание
+
+    async def maintenance_spaces(self) -> list[SpaceRef]:
+        async with self.sessionmaker() as session:
+            rows = await session.execute(
+                select(SPACES.c.id, SPACES.c.slug, SPACES.c.title).order_by(SPACES.c.slug),
+                execution_options=self.options,
+            )
+        return [SpaceRef(row.id, row.slug, row.title) for row in rows]
+
+    async def cleanup_maintenance(
+        self, retention: Mapping[str, timedelta], names: frozenset[str]
+    ) -> dict[str, int]:
+        async with self._own() as session:
+            statements = {
+                "quota_windows": delete(QUOTAS).where(
+                    QUOTAS.c.window_start + func.make_interval(0, 0, 0, 0, 0, 0, QUOTAS.c.window_seconds)
+                    <= func.now()
+                ),
+                "operation_keys": delete(OPERATION_KEYS).where(
+                    OPERATION_KEYS.c.created_at < func.now() - retention["operation_keys"]
+                ),
+                "lease_logs": delete(LEASE_LOGS).where(
+                    LEASE_LOGS.c.ts < func.now() - retention["lease_logs"]
+                ),
+                "lease_history": delete(HISTORY).where(
+                    HISTORY.c.released_at.is_not(None),
+                    HISTORY.c.released_at < func.now() - retention["lease_history"],
+                ),
+                "webhook_deliveries": delete(WEBHOOK_DELIVERIES).where(
+                    WEBHOOK_DELIVERIES.c.created_at < func.now() - retention["deliveries"]
+                ),
+                "notifications": delete(NOTIFICATIONS).where(
+                    func.coalesce(NOTIFICATIONS.c.sent_at, NOTIFICATIONS.c.scheduled_at)
+                    < func.now() - retention["deliveries"]
+                ),
+                "events": delete(EVENTS).where(EVENTS.c.occurred_at < func.now() - retention["events"]),
+            }
+            counts: dict[str, int] = {}
+            for name, stmt in statements.items():
+                if name not in names:
+                    continue
+                result = await session.execute(stmt, execution_options=self.options)
+                counts[name] = int(result.rowcount or 0)  # type: ignore[attr-defined]
+            return counts
 
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:

@@ -8,15 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P9.1 Maintenance
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] описать расписание и отчёт maintenance
-  - [ ] написать pg-тесты истечений, аренд и очисток
-  - [ ] реализовать store maintenance primitives
-  - [ ] реализовать maintenance runner и встраивание в диспетчер
-  - [ ] прогнать полный scripts/check.sh
-  - [ ] обновить прогресс и закрыть задачу
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -62,7 +57,7 @@
 | P8.2 | Агрегированные события | P8.1, P3.3 | done |  |  |
 | P8.3 | Исходящие вебхуки | P8.1 | done |  |  |
 | P8.4 | Telegram-уведомления | P8.3 | done |  |  |
-| P9.1 | Maintenance | P5.4, P3.3 | in_progress |  |  |
+| P9.1 | Maintenance | P5.4, P3.3 | done |  |  |
 | P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | todo | | |
 | P9.3 | Метрики | P4.2 | todo | | |
 | P10.1 | MemoryStore | P2–P9 | todo | | |
@@ -71,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 39 / 47 done
+**Итого:** 40 / 47 done
 
 ## Журнал сессий
 
@@ -117,3 +112,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P8.2 · done · pool.check_capacity (low/empty при смене состояния, авто при LeaseUnavailable), worker.leases_lost через hub.flush_lease_losses (D-119) · дальше P8.3
 2026-09-27 · P8.3 · done · endpoint'ы с https/dev allowlist и фильтрами, зашифрованные секреты и ротация с двумя v1, HMAC verify с окном 5 мин; очередь доставок, httpx без редиректов, exp+jitter ретраи, автоотключение с событием и ручной повтор · дальше P8.4
 2026-09-27 · P8.4 · done · CRUD Telegram-каналов/правил, зашифрованный bot token, фильтры service/data.*/labels, немедленная и digest-очередь, шаблоны и ссылки на карточки, aiogram-транспорт, exp+jitter и retry_after 429; 377 тестов зелёные · дальше P9.1
+2026-09-27 · P9.1 · done · MaintenanceSchedule/Report и pump диспетчера; таймеры standing/availability, verification/challenge, закрытие аренд по expires_at, агрегаты потерь; часовая очистка квот/ключей и суточный retention логов/истории/events/webhook/notification; 379 тестов зелёные · дальше P9.2

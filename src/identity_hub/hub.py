@@ -23,6 +23,7 @@ from identity_hub.identity_data import IdentityDataMixin
 from identity_hub.importing import ImportingMixin
 from identity_hub.links import LinksMixin
 from identity_hub.logging import LeaseLogPolicy, LeaseLogSink
+from identity_hub.maintenance import Maintenance, MaintenanceSchedule
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
@@ -72,6 +73,7 @@ class IdentityHub:
         webhooks: WebhookPolicy | None = None,
         webhook_dev_hosts: Iterable[str] = (),
         telegram_transport: TelegramTransport | None = None,
+        maintenance: MaintenanceSchedule | None = None,
     ) -> None:
         if store is None:
             if sessionmaker is None:
@@ -103,6 +105,8 @@ class IdentityHub:
         )
         self.dispatcher.add_consumer("notifications", self.notification_dispatcher.handle_events)
         self.dispatcher.add_pump(self.notification_dispatcher.deliver_due)
+        self.maintenance = Maintenance(self, maintenance)
+        self.dispatcher.add_pump(self.maintenance.run_due)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -872,6 +872,16 @@ class StoreTx(ABC):
     @abstractmethod
     async def delete_notification_rule(self, rule_id: UUID) -> bool: ...
 
+    # --------------------------------------------------------- обслуживание (P9.1)
+
+    @abstractmethod
+    async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
+        """Истёкшие денормализованные standing/availability таймеры."""
+
+    @abstractmethod
+    async def expire_leases(self, limit: int) -> int:
+        """Закрыть историю истёкших аренд временем expires_at и записать lease.expired."""
+
 
 class Store(ABC):
     @abstractmethod
@@ -966,3 +976,14 @@ class Store(ABC):
         retry_after: timedelta,
         max_attempts: int,
     ) -> bool: ...
+
+    # --------------------------------------------------------- обслуживание (P9.1)
+
+    @abstractmethod
+    async def maintenance_spaces(self) -> list[SpaceRef]: ...
+
+    @abstractmethod
+    async def cleanup_maintenance(
+        self, retention: Mapping[str, timedelta], names: frozenset[str]
+    ) -> dict[str, int]:
+        """Удалить завершившиеся окна квот и старые журнальные данные по времени БД."""
