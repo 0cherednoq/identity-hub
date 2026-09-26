@@ -8,10 +8,14 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P1.2 RegionMachine
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] модель: RegionSpec, RegionState, Command/Observation/Override/Timer, RegionDecision
+  - [ ] apply: команды, наблюдения (stale, unknown, pin/drift, confirm_leaving), override, таймер
+  - [ ] спецификации lifecycle, standing, auth, availability, proxy, delivery
+  - [ ] табличные тесты по диаграммам §3
+  - [ ] hypothesis-тест инвариантов
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -23,7 +27,7 @@
 | P0.3 | Тестовая инфраструктура | P0.2 | done |  |  |
 | P0.4 | Миграции Alembic, exclude_identity_hub | P0.3 | done |  |  |
 | P1.1 | Ошибки и примитивы | P0.2 | done |  |  |
-| P1.2 | RegionMachine | P1.1 | todo | | |
+| P1.2 | RegionMachine | P1.1 | in_progress |  |  |
 | P1.3 | VerificationFlow / Spec / Tier | P1.1 | todo | | |
 | P1.4 | Декларация Service и протоколы | P1.1 | todo | | |
 | P1.5 | Вычисление допустимости операции | P1.4 | todo | | |
