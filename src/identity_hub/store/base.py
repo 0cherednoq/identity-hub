@@ -23,6 +23,7 @@ __all__ = [
     "CandidateQuery",
     "DataRow",
     "IdentityRow",
+    "LeaseRow",
     "LinkRow",
     "NewIdentity",
     "ServiceRow",
@@ -130,6 +131,22 @@ class CandidateQuery:
     among: Any = None  # список id или подзапрос домена (Select) — FR-6.1
     exclude: frozenset[UUID] = frozenset()
     shared: bool = False  # FR-6.6: живая аренда не исключает аккаунт
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseRow:
+    """Живая аренда (ih_leases) или, в shared-режиме, только строка истории."""
+
+    lease_id: UUID
+    token: UUID
+    identity_id: UUID
+    fencing: int
+    pool: str
+    holder: str
+    acquired_at: datetime
+    expires_at: datetime
+    idempotency_key: str | None = None
+    proxy_id: UUID | None = None
 
 
 class StoreTx(ABC):
@@ -260,6 +277,28 @@ class StoreTx(ABC):
 
         Порядок — наименее недавно арендованный (D-007). Истёкшие временные состояния availability
         считаются доступными (ленивое снятие, ТЗ §3.4).
+        """
+
+    @abstractmethod
+    async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
+        """Живая аренда с этим ключом идемпотентности (FR-6.5)."""
+
+    @abstractmethod
+    async def acquire_lease(
+        self,
+        identity: IdentityRow,
+        *,
+        pool: str,
+        holder: str,
+        ttl_seconds: float,
+        idempotency_key: str | None,
+        shared: bool,
+        proxy_id: UUID | None = None,
+    ) -> tuple[LeaseRow, LeaseRow | None]:
+        """Захватить аренду заблокированного кандидата: fencing + 1, ih_leases, строка истории (G-4.2).
+
+        Истёкшая аренда перезаписывается, её история закрывается как `expired` временем `expires_at`
+        (FR-6.8). Возвращает (новая аренда, перезахваченная истёкшая или None).
         """
 
 

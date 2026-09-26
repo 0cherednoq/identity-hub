@@ -19,6 +19,7 @@ from identity_hub.store.base import CandidateQuery, IdentityRow
 
 if TYPE_CHECKING:
     from identity_hub._space import SpaceBase
+    from identity_hub.lease import Lease
 
 __all__ = ["DEFAULT_STANDING", "LeaseTiming", "Pool", "PoolsMixin", "default_holder"]
 
@@ -106,6 +107,12 @@ class Pool:
             exclude=frozenset(exclude),
             shared=self.shared,
         )
+
+    async def acquire(self, **kwargs: Any) -> Lease:
+        """Низкоуровневый захват (без heartbeat); обычный путь — `async with pool.lease(...)`."""
+        from identity_hub.lease import acquire
+
+        return await acquire(self, **kwargs)
 
     async def _pick(self, **filters: Any) -> IdentityRow | None:
         """Выбрать кандидата в короткой транзакции (без захвата аренды) — для проверки фильтров."""

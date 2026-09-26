@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Table, Text, and_, delete, func, literal, or_, select, text, update
 from sqlalchemy import cast as sa_cast
@@ -27,8 +27,8 @@ from sqlalchemy.sql import Executable, Select
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, ChangeSource, Lifecycle
-from identity_hub.errors import SpaceMismatch
+from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, Lifecycle
+from identity_hub.errors import LeaseUnavailable, SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
@@ -37,6 +37,7 @@ from identity_hub.postgres.models import (
     IdentityDataRecord,
     IdentityLinkRecord,
     IdentityRecord,
+    LeaseHistoryRecord,
     LeaseRecord,
     RegionStateRecord,
     ServiceRecord,
@@ -47,6 +48,7 @@ from identity_hub.store.base import (
     CandidateQuery,
     DataRow,
     IdentityRow,
+    LeaseRow,
     LinkRow,
     NewIdentity,
     ServiceRow,
@@ -64,6 +66,7 @@ SESSIONS = cast(Table, SessionRecord.__table__)
 LINKS = cast(Table, IdentityLinkRecord.__table__)
 DATA = cast(Table, IdentityDataRecord.__table__)
 LEASES = cast(Table, LeaseRecord.__table__)
+HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -547,6 +550,134 @@ class PgTx(StoreTx):
         )
         row = (await self.execute(stmt)).mappings().one_or_none()
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
+
+    async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(LEASES).where(
+                        LEASES.c.idempotency_key == idempotency_key,
+                        LEASES.c.space_id == self.space.id,
+                        LEASES.c.expires_at > func.now(),
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _lease_row(row) if row else None
+
+    async def acquire_lease(
+        self,
+        identity: IdentityRow,
+        *,
+        pool: str,
+        holder: str,
+        ttl_seconds: float,
+        idempotency_key: str | None,
+        shared: bool,
+        proxy_id: UUID | None = None,
+    ) -> tuple[LeaseRow, LeaseRow | None]:
+        now = await self.now()
+        expires_at = now + timedelta(seconds=ttl_seconds)
+        fencing: int = (
+            await self.execute(
+                update(IDENTITIES)
+                .where(IDENTITIES.c.id == identity.id, IDENTITIES.c.space_id == self.space.id)
+                .values(fencing_seq=IDENTITIES.c.fencing_seq + 1)
+                .returning(IDENTITIES.c.fencing_seq)
+            )
+        ).scalar_one()
+        lease_id, token = new_id(), uuid4()
+        reclaimed: LeaseRow | None = None
+        if not shared:
+            if idempotency_key is not None:
+                # ключ истёкшей аренды освобождается, иначе уникальный индекс не даст его переиспользовать
+                await self.execute(
+                    update(LEASES)
+                    .where(LEASES.c.idempotency_key == idempotency_key, LEASES.c.expires_at <= func.now())
+                    .values(idempotency_key=None)
+                )
+            old = (
+                (
+                    await self.execute(
+                        select(LEASES).where(LEASES.c.identity_id == identity.id).with_for_update()
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if old is not None:
+                if old["expires_at"] > now:
+                    raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")
+                closed = await self.execute(
+                    update(HISTORY)
+                    .where(HISTORY.c.lease_id == old["lease_id"], HISTORY.c.released_at.is_(None))
+                    .values(released_at=old["expires_at"], end_reason=LeaseEndReason.EXPIRED)
+                )
+                if closed.rowcount:  # type: ignore[attr-defined]
+                    reclaimed = _lease_row(old)
+            values = {
+                "space_id": self.space.id,
+                "lease_id": lease_id,
+                "token": token,
+                "fencing": fencing,
+                "pool": pool,
+                "holder": holder,
+                "idempotency_key": idempotency_key,
+                "acquired_at": now,
+                "heartbeat_at": now,
+                "expires_at": expires_at,
+            }
+            stmt = insert(LEASES).values(identity_id=identity.id, **values)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[LEASES.c.identity_id],
+                set_=values,
+                where=LEASES.c.expires_at <= func.now(),
+            )
+            if not (await self.execute(stmt)).rowcount:  # type: ignore[attr-defined]
+                raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")  # pragma: no cover
+        await self.execute(
+            insert(HISTORY).values(
+                lease_id=lease_id,
+                space_id=self.space.id,
+                identity_id=identity.id,
+                token=token,
+                fencing=fencing,
+                pool=pool,
+                holder=holder,
+                proxy_id=proxy_id,
+                acquired_at=now,
+                last_heartbeat_at=now,
+            )
+        )
+        lease = LeaseRow(
+            lease_id=lease_id,
+            token=token,
+            identity_id=identity.id,
+            fencing=fencing,
+            pool=pool,
+            holder=holder,
+            acquired_at=now,
+            expires_at=expires_at,
+            idempotency_key=idempotency_key,
+            proxy_id=proxy_id,
+        )
+        return lease, reclaimed
+
+
+def _lease_row(row: Any) -> LeaseRow:
+    return LeaseRow(
+        lease_id=row["lease_id"],
+        token=row["token"],
+        identity_id=row["identity_id"],
+        fencing=row["fencing"],
+        pool=row["pool"],
+        holder=row["holder"],
+        acquired_at=row["acquired_at"],
+        expires_at=row["expires_at"],
+        idempotency_key=row["idempotency_key"],
+    )
 
 
 def cast_uuid_array(ids: list[UUID]) -> Any:
