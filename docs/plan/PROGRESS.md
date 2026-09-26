@@ -8,10 +8,16 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P9.2 CLI
+- **Начата:** 2026-09-27
 - **Шаги:**
-  - [ ] —
+  - [ ] описать конфигурацию CLI и async entrypoints
+  - [ ] написать pg-тесты doctor и rotate-key
+  - [ ] реализовать doctor проверку/исправление денормализации
+  - [ ] реализовать постепенный rotate-key всех секретных таблиц
+  - [ ] реализовать argparse команды migrate/dispatcher/maintenance/doctor/rotate-key
+  - [ ] прогнать полный scripts/check.sh
+  - [ ] обновить прогресс и закрыть задачу
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -58,7 +64,7 @@
 | P8.3 | Исходящие вебхуки | P8.1 | done |  |  |
 | P8.4 | Telegram-уведомления | P8.3 | done |  |  |
 | P9.1 | Maintenance | P5.4, P3.3 | done |  |  |
-| P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | todo | | |
+| P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | in_progress |  |  |
 | P9.3 | Метрики | P4.2 | todo | | |
 | P10.1 | MemoryStore | P2–P9 | todo | | |
 | P10.2 | identity_hub.testing | P10.1 | todo | | |
