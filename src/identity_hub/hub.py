@@ -19,6 +19,7 @@ from identity_hub.links import LinksMixin
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
+from identity_hub.secrets_admin import SecretsAdminMixin
 from identity_hub.service import Service
 from identity_hub.state import StateMixin
 from identity_hub.store.base import ServiceRow, SpaceRef, Store
@@ -123,6 +124,7 @@ class SpaceHandle(
     PoolsMixin,
     ProxiesMixin,
     RequirementsMixin,
+    SecretsAdminMixin,
     StateMixin,
     SyncMixin,
     VerificationsMixin,
