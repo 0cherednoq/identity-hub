@@ -22,6 +22,7 @@ from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
 from identity_hub.service import Service
 from identity_hub.state import StateMixin
 from identity_hub.store.base import ServiceRow, SpaceRef, Store
+from identity_hub.sync import SyncMixin
 from identity_hub.verifications import RequirementsMixin, VerificationsMixin
 
 if TYPE_CHECKING:
@@ -123,6 +124,7 @@ class SpaceHandle(
     ProxiesMixin,
     RequirementsMixin,
     StateMixin,
+    SyncMixin,
     VerificationsMixin,
 ):
     """Пространство (ТЗ §5.1). `.using(session)` — работа в общей транзакции пользователя.

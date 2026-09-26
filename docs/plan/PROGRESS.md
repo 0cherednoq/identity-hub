@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P5.5 Пробы, resync, reconcile
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: stale_regions (давно не сверялись)
-  - [ ] sync.py: ProbeContext, resync(id, regions) под арендой с квотой probe, коды standing сервиса
-  - [ ] reconcile(regions, not_synced_for, limit) с wait=False
-  - [ ] pg-тесты: resync, pinned override + проба → drift, неизвестный статус, reconcile пропускает занятые
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -49,7 +46,7 @@
 | P5.2 | Привязка прокси | P5.1 | done |  |  |
 | P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | done |  |  |
 | P5.4 | Верификации в БД | P1.3, P3.4 | done |  |  |
-| P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | in_progress |  |  |
+| P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | done |  |  |
 | P5.6 | Секреты для админки | P3.4 | todo | | |
 | P5.7 | import_many | P5.2, P5.4, P2.6 | todo | | |
 | P6.1 | Поиск | P2.5, P3.3 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 28 / 47 done
+**Итого:** 29 / 47 done
 
 ## Журнал сессий
 
@@ -104,3 +101,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P5.2 · done · sticky-привязка к наименее загруженному, ёмкость через bound_count (D-117, миграция 0004), wait/rebind, non-sticky, proxy.binding.changed/pool.exhausted, lease.proxy, proxy_id в истории · дальше P5.3
 2026-09-26 · P5.3 · done · run_logins (одна попытка на аккаунт за прогон), LoginContext/linked (аренда связанного), challenge: открытие (зашифрованный контекст, один открытый), answer_challenge, expire_challenges; pytest-timeout 120 с · дальше P5.4
 2026-09-26 · P5.4 · done · lease.verification: start (evidence зашифрован), submit/approve/reject/abandon/reconcile/evidence, verified_factors в той же tx, expire_verifications, требования платформы add/resolve · дальше P5.5
+2026-09-26 · P5.5 · done · resync (проба под арендой, квота probe через lease.operation, коды standing сервиса), reconcile (давно не сверявшиеся, занятые пропускаются), verification-пробы · дальше P5.6

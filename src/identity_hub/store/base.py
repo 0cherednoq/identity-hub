@@ -526,6 +526,12 @@ class StoreTx(ABC):
     async def due_regions(self, region: str, limit: int) -> list[tuple[UUID, str]]:
         """(identity_id, key) строк региона, у которых истёк `until` (снятие временных состояний)."""
 
+    @abstractmethod
+    async def stale_identities(
+        self, service: str, region: str, key: str, older_than_seconds: float, limit: int
+    ) -> list[UUID]:
+        """Аккаунты сервиса, чей регион не сверялся дольше порога (или ни разу) — кандидаты reconcile."""
+
     # --------------------------------------------------------- challenge (P5.3)
 
     @abstractmethod

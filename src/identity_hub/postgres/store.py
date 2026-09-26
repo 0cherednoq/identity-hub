@@ -41,7 +41,7 @@ from sqlalchemy.sql import Executable, Select
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, ProxyStatus
+from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, Lifecycle, ProxyStatus
 from identity_hub.errors import LeaseUnavailable, SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
@@ -1283,6 +1283,30 @@ class PgTx(StoreTx):
             .limit(limit)
         )
         return [(r.identity_id, r.key) for r in rows]
+
+    async def stale_identities(
+        self, service: str, region: str, key: str, older_than_seconds: float, limit: int
+    ) -> list[UUID]:
+        rs = REGION_STATES.c
+        synced = (
+            select(rs.synced_at)
+            .where(rs.identity_id == IDENTITIES.c.id, rs.region == region, rs.key == key)
+            .correlate(IDENTITIES)
+            .scalar_subquery()
+        )
+        threshold = func.now() - timedelta(seconds=older_than_seconds)
+        rows = await self.execute(
+            select(IDENTITIES.c.id)
+            .where(
+                IDENTITIES.c.space_id == self.space.id,
+                IDENTITIES.c.service == service,
+                IDENTITIES.c.lifecycle != Lifecycle.RETIRED,
+                or_(synced.is_(None), synced < threshold),
+            )
+            .order_by(synced.asc().nulls_first(), IDENTITIES.c.id)
+            .limit(limit)
+        )
+        return list(rows.scalars())
 
 
 def _challenge_row(row: Any) -> ChallengeRow:
