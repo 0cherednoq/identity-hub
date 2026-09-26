@@ -75,7 +75,8 @@ AUTH = RegionSpec(
     transitions={
         AuthState.NO_SESSION: _fs(AuthState.LOGGING_IN, AuthState.AUTHENTICATED),
         AuthState.LOGGING_IN: _fs(AuthState.CHALLENGE, AuthState.AUTHENTICATED, AuthState.NO_SESSION),
-        AuthState.CHALLENGE: _fs(AuthState.LOGGING_IN, AuthState.NO_SESSION),
+        # challenge → authenticated: вход завершён вручную (mark_authenticated, FR-5.6)
+        AuthState.CHALLENGE: _fs(AuthState.LOGGING_IN, AuthState.AUTHENTICATED, AuthState.NO_SESSION),
         AuthState.AUTHENTICATED: _fs(AuthState.SESSION_INVALID, AuthState.NO_SESSION),
         AuthState.SESSION_INVALID: _fs(AuthState.LOGGING_IN, AuthState.AUTHENTICATED, AuthState.NO_SESSION),
     },

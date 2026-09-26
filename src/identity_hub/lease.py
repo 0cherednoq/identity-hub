@@ -16,12 +16,18 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from pydantic import BaseModel
+
 from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
-from identity_hub.enums import LeaseEndReason
-from identity_hub.errors import LeaseLost, LeaseUnavailable
+from identity_hub.crypto import associated_data
+from identity_hub.domain.data import validate_model
+from identity_hub.domain.regions import Command
+from identity_hub.enums import AuthState, LeaseEndReason, SessionStatus
+from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing
 from identity_hub.events import EventDraft
-from identity_hub.store.base import IdentityRow, LeaseCounters, LeaseRow
+from identity_hub.state import DEFAULT_SLOT, apply_region_change
+from identity_hub.store.base import IdentityRow, LeaseCounters, LeaseRow, StoreTx
 
 if TYPE_CHECKING:
     from identity_hub.pool import Pool
@@ -208,6 +214,78 @@ class Lease:
         else:
             self._counters.failed += 1
             self._counters.last_error = error
+
+    # --------------------------------------------------------- секреты и сессии (FR-5.2, 5.3, 5.6)
+
+    async def credentials(self) -> BaseModel | None:
+        """Расшифрованные credentials — только под арендой (FR-5.2)."""
+        self.check()
+        async with self.pool.space._tx(own=True) as tx:
+            payload = await tx.get_credentials(self.identity_id)
+        if payload is None:
+            return None
+        aad = associated_data("ih_credentials", self.identity_id)
+        return self.pool.space.hub.envelope.open_model(self.pool.service.credentials, payload, aad)
+
+    async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
+        """Расшифрованная действующая сессия слота или None."""
+        self.check()
+        async with self.pool.space._tx(own=True) as tx:
+            found = await tx.get_session(self.identity_id, slot)
+        if found is None or found[1] != SessionStatus.VALID:
+            return None
+        aad = associated_data("ih_sessions", self.identity_id, slot)
+        return self.pool.space.hub.envelope.open_model(self.pool.service.session, found[0], aad)
+
+    async def save_session(
+        self,
+        session: BaseModel | Mapping[str, Any],
+        slot: str = DEFAULT_SLOT,
+        *,
+        expires_at: datetime | None = None,
+    ) -> None:
+        """Сохранить результат входа; запись устаревшей аренды — StaleFencing (FR-5.3, G-1.4)."""
+        self.check()
+        model = validate_model(self.pool.service.session, session, "session")
+        aad = associated_data("ih_sessions", self.identity_id, slot)
+        payload = self.pool.space.hub.envelope.seal_model(model, aad)  # до открытия транзакции (T-5)
+        async with self.pool.space._tx(own=True) as tx:
+            await self._check_fencing(tx)
+            if not await tx.put_session(
+                self.identity_id, slot, payload, fencing=self.fencing, expires_at=expires_at
+            ):
+                raise StaleFencing(self.identity_id, self.fencing)
+            await self.pool.space._emit(
+                tx,
+                EventDraft(
+                    "session.saved",
+                    actor=self.holder,
+                    service=self.service,
+                    identity_id=self.identity_id,
+                    lease_id=self.lease_id,
+                    data={"slot": slot},
+                ),
+            )
+
+    async def mark_authenticated(self, slot: str = DEFAULT_SLOT) -> None:
+        """Вход выполнен пользователем сам (без Authenticator, FR-5.6): auth → authenticated."""
+        self.check()
+        async with self.pool.space._tx(own=True) as tx:
+            await self._check_fencing(tx)
+            await apply_region_change(
+                self.pool.space,
+                tx,
+                self.identity_id,
+                "auth",
+                slot,
+                Command(AuthState.AUTHENTICATED, actor=self.holder),
+                lease_id=self.lease_id,
+            )
+
+    async def _check_fencing(self, tx: StoreTx) -> None:
+        current = await tx.current_fencing(self.identity_id, lock=True)
+        if current != self.fencing:
+            raise StaleFencing(self.identity_id, self.fencing, current)
 
     # --------------------------------------------------------- освобождение
 

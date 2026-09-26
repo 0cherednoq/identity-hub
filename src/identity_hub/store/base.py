@@ -332,6 +332,23 @@ class StoreTx(ABC):
     ) -> bool:
         """Освободить аренду по token (повтор и чужой token — no-op) и закрыть историю (G-4.2)."""
 
+    @abstractmethod
+    async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
+        """Текущий fencing_seq аккаунта; `lock=True` — FOR SHARE до конца транзакции."""
+
+    @abstractmethod
+    async def revoke_lease(self, identity_id: UUID) -> LeaseRow | None:
+        """Отозвать живую аренду: fencing + 1, строка ih_leases освобождена, история закрыта как revoked."""
+
+    # --------------------------------------------------------- секреты (P3.4)
+
+    @abstractmethod
+    async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None: ...
+
+    @abstractmethod
+    async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
+        """(payload, status) сессии слота."""
+
 
 class Store(ABC):
     @abstractmethod

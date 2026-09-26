@@ -724,6 +724,72 @@ class PgTx(StoreTx):
         )
         return bool(closed.rowcount)  # type: ignore[attr-defined]
 
+    async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
+        stmt = select(IDENTITIES.c.fencing_seq).where(
+            IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id
+        )
+        if lock:
+            stmt = stmt.with_for_update(read=True)
+        value: int | None = (await self.execute(stmt)).scalar_one_or_none()
+        return value
+
+    async def revoke_lease(self, identity_id: UUID) -> LeaseRow | None:
+        row = (
+            (
+                await self.execute(
+                    update(LEASES)
+                    .where(
+                        LEASES.c.identity_id == identity_id,
+                        LEASES.c.space_id == self.space.id,
+                        LEASES.c.expires_at > func.now(),
+                    )
+                    .values(expires_at=func.now(), idempotency_key=None)
+                    .returning(*LEASES.c)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        await self.execute(
+            update(IDENTITIES)
+            .where(IDENTITIES.c.id == identity_id)
+            .values(fencing_seq=IDENTITIES.c.fencing_seq + 1)
+        )
+        await self.execute(
+            update(HISTORY)
+            .where(HISTORY.c.lease_id == row["lease_id"], HISTORY.c.released_at.is_(None))
+            .values(released_at=func.now(), end_reason=LeaseEndReason.REVOKED)
+        )
+        return _lease_row(row)
+
+    async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None:
+        row = (
+            await self.execute(
+                select(
+                    CREDENTIALS.c.key_id,
+                    CREDENTIALS.c.wrapped_dek,
+                    CREDENTIALS.c.nonce,
+                    CREDENTIALS.c.ciphertext,
+                ).where(CREDENTIALS.c.identity_id == identity_id, CREDENTIALS.c.space_id == self.space.id)
+            )
+        ).one_or_none()
+        return EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext) if row else None
+
+    async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
+        c = SESSIONS.c
+        row = (
+            await self.execute(
+                select(c.key_id, c.wrapped_dek, c.nonce, c.ciphertext, c.status).where(
+                    c.identity_id == identity_id, c.slot == slot, c.space_id == self.space.id
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext), row.status
+
 
 def _counter_values(counters: LeaseCounters) -> dict[str, Any]:
     if counters.is_empty:

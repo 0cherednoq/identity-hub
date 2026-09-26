@@ -15,6 +15,7 @@ from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.data import validate_labels
 from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
+from identity_hub.events import EventDraft
 from identity_hub.service import LeaseMode, Pacing, ProxyPolicy, Service
 from identity_hub.store.base import CandidateQuery, IdentityRow
 
@@ -135,6 +136,29 @@ def _check_profile_filter(service: Service, profile: Mapping[str, Any]) -> None:
 
 
 class PoolsMixin:
+    async def revoke_lease(self: Any, identity_id: UUID, *, reason: str, actor: str) -> bool:
+        """Отозвать аренду из админки (FR-6.9): воркер теряет её на ближайшем heartbeat,
+        а его записи отклоняются по fencing. False — живой аренды не было."""
+        if not reason:
+            raise ValidationFailed("отзыв аренды требует причину")
+        async with self._tx(own=True) as tx:
+            row = await self._identity(tx, identity_id)
+            revoked = await tx.revoke_lease(identity_id)
+            if revoked is None:
+                return False
+            await self._emit(
+                tx,
+                EventDraft(
+                    "lease.revoked",
+                    actor=actor,
+                    service=row.service,
+                    identity_id=identity_id,
+                    lease_id=revoked.lease_id,
+                    data={"pool": revoked.pool, "holder": revoked.holder, "reason": reason},
+                ),
+            )
+            return True
+
     def pool(
         self: Any,
         name: str,
