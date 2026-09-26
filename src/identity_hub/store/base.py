@@ -324,6 +324,10 @@ class StoreTx(ABC):
         """False — конфликт уникальности (параллельная регистрация)."""
 
     @abstractmethod
+    async def find_by_refs(self, refs: Sequence[tuple[str, str]]) -> dict[tuple[str, str], tuple[UUID, UUID]]:
+        """(service, external_ref) → (id, space_id) — во всех пространствах (импорт, FR-2.2)."""
+
+    @abstractmethod
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
         """Какие из аккаунтов есть в этом пространстве."""
 
@@ -506,6 +510,10 @@ class StoreTx(ABC):
     @abstractmethod
     async def bind_proxy(self, identity_id: UUID, proxy_id: UUID, previous: UUID | None) -> None:
         """Привязать аккаунт к прокси; ёмкость прежнего прокси освобождается."""
+
+    @abstractmethod
+    async def adjust_proxy_load(self, proxy_id: UUID, delta: int) -> None:
+        """bound_count += delta (не ниже 0) — привязка вне выбора прокси (импорт)."""
 
     @abstractmethod
     async def due_proxies(self, limit: int) -> list[UUID]:

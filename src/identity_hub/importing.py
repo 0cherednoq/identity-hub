@@ -1,22 +1,38 @@
-"""Импорт аккаунтов (FR-2.4–2.7). Запись импорта; сам `import_many` — задача P5.7."""
+"""Импорт аккаунтов (ТЗ FR-2.4–2.7, G-4.4).
+
+Записи валидируются и шифруются схемами сервиса **до** обращения к БД, пишутся пачками
+(по умолчанию 500) в отдельных транзакциях; пачки независимы. Отчёт: created / updated / skipped / failed.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-__all__ = ["ImportRecord"]
+from identity_hub._space import SpaceBase, logger
+from identity_hub.domain.regions import Observation
+from identity_hub.enums import AuthState, ChangeSource, Lifecycle
+from identity_hub.errors import IdentityHubError
+from identity_hub.events import EventDraft
+from identity_hub.service import Service
+
+__all__ = ["BatchHook", "ImportRecord", "ImportReport", "ImportingMixin", "OnExisting"]
+
+BatchHook = Callable[[Any, list[UUID]], Awaitable[None]]
+"""on_batch_committed(session, created_ids): доменные строки после каждой пачки (FR-2.7)."""
 
 
 @dataclass(slots=True)
 class ImportRecord:
     """Одна запись импорта. Данные валидируются схемами сервиса до обращения к БД.
 
-    `links` — роль → external_ref связанного аккаунта (в том числе из той же пачки).
-    `sessions` — слот → данные сессии; `proxy` — URL прокси (дедупликация по fingerprint).
-    `verifications` — фактор → начальное состояние (например, `"verified"`).
+    `links` — роль → `"<service>:<external_ref>"` или `external_ref` того же сервиса (D-118),
+    в том числе аккаунт из той же пачки. `sessions` — слот → данные сессии; `proxy` — URL прокси
+    (дедупликация по fingerprint). `verifications` — фактор → начальное состояние (например, `"verified"`).
     """
 
     external_ref: str
@@ -31,3 +47,306 @@ class ImportRecord:
     links: Mapping[str, str] = field(default_factory=dict)
     proxy: str | None = None
     verifications: Mapping[str, str] = field(default_factory=dict)
+
+
+class OnExisting(StrEnum):
+    SKIP = "skip"
+    UPDATE_SESSION = "update_session"
+    FAIL = "fail"
+
+
+@dataclass
+class ImportReport:
+    created: list[UUID] = field(default_factory=list)
+    updated: list[UUID] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)  # (external_ref, причина)
+    failed: list[tuple[str, str]] = field(default_factory=list)
+    hook_failed: list[list[UUID]] = field(default_factory=list)  # пачки, для которых хук упал — повторить
+
+    @property
+    def total(self) -> int:
+        return len(self.created) + len(self.updated) + len(self.skipped) + len(self.failed)
+
+
+@dataclass
+class _Prepared:
+    record: ImportRecord
+    prepared: Any  # identities.PreparedIdentity
+    proxy: Any = None  # NewProxy
+
+
+class ImportingMixin(SpaceBase):
+    async def import_many(
+        self,
+        *,
+        service: Service | str,
+        records: Iterable[ImportRecord] | AsyncIterable[ImportRecord],
+        batch_size: int = 500,
+        on_existing: OnExisting | str = OnExisting.SKIP,
+        verify_sessions: bool = False,
+        on_batch_committed: BatchHook | None = None,
+        actor: str = "import",
+    ) -> ImportReport:
+        """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`."""
+        svc = self.hub.service(service)
+        mode = OnExisting(on_existing)
+        report = ImportReport()
+        batch: list[ImportRecord] = []
+        async for record in _aiter(records):
+            batch.append(record)
+            if len(batch) >= batch_size:
+                await self._import_batch(svc, batch, mode, verify_sessions, on_batch_committed, actor, report)
+                batch = []
+        if batch:
+            await self._import_batch(svc, batch, mode, verify_sessions, on_batch_committed, actor, report)
+        return report
+
+    async def import_files(
+        self, *, service: Service | str, paths: Iterable[str | Path], **kwargs: Any
+    ) -> ImportReport:
+        """Импорт файлов импортёрами сервиса (`.session`, tdata, JSON с cookies — FR-2.6)."""
+        svc = self.hub.service(service)
+
+        async def records() -> AsyncIterable[ImportRecord]:
+            for raw in paths:
+                path = Path(raw)
+                importer = next((i for i in svc.importers if i.can_import(path)), None)
+                if importer is None:
+                    raise IdentityHubError(f"нет импортёра для файла {path.name}")
+                async for record in importer.read(path):
+                    yield record
+
+        return await self.import_many(service=svc, records=records(), **kwargs)
+
+    # --------------------------------------------------------- пачка
+
+    async def _import_batch(
+        self,
+        svc: Service,
+        batch: list[ImportRecord],
+        mode: OnExisting,
+        verify_sessions: bool,
+        hook: BatchHook | None,
+        actor: str,
+        report: ImportReport,
+    ) -> None:
+        from identity_hub.identities import prepare_identity
+
+        ready: list[_Prepared] = []
+        seen: set[str] = set()
+        for record in batch:  # валидация и шифрование — до транзакции (FR-2.4, T-5)
+            if record.external_ref in seen:
+                report.skipped.append((record.external_ref, "дубликат в пачке"))
+                continue
+            seen.add(record.external_ref)
+            try:
+                sessions = dict(record.sessions)
+                auth = AuthState.NO_SESSION
+                if "default" in sessions and not verify_sessions:
+                    auth = AuthState.AUTHENTICATED
+                prepared = prepare_identity(
+                    self,
+                    svc,
+                    external_ref=record.external_ref,
+                    identity_id=record.id,
+                    credentials=record.credentials,
+                    sessions=sessions,
+                    attributes=record.attributes,
+                    profile=record.profile,
+                    labels=record.labels,
+                    tags=record.tags,
+                    note=record.note,
+                    lifecycle=Lifecycle.PROVISIONING,  # FR-2.5
+                    auth_state=auth,
+                )
+                for factor in record.verifications:
+                    svc.verification(factor)
+                proxy = None
+                if record.proxy:
+                    pool = svc.proxy_policy.pool if svc.proxy_policy else "import"
+                    proxy = self._prepare_proxy(record.proxy, pool, None, None, None, None, None, 3, None)  # type: ignore[attr-defined]
+                ready.append(_Prepared(record, prepared, proxy))
+            except IdentityHubError as exc:
+                report.failed.append((record.external_ref, str(exc)))
+        if not ready:
+            return
+
+        created: list[UUID] = []
+        updated: list[UUID] = []
+        skipped: list[tuple[str, str]] = []
+        failed: list[tuple[str, str]] = []
+        try:
+            async with self._tx(own=True) as tx:
+                refs = [(svc.name, p.record.external_ref) for p in ready]
+                existing = await tx.find_by_refs(refs)
+                by_id = await tx.existing_identities([p.prepared.row.id for p in ready if p.record.id])
+                inserted: dict[str, UUID] = {}
+                to_link: list[_Prepared] = []
+                for item in ready:
+                    row = item.prepared.row
+                    found = existing.get((svc.name, row.external_ref))
+                    if found is not None or row.id in by_id:
+                        await self._existing_record(tx, svc, item, found, mode, updated, skipped, failed)
+                        continue
+                    if not await tx.insert_identity(row):
+                        failed.append((row.external_ref, "id занят другим аккаунтом"))
+                        continue
+                    await self._write_children(tx, item.prepared, source=ChangeSource.IMPORT)  # type: ignore[attr-defined]
+                    if item.proxy is not None:
+                        proxy_id, _ = await tx.insert_proxy(item.proxy)
+                        await tx.bind_proxy(row.id, proxy_id, None)
+                        await tx.adjust_proxy_load(proxy_id, 1)
+                    for factor, state in item.record.verifications.items():
+                        await self._initial_verification(tx, row.id, factor, state, actor)
+                    inserted[row.external_ref] = row.id
+                    created.append(row.id)
+                    if item.record.links:
+                        to_link.append(item)
+                await self._import_links(tx, svc, to_link, inserted)
+                if created:
+                    await self._emit(
+                        tx,
+                        EventDraft(
+                            "identity.imported",
+                            actor=actor,
+                            service=svc.name,
+                            data={"count": len(created), "updated": len(updated), "skipped": len(skipped)},
+                        ),
+                    )
+        except Exception as exc:
+            logger.warning("пачка импорта отклонена целиком", exc_info=True)
+            reason = f"пачка отклонена: {type(exc).__name__}: {exc}"[:500]
+            report.failed.extend((p.record.external_ref, reason) for p in ready)
+            return
+        report.created.extend(created)
+        report.updated.extend(updated)
+        report.skipped.extend(skipped)
+        report.failed.extend(failed)
+        if hook is not None and created:
+            await self._run_hook(hook, created, report)
+
+    async def _existing_record(
+        self,
+        tx: Any,
+        svc: Service,
+        item: _Prepared,
+        found: tuple[UUID, UUID] | None,
+        mode: OnExisting,
+        updated: list[UUID],
+        skipped: list[tuple[str, str]],
+        failed: list[tuple[str, str]],
+    ) -> None:
+        ref = item.record.external_ref
+        if found is not None and found[1] != tx.space.id:
+            failed.append((ref, "аккаунт платформы уже в другом пространстве (FR-2.2)"))
+            return
+        if mode is OnExisting.FAIL:
+            failed.append((ref, "уже существует"))
+            return
+        if mode is OnExisting.SKIP or found is None or not item.prepared.sessions:
+            skipped.append((ref, "уже существует"))
+            return
+        identity_id = found[0]
+        fencing = await tx.current_fencing(identity_id, lock=True)
+        for slot, payload in item.prepared.sessions.items():
+            # шифротекст привязан к id записи импорта через AAD — перешифровать под существующий id
+            session = self.hub.envelope.open_json(payload, _aad(item.prepared.row.id, slot))
+            resealed = self.hub.envelope.seal(_to_json(session), _aad(identity_id, slot))
+            await tx.put_session(identity_id, slot, resealed, fencing=fencing or 0)
+        from identity_hub.state import DEFAULT_SLOT, apply_region_change
+
+        if DEFAULT_SLOT in item.prepared.sessions:
+            await apply_region_change(
+                self,
+                tx,
+                identity_id,
+                "auth",
+                DEFAULT_SLOT,
+                Observation(
+                    AuthState.AUTHENTICATED,
+                    observed_at=await tx.now(),
+                    source=ChangeSource.IMPORT,
+                    actor="import",
+                ),
+            )
+        updated.append(identity_id)
+
+    async def _initial_verification(
+        self, tx: Any, identity_id: UUID, factor: str, state: str, actor: str
+    ) -> None:
+        from identity_hub.verifications import apply_verification
+
+        now = await tx.now()
+        await apply_verification(
+            self,
+            tx,
+            identity_id,
+            factor,
+            lambda flow, s, verified, _now: flow.reconcile(
+                s, Observation(state, observed_at=now, source=ChangeSource.IMPORT, actor=actor), now
+            ),
+            actor=actor,
+        )
+
+    async def _import_links(
+        self, tx: Any, svc: Service, items: list[_Prepared], inserted: dict[str, UUID]
+    ) -> None:
+        """Связи по external_ref: сначала из этой пачки, затем из БД (FR-2.4)."""
+        if not items:
+            return
+        wanted: set[tuple[str, str]] = set()
+        for item in items:
+            for target in item.record.links.values():
+                wanted.add(self._link_ref(svc, target))
+        known = await tx.find_by_refs(sorted(wanted))
+        for item in items:
+            for role, target in item.record.links.items():
+                service_name, ref = self._link_ref(svc, target)
+                linked = inserted.get(ref) if service_name == svc.name else None
+                if linked is None:
+                    found = known.get((service_name, ref))
+                    if found is None or found[1] != tx.space.id:
+                        raise IdentityHubError(f"связь {role}: аккаунт {service_name}:{ref} не найден")
+                    linked = found[0]
+                await tx.insert_link(item.prepared.row.id, role, linked)
+
+    def _link_ref(self, svc: Service, target: str) -> tuple[str, str]:
+        prefix, sep, rest = target.partition(":")
+        if sep and prefix in {s.name for s in self.hub.services}:
+            return prefix, rest
+        return svc.name, target
+
+    async def _run_hook(self, hook: BatchHook, created: list[UUID], report: ImportReport) -> None:
+        sessionmaker = getattr(self.hub.store, "sessionmaker", None)
+        try:
+            if sessionmaker is None:
+                await hook(None, list(created))
+                return
+            async with sessionmaker() as session, session.begin():
+                await hook(session, list(created))
+        except Exception:
+            logger.exception("on_batch_committed упал; пачка сохранена, повторите хук для этих id")
+            report.hook_failed.append(list(created))
+
+
+def _aad(identity_id: UUID, slot: str) -> bytes:
+    from identity_hub.crypto import associated_data
+
+    return associated_data("ih_sessions", identity_id, slot)
+
+
+def _to_json(value: Any) -> bytes:
+    import pydantic_core
+
+    return pydantic_core.to_json(value)
+
+
+async def _aiter(
+    records: Iterable[ImportRecord] | AsyncIterable[ImportRecord],
+) -> AsyncIterable[ImportRecord]:
+    if isinstance(records, AsyncIterable):
+        async for record in records:
+            yield record
+    else:
+        for record in records:
+            yield record

@@ -8,13 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P5.7 import_many
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: find_by_refs, adjust_proxy_load
-  - [ ] import_many: валидация до БД, пачки в своих транзакциях, on_existing, связи по external_ref (в т.ч. внутри пачки), прокси, верификации, identity.imported, on_batch_committed
-  - [ ] FileImporter: import_files
-  - [ ] pg-тесты: повтор → skipped, смешанная пачка, связи, прокси, update_session, хук
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -51,7 +48,7 @@
 | P5.4 | Верификации в БД | P1.3, P3.4 | done |  |  |
 | P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | done |  |  |
 | P5.6 | Секреты для админки | P3.4 | done |  |  |
-| P5.7 | import_many | P5.2, P5.4, P2.6 | in_progress |  |  |
+| P5.7 | import_many | P5.2, P5.4, P2.6 | done |  |  |
 | P6.1 | Поиск | P2.5, P3.3 | todo | | |
 | P6.2 | Карточки и статистика | P6.1 | todo | | |
 | P7.1 | Контекст логов | P3.3 | todo | | |
@@ -69,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 30 / 47 done
+**Итого:** 31 / 47 done
 
 ## Журнал сессий
 
@@ -106,3 +103,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P5.4 · done · lease.verification: start (evidence зашифрован), submit/approve/reject/abandon/reconcile/evidence, verified_factors в той же tx, expire_verifications, требования платформы add/resolve · дальше P5.5
 2026-09-26 · P5.5 · done · resync (проба под арендой, квота probe через lease.operation, коды standing сервиса), reconcile (давно не сверявшиеся, занятые пропускаются), verification-пробы · дальше P5.6
 2026-09-26 · P5.6 · done · update_credentials, reveal_secret (credentials/session/profile/evidence) с аудитом identity.secret.revealed в той же tx · дальше P5.7
+2026-09-27 · P5.7 · done · import_many: валидация/шифрование до БД, пачки в своих tx, on_existing skip/update_session/fail, связи по service:external_ref (в т.ч. внутри пачки), прокси с дедупликацией и привязкой, начальные верификации, identity.imported, on_batch_committed; import_files (D-118) · фаза 5 закрыта, дальше P6.1

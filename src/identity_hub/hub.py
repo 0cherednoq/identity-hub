@@ -15,6 +15,7 @@ from identity_hub.crypto import Envelope
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
+from identity_hub.importing import ImportingMixin
 from identity_hub.links import LinksMixin
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
@@ -119,6 +120,7 @@ class IdentityHub:
 class SpaceHandle(
     IdentitiesMixin,
     IdentityDataMixin,
+    ImportingMixin,
     LinksMixin,
     LoginMixin,
     PoolsMixin,

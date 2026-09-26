@@ -28,6 +28,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    tuple_,
     update,
 )
 from sqlalchemy import cast as sa_cast
@@ -280,6 +281,17 @@ class PgTx(StoreTx):
             values |= row.profile_secret.columns("profile_")
         stmt = insert(IDENTITIES).values(**values).on_conflict_do_nothing()
         return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    async def find_by_refs(self, refs: Sequence[tuple[str, str]]) -> dict[tuple[str, str], tuple[UUID, UUID]]:
+        if not refs:
+            return {}
+        pairs = list(dict.fromkeys(refs))
+        rows = await self.execute(
+            select(
+                IDENTITIES.c.id, IDENTITIES.c.space_id, IDENTITIES.c.service, IDENTITIES.c.external_ref
+            ).where(tuple_(IDENTITIES.c.service, IDENTITIES.c.external_ref).in_(pairs))
+        )
+        return {(r.service, r.external_ref): (r.id, r.space_id) for r in rows}
 
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
         if not ids:
@@ -1116,6 +1128,13 @@ class PgTx(StoreTx):
                 .where(PROXIES.c.id == previous, PROXIES.c.bound_count > 0)
                 .values(bound_count=PROXIES.c.bound_count - 1)
             )
+
+    async def adjust_proxy_load(self, proxy_id: UUID, delta: int) -> None:
+        await self.execute(
+            update(PROXIES)
+            .where(PROXIES.c.id == proxy_id)
+            .values(bound_count=func.greatest(0, PROXIES.c.bound_count + delta))
+        )
 
     async def due_proxies(self, limit: int) -> list[UUID]:
         rows = await self.execute(
