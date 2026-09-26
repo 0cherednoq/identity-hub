@@ -17,6 +17,7 @@ from identity_hub.identity_data import IdentityDataMixin
 from identity_hub.links import LinksMixin
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
+from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
 from identity_hub.service import Service
 from identity_hub.state import StateMixin
 from identity_hub.store.base import ServiceRow, SpaceRef, Store
@@ -53,6 +54,7 @@ class IdentityHub:
         clock: Clock | None = None,
         strict_events: bool = False,
         store: Store | None = None,
+        proxy_health: ProxyHealthPolicy | None = None,
     ) -> None:
         if store is None:
             if sessionmaker is None:
@@ -67,6 +69,7 @@ class IdentityHub:
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         self.clock: Clock = clock or SystemClock()
+        self.proxy_health = proxy_health or ProxyHealthPolicy()
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}
         for service in services:
@@ -109,7 +112,7 @@ class IdentityHub:
         return ref
 
 
-class SpaceHandle(IdentitiesMixin, IdentityDataMixin, LinksMixin, PoolsMixin, StateMixin):
+class SpaceHandle(IdentitiesMixin, IdentityDataMixin, LinksMixin, PoolsMixin, ProxiesMixin, StateMixin):
     """Пространство (ТЗ §5.1). `.using(session)` — работа в общей транзакции пользователя.
 
     Операции разложены по миксинам: регионы — `state.StateMixin`, далее по задачам плана.

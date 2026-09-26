@@ -708,6 +708,9 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
     status_source: Mapped[str] = mapped_column(String(16), default=ChangeSource.COMMAND)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pending_observation: Mapped[str | None] = mapped_column(
+        String(16)
+    )  # confirm_leaving (D-116, миграция 0003)
     max_identities: Mapped[int] = mapped_column(Integer, default=3)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

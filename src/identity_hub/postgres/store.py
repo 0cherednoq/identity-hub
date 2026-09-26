@@ -41,7 +41,7 @@ from sqlalchemy.sql import Executable, Select
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, Lifecycle
+from identity_hub.enums import AuthState, Availability, ChangeSource, LeaseEndReason, Lifecycle, ProxyStatus
 from identity_hub.errors import LeaseUnavailable, SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
@@ -54,6 +54,7 @@ from identity_hub.postgres.models import (
     LeaseHistoryRecord,
     LeaseRecord,
     OperationKeyRecord,
+    ProxyRecord,
     QuotaUsageRecord,
     RegionStateRecord,
     ServiceRecord,
@@ -69,6 +70,8 @@ from identity_hub.store.base import (
     LeaseRow,
     LinkRow,
     NewIdentity,
+    NewProxy,
+    ProxyRow,
     QuotaCharge,
     QuotaWindow,
     ServiceRow,
@@ -89,6 +92,8 @@ LEASES = cast(Table, LeaseRecord.__table__)
 HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
+PROXIES = cast(Table, ProxyRecord.__table__)
+PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -966,6 +971,80 @@ class PgTx(StoreTx):
             )
             .values(status=status, updated_at=func.now())
         )
+
+    # --------------------------------------------------------- прокси
+
+    async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
+        stmt = (
+            insert(PROXIES)
+            .values(
+                id=row.id,
+                space_id=self.space.id,
+                pool=row.pool,
+                scheme=row.scheme,
+                host=row.host,
+                port=row.port,
+                fingerprint=row.fingerprint,
+                max_identities=row.max_identities,
+                **row.secret.columns(),
+            )
+            .on_conflict_do_nothing(index_elements=[PROXIES.c.space_id, PROXIES.c.fingerprint])
+            .returning(PROXIES.c.id)
+        )
+        created: UUID | None = (await self.execute(stmt)).scalar_one_or_none()
+        if created is not None:
+            return created, True
+        existing: UUID = (
+            await self.execute(
+                select(PROXIES.c.id).where(
+                    PROXIES.c.space_id == self.space.id, PROXIES.c.fingerprint == row.fingerprint
+                )
+            )
+        ).scalar_one()
+        return existing, False
+
+    async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(PROXIES).where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _proxy_row(row) if row else None
+
+    async def update_proxy(
+        self, proxy_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
+    ) -> bool:
+        stmt = (
+            update(PROXIES)
+            .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
+            .values(**values)
+        )
+        for column, value in (expected or {}).items():
+            stmt = stmt.where(PROXIES.c[column].is_not_distinct_from(value))
+        return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    async def due_proxies(self, limit: int) -> list[UUID]:
+        rows = await self.execute(
+            select(PROXIES.c.id)
+            .where(
+                PROXIES.c.space_id == self.space.id,
+                PROXIES.c.status == ProxyStatus.QUARANTINED,
+                PROXIES.c.next_check_at <= func.now(),
+            )
+            .order_by(PROXIES.c.next_check_at)
+            .limit(limit)
+        )
+        return list(rows.scalars())
+
+
+def _proxy_row(row: Any) -> ProxyRow:
+    values = {f: row[f] for f in PROXY_FIELDS if f != "secret"}
+    secret = EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
+    return ProxyRow(**values, secret=secret)
 
 
 def _counter_values(counters: LeaseCounters) -> dict[str, Any]:

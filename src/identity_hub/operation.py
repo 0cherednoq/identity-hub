@@ -166,7 +166,7 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
                     ),
                     lease_id=lease.lease_id,
                 )
-            # Blame.PROXY — здоровье прокси (P5.1); Blame.REQUEST — состояние не меняется
+            # Blame.PROXY — здоровье прокси (ниже, своей транзакцией); Blame.REQUEST — состояние не меняется
             await space._emit(
                 tx,
                 EventDraft(
@@ -185,6 +185,13 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
             )
     except Exception:
         logger.exception("не удалось записать последствия ошибки операции %s", op.kind)
+    if fault.blame is Blame.PROXY and lease.proxy_id is not None:
+        try:
+            await space.report_proxy_failure(  # type: ignore[attr-defined]
+                lease.proxy_id, weight=fault.weight, actor=lease.holder, raw_status=fault.raw_status
+            )
+        except Exception:
+            logger.exception("не удалось учесть ошибку прокси %s", lease.proxy_id)
 
 
 async def _cooling(lease: Lease, tx: StoreTx, until: datetime) -> None:

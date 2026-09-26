@@ -28,6 +28,8 @@ __all__ = [
     "LeaseRow",
     "LinkRow",
     "NewIdentity",
+    "NewProxy",
+    "ProxyRow",
     "QuotaCharge",
     "QuotaWindow",
     "ServiceRow",
@@ -200,6 +202,43 @@ class ChargeOutcome:
     @property
     def ok(self) -> bool:
         return self.exhausted is None
+
+
+@dataclass(frozen=True, slots=True)
+class NewProxy:
+    id: UUID
+    pool: str
+    scheme: str
+    host: str
+    port: int
+    fingerprint: str
+    max_identities: int
+    secret: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyRow:
+    """Строка ih_proxies; логин и пароль — в зашифрованном `secret`."""
+
+    id: UUID
+    space_id: UUID
+    pool: str
+    scheme: str
+    host: str
+    port: int
+    fingerprint: str
+    status: str
+    error_score: float
+    fail_streak: int
+    next_check_at: datetime | None
+    status_changed_at: datetime
+    status_source: str
+    checked_at: datetime | None
+    pinned_until: datetime | None
+    pending_observation: str | None
+    max_identities: int
+    created_at: datetime
+    secret: EncryptedPayload
 
 
 class StoreTx(ABC):
@@ -405,6 +444,25 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def set_session_status(self, identity_id: UUID, slot: str, status: str) -> None: ...
+
+    # --------------------------------------------------------- прокси (P5.1)
+
+    @abstractmethod
+    async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
+        """(id, создан). Дубликат по fingerprint в пространстве возвращает существующий id (FR-8.1)."""
+
+    @abstractmethod
+    async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None: ...
+
+    @abstractmethod
+    async def update_proxy(
+        self, proxy_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
+    ) -> bool:
+        """Обновить колонки прокси; `expected` — compare-and-set."""
+
+    @abstractmethod
+    async def due_proxies(self, limit: int) -> list[UUID]:
+        """Прокси в карантине, у которых наступил `next_check_at` (перепроверка по расписанию)."""
 
     # --------------------------------------------------------- секреты (P3.4)
 

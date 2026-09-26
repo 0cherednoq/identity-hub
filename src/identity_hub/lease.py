@@ -96,6 +96,10 @@ class Lease:
         return self._row.holder
 
     @property
+    def proxy_id(self) -> UUID | None:
+        return self._row.proxy_id
+
+    @property
     def lost(self) -> bool:
         return self._lost is not None or self._deadline_passed()
 

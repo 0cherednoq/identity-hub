@@ -8,14 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P5.1 Прокси и их здоровье
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] миграция 0003: ih_proxies.pending_observation (D-116)
-  - [ ] store: ProxyRow, insert_proxy (дедупликация по fingerprint), get/update_proxy (CAS), due_proxies
-  - [ ] proxies.py: add_proxy/add_proxies, url с расшифровкой, ProxyHealthPolicy
-  - [ ] здоровье: ошибки → карантин, перепроверка с backoff ×2, dead, подтверждение выхода, override; вина прокси из операции
-  - [ ] pg-тесты: alive → quarantined → dead → alive
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -46,7 +42,7 @@
 | P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | done |  |  |
 | P4.1 | Квоты, pacing, ключи операций | P3.3 | done |  |  |
 | P4.2 | lease.operation | P4.1 | done |  |  |
-| P5.1 | Прокси и их здоровье | P4.2 | in_progress |  |  |
+| P5.1 | Прокси и их здоровье | P4.2 | done |  |  |
 | P5.2 | Привязка прокси | P5.1 | todo | | |
 | P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | todo | | |
 | P5.4 | Верификации в БД | P1.3, P3.4 | todo | | |
@@ -70,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 24 / 47 done
+**Итого:** 25 / 47 done
 
 ## Журнал сессий
 
@@ -101,3 +97,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P3.4 · done · lease.credentials()/session()/save_session() (fencing, StaleFencing), mark_authenticated, space.revoke_lease (fencing+1, история revoked, heartbeat → LeaseLost revoked) · фаза 3 закрыта, дальше P4.1
 2026-09-26 · P4.1 · done · charge_quotas (savepoint, date_bin, WHERE used<limit), ключ операции в той же точке сохранения (D-114), pacing со сбросом (D-113), quota.exhausted раз за окно · дальше P4.2
 2026-09-26 · P4.2 · done · lease.operation: свежий снимок + fencing, evaluate, списание до вызова, классификация вины (identity/session_invalid/banned/request), cool_down, error_score/карантин (D-115) · фаза 4 закрыта, дальше P5.1
+2026-09-26 · P5.1 · done · add_proxy/add_proxies (fingerprint, шифрование), URL, здоровье: карантин по порогу, перепроверка с backoff ×2, dead, подтверждение выхода, override, вина прокси из операции; миграция 0003 (D-116) · дальше P5.2
