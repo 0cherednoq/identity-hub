@@ -37,6 +37,7 @@ __all__ = [
     "SpaceRef",
     "Store",
     "StoreTx",
+    "VerificationRow",
 ]
 
 
@@ -258,6 +259,18 @@ class ChallengeRow:
     expires_at: datetime | None
     answered_at: datetime | None
     resolved_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationRow:
+    """Данные фактора в ih_verifications (состояние — в ih_region_states)."""
+
+    attempts: int
+    started_at: datetime | None
+    submitted_at: datetime | None
+    verified_at: datetime | None
+    expires_at: datetime | None
+    evidence: EncryptedPayload | None
 
 
 class StoreTx(ABC):
@@ -497,6 +510,21 @@ class StoreTx(ABC):
     @abstractmethod
     async def due_proxies(self, limit: int) -> list[UUID]:
         """Прокси в карантине, у которых наступил `next_check_at` (перепроверка по расписанию)."""
+
+    # --------------------------------------------------------- верификации (P5.4)
+
+    @abstractmethod
+    async def load_verification(self, identity_id: UUID, factor: str) -> VerificationRow | None: ...
+
+    @abstractmethod
+    async def save_verification(
+        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: EncryptedPayload | None = None
+    ) -> None:
+        """Upsert строки ih_verifications; `evidence` — перезаписать доказательства."""
+
+    @abstractmethod
+    async def due_regions(self, region: str, limit: int) -> list[tuple[UUID, str]]:
+        """(identity_id, key) строк региона, у которых истёк `until` (снятие временных состояний)."""
 
     # --------------------------------------------------------- challenge (P5.3)
 

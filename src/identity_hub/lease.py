@@ -33,6 +33,7 @@ from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseCounters, 
 if TYPE_CHECKING:
     from identity_hub.operation import Operation
     from identity_hub.pool import Pool
+    from identity_hub.verifications import Verification
 
 __all__ = ["Lease", "OnLost", "acquire", "lease_scope"]
 
@@ -240,6 +241,12 @@ class Lease:
         from identity_hub.operation import operation_scope
 
         return operation_scope(self, kind, key)
+
+    def verification(self, factor: str) -> Verification:
+        """Фактор верификации под арендой (FR-10): start/submit/reconcile/…."""
+        from identity_hub.verifications import Verification
+
+        return Verification(self, factor)
 
     # --------------------------------------------------------- секреты и сессии (FR-5.2, 5.3, 5.6)
 

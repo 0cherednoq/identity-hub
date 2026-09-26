@@ -62,6 +62,7 @@ from identity_hub.postgres.models import (
     ServiceRecord,
     SessionRecord,
     SpaceRecord,
+    VerificationRecord,
 )
 from identity_hub.store.base import (
     CandidateQuery,
@@ -81,6 +82,7 @@ from identity_hub.store.base import (
     SpaceRef,
     Store,
     StoreTx,
+    VerificationRow,
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
@@ -98,6 +100,7 @@ OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
 BINDINGS = cast(Table, BindingRecord.__table__)
 CHALLENGES = cast(Table, ChallengeRecord.__table__)
+VERIFICATIONS = cast(Table, VerificationRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
@@ -1215,6 +1218,71 @@ class PgTx(StoreTx):
             .limit(limit)
         )
         return [_challenge_row(r) for r in rows.mappings()]
+
+    # --------------------------------------------------------- верификации
+
+    async def load_verification(self, identity_id: UUID, factor: str) -> VerificationRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(VERIFICATIONS).where(
+                        VERIFICATIONS.c.identity_id == identity_id,
+                        VERIFICATIONS.c.factor == factor,
+                        VERIFICATIONS.c.space_id == self.space.id,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        evidence = (
+            EncryptedPayload(
+                row["evidence_key_id"],
+                row["evidence_wrapped_dek"],
+                row["evidence_nonce"],
+                row["evidence_ciphertext"],
+            )
+            if row["evidence_ciphertext"] is not None
+            else None
+        )
+        return VerificationRow(
+            attempts=row["attempts"],
+            started_at=row["started_at"],
+            submitted_at=row["submitted_at"],
+            verified_at=row["verified_at"],
+            expires_at=row["expires_at"],
+            evidence=evidence,
+        )
+
+    async def save_verification(
+        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: EncryptedPayload | None = None
+    ) -> None:
+        data = dict(values)
+        if evidence is not None:
+            data |= evidence.columns("evidence_")
+        stmt = insert(VERIFICATIONS).values(
+            identity_id=identity_id, factor=factor, space_id=self.space.id, **data
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[VERIFICATIONS.c.identity_id, VERIFICATIONS.c.factor],
+            set_=data or {"factor": factor},
+        )
+        await self.execute(stmt)
+
+    async def due_regions(self, region: str, limit: int) -> list[tuple[UUID, str]]:
+        rows = await self.execute(
+            select(REGION_STATES.c.identity_id, REGION_STATES.c.key)
+            .where(
+                REGION_STATES.c.space_id == self.space.id,
+                REGION_STATES.c.region == region,
+                REGION_STATES.c.until <= func.now(),
+            )
+            .order_by(REGION_STATES.c.until)
+            .limit(limit)
+        )
+        return [(r.identity_id, r.key) for r in rows]
 
 
 def _challenge_row(row: Any) -> ChallengeRow:
