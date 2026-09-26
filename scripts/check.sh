@@ -6,4 +6,4 @@ uv run ruff check --fix-only -q .
 uv run ruff format -q .
 uv run ruff check .
 uv run mypy src
-uv run pytest -m "not load" -q "$@"
+uv run pytest -m "not load" -q -rfE "$@"

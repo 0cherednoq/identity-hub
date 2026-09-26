@@ -168,3 +168,22 @@ async def test_heartbeat_does_not_use_user_session(
         await user.rollback()
     (history,) = await _history(sessionmaker)
     assert history.end_reason == "released"
+
+
+async def test_on_lost_fires_when_check_detects_loss_first(
+    space: SpaceHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Регрессия: потерю первым заметил check(), а не heartbeat — on_lost всё равно вызывается."""
+    from identity_hub.lease import Lease
+
+    async def idle(self: Lease) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(Lease, "_heartbeat_loop", idle)
+    await make_identity(space)
+    calls: list[str] = []
+    with pytest.raises(LeaseLost):
+        async with fast_pool(space).lease(on_lost=lambda: calls.append("lost")) as lease:
+            await asyncio.sleep(1.1)  # дедлайн TTL − safety_margin = 1.0 с
+            lease.check()
+    assert calls == ["lost"]

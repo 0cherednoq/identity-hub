@@ -93,3 +93,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P3.1 · done · Pool/LeaseTiming (G-1.2), candidate_query (for_operation, теги, метки, профиль, among list/Select), pick_candidate (FOR UPDATE OF SKIP LOCKED, ленивое availability, D-007) · дальше P3.2
 2026-09-26 · P3.2 · done · acquire: SKIP LOCKED + fencing + ih_leases/история одной tx, перезахват истёкшей с закрытием истории по expires_at, idempotency_key, wait с backoff, shared-режим, события lease.acquired/expired · дальше P3.3
 2026-09-26 · P3.3 · done · pool.lease(): heartbeat на своей tx, самоограждение по monotonic (D-112), on_lost sync/async, LeaseLost, check(), release идемпотентный по token, счётчики в историю, LeaseContext · дальше P3.4
+2026-09-26 · P3.3 · fix · коммит P3.3 прошёл при нестабильном падении (tail глотал код возврата); найден баг: on_lost не вызывался, если потерю первым заметил check(). Исправлено + регрессионный тест; протокол уточнён

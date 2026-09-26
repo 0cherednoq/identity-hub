@@ -56,6 +56,7 @@ class Lease:
         self._on_lost: OnLost | None = None
         self._cancelled_by_us = False
         self._released = False
+        self._on_lost_fired = False
 
     # --------------------------------------------------------- свойства
 
@@ -170,20 +171,25 @@ class Lease:
         self._counters.last_error = self._counters.last_error or counters.last_error
 
     async def _mark_lost(self, reason: str) -> None:
-        if self._lost is not None:
-            return
-        self._lost = reason
-        logger.warning("аренда %s потеряна: %s", self.lease_id, reason)
-        if self._on_lost is not None:
-            try:
-                result = self._on_lost()
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                logger.exception("on_lost аренды %s завершился ошибкой", self.lease_id)
+        if self._lost is None:
+            self._lost = reason
+            logger.warning("аренда %s потеряна: %s", self.lease_id, reason)
+        await self._fire_on_lost()
         if self._owner is not None and not self._owner.done():
             self._cancelled_by_us = True
             self._owner.cancel(f"identity_hub: аренда {self.lease_id} потеряна")
+
+    async def _fire_on_lost(self) -> None:
+        """Вызвать on_lost ровно один раз, каким бы путём ни обнаружилась потеря (heartbeat или check())."""
+        if self._on_lost_fired or self._on_lost is None:
+            return
+        self._on_lost_fired = True
+        try:
+            result = self._on_lost()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("on_lost аренды %s завершился ошибкой", self.lease_id)
 
     async def _stop_heartbeat(self) -> None:
         self._closed = True
@@ -262,6 +268,7 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost}")
         raise LeaseLost(lease.lease_id, lease._lost or "heartbeat") from exc
     except LeaseLost:
+        await lease._fire_on_lost()
         await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost or 'heartbeat'}")
         raise
     except BaseException as exc:
@@ -269,6 +276,7 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         raise
     else:
         if lease._lost is not None:
+            await lease._fire_on_lost()
             await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost}")
             raise LeaseLost(lease.lease_id, lease._lost)
         await lease.release(LeaseEndReason.RELEASED)
