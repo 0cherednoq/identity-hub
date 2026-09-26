@@ -35,6 +35,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql.base import ischema_names
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
 
@@ -89,6 +90,10 @@ class XID8(UserDefinedType[str]):
 
     def get_col_spec(self, **kw: Any) -> str:
         return "XID8"
+
+
+# рефлексия (Alembic autogenerate, doctor) распознаёт xid8
+ischema_names["xid8"] = XID8
 
 
 class IdentityHubBase(DeclarativeBase):
