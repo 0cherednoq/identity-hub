@@ -16,6 +16,7 @@ from identity_hub.crypto import Envelope
 from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
 from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
+from identity_hub.doctor import Doctor
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.identities import IdentitiesMixin
@@ -107,6 +108,7 @@ class IdentityHub:
         self.dispatcher.add_pump(self.notification_dispatcher.deliver_due)
         self.maintenance = Maintenance(self, maintenance)
         self.dispatcher.add_pump(self.maintenance.run_due)
+        self.doctor = Doctor(self)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}

@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable, Select
 
 from identity_hub._ids import new_id
-from identity_hub.crypto.envelope import EncryptedPayload
+from identity_hub.crypto.envelope import EncryptedPayload, associated_data
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import (
     AuthState,
@@ -89,6 +89,7 @@ from identity_hub.store.base import (
     ChallengeRow,
     ChargeOutcome,
     DataRow,
+    DoctorIssue,
     IdentityRow,
     LeaseCounters,
     LeaseHistoryRow,
@@ -2589,6 +2590,197 @@ class PgStore(Store):
                 result = await session.execute(stmt, execution_options=self.options)
                 counts[name] = int(result.rowcount or 0)  # type: ignore[attr-defined]
             return counts
+
+    # --------------------------------------------------------- doctor / rotate-key
+
+    async def doctor(self, *, fix: bool) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        async with self._own() as session:
+            identities = list(
+                (
+                    await session.execute(
+                        select(IDENTITIES, SPACES.c.slug).join(SPACES, SPACES.c.id == IDENTITIES.c.space_id),
+                        execution_options=self.options,
+                    )
+                ).mappings()
+            )
+            region_rows = (
+                await session.execute(select(REGION_STATES), execution_options=self.options)
+            ).mappings()
+            regions = {(row["identity_id"], row["region"], row["key"]): row for row in region_rows}
+            event_rows = await session.execute(
+                select(EVENTS.c.identity_id, func.max(EVENTS.c.sequence))
+                .where(EVENTS.c.identity_id.is_not(None), EVENTS.c.sequence.is_not(None))
+                .group_by(EVENTS.c.identity_id),
+                execution_options=self.options,
+            )
+            event_seq = {row[0]: int(row[1]) for row in event_rows}
+            for row in identities:
+                identity_id = row["id"]
+                changes: dict[str, Any] = {}
+                standing = regions.get((identity_id, "standing", ""))
+                if standing is not None:
+                    expected = (standing["state"], standing["code"], standing["until"])
+                    actual = (row["standing"], row["standing_code"], row["standing_until"])
+                    if actual != expected:
+                        issues.append(DoctorIssue("standing", row["slug"], identity_id, expected, actual))
+                        changes.update(
+                            standing=expected[0], standing_code=expected[1], standing_until=expected[2]
+                        )
+                auth = regions.get((identity_id, "auth", "default"))
+                if auth is not None and row["auth_state"] != auth["state"]:
+                    issues.append(
+                        DoctorIssue("auth_state", row["slug"], identity_id, auth["state"], row["auth_state"])
+                    )
+                    changes["auth_state"] = auth["state"]
+                verified = sorted(
+                    key
+                    for (owner, region, key), state in regions.items()
+                    if owner == identity_id and region == "verification" and state["state"] == "verified"
+                )
+                if sorted(row["verified_factors"]) != verified:
+                    issues.append(
+                        DoctorIssue(
+                            "verified_factors",
+                            row["slug"],
+                            identity_id,
+                            verified,
+                            list(row["verified_factors"]),
+                        )
+                    )
+                    changes["verified_factors"] = verified
+                expected_seq = event_seq.get(identity_id, 0)
+                # После retention старые события отсутствуют, поэтому доказуем только нижнюю границу.
+                if row["event_seq"] < expected_seq:
+                    issues.append(
+                        DoctorIssue("event_seq", row["slug"], identity_id, expected_seq, row["event_seq"])
+                    )
+                    changes["event_seq"] = expected_seq
+                if fix and changes:
+                    await session.execute(
+                        update(IDENTITIES).where(IDENTITIES.c.id == identity_id).values(**changes),
+                        execution_options=self.options,
+                    )
+
+            binding_counts = (
+                select(BINDINGS.c.proxy_id, func.count().label("n")).group_by(BINDINGS.c.proxy_id).subquery()
+            )
+            proxies = (
+                await session.execute(
+                    select(
+                        PROXIES.c.id,
+                        PROXIES.c.bound_count,
+                        SPACES.c.slug,
+                        func.coalesce(binding_counts.c.n, 0).label("expected"),
+                    )
+                    .join(SPACES, SPACES.c.id == PROXIES.c.space_id)
+                    .outerjoin(binding_counts, binding_counts.c.proxy_id == PROXIES.c.id),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            for row in proxies:
+                if row["bound_count"] == row["expected"]:
+                    continue
+                issues.append(
+                    DoctorIssue(
+                        "proxy.bound_count",
+                        row["slug"],
+                        row["id"],
+                        int(row["expected"]),
+                        row["bound_count"],
+                    )
+                )
+                if fix:
+                    await session.execute(
+                        update(PROXIES).where(PROXIES.c.id == row["id"]).values(bound_count=row["expected"]),
+                        execution_options=self.options,
+                    )
+        return issues
+
+    async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]:
+        active = envelope.active_key_id
+        counts: dict[str, int] = {}
+        specs: list[tuple[str, Table, str, Callable[[Any], bytes]]] = [
+            ("credentials", CREDENTIALS, "", lambda r: associated_data("ih_credentials", r["identity_id"])),
+            (
+                "sessions",
+                SESSIONS,
+                "",
+                lambda r: associated_data("ih_sessions", r["identity_id"], r["slot"]),
+            ),
+            (
+                "challenges",
+                CHALLENGES,
+                "context_",
+                lambda r: associated_data("ih_challenges", r["identity_id"], str(r["id"])),
+            ),
+            (
+                "verifications",
+                VERIFICATIONS,
+                "evidence_",
+                lambda r: associated_data("ih_verifications", r["identity_id"], r["factor"]),
+            ),
+            ("proxies", PROXIES, "", lambda r: associated_data("ih_proxies", r["id"])),
+            (
+                "webhooks",
+                WEBHOOK_ENDPOINTS,
+                "",
+                lambda r: associated_data("ih_webhook_endpoints", r["id"]),
+            ),
+            (
+                "notification_channels",
+                NOTIFICATION_CHANNELS,
+                "",
+                lambda r: associated_data("ih_notification_channels", r["id"]),
+            ),
+            (
+                "profiles",
+                IDENTITIES,
+                "profile_",
+                lambda r: associated_data("ih_identities", r["id"], "profile"),
+            ),
+        ]
+        remaining = max(0, limit)
+        async with self._own() as session:
+            for name, table, prefix, aad_of in specs:
+                if remaining == 0:
+                    break
+                key = table.c[f"{prefix}key_id"]
+                ciphertext = table.c[f"{prefix}ciphertext"]
+                rows = list(
+                    (
+                        await session.execute(
+                            select(table)
+                            .where(ciphertext.is_not(None), key != active)
+                            .limit(remaining)
+                            .with_for_update(skip_locked=True),
+                            execution_options=self.options,
+                        )
+                    ).mappings()
+                )
+                for row in rows:
+                    payload = EncryptedPayload(
+                        row[f"{prefix}key_id"],
+                        row[f"{prefix}wrapped_dek"],
+                        row[f"{prefix}nonce"],
+                        row[f"{prefix}ciphertext"],
+                    )
+                    rotated = envelope.rewrap(payload, aad_of(row))
+                    await session.execute(
+                        update(table)
+                        .where(*[column == row[column.name] for column in table.primary_key.columns])
+                        .values(
+                            **{
+                                f"{prefix}key_id": rotated.key_id,
+                                f"{prefix}wrapped_dek": rotated.wrapped_dek,
+                            }
+                        ),
+                        execution_options=self.options,
+                    )
+                if rows:
+                    counts[name] = len(rows)
+                    remaining -= len(rows)
+        return counts
 
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:

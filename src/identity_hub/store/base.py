@@ -29,6 +29,7 @@ __all__ = [
     "ChallengeRow",
     "ChargeOutcome",
     "DataRow",
+    "DoctorIssue",
     "IdentityRow",
     "LeaseCounters",
     "LeaseHistoryRow",
@@ -65,6 +66,15 @@ class SpaceRef:
     id: UUID
     slug: str
     title: str
+
+
+@dataclass(frozen=True, slots=True)
+class DoctorIssue:
+    kind: str
+    space: str
+    entity_id: UUID
+    expected: Any
+    actual: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -987,3 +997,11 @@ class Store(ABC):
         self, retention: Mapping[str, timedelta], names: frozenset[str]
     ) -> dict[str, int]:
         """Удалить завершившиеся окна квот и старые журнальные данные по времени БД."""
+
+    # --------------------------------------------------------- doctor / rotate-key (P9.2)
+
+    @abstractmethod
+    async def doctor(self, *, fix: bool) -> list[DoctorIssue]: ...
+
+    @abstractmethod
+    async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]: ...
