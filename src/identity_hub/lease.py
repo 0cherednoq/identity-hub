@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import logging
 import random
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import replace
@@ -175,7 +176,32 @@ class Lease:
                 await self._mark_lost("heartbeat")
                 return
 
+    async def _flush_logs(self, *, final: bool = False) -> None:
+        """Пачка логов аренды в ih_lease_logs (FR-12.2). Ошибка записи не влияет на аренду."""
+        sink = self.pool.space.hub.lease_log_sink
+        entries = sink.drain(self.lease_id, final=final)
+        if not entries:
+            return
+        try:
+            async with self.pool.space._tx(own=True) as tx:
+                await tx.insert_lease_logs(
+                    [
+                        {
+                            "lease_id": e.lease_id,
+                            "identity_id": e.identity_id,
+                            "ts": e.ts,
+                            "level": e.level,
+                            "message": e.message,
+                            "fields": e.fields,
+                        }
+                        for e in entries
+                    ]
+                )
+        except Exception:
+            logging.getLogger("identity_hub.sink").debug("sink ih_lease_logs недоступен", exc_info=True)
+
     async def _extend(self) -> datetime | None:
+        await self._flush_logs()
         counters, self._counters = self._counters, LeaseCounters.empty()
         try:
             async with self.pool.space._tx(own=True) as tx:
@@ -330,6 +356,7 @@ class Lease:
         if self._released:
             return
         self._released = True
+        await self._flush_logs(final=True)
         counters, self._counters = self._counters, LeaseCounters.empty()
         if error is not None:
             counters.last_error = error[:2000]

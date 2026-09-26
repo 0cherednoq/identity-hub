@@ -602,6 +602,12 @@ class StoreTx(ABC):
     ) -> tuple[list[IdentityRow], int | None]:
         """Страница (created_at DESC, id DESC) и ограниченный счётчик (до count_limit + 1)."""
 
+    # --------------------------------------------------------- логи аренды (P7.2)
+
+    @abstractmethod
+    async def insert_lease_logs(self, rows: Sequence[dict[str, Any]]) -> None:
+        """Пачка записей ih_lease_logs: lease_id, identity_id, ts, level, message, fields."""
+
     # --------------------------------------------------------- read-модели (P6.2)
 
     @abstractmethod

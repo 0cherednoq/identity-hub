@@ -17,6 +17,7 @@ from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
 from identity_hub.importing import ImportingMixin
 from identity_hub.links import LinksMixin
+from identity_hub.logging import LeaseLogPolicy, LeaseLogSink
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
@@ -62,6 +63,7 @@ class IdentityHub:
         strict_events: bool = False,
         store: Store | None = None,
         proxy_health: ProxyHealthPolicy | None = None,
+        lease_logs: LeaseLogPolicy | None = None,
     ) -> None:
         if store is None:
             if sessionmaker is None:
@@ -77,6 +79,8 @@ class IdentityHub:
         self.retention = retention or Retention()
         self.clock: Clock = clock or SystemClock()
         self.proxy_health = proxy_health or ProxyHealthPolicy()
+        # sink ih_lease_logs (FR-12.2): подключить `logging.getLogger().addHandler(hub.lease_log_sink)`
+        self.lease_log_sink = LeaseLogSink(lease_logs)
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}
         for service in services:

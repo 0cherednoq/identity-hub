@@ -55,6 +55,7 @@ from identity_hub.postgres.models import (
     IdentityLinkRecord,
     IdentityRecord,
     LeaseHistoryRecord,
+    LeaseLogRecord,
     LeaseRecord,
     OperationKeyRecord,
     ProxyRecord,
@@ -99,6 +100,7 @@ LINKS = cast(Table, IdentityLinkRecord.__table__)
 DATA = cast(Table, IdentityDataRecord.__table__)
 LEASES = cast(Table, LeaseRecord.__table__)
 HISTORY = cast(Table, LeaseHistoryRecord.__table__)
+LEASE_LOGS = cast(Table, LeaseLogRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
@@ -1373,6 +1375,12 @@ class PgTx(StoreTx):
             capped = select(i.id).where(*conditions).limit(count_limit + 1).subquery()
             total = int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
         return rows, total
+
+    # --------------------------------------------------------- логи аренды
+
+    async def insert_lease_logs(self, rows: Sequence[dict[str, Any]]) -> None:
+        if rows:
+            await self.execute(insert(LEASE_LOGS).values([{**r, "space_id": self.space.id} for r in rows]))
 
     # --------------------------------------------------------- read-модели
 
