@@ -8,10 +8,13 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P5.5 Пробы, resync, reconcile
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] store: stale_regions (давно не сверялись)
+  - [ ] sync.py: ProbeContext, resync(id, regions) под арендой с квотой probe, коды standing сервиса
+  - [ ] reconcile(regions, not_synced_for, limit) с wait=False
+  - [ ] pg-тесты: resync, pinned override + проба → drift, неизвестный статус, reconcile пропускает занятые
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -46,7 +49,7 @@
 | P5.2 | Привязка прокси | P5.1 | done |  |  |
 | P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | done |  |  |
 | P5.4 | Верификации в БД | P1.3, P3.4 | done |  |  |
-| P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | todo | | |
+| P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | in_progress |  |  |
 | P5.6 | Секреты для админки | P3.4 | todo | | |
 | P5.7 | import_many | P5.2, P5.4, P2.6 | todo | | |
 | P6.1 | Поиск | P2.5, P3.3 | todo | | |
