@@ -8,16 +8,11 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P10.2 identity_hub.testing
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] реализовать make_service и make_identity
-  - [ ] добавить pytest-плагин с изолированными memory-фикстурами
-  - [ ] экспортировать наследуемый conformance-набор для Store
-  - [ ] добавить исполняемый пользовательский тест в examples
-  - [ ] прогнать тесты плагина и conformance
-  - [ ] прогнать полный scripts/check.sh и закрыть задачу
-- **Заметки для следующей сессии:** P10.1 закрыта коммитом 029d25f; P10.2 создаёт публичные фабрики, namespaced pytest fixtures и переиспользуемый StoreConformanceSuite. Пользовательские admin/.github/.gitignore изменения не включать.
+  - [ ] —
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
@@ -66,12 +61,12 @@
 | P9.2 | CLI (migrate, dispatcher, maintenance, doctor, rotate-key) | P9.1, P8.1 | done |  |  |
 | P9.3 | Метрики | P4.2 | done |  |  |
 | P10.1 | MemoryStore | P2–P9 | done |  |  |
-| P10.2 | identity_hub.testing | P10.1 | in_progress |  |  |
+| P10.2 | identity_hub.testing | P10.1 | done |  |  |
 | P10.3 | Нагрузочные тесты | P10.2 | todo | | |
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 43 / 47 done
+**Итого:** 44 / 47 done
 
 ## Журнал сессий
 
@@ -121,3 +116,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P9.2 · done · CLI migrate/dispatcher/maintenance/doctor/rotate-key через app factory; doctor проверяет и чинит регионы, verified_factors, event_seq и proxy.bound_count; rotate-key пакетно переоборачивает credentials/session/challenge/evidence/proxy/webhook/bot/profile; 387 тестов зелёные · дальше P9.3
 2026-09-27 · P9.3 · done · MetricsHook/NullMetrics/RecordingMetrics без Prometheus; histogram lease/operation, failure counters, pool availability, cursor lag и webhook/notification queue gauges; backend метрик изолирован; 389 тестов зелёные · фаза 9 закрыта, дальше P10.1
 2026-09-27 · P10.1 · done · MemoryStore с rollback, полным Store-контрактом и общим conformance-набором для memory/pg; 407 тестов зелёные · дальше P10.2 identity_hub.testing
+2026-09-27 · P10.2 · done · фабрики, pytest-плагин, экспортируемый StoreConformanceSuite и исполняемый memory-пример; 410 тестов зелёные · дальше P10.3 нагрузочные тесты
