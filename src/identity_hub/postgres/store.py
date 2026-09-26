@@ -72,7 +72,9 @@ from identity_hub.store.base import (
     DataRow,
     IdentityRow,
     LeaseCounters,
+    LeaseHistoryRow,
     LeaseRow,
+    LeaseStatsRow,
     LinkRow,
     NewIdentity,
     NewProxy,
@@ -104,6 +106,7 @@ BINDINGS = cast(Table, BindingRecord.__table__)
 CHALLENGES = cast(Table, ChallengeRecord.__table__)
 VERIFICATIONS = cast(Table, VerificationRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
+LEASE_HISTORY_FIELDS = tuple(f.name for f in fields(LeaseHistoryRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -1370,6 +1373,127 @@ class PgTx(StoreTx):
             capped = select(i.id).where(*conditions).limit(count_limit + 1).subquery()
             total = int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
         return rows, total
+
+    # --------------------------------------------------------- read-модели
+
+    async def list_regions(self, identity_id: UUID) -> list[tuple[str, str, RegionState]]:
+        rows = await self.execute(
+            select(REGION_STATES)
+            .where(REGION_STATES.c.identity_id == identity_id, REGION_STATES.c.space_id == self.space.id)
+            .order_by(REGION_STATES.c.region, REGION_STATES.c.key)
+        )
+        result = []
+        for r in rows.mappings():
+            values = {f: r[f] for f in REGION_FIELDS}
+            values["change_source"] = ChangeSource(values["change_source"])
+            result.append((r["region"], r["key"], RegionState(**values)))
+        return result
+
+    async def current_lease(self, identity_id: UUID) -> LeaseRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(LEASES).where(
+                        LEASES.c.identity_id == identity_id,
+                        LEASES.c.space_id == self.space.id,
+                        LEASES.c.expires_at > func.now(),
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _lease_row(row) if row else None
+
+    async def data_namespaces(self, identity_id: UUID) -> list[tuple[str, int, int, datetime]]:
+        rows = await self.execute(
+            select(DATA.c.namespace, DATA.c.schema_version, DATA.c.version, DATA.c.updated_at)
+            .where(DATA.c.identity_id == identity_id, DATA.c.space_id == self.space.id)
+            .order_by(DATA.c.namespace)
+        )
+        return [(r.namespace, r.schema_version, r.version, r.updated_at) for r in rows]
+
+    async def region_counts(self, service: str | None) -> list[tuple[str, str, str, int]]:
+        result: list[tuple[str, str, str, int]] = []
+        for column in ("lifecycle", "standing", "auth_state", "availability"):
+            col = IDENTITIES.c[column]
+            stmt = select(IDENTITIES.c.service, col, func.count()).where(
+                IDENTITIES.c.space_id == self.space.id
+            )
+            if service is not None:
+                stmt = stmt.where(IDENTITIES.c.service == service)
+            grouped: list[Any] = list(await self.execute(stmt.group_by(IDENTITIES.c.service, col)))
+            result.extend((str(r[0]), column, str(r[1]), int(r[2])) for r in grouped)
+        return result
+
+    async def lease_history(
+        self, identity_id: UUID, *, limit: int, before: datetime | None
+    ) -> list[LeaseHistoryRow]:
+        stmt = select(HISTORY).where(
+            HISTORY.c.identity_id == identity_id, HISTORY.c.space_id == self.space.id
+        )
+        if before is not None:
+            stmt = stmt.where(HISTORY.c.acquired_at < before)
+        rows = await self.execute(stmt.order_by(HISTORY.c.acquired_at.desc()).limit(limit))
+        return [LeaseHistoryRow(**{f: r[f] for f in LEASE_HISTORY_FIELDS}) for r in rows.mappings()]
+
+    async def lease_stats(self, identity_id: UUID, since: datetime) -> LeaseStatsRow:
+        base = [
+            HISTORY.c.identity_id == identity_id,
+            HISTORY.c.space_id == self.space.id,
+            HISTORY.c.acquired_at >= since,
+        ]
+        held = func.coalesce(HISTORY.c.duration, func.now() - HISTORY.c.acquired_at)
+        agg: Any = (
+            await self.execute(
+                select(
+                    func.count(),
+                    func.coalesce(func.sum(held), timedelta(0)),
+                    func.avg(held),
+                    func.max(held),
+                    func.coalesce(func.sum(HISTORY.c.succeeded), 0),
+                    func.coalesce(func.sum(HISTORY.c.failed), 0),
+                ).where(*base)
+            )
+        ).one()
+        reasons: list[Any] = list(
+            await self.execute(
+                select(func.coalesce(HISTORY.c.end_reason, "active"), func.count())
+                .where(*base)
+                .group_by(HISTORY.c.end_reason)
+            )
+        )
+        ops: list[Any] = list(
+            await self.execute(
+                select(text("key"), func.sum(text("value::bigint")))
+                .select_from(
+                    HISTORY.join(
+                        func.jsonb_each_text(HISTORY.c.operations).table_valued("key", "value"), literal(True)
+                    )
+                )
+                .where(*base)
+                .group_by(text("key"))
+            )
+        )
+        return LeaseStatsRow(
+            count=int(agg[0]),
+            total=agg[1],
+            average=agg[2],
+            longest=agg[3],
+            by_reason={str(r[0]): int(r[1]) for r in reasons},
+            operations={str(r[0]): int(r[1]) for r in ops},
+            succeeded=int(agg[4]),
+            failed=int(agg[5]),
+        )
+
+    async def identities_page(self, service: str, after: UUID | None, limit: int) -> list[IdentityRow]:
+        stmt = select(IDENTITIES).where(
+            IDENTITIES.c.space_id == self.space.id, IDENTITIES.c.service == service
+        )
+        if after is not None:
+            stmt = stmt.where(IDENTITIES.c.id > after)
+        rows = await self.execute(stmt.order_by(IDENTITIES.c.id).limit(limit))
+        return [IdentityRow(**{f: r[f] for f in IDENTITY_FIELDS}) for r in rows.mappings()]
 
 
 def _challenge_row(row: Any) -> ChallengeRow:

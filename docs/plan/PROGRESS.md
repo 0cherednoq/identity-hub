@@ -8,12 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P6.2 Карточки и статистика
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: list_regions, current_lease, data_namespaces, region_counts, lease_history, lease_stats, identities_page для переиндексации
-  - [ ] read/cards.py: identity_card, pool_summary, lease_history, lease_stats, reindex_search
-  - [ ] pg-тесты: состав карточки без секретов и token, статистика, переиндексация
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -52,7 +50,7 @@
 | P5.6 | Секреты для админки | P3.4 | done |  |  |
 | P5.7 | import_many | P5.2, P5.4, P2.6 | done |  |  |
 | P6.1 | Поиск | P2.5, P3.3 | done |  |  |
-| P6.2 | Карточки и статистика | P6.1 | in_progress |  |  |
+| P6.2 | Карточки и статистика | P6.1 | done |  |  |
 | P7.1 | Контекст логов | P3.3 | todo | | |
 | P7.2 | Sink ih_lease_logs | P7.1 | todo | | |
 | P8.1 | Диспетчер | P2.2 | todo | | |
@@ -68,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 32 / 47 done
+**Итого:** 33 / 47 done
 
 ## Журнал сессий
 
@@ -107,3 +105,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P5.6 · done · update_credentials, reveal_secret (credentials/session/profile/evidence) с аудитом identity.secret.revealed в той же tx · дальше P5.7
 2026-09-27 · P5.7 · done · import_many: валидация/шифрование до БД, пачки в своих tx, on_existing skip/update_session/fail, связи по service:external_ref (в т.ч. внутри пачки), прокси с дедупликацией и привязкой, начальные верификации, identity.imported, on_batch_committed; import_files (D-118) · фаза 5 закрыта, дальше P6.1
 2026-09-27 · P6.1 · done · search: фильтры сервис/регионы/status/теги, profile vs labels с типизацией, trigram по search_text с экранированием, UUID/короткий id, keyset (created_at,id) DESC, счётчик до 1000+; тест коллизий миксинов · дальше P6.2
+2026-09-27 · P6.2 · done · identity_card (регионы, верификации, связи, аренда без token, прокси без секрета, квоты, неймспейсы, challenge, ссылка в админку), pool_summary, lease_history, lease_stats (утилизация, причины, операции), reindex_search · фаза 6 закрыта, дальше P7.1

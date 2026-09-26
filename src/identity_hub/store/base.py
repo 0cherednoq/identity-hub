@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -26,7 +26,9 @@ __all__ = [
     "DataRow",
     "IdentityRow",
     "LeaseCounters",
+    "LeaseHistoryRow",
     "LeaseRow",
+    "LeaseStatsRow",
     "LinkRow",
     "NewIdentity",
     "NewProxy",
@@ -285,6 +287,39 @@ class SearchFilter:
     contains: tuple[tuple[str, tuple[dict[str, Any], ...]], ...] = ()  # (profile|labels, варианты @>)
     terms: tuple[str, ...] = ()
     exact_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseHistoryRow:
+    """Строка ih_lease_history без token."""
+
+    lease_id: UUID
+    identity_id: UUID
+    fencing: int
+    pool: str
+    holder: str
+    proxy_id: UUID | None
+    acquired_at: datetime
+    last_heartbeat_at: datetime
+    released_at: datetime | None
+    duration: timedelta | None
+    end_reason: str | None
+    operations: dict[str, int]
+    succeeded: int
+    failed: int
+    last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseStatsRow:
+    count: int
+    total: timedelta
+    average: timedelta | None
+    longest: timedelta | None
+    by_reason: dict[str, int]
+    operations: dict[str, int]
+    succeeded: int
+    failed: int
 
 
 class StoreTx(ABC):
@@ -566,6 +601,35 @@ class StoreTx(ABC):
         count_limit: int | None,
     ) -> tuple[list[IdentityRow], int | None]:
         """Страница (created_at DESC, id DESC) и ограниченный счётчик (до count_limit + 1)."""
+
+    # --------------------------------------------------------- read-модели (P6.2)
+
+    @abstractmethod
+    async def list_regions(self, identity_id: UUID) -> list[tuple[str, str, RegionState]]: ...
+
+    @abstractmethod
+    async def current_lease(self, identity_id: UUID) -> LeaseRow | None:
+        """Живая аренда аккаунта (без показа token наружу — это забота вызывающего)."""
+
+    @abstractmethod
+    async def data_namespaces(self, identity_id: UUID) -> list[tuple[str, int, int, datetime]]:
+        """(namespace, schema_version, version, updated_at)."""
+
+    @abstractmethod
+    async def region_counts(self, service: str | None) -> list[tuple[str, str, str, int]]:
+        """(service, колонка региона, значение, число аккаунтов) — сводка пула (FR-11.6)."""
+
+    @abstractmethod
+    async def lease_history(
+        self, identity_id: UUID, *, limit: int, before: datetime | None
+    ) -> list[LeaseHistoryRow]: ...
+
+    @abstractmethod
+    async def lease_stats(self, identity_id: UUID, since: datetime) -> LeaseStatsRow: ...
+
+    @abstractmethod
+    async def identities_page(self, service: str, after: UUID | None, limit: int) -> list[IdentityRow]:
+        """Страница аккаунтов сервиса по id (переиндексация)."""
 
     # --------------------------------------------------------- challenge (P5.3)
 
