@@ -22,12 +22,12 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.engine import Result
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.sql import Executable
+from sqlalchemy.sql import Executable, Select
 
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import ChangeSource
+from identity_hub.enums import AuthState, Availability, ChangeSource, Lifecycle
 from identity_hub.errors import SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
@@ -37,12 +37,14 @@ from identity_hub.postgres.models import (
     IdentityDataRecord,
     IdentityLinkRecord,
     IdentityRecord,
+    LeaseRecord,
     RegionStateRecord,
     ServiceRecord,
     SessionRecord,
     SpaceRecord,
 )
 from identity_hub.store.base import (
+    CandidateQuery,
     DataRow,
     IdentityRow,
     LinkRow,
@@ -61,6 +63,7 @@ CREDENTIALS = cast(Table, CredentialsRecord.__table__)
 SESSIONS = cast(Table, SessionRecord.__table__)
 LINKS = cast(Table, IdentityLinkRecord.__table__)
 DATA = cast(Table, IdentityDataRecord.__table__)
+LEASES = cast(Table, LeaseRecord.__table__)
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
@@ -498,6 +501,52 @@ class PgTx(StoreTx):
             best.setdefault(r.id, (r.id, r.depth, list(r.path)))
         result = list(best.values())
         return sorted(result, key=lambda item: (item[1], str(item[0])))
+
+    # --------------------------------------------------------- аренда
+
+    async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
+        i, lease = IDENTITIES.c, LEASES.c
+        now = func.now()
+        conditions: list[Any] = [
+            i.space_id == self.space.id,
+            i.service == query.service,
+            i.lifecycle == Lifecycle.READY,
+            i.standing.in_(sorted(query.standing)),
+            or_(
+                i.availability == Availability.AVAILABLE,
+                and_(
+                    i.availability.in_([Availability.PAUSED, Availability.COOLING]),
+                    i.availability_until <= now,
+                ),
+            ),
+        ]
+        if query.needs_auth:
+            conditions.append(i.auth_state == AuthState.AUTHENTICATED)
+        if query.required_factors:
+            conditions.append(i.verified_factors.contains(sorted(query.required_factors)))
+        if query.tags:
+            conditions.append(i.tags.contains(sorted(query.tags)))
+        if query.labels:
+            conditions.append(i.labels.contains(query.labels))
+        if query.profile:
+            conditions.append(i.profile.contains(query.profile))
+        if query.among is not None:
+            among = query.among if isinstance(query.among, Select) else list(query.among)
+            conditions.append(i.id.in_(among))
+        if query.exclude:
+            conditions.append(i.id.not_in(list(query.exclude)))
+        if not query.shared:
+            conditions.append(or_(lease.identity_id.is_(None), lease.expires_at <= now))
+        stmt = (
+            select(IDENTITIES)
+            .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
+            .where(*conditions)
+            .order_by(lease.acquired_at.asc().nulls_first(), i.id)
+            .limit(1)
+            .with_for_update(of=IDENTITIES, skip_locked=True)
+        )
+        row = (await self.execute(stmt)).mappings().one_or_none()
+        return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
 
 
 def cast_uuid_array(ids: list[UUID]) -> Any:

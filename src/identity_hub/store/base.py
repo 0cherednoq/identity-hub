@@ -20,6 +20,7 @@ from identity_hub.domain.regions import RegionState
 from identity_hub.events import EventDraft
 
 __all__ = [
+    "CandidateQuery",
     "DataRow",
     "IdentityRow",
     "LinkRow",
@@ -113,6 +114,22 @@ class LinkRow:
     other_service: str
     other_external_ref: str
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateQuery:
+    """Условия выборки аккаунта для аренды (ТЗ FR-6.1, §3.9)."""
+
+    service: str
+    standing: frozenset[str]
+    needs_auth: bool = True
+    required_factors: frozenset[str] = frozenset()
+    tags: frozenset[str] = frozenset()
+    labels: dict[str, Any] | None = None
+    profile: dict[str, Any] | None = None
+    among: Any = None  # список id или подзапрос домена (Select) — FR-6.1
+    exclude: frozenset[UUID] = frozenset()
+    shared: bool = False  # FR-6.6: живая аренда не исключает аккаунт
 
 
 class StoreTx(ABC):
@@ -234,6 +251,16 @@ class StoreTx(ABC):
     @abstractmethod
     async def dependents(self, identity_id: UUID, max_depth: int) -> list[tuple[UUID, int, list[str]]]:
         """Транзитивно зависящие аккаунты: (id, глубина, цепочка ролей) — анализ последствий."""
+
+    # --------------------------------------------------------- аренда (P3.x)
+
+    @abstractmethod
+    async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
+        """Свободный допустимый аккаунт, заблокированный до конца транзакции (FOR UPDATE SKIP LOCKED).
+
+        Порядок — наименее недавно арендованный (D-007). Истёкшие временные состояния availability
+        считаются доступными (ленивое снятие, ТЗ §3.4).
+        """
 
 
 class Store(ABC):

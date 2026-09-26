@@ -8,12 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P3.1 Pool и SQL выборки кандидатов
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: CandidateQuery, pick_candidate (FOR UPDATE OF SKIP LOCKED, ленивое availability, свободная аренда)
-  - [ ] pool.py: Pool (валидация G-1.2, фильтры, for_operation, among)
-  - [ ] pg-тесты: фильтры, порядок выдачи, SKIP LOCKED, EXPLAIN по частичному индексу
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -38,7 +36,7 @@
 | P2.4 | register | P2.3, P1.6 | done |  |  |
 | P2.5 | Изменение данных аккаунта, identity_data | P2.4 | done |  |  |
 | P2.6 | Связи и read-модели связей | P2.4 | done |  |  |
-| P3.1 | Pool и SQL выборки кандидатов | P1.5, P2.4 | in_progress |  |  |
+| P3.1 | Pool и SQL выборки кандидатов | P1.5, P2.4 | done |  |  |
 | P3.2 | Захват аренды | P3.1 | todo | | |
 | P3.3 | Жизненный цикл Lease (heartbeat, fencing) | P3.2 | todo | | |
 | P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | todo | | |
@@ -68,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 18 / 47 done
+**Итого:** 19 / 47 done
 
 ## Журнал сессий
 
@@ -92,3 +90,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P2.4 · done · register: prepare_identity (валидация+шифрование до tx), идемпотентность, глобальная уникальность, связи, начальные регионы, profile_encrypted (миграция 0002); scripts/check.sh; D-109..D-111 · дальше P2.5
 2026-09-26 · P2.5 · done · set_labels/set_tags/add_tags/remove_tags/set_attributes/update_profile (в т.ч. зашифрованный)/set_note/delete (RESTRICT), identity_data load/save с версией · дальше P2.6
 2026-09-26 · P2.6 · done · link/unlink с событиями, links_of, link_summary (один запрос), impact_of (рекурсивный CTE с защитой от циклов) · фаза 2 закрыта, дальше P3.1
+2026-09-26 · P3.1 · done · Pool/LeaseTiming (G-1.2), candidate_query (for_operation, теги, метки, профиль, among list/Select), pick_candidate (FOR UPDATE OF SKIP LOCKED, ленивое availability, D-007) · дальше P3.2
