@@ -1,3 +1,175 @@
 # Identity Hub
 
-Python-библиотека управления парком аккаунтов. Требования — `identity-hub-requirements.md`, план — `docs/plan/PLAN.md`.
+Identity Hub — асинхронная Python-библиотека для управления парком внешних
+аккаунтов: их состояниями, эксклюзивной арендой, квотами, прокси, зашифрованными
+сессиями и событиями. Основной читатель этого руководства — разработчик Python
+3.12+, который встраивает библиотеку в воркеры или веб-приложение.
+
+Библиотека подходит, когда несколько процессов должны безопасно делить аккаунты
+Telegram, бирж или других платформ. Она не является клиентом этих платформ:
+сетевой вызов выполняет код приложения, а Identity Hub решает, какой аккаунт
+можно взять, и фиксирует результат операции.
+
+## Установка через uv
+
+Для PostgreSQL и встроенных миграций Alembic:
+
+```bash
+uv add "identity-hub[postgres,alembic]"
+```
+
+Дополнительные зависимости подключаются отдельно: `telegram` для транспорта
+уведомлений через aiogram, `webhooks` для HTTP-вебхуков, `structlog` для
+структурированных логов и `testing` для тестового `MemoryStore` и pytest-плагина.
+
+Для разработки самого репозитория:
+
+```bash
+uv sync --all-extras
+docker compose up -d postgres
+uv run pytest
+```
+
+## Быстрый старт
+
+1. Создайте 32-байтовый мастер-ключ. Не коммитьте его и не выводите в логи:
+
+   ```bash
+   uv run python -c "from identity_hub.crypto import generate_key; print(generate_key())"
+   ```
+
+2. Сохраните результат в `IDENTITY_HUB_KEK`. Первый ключ в строке активен;
+   прежние ключи оставляют после запятой на время ротации.
+
+3. Задайте URL PostgreSQL и примените миграции:
+
+   ```bash
+   export IDENTITY_HUB_DATABASE_URL='postgresql+asyncpg://app:password@localhost/app'
+   export IDENTITY_HUB_KEK='k1:<base64-ключ>'
+   uv run identity-hub migrate
+   ```
+
+4. Объявите сервис в коде и создайте один `IdentityHub` на процесс:
+
+   ```python
+   from datetime import timedelta
+
+   from pydantic import BaseModel, SecretStr
+   from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+   from identity_hub.crypto import EnvSecretsProvider
+   from identity_hub.hub import IdentityHub
+   from identity_hub.service import OperationRule, Quota, Service
+
+
+   class TelegramCredentials(BaseModel):
+       phone: str
+
+
+   class TelegramSession(BaseModel):
+       auth_key: SecretStr
+       dc_id: int = 2
+
+
+   TELEGRAM = Service(
+       name="telegram",
+       title="Telegram",
+       credentials=TelegramCredentials,
+       session=TelegramSession,
+       operations={
+           "read_channel": OperationRule(
+               quotas=(Quota(100, timedelta(hours=1)),),
+           ),
+       },
+   )
+
+   engine = create_async_engine(
+       "postgresql+asyncpg://app:password@localhost/app",
+       pool_pre_ping=True,
+   )
+   sessions = async_sessionmaker(engine, expire_on_commit=False)
+   hub = IdentityHub(
+       sessionmaker=sessions,
+       secrets=EnvSecretsProvider(),
+       services=[TELEGRAM],
+   )
+   ```
+
+5. На старте приложения синхронизируйте реестр сервисов, затем работайте через
+   пространство и пул:
+
+   ```python
+   from identity_hub.enums import AuthState, Lifecycle
+
+   await hub.start()
+   space = hub.space("production", "Production")
+
+   await space.register(
+       service=TELEGRAM,
+       external_ref="+12025550123",
+       credentials={"phone": "+12025550123"},
+       session={"auth_key": "secret-session"},
+       tags=["parser"],
+       lifecycle=Lifecycle.READY,
+       auth_state=AuthState.AUTHENTICATED,
+   )
+
+   parsers = space.pool("parsers", service=TELEGRAM, tags=["parser"])
+   async with parsers.lease(for_operation="read_channel") as lease:
+       session = await lease.session()
+       async with lease.operation("read_channel", key="job:42"):
+           # Здесь приложение вызывает Telegram-клиент с session и lease.proxy.
+           messages = await telegram_client.read_history(session)
+   ```
+
+`for_operation` отбрасывает аккаунты, которые не удовлетворяют состояниям,
+верификации или квотам. Контекст `operation` повторно проверяет состояние и
+списывает квоту до внешнего вызова. Параметр `key` делает списание конкретной
+операции идемпотентным.
+
+Полный самодостаточный сценарий находится в
+[`examples/telegram_service.py`](examples/telegram_service.py). Он использует
+память вместо PostgreSQL и имитирует платформенный клиент, поэтому запускается
+без внешних сервисов:
+
+```bash
+uv run python examples/telegram_service.py
+```
+
+## Эксплуатация и тесты
+
+- [CLI и переменные окружения](docs/cli.md) — миграции, диспетчер,
+  обслуживание, диагностика и ротация ключей.
+- [Интеграция](docs/integrations.md) — Alembic, отдельная схема PostgreSQL,
+  PgBouncer, Dishka и жизненный цикл процессов.
+- [Нагрузочные характеристики](docs/perf.md) — воспроизводимый стенд и
+  известные ограничения производительности.
+- [CHANGELOG](CHANGELOG.md) — пользовательские изменения по версиям.
+
+Для быстрых тестов без БД установите extra `testing`. Pytest-плагин предоставляет
+фикстуры с префиксом `identity_hub_`, а пользовательский пример можно выполнить
+командой:
+
+```bash
+uv run pytest examples/test_memory_hub.py
+```
+
+`MemoryStore` предназначен для тестов и однопроцессных примеров. Конкурентные
+воркеры, долговечные аренды и эксплуатационный журнал требуют PostgreSQL.
+
+## Границы безопасности
+
+- Сессии, credentials, секреты прокси и токены доставок шифруются отдельными
+  DEK; мастер-ключи предоставляет приложение.
+- Расшифрованные credentials и сессии доступны только внутри активной аренды.
+- Потеря heartbeat отменяет владеющую задачу и вызывает `on_lost`; сетевой
+  клиент должен быть отключён этим callback.
+- Диспетчер доставляет события как минимум один раз. Обработчики обязаны быть
+  идемпотентными.
+- `SpaceHandle.using(db_session)` нужен, когда изменение Identity Hub должно
+  участвовать во внешней транзакции приложения; обычные методы используют свои
+  короткие транзакции.
+
+Полная спецификация поведения —
+[`identity-hub-requirements.md`](identity-hub-requirements.md), история
+реализации — [`docs/plan/PLAN.md`](docs/plan/PLAN.md).

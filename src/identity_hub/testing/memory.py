@@ -276,7 +276,7 @@ class MemoryTx(StoreTx):
         old = self.state.sessions.get((identity_id, slot))
         if old is not None and old[2] > fencing:
             return False
-        self.state.sessions[(identity_id, slot)] = (payload, "active", fencing, expires_at)
+        self.state.sessions[(identity_id, slot)] = (payload, "valid", fencing, expires_at)
         return True
 
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
