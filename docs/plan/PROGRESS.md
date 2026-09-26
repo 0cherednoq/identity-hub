@@ -8,10 +8,14 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P3.3 Жизненный цикл Lease (heartbeat, fencing)
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] store: extend_lease и release_lease (по token, идемпотентно, счётчики в историю)
+  - [ ] context.py: LeaseContext в contextvars
+  - [ ] Lease: heartbeat-задача на своей транзакции, самоограждение по monotonic, on_lost, LeaseLost, check()
+  - [ ] pool.lease(): released / failed / lost, события
+  - [ ] pg-тесты: продление, потеря раньше TTL, причины окончания, идемпотентный release
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -38,7 +42,7 @@
 | P2.6 | Связи и read-модели связей | P2.4 | done |  |  |
 | P3.1 | Pool и SQL выборки кандидатов | P1.5, P2.4 | done |  |  |
 | P3.2 | Захват аренды | P3.1 | done |  |  |
-| P3.3 | Жизненный цикл Lease (heartbeat, fencing) | P3.2 | todo | | |
+| P3.3 | Жизненный цикл Lease (heartbeat, fencing) | P3.2 | in_progress |  |  |
 | P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | todo | | |
 | P4.1 | Квоты, pacing, ключи операций | P3.3 | todo | | |
 | P4.2 | lease.operation | P4.1 | todo | | |
