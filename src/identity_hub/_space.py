@@ -16,6 +16,7 @@ from identity_hub.store.base import IdentityRow, SpaceRef, StoreTx
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from identity_hub.dispatch.notifications import Notifications
     from identity_hub.dispatch.webhooks import Webhooks
     from identity_hub.hub import IdentityHub
 
@@ -53,6 +54,13 @@ class SpaceBase:
         from identity_hub.dispatch.webhooks import Webhooks
 
         return Webhooks(self)
+
+    @property
+    def notifications(self) -> Notifications:
+        """Управление Telegram-каналами и правилами пространства (FR-15)."""
+        from identity_hub.dispatch.notifications import Notifications
+
+        return Notifications(self)
 
     @asynccontextmanager
     async def _tx(self, *, own: bool = False) -> AsyncIterator[StoreTx]:

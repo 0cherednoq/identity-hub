@@ -14,6 +14,7 @@ from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
 from identity_hub.dispatch.dispatcher import Dispatcher
+from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
 from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import EventDraft
@@ -70,6 +71,7 @@ class IdentityHub:
         lease_logs: LeaseLogPolicy | None = None,
         webhooks: WebhookPolicy | None = None,
         webhook_dev_hosts: Iterable[str] = (),
+        telegram_transport: TelegramTransport | None = None,
     ) -> None:
         if store is None:
             if sessionmaker is None:
@@ -92,6 +94,15 @@ class IdentityHub:
         self.webhook_dispatcher = WebhookDispatcher(self, webhooks)
         self.dispatcher.add_consumer("webhooks", self.webhook_dispatcher.handle_events)
         self.dispatcher.add_pump(self.webhook_dispatcher.deliver_due)
+        if telegram_transport is None:
+            from identity_hub.telegram_notify import AiogramTelegramTransport
+
+            telegram_transport = AiogramTelegramTransport()
+        self.notification_dispatcher = NotificationDispatcher(
+            self, telegram_transport, policy=self.webhook_dispatcher.policy
+        )
+        self.dispatcher.add_consumer("notifications", self.notification_dispatcher.handle_events)
+        self.dispatcher.add_pump(self.notification_dispatcher.deliver_due)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}

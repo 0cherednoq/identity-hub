@@ -69,6 +69,9 @@ from identity_hub.postgres.models import (
     LeaseHistoryRecord,
     LeaseLogRecord,
     LeaseRecord,
+    NotificationChannelRecord,
+    NotificationRecord,
+    NotificationRuleRecord,
     OperationKeyRecord,
     ProxyRecord,
     QuotaUsageRecord,
@@ -93,8 +96,15 @@ from identity_hub.store.base import (
     LeaseStatsRow,
     LinkRow,
     NewIdentity,
+    NewNotificationChannel,
+    NewNotificationRule,
     NewProxy,
     NewWebhookEndpoint,
+    NotificationAttempt,
+    NotificationChannelRow,
+    NotificationEnqueue,
+    NotificationRuleRow,
+    NotificationTargetRow,
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
@@ -131,6 +141,9 @@ CURSORS = cast(Table, EventCursorRecord.__table__)
 SPACES = cast(Table, SpaceRecord.__table__)
 WEBHOOK_ENDPOINTS = cast(Table, WebhookEndpointRecord.__table__)
 WEBHOOK_DELIVERIES = cast(Table, WebhookDeliveryRecord.__table__)
+NOTIFICATION_CHANNELS = cast(Table, NotificationChannelRecord.__table__)
+NOTIFICATION_RULES = cast(Table, NotificationRuleRecord.__table__)
+NOTIFICATIONS = cast(Table, NotificationRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 LEASE_HISTORY_FIELDS = tuple(f.name for f in fields(LeaseHistoryRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
@@ -1660,6 +1673,136 @@ class PgTx(StoreTx):
         ).mappings()
         return [_webhook_delivery_row(row) for row in rows]
 
+    # --------------------------------------------------------- Telegram-уведомления
+
+    async def insert_notification_channel(self, row: NewNotificationChannel) -> NotificationChannelRow:
+        stored = (
+            (
+                await self.execute(
+                    insert(NOTIFICATION_CHANNELS)
+                    .values(
+                        id=row.id,
+                        space_id=self.space.id,
+                        kind="telegram",
+                        title=row.title,
+                        config=row.config,
+                        **row.secret.columns(),
+                    )
+                    .returning(NOTIFICATION_CHANNELS)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        return _notification_channel_row(stored)
+
+    async def notification_channels(self) -> list[NotificationChannelRow]:
+        rows = (
+            await self.execute(
+                select(NOTIFICATION_CHANNELS)
+                .where(NOTIFICATION_CHANNELS.c.space_id == self.space.id)
+                .order_by(NOTIFICATION_CHANNELS.c.created_at, NOTIFICATION_CHANNELS.c.id)
+            )
+        ).mappings()
+        return [_notification_channel_row(row) for row in rows]
+
+    async def update_notification_channel(
+        self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
+    ) -> bool:
+        changes = dict(values)
+        if secret is not None:
+            changes.update(secret.columns())
+        if not changes:
+            return await self._notification_channel_exists(channel_id)
+        result = await self.execute(
+            update(NOTIFICATION_CHANNELS)
+            .where(
+                NOTIFICATION_CHANNELS.c.id == channel_id,
+                NOTIFICATION_CHANNELS.c.space_id == self.space.id,
+            )
+            .values(**changes)
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def _notification_channel_exists(self, channel_id: UUID) -> bool:
+        return (
+            await self.execute(
+                select(NOTIFICATION_CHANNELS.c.id).where(
+                    NOTIFICATION_CHANNELS.c.id == channel_id,
+                    NOTIFICATION_CHANNELS.c.space_id == self.space.id,
+                )
+            )
+        ).scalar_one_or_none() is not None
+
+    async def delete_notification_channel(self, channel_id: UUID) -> bool:
+        result = await self.execute(
+            delete(NOTIFICATION_CHANNELS).where(
+                NOTIFICATION_CHANNELS.c.id == channel_id,
+                NOTIFICATION_CHANNELS.c.space_id == self.space.id,
+            )
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def insert_notification_rule(self, row: NewNotificationRule) -> NotificationRuleRow:
+        if not await self._notification_channel_exists(row.channel_id):
+            from identity_hub.errors import NotFound
+
+            raise NotFound("notification channel", row.channel_id)
+        stored = (
+            (
+                await self.execute(
+                    insert(NOTIFICATION_RULES)
+                    .values(
+                        id=row.id,
+                        space_id=self.space.id,
+                        channel_id=row.channel_id,
+                        name=row.name,
+                        event_types=row.event_types,
+                        min_severity=row.min_severity,
+                        filter=row.filter,
+                        digest_seconds=row.digest_seconds,
+                        template=row.template,
+                        created_by=row.created_by,
+                    )
+                    .returning(NOTIFICATION_RULES)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        return _notification_rule_row(stored)
+
+    async def notification_rules(self) -> list[NotificationRuleRow]:
+        rows = (
+            await self.execute(
+                select(NOTIFICATION_RULES)
+                .where(NOTIFICATION_RULES.c.space_id == self.space.id)
+                .order_by(NOTIFICATION_RULES.c.updated_at, NOTIFICATION_RULES.c.id)
+            )
+        ).mappings()
+        return [_notification_rule_row(row) for row in rows]
+
+    async def update_notification_rule(self, rule_id: UUID, values: dict[str, Any]) -> bool:
+        changes = {**values, "updated_at": func.now()}
+        result = await self.execute(
+            update(NOTIFICATION_RULES)
+            .where(
+                NOTIFICATION_RULES.c.id == rule_id,
+                NOTIFICATION_RULES.c.space_id == self.space.id,
+            )
+            .values(**changes)
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def delete_notification_rule(self, rule_id: UUID) -> bool:
+        result = await self.execute(
+            delete(NOTIFICATION_RULES).where(
+                NOTIFICATION_RULES.c.id == rule_id,
+                NOTIFICATION_RULES.c.space_id == self.space.id,
+            )
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
 
 def _event(row: Any) -> Event:
     return Event(
@@ -1710,6 +1853,32 @@ def _webhook_delivery_row(row: Any) -> WebhookDeliveryRow:
         error=row["error"],
         created_at=row["created_at"],
         delivered_at=row["delivered_at"],
+    )
+
+
+def _notification_channel_row(row: Any) -> NotificationChannelRow:
+    return NotificationChannelRow(
+        id=row["id"],
+        title=row["title"],
+        config=dict(row["config"]),
+        enabled=row["enabled"],
+        created_at=row["created_at"],
+    )
+
+
+def _notification_rule_row(row: Any) -> NotificationRuleRow:
+    return NotificationRuleRow(
+        id=row["id"],
+        channel_id=row["channel_id"],
+        name=row["name"],
+        enabled=row["enabled"],
+        event_types=list(row["event_types"]),
+        min_severity=row["min_severity"],
+        filter=dict(row["filter"]),
+        digest_seconds=row["digest_seconds"],
+        template=row["template"],
+        created_by=row["created_by"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -2104,6 +2273,201 @@ class PgStore(Store):
                     text("SELECT pg_notify(:channel, :payload)"),
                     {"channel": NOTIFY_CHANNEL, "payload": row.slug},
                 )
+            return True
+
+    # --------------------------------------------------------- Telegram-уведомления
+
+    async def enabled_notification_targets(self) -> list[NotificationTargetRow]:
+        r, c = NOTIFICATION_RULES.c, NOTIFICATION_CHANNELS.c
+        async with self.sessionmaker() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        NOTIFICATION_RULES,
+                        SPACES.c.slug.label("space_slug"),
+                        c.config.label("channel_config"),
+                        c.key_id,
+                        c.wrapped_dek,
+                        c.nonce,
+                        c.ciphertext,
+                    )
+                    .join(NOTIFICATION_CHANNELS, c.id == r.channel_id)
+                    .join(SPACES, SPACES.c.id == r.space_id)
+                    .where(r.enabled.is_(True), c.enabled.is_(True)),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            return [
+                NotificationTargetRow(
+                    rule=_notification_rule_row(row),
+                    space_slug=row["space_slug"],
+                    channel_config=dict(row["channel_config"]),
+                    channel_secret=EncryptedPayload(
+                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
+                    ),
+                )
+                for row in rows
+            ]
+
+    async def enqueue_notifications(self, items: Sequence[NotificationEnqueue]) -> int:
+        if not items:
+            return 0
+        total = 0
+        async with self._own() as session:
+            for item in items:
+                values = {
+                    "rule_id": item.rule_id,
+                    "channel_id": item.channel_id,
+                    "digest_key": item.digest_key,
+                    "event_ids": [item.event_id],
+                    "status": DeliveryStatus.PENDING,
+                    "attempt": 0,
+                    "scheduled_at": item.scheduled_at,
+                }
+                stmt = insert(NOTIFICATIONS).values(**values)
+                if item.digest_key is not None:
+                    event_ids = case(
+                        (
+                            func.array_position(NOTIFICATIONS.c.event_ids, item.event_id).is_(None),
+                            func.array_append(NOTIFICATIONS.c.event_ids, item.event_id),
+                        ),
+                        else_=NOTIFICATIONS.c.event_ids,
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[NOTIFICATIONS.c.digest_key],
+                        index_where=and_(
+                            NOTIFICATIONS.c.digest_key.is_not(None),
+                            NOTIFICATIONS.c.status == DeliveryStatus.PENDING,
+                        ),
+                        set_={"event_ids": event_ids},
+                    )
+                result = await session.execute(stmt, execution_options=self.options)
+                total += int(result.rowcount or 0)  # type: ignore[attr-defined]
+        return total
+
+    async def claim_notifications(self, *, limit: int, claim_for: timedelta) -> list[NotificationAttempt]:
+        n, r, c = NOTIFICATIONS.c, NOTIFICATION_RULES.c, NOTIFICATION_CHANNELS.c
+        async with self._own() as session:
+            locked: list[int] = list(
+                (
+                    await session.execute(
+                        select(n.id)
+                        .join(NOTIFICATION_RULES, r.id == n.rule_id)
+                        .join(NOTIFICATION_CHANNELS, c.id == n.channel_id)
+                        .where(
+                            n.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
+                            n.scheduled_at <= func.now(),
+                            r.enabled.is_(True),
+                            c.enabled.is_(True),
+                        )
+                        .order_by(n.scheduled_at, n.id)
+                        .limit(limit)
+                        .with_for_update(of=NOTIFICATIONS, skip_locked=True),
+                        execution_options=self.options,
+                    )
+                ).scalars()
+            )
+            if not locked:
+                return []
+            await session.execute(
+                update(NOTIFICATIONS)
+                .where(n.id.in_(locked))
+                # `failed` закрывает partial unique «open digest»: событие, пришедшее во время
+                # сетевого I/O, создаст новое pending-уведомление и не потеряется.
+                .values(
+                    status=DeliveryStatus.FAILED,
+                    attempt=n.attempt + 1,
+                    scheduled_at=func.now() + claim_for,
+                ),
+                execution_options=self.options,
+            )
+            rows = list(
+                (
+                    await session.execute(
+                        select(
+                            n.id.label("notification_id"),
+                            n.attempt,
+                            n.rule_id,
+                            n.channel_id,
+                            n.event_ids,
+                            r.template,
+                            c.config.label("channel_config"),
+                            c.key_id,
+                            c.wrapped_dek,
+                            c.nonce,
+                            c.ciphertext,
+                        )
+                        .join(NOTIFICATION_RULES, r.id == n.rule_id)
+                        .join(NOTIFICATION_CHANNELS, c.id == n.channel_id)
+                        .where(n.id.in_(locked))
+                        .order_by(n.id),
+                        execution_options=self.options,
+                    )
+                ).mappings()
+            )
+            event_ids = {event_id for row in rows for event_id in row["event_ids"]}
+            event_rows = (
+                await session.execute(
+                    select(EVENTS, SPACES.c.slug)
+                    .join(SPACES, SPACES.c.id == EVENTS.c.space_id)
+                    .where(EVENTS.c.event_id.in_(event_ids)),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            events = {row["event_id"]: _event(row) for row in event_rows}
+            return [
+                NotificationAttempt(
+                    notification_id=row["notification_id"],
+                    attempt=row["attempt"],
+                    rule_id=row["rule_id"],
+                    channel_id=row["channel_id"],
+                    template=row["template"],
+                    channel_config=dict(row["channel_config"]),
+                    channel_secret=EncryptedPayload(
+                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
+                    ),
+                    events=tuple(events[event_id] for event_id in row["event_ids"] if event_id in events),
+                )
+                for row in rows
+            ]
+
+    async def finish_notification(
+        self,
+        notification_id: int,
+        attempt: int,
+        *,
+        succeeded: bool,
+        error: str | None,
+        retry_after: timedelta,
+        max_attempts: int,
+    ) -> bool:
+        n = NOTIFICATIONS.c
+        async with self._own() as session:
+            row = (
+                await session.execute(
+                    select(n.attempt, n.status).where(n.id == notification_id).with_for_update(),
+                    execution_options=self.options,
+                )
+            ).one_or_none()
+            if (
+                row is None
+                or row.attempt != attempt
+                or row.status not in (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+            ):
+                return False
+            values: dict[str, Any]
+            if succeeded:
+                values = {"status": DeliveryStatus.SUCCEEDED, "sent_at": func.now(), "error": None}
+            else:
+                values = {
+                    "status": DeliveryStatus.DEAD if attempt >= max_attempts else DeliveryStatus.FAILED,
+                    "scheduled_at": func.now() + retry_after,
+                    "error": error[:2000] if error else None,
+                }
+            await session.execute(
+                update(NOTIFICATIONS).where(n.id == notification_id).values(**values),
+                execution_options=self.options,
+            )
             return True
 
     @asynccontextmanager

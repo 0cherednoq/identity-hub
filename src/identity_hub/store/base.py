@@ -36,8 +36,15 @@ __all__ = [
     "LeaseStatsRow",
     "LinkRow",
     "NewIdentity",
+    "NewNotificationChannel",
+    "NewNotificationRule",
     "NewProxy",
     "NewWebhookEndpoint",
+    "NotificationAttempt",
+    "NotificationChannelRow",
+    "NotificationEnqueue",
+    "NotificationRuleRow",
+    "NotificationTargetRow",
     "ProxyRow",
     "QuotaCharge",
     "QuotaWindow",
@@ -382,6 +389,80 @@ class WebhookAttempt:
     url: str
     secret: EncryptedPayload
     event: Event
+
+
+@dataclass(frozen=True, slots=True)
+class NewNotificationChannel:
+    id: UUID
+    title: str
+    config: dict[str, Any]
+    secret: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationChannelRow:
+    id: UUID
+    title: str
+    config: dict[str, Any]
+    enabled: bool
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NewNotificationRule:
+    id: UUID
+    channel_id: UUID
+    name: str
+    event_types: list[str]
+    min_severity: str
+    filter: dict[str, Any]
+    digest_seconds: int | None
+    template: str | None
+    created_by: str
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationRuleRow:
+    id: UUID
+    channel_id: UUID
+    name: str
+    enabled: bool
+    event_types: list[str]
+    min_severity: str
+    filter: dict[str, Any]
+    digest_seconds: int | None
+    template: str | None
+    created_by: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationTargetRow:
+    rule: NotificationRuleRow
+    space_slug: str
+    channel_config: dict[str, Any]
+    channel_secret: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationEnqueue:
+    rule_id: UUID
+    channel_id: UUID
+    event_id: UUID
+    digest_key: str | None
+    scheduled_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationAttempt:
+    notification_id: int
+    attempt: int
+    rule_id: UUID
+    channel_id: UUID
+    template: str | None
+    channel_config: dict[str, Any]
+    channel_secret: EncryptedPayload
+    events: tuple[Event, ...]
 
 
 class StoreTx(ABC):
@@ -763,6 +844,34 @@ class StoreTx(ABC):
     @abstractmethod
     async def webhook_deliveries(self, endpoint_id: UUID, limit: int) -> list[WebhookDeliveryRow]: ...
 
+    # --------------------------------------------------------- Telegram-уведомления (P8.4)
+
+    @abstractmethod
+    async def insert_notification_channel(self, row: NewNotificationChannel) -> NotificationChannelRow: ...
+
+    @abstractmethod
+    async def notification_channels(self) -> list[NotificationChannelRow]: ...
+
+    @abstractmethod
+    async def update_notification_channel(
+        self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
+    ) -> bool: ...
+
+    @abstractmethod
+    async def delete_notification_channel(self, channel_id: UUID) -> bool: ...
+
+    @abstractmethod
+    async def insert_notification_rule(self, row: NewNotificationRule) -> NotificationRuleRow: ...
+
+    @abstractmethod
+    async def notification_rules(self) -> list[NotificationRuleRow]: ...
+
+    @abstractmethod
+    async def update_notification_rule(self, rule_id: UUID, values: dict[str, Any]) -> bool: ...
+
+    @abstractmethod
+    async def delete_notification_rule(self, rule_id: UUID) -> bool: ...
+
 
 class Store(ABC):
     @abstractmethod
@@ -834,3 +943,26 @@ class Store(ABC):
         max_failures: int,
     ) -> bool:
         """Зафиксировать попытку; вернуть False, если резервирование уже устарело."""
+
+    # --------------------------------------------------------- Telegram-уведомления (P8.4)
+
+    @abstractmethod
+    async def enabled_notification_targets(self) -> list[NotificationTargetRow]: ...
+
+    @abstractmethod
+    async def enqueue_notifications(self, items: Sequence[NotificationEnqueue]) -> int: ...
+
+    @abstractmethod
+    async def claim_notifications(self, *, limit: int, claim_for: timedelta) -> list[NotificationAttempt]: ...
+
+    @abstractmethod
+    async def finish_notification(
+        self,
+        notification_id: int,
+        attempt: int,
+        *,
+        succeeded: bool,
+        error: str | None,
+        retry_after: timedelta,
+        max_attempts: int,
+    ) -> bool: ...
