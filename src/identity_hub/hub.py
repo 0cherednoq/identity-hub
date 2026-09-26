@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import UUID
 
+from identity_hub._space import SpaceBase
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
 from identity_hub.errors import NotFound, ValidationFailed
-from identity_hub.events import EventDraft, scrub
 from identity_hub.protocols import SecretsProvider
 from identity_hub.service import Service
-from identity_hub.store.base import ServiceRow, SpaceRef, Store, StoreTx
+from identity_hub.state import StateMixin
+from identity_hub.store.base import ServiceRow, SpaceRef, Store
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-__all__ = ["IdentityHub", "Retention", "SpaceHandle"]
+__all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle"]
 
 
 @dataclass(frozen=True)
@@ -105,43 +105,8 @@ class IdentityHub:
         return ref
 
 
-class SpaceHandle:
-    """Пространство (ТЗ §5.1). `.using(session)` — работа в общей транзакции пользователя."""
+class SpaceHandle(StateMixin):
+    """Пространство (ТЗ §5.1). `.using(session)` — работа в общей транзакции пользователя.
 
-    def __init__(
-        self,
-        hub: IdentityHub,
-        slug: str,
-        *,
-        title: str | None = None,
-        space_id: UUID | None = None,
-        session: AsyncSession | None = None,
-    ) -> None:
-        self.hub = hub
-        self.slug = slug
-        self._title = title
-        self._space_id = space_id
-        self._session = session
-
-    def using(self, session: AsyncSession) -> SpaceHandle:
-        return SpaceHandle(self.hub, self.slug, title=self._title, space_id=self._space_id, session=session)
-
-    async def ref(self) -> SpaceRef:
-        return await self.hub._space_ref(self.slug, self._title, self._space_id)
-
-    @asynccontextmanager
-    async def _tx(self, *, own: bool = False) -> AsyncIterator[StoreTx]:
-        """Транзакция операции. `own=True` — всегда своя (факты внешнего мира, ТЗ §7.2)."""
-        ref = await self.ref()
-        session: Any = None if own else self._session
-        async with self.hub.store.transaction(ref, session=session) as tx:
-            yield tx
-
-    async def _emit(self, tx: StoreTx, *drafts: EventDraft) -> list[UUID]:
-        """Записать события в транзакции операции; данные очищаются от секретов (S-8)."""
-        strict = self.hub.strict_events
-        clean = [replace(d, data=scrub(d.data, strict=strict)) for d in drafts]
-        return await tx.emit(clean)
-
-    def __repr__(self) -> str:
-        return f"SpaceHandle({self.slug!r}{', using session' if self._session else ''})"
+    Операции разложены по миксинам: регионы — `state.StateMixin`, далее по задачам плана.
+    """

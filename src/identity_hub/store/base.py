@@ -15,9 +15,10 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from identity_hub.domain.regions import RegionState
 from identity_hub.events import EventDraft
 
-__all__ = ["ServiceRow", "SpaceRef", "Store", "StoreTx"]
+__all__ = ["IdentityRow", "ServiceRow", "SpaceRef", "Store", "StoreTx"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,36 @@ class SpaceRef:
 class ServiceRow:
     name: str
     title: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityRow:
+    """Строка ih_identities без секретов."""
+
+    id: UUID
+    space_id: UUID
+    service: str
+    external_ref: str
+    lifecycle: str
+    standing: str
+    standing_code: str | None
+    standing_until: datetime | None
+    auth_state: str
+    availability: str
+    availability_until: datetime | None
+    requirements: list[Any]
+    tags: list[str]
+    attributes: dict[str, Any]
+    profile: dict[str, Any]
+    labels: dict[str, Any]
+    note: str | None
+    search_text: str
+    verified_factors: list[str]
+    error_score: float
+    fencing_seq: int
+    event_seq: int
+    created_at: datetime
+    updated_at: datetime
 
 
 class StoreTx(ABC):
@@ -49,6 +80,27 @@ class StoreTx(ABC):
         `data` уже очищены от секретов. Для событий аккаунта инкрементирует `event_seq`
         и проставляет `sequence`. Внешние события будят диспетчер (NOTIFY при коммите).
         """
+
+    # --------------------------------------------------------- аккаунт и регионы (P2.3)
+
+    @abstractmethod
+    async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
+        """Аккаунт этого пространства (чужое пространство — None)."""
+
+    @abstractmethod
+    async def update_identity(
+        self, identity_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
+    ) -> bool:
+        """Обновить колонки ih_identities; `expected` — compare-and-set (D-107). False — не совпало."""
+
+    @abstractmethod
+    async def load_region(self, identity_id: UUID, region: str, key: str) -> RegionState | None: ...
+
+    @abstractmethod
+    async def save_region(
+        self, identity_id: UUID, region: str, key: str, previous: RegionState | None, new: RegionState
+    ) -> bool:
+        """Записать регион с проверкой `version` (previous=None — вставка). False — гонка."""
 
 
 class Store(ABC):

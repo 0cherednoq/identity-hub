@@ -10,24 +10,38 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import fields
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import Table, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Result
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable
 
 from identity_hub._ids import new_id
+from identity_hub.domain.regions import RegionState
+from identity_hub.enums import ChangeSource
 from identity_hub.errors import SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
-from identity_hub.postgres.models import EventRecord, IdentityRecord, ServiceRecord, SpaceRecord
-from identity_hub.store.base import ServiceRow, SpaceRef, Store, StoreTx
+from identity_hub.postgres.models import (
+    EventRecord,
+    IdentityRecord,
+    RegionStateRecord,
+    ServiceRecord,
+    SpaceRecord,
+)
+from identity_hub.store.base import IdentityRow, ServiceRow, SpaceRef, Store, StoreTx
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
+
+IDENTITIES = cast(Table, IdentityRecord.__table__)
+REGION_STATES = cast(Table, RegionStateRecord.__table__)
+IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
+REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
 SESSION_SPACE_KEY = "identity_hub.space"
 NOTIFY_CHANNEL = "ih_events"
@@ -89,6 +103,81 @@ class PgTx(StoreTx):
                 {"channel": NOTIFY_CHANNEL, "payload": self.space.slug},
             )
         return [r["event_id"] for r in rows]
+
+    # --------------------------------------------------------- аккаунт и регионы
+
+    async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(IDENTITIES).where(
+                        IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
+
+    async def update_identity(
+        self, identity_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
+    ) -> bool:
+        stmt = (
+            update(IDENTITIES)
+            .where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
+            .values(**values, updated_at=func.now())
+        )
+        for column, value in (expected or {}).items():
+            stmt = stmt.where(IDENTITIES.c[column].is_not_distinct_from(value))
+        result = await self.execute(stmt)
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def load_region(self, identity_id: UUID, region: str, key: str) -> RegionState | None:
+        row = (
+            (
+                await self.execute(
+                    select(REGION_STATES).where(
+                        REGION_STATES.c.identity_id == identity_id,
+                        REGION_STATES.c.space_id == self.space.id,
+                        REGION_STATES.c.region == region,
+                        REGION_STATES.c.key == key,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        values = {f: row[f] for f in REGION_FIELDS}
+        values["change_source"] = ChangeSource(values["change_source"])
+        return RegionState(**values)
+
+    async def save_region(
+        self, identity_id: UUID, region: str, key: str, previous: RegionState | None, new: RegionState
+    ) -> bool:
+        values = {f: getattr(new, f) for f in REGION_FIELDS}
+        values["change_source"] = str(new.change_source)
+        if previous is None:
+            stmt = (
+                insert(REGION_STATES)
+                .values(identity_id=identity_id, space_id=self.space.id, region=region, key=key, **values)
+                .on_conflict_do_nothing()
+            )
+            return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+        stmt_upd = (
+            update(REGION_STATES)
+            .where(
+                REGION_STATES.c.identity_id == identity_id,
+                REGION_STATES.c.space_id == self.space.id,
+                REGION_STATES.c.region == region,
+                REGION_STATES.c.key == key,
+                REGION_STATES.c.version == previous.version,
+            )
+            .values(**values)
+        )
+        return bool((await self.execute(stmt_upd)).rowcount)  # type: ignore[attr-defined]
 
 
 class PgStore(Store):
