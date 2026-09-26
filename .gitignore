@@ -12,3 +12,4 @@ build/
 .idea/workspace.xml
 .idea/shelf/
 .env
+.idea/
