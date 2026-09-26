@@ -505,15 +505,21 @@ async def acquire(
                 candidate = await tx.pick_candidate(query)
                 if candidate is not None:
                     proxy, drafts = await _resolve_proxy(pool, tx, candidate)
-                    row, reclaimed = await tx.acquire_lease(
-                        candidate,
-                        pool=pool.name,
-                        holder=pool.holder,
-                        ttl_seconds=pool.timing.ttl.total_seconds(),
-                        idempotency_key=idempotency_key,
-                        shared=pool.shared,
-                        proxy_id=proxy.id if proxy else None,
-                    )
+                    try:
+                        row, reclaimed = await tx.acquire_lease(
+                            candidate,
+                            pool=pool.name,
+                            holder=pool.holder,
+                            ttl_seconds=pool.timing.ttl.total_seconds(),
+                            idempotency_key=idempotency_key,
+                            shared=pool.shared,
+                            proxy_id=proxy.id if proxy else None,
+                        )
+                    except LeaseUnavailable:
+                        # JOIN с ih_leases читает снимок начала SELECT. Под высокой конкуренцией
+                        # конкурент может успеть закоммитить аренду после снимка, но до INSERT;
+                        # fencing/уникальный ключ сохраняют безопасность, а выбор нужно повторить.
+                        raise _SkipCandidate(candidate.id) from None
                     if reclaimed is not None:
                         drafts.append(
                             _lease_event(

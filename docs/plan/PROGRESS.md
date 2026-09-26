@@ -8,17 +8,11 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P10.3 Нагрузочные тесты
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] добавить benchmark harness и статистику p50/p95/p99
-  - [ ] реализовать seed 10k/100k отдельно от измерений
-  - [ ] проверить lease 10k/50 workers и operation
-  - [ ] проверить search 100k, import 10k и event latency
-  - [ ] проверить инварианты аренд/fencing/соединений/deadlock
-  - [ ] зафиксировать результаты и отклонения в docs/perf.md/DECISIONS
-  - [ ] прогнать scripts/check.sh без load и закрыть задачу
-- **Заметки для следующей сессии:** P10.2 закрыта коммитом 28dc0b4. P10.3: pytest -m load запускается явно; seed исключается из latency, результаты документируются с окружением и commit. Пользовательские admin/.github/.gitignore изменения не включать.
+  - [ ] —
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
@@ -68,11 +62,11 @@
 | P9.3 | Метрики | P4.2 | done |  |  |
 | P10.1 | MemoryStore | P2–P9 | done |  |  |
 | P10.2 | identity_hub.testing | P10.1 | done |  |  |
-| P10.3 | Нагрузочные тесты | P10.2 | in_progress |  |  |
+| P10.3 | Нагрузочные тесты | P10.2 | done |  |  |
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 44 / 47 done
+**Итого:** 45 / 47 done
 
 ## Журнал сессий
 
@@ -123,3 +117,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-27 · P9.3 · done · MetricsHook/NullMetrics/RecordingMetrics без Prometheus; histogram lease/operation, failure counters, pool availability, cursor lag и webhook/notification queue gauges; backend метрик изолирован; 389 тестов зелёные · фаза 9 закрыта, дальше P10.1
 2026-09-27 · P10.1 · done · MemoryStore с rollback, полным Store-контрактом и общим conformance-набором для memory/pg; 407 тестов зелёные · дальше P10.2 identity_hub.testing
 2026-09-27 · P10.2 · done · фабрики, pytest-плагин, экспортируемый StoreConformanceSuite и исполняемый memory-пример; 410 тестов зелёные · дальше P10.3 нагрузочные тесты
+2026-09-27 · P10.3 · done · load-harness и реальные 10k/100k замеры; исправлена acquire-гонка D-126; event budget достигнут, четыре perf-долга оформлены D-127/PERF-1; 411 обычных тестов зелёные · дальше P10.4 документация

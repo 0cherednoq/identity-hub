@@ -59,6 +59,17 @@ async def test_race_many_acquirers_are_exclusive(space: SpaceHandle) -> None:
     assert all(isinstance(e, LeaseUnavailable) for e in errors)
 
 
+async def test_race_50_acquirers_do_not_lose_available_candidates(space: SpaceHandle) -> None:
+    ids = {await make_identity(space) for _ in range(50)}
+    pool = space.pool("p50", service="fake_tg")
+
+    results = await asyncio.gather(*(pool.acquire() for _ in range(50)), return_exceptions=True)
+
+    assert not [result for result in results if isinstance(result, BaseException)]
+    leases = [result for result in results if not isinstance(result, BaseException)]
+    assert {lease.identity_id for lease in leases} == ids
+
+
 async def test_idempotency_key_returns_same_lease(space: SpaceHandle) -> None:
     await make_identity(space)
     await make_identity(space)
