@@ -1,5 +1,72 @@
 [project]
-name = "accountlibrarry"
-version = "0.1.0"
-requires-python = ">=3.14"
-dependencies = []
+name = "identity-hub"
+version = "0.1.0.dev0"
+description = "Управление парком аккаунтов: жизненный цикл, аренда, лимиты, прокси, секреты, события."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "cryptography>=42",
+    "uuid-utils>=0.9; python_version < '3.14'",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.29"]
+alembic = ["alembic>=1.13"]
+telegram = ["aiogram>=3.4"]
+structlog = ["structlog>=24.1"]
+webhooks = ["httpx>=0.27"]
+
+[project.scripts]
+identity-hub = "identity_hub.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.24",
+    "testcontainers[postgres]>=4.7",
+    "hypothesis>=6.100",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/identity_hub"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # кириллица в строках и комментариях
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*", "asyncpg.*", "uuid_utils.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "unit: без БД",
+    "pg: требует PostgreSQL",
+    "conformance: общий набор для всех Store",
+    "load: нагрузочные, запускаются явно",
+]
+addopts = "-ra --strict-markers"

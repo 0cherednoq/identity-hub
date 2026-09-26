@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/accountlibrarry.iml" filepath="$PROJECT_DIR$/.idea/accountlibrarry.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/identity-hub.iml" filepath="$PROJECT_DIR$/.idea/identity-hub.iml" />
     </modules>
   </component>
 </project>
