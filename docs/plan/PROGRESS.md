@@ -8,10 +8,14 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P0.4 Миграции Alembic, exclude_identity_hub
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] env.py, script.py.mako, программный migrate()
+  - [ ] миграция 0001 (autogenerate + ревизия)
+  - [ ] exclude_identity_hub
+  - [ ] pg-тесты: upgrade, нет дрейфа с metadata, отдельная схема
+  - [ ] фикстура prepared_db через migrate
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -21,7 +25,7 @@
 | P0.1 | Проект, инструменты, git | — | done |  |  |
 | P0.2 | Перенос схемы и базовые типы | P0.1 | done |  |  |
 | P0.3 | Тестовая инфраструктура | P0.2 | done |  |  |
-| P0.4 | Миграции Alembic, exclude_identity_hub | P0.3 | todo | | |
+| P0.4 | Миграции Alembic, exclude_identity_hub | P0.3 | in_progress |  |  |
 | P1.1 | Ошибки и примитивы | P0.2 | todo | | |
 | P1.2 | RegionMachine | P1.1 | todo | | |
 | P1.3 | VerificationFlow / Spec / Tier | P1.1 | todo | | |
