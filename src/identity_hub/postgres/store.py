@@ -48,6 +48,7 @@ from identity_hub.enums import (
     AuthState,
     Availability,
     ChangeSource,
+    DeliveryStatus,
     LeaseEndReason,
     Lifecycle,
     ProxyStatus,
@@ -76,6 +77,8 @@ from identity_hub.postgres.models import (
     SessionRecord,
     SpaceRecord,
     VerificationRecord,
+    WebhookDeliveryRecord,
+    WebhookEndpointRecord,
 )
 from identity_hub.store.base import (
     NOTIFY_CHANNEL,
@@ -91,6 +94,7 @@ from identity_hub.store.base import (
     LinkRow,
     NewIdentity,
     NewProxy,
+    NewWebhookEndpoint,
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
@@ -100,6 +104,9 @@ from identity_hub.store.base import (
     Store,
     StoreTx,
     VerificationRow,
+    WebhookAttempt,
+    WebhookDeliveryRow,
+    WebhookEndpointRow,
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
@@ -122,6 +129,8 @@ VERIFICATIONS = cast(Table, VerificationRecord.__table__)
 EVENTS = cast(Table, EventRecord.__table__)
 CURSORS = cast(Table, EventCursorRecord.__table__)
 SPACES = cast(Table, SpaceRecord.__table__)
+WEBHOOK_ENDPOINTS = cast(Table, WebhookEndpointRecord.__table__)
+WEBHOOK_DELIVERIES = cast(Table, WebhookDeliveryRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 LEASE_HISTORY_FIELDS = tuple(f.name for f in fields(LeaseHistoryRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
@@ -1533,6 +1542,124 @@ class PgTx(StoreTx):
         rows = await self.execute(stmt.order_by(IDENTITIES.c.id).limit(limit))
         return [IdentityRow(**{f: r[f] for f in IDENTITY_FIELDS}) for r in rows.mappings()]
 
+    # --------------------------------------------------------- исходящие вебхуки
+
+    async def insert_webhook_endpoint(self, row: NewWebhookEndpoint) -> WebhookEndpointRow:
+        values = {
+            "id": row.id,
+            "space_id": self.space.id,
+            "url": row.url,
+            "description": row.description,
+            "event_types": row.event_types,
+            "filter": row.filter,
+            "min_severity": row.min_severity,
+            **row.secret.columns(),
+        }
+        stored = (
+            (await self.execute(insert(WEBHOOK_ENDPOINTS).values(**values).returning(WEBHOOK_ENDPOINTS)))
+            .mappings()
+            .one()
+        )
+        return _webhook_endpoint_row(stored, self.space.slug)
+
+    async def get_webhook_endpoint(self, endpoint_id: UUID) -> WebhookEndpointRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(WEBHOOK_ENDPOINTS).where(
+                        WEBHOOK_ENDPOINTS.c.id == endpoint_id,
+                        WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _webhook_endpoint_row(row, self.space.slug) if row else None
+
+    async def update_webhook_secret(self, endpoint_id: UUID, secret: EncryptedPayload) -> bool:
+        result = await self.execute(
+            update(WEBHOOK_ENDPOINTS)
+            .where(
+                WEBHOOK_ENDPOINTS.c.id == endpoint_id,
+                WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+            )
+            .values(**secret.columns())
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def set_webhook_enabled(self, endpoint_id: UUID, enabled: bool, reason: str | None) -> bool:
+        values: dict[str, Any] = {
+            "enabled": enabled,
+            "disabled_reason": None if enabled else reason,
+        }
+        if enabled:
+            values["failure_streak"] = 0
+        result = await self.execute(
+            update(WEBHOOK_ENDPOINTS)
+            .where(
+                WEBHOOK_ENDPOINTS.c.id == endpoint_id,
+                WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+            )
+            .values(**values)
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def retry_webhook_delivery(self, delivery_id: int) -> bool:
+        row = (
+            await self.execute(
+                select(WEBHOOK_DELIVERIES.c.endpoint_id)
+                .join(
+                    WEBHOOK_ENDPOINTS,
+                    WEBHOOK_ENDPOINTS.c.id == WEBHOOK_DELIVERIES.c.endpoint_id,
+                )
+                .where(
+                    WEBHOOK_DELIVERIES.c.id == delivery_id,
+                    WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+                )
+                .with_for_update(of=WEBHOOK_DELIVERIES)
+            )
+        ).one_or_none()
+        if row is None:
+            return False
+        await self.execute(
+            update(WEBHOOK_DELIVERIES)
+            .where(WEBHOOK_DELIVERIES.c.id == delivery_id)
+            .values(
+                status=DeliveryStatus.PENDING,
+                attempt=0,
+                next_attempt_at=func.now(),
+                response_code=None,
+                response_ms=None,
+                error=None,
+                delivered_at=None,
+            )
+        )
+        await self.execute(
+            update(WEBHOOK_ENDPOINTS)
+            .where(WEBHOOK_ENDPOINTS.c.id == row.endpoint_id)
+            .values(enabled=True, disabled_reason=None, failure_streak=0)
+        )
+        return True
+
+    async def webhook_deliveries(self, endpoint_id: UUID, limit: int) -> list[WebhookDeliveryRow]:
+        rows = (
+            await self.execute(
+                select(WEBHOOK_DELIVERIES)
+                .join(
+                    WEBHOOK_ENDPOINTS,
+                    WEBHOOK_ENDPOINTS.c.id == WEBHOOK_DELIVERIES.c.endpoint_id,
+                )
+                .where(
+                    WEBHOOK_DELIVERIES.c.endpoint_id == endpoint_id,
+                    WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+                )
+                .order_by(WEBHOOK_DELIVERIES.c.created_at.desc(), WEBHOOK_DELIVERIES.c.id.desc())
+                .limit(limit)
+            )
+        ).mappings()
+        return [_webhook_delivery_row(row) for row in rows]
+
 
 def _event(row: Any) -> Event:
     return Event(
@@ -1549,6 +1676,40 @@ def _event(row: Any) -> Event:
         sequence=row["sequence"],
         actor=row["actor"],
         data=row["data"],
+    )
+
+
+def _webhook_endpoint_row(row: Any, space_slug: str) -> WebhookEndpointRow:
+    return WebhookEndpointRow(
+        id=row["id"],
+        space_id=row["space_id"],
+        space_slug=space_slug,
+        url=row["url"],
+        description=row["description"],
+        event_types=list(row["event_types"]),
+        filter=dict(row["filter"]),
+        min_severity=row["min_severity"],
+        enabled=row["enabled"],
+        disabled_reason=row["disabled_reason"],
+        failure_streak=row["failure_streak"],
+        created_at=row["created_at"],
+        secret=EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]),
+    )
+
+
+def _webhook_delivery_row(row: Any) -> WebhookDeliveryRow:
+    return WebhookDeliveryRow(
+        id=row["id"],
+        endpoint_id=row["endpoint_id"],
+        event_id=row["event_id"],
+        status=row["status"],
+        attempt=row["attempt"],
+        next_attempt_at=row["next_attempt_at"],
+        response_code=row["response_code"],
+        response_ms=row["response_ms"],
+        error=row["error"],
+        created_at=row["created_at"],
+        delivered_at=row["delivered_at"],
     )
 
 
@@ -1735,6 +1896,215 @@ class PgStore(Store):
                 execution_options=opts,
             )
             return len(events)
+
+    # --------------------------------------------------------- исходящие вебхуки
+
+    async def enabled_webhook_endpoints(self) -> list[WebhookEndpointRow]:
+        async with self.sessionmaker() as session:
+            rows = (
+                await session.execute(
+                    select(WEBHOOK_ENDPOINTS, SPACES.c.slug.label("space_slug"))
+                    .join(SPACES, SPACES.c.id == WEBHOOK_ENDPOINTS.c.space_id)
+                    .where(WEBHOOK_ENDPOINTS.c.enabled.is_(True)),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            return [_webhook_endpoint_row(row, row["space_slug"]) for row in rows]
+
+    async def identity_labels(self, identity_ids: Sequence[UUID]) -> dict[UUID, dict[str, Any]]:
+        if not identity_ids:
+            return {}
+        async with self.sessionmaker() as session:
+            rows = await session.execute(
+                select(IDENTITIES.c.id, IDENTITIES.c.labels).where(IDENTITIES.c.id.in_(set(identity_ids))),
+                execution_options=self.options,
+            )
+        return {row.id: dict(row.labels) for row in rows}
+
+    async def enqueue_webhook_deliveries(self, pairs: Sequence[tuple[UUID, UUID]]) -> int:
+        unique = set(pairs)
+        if not unique:
+            return 0
+        stmt = (
+            insert(WEBHOOK_DELIVERIES)
+            .values(
+                [
+                    {
+                        "endpoint_id": endpoint_id,
+                        "event_id": event_id,
+                        "status": DeliveryStatus.PENDING,
+                        "attempt": 0,
+                    }
+                    for endpoint_id, event_id in unique
+                ]
+            )
+            .on_conflict_do_nothing(constraint="uq_ih_webhook_deliveries_endpoint_event")
+        )
+        async with self._own() as session:
+            result = await session.execute(stmt, execution_options=self.options)
+            return int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def claim_webhook_deliveries(self, *, limit: int, claim_for: timedelta) -> list[WebhookAttempt]:
+        d, ep, e = WEBHOOK_DELIVERIES.c, WEBHOOK_ENDPOINTS.c, EVENTS.c
+        async with self._own() as session:
+            locked: list[int] = list(
+                (
+                    await session.execute(
+                        select(d.id)
+                        .join(WEBHOOK_ENDPOINTS, ep.id == d.endpoint_id)
+                        .where(
+                            d.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
+                            d.next_attempt_at <= func.now(),
+                            ep.enabled.is_(True),
+                        )
+                        .order_by(d.next_attempt_at, d.id)
+                        .limit(limit)
+                        .with_for_update(of=WEBHOOK_DELIVERIES, skip_locked=True),
+                        execution_options=self.options,
+                    )
+                ).scalars()
+            )
+            if not locked:
+                return []
+            await session.execute(
+                update(WEBHOOK_DELIVERIES)
+                .where(d.id.in_(locked))
+                .values(attempt=d.attempt + 1, next_attempt_at=func.now() + claim_for),
+                execution_options=self.options,
+            )
+            rows = (
+                await session.execute(
+                    select(
+                        EVENTS,
+                        SPACES.c.slug,
+                        d.id.label("delivery_id"),
+                        d.attempt.label("delivery_attempt"),
+                        ep.id.label("endpoint_id"),
+                        ep.url.label("endpoint_url"),
+                        ep.key_id,
+                        ep.wrapped_dek,
+                        ep.nonce,
+                        ep.ciphertext,
+                    )
+                    .select_from(WEBHOOK_DELIVERIES)
+                    .join(WEBHOOK_ENDPOINTS, ep.id == d.endpoint_id)
+                    .join(EVENTS, e.event_id == d.event_id)
+                    .join(SPACES, SPACES.c.id == e.space_id)
+                    .where(d.id.in_(locked))
+                    .order_by(d.id),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            return [
+                WebhookAttempt(
+                    delivery_id=row["delivery_id"],
+                    attempt=row["delivery_attempt"],
+                    endpoint_id=row["endpoint_id"],
+                    url=row["endpoint_url"],
+                    secret=EncryptedPayload(
+                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
+                    ),
+                    event=_event(row),
+                )
+                for row in rows
+            ]
+
+    async def finish_webhook_delivery(
+        self,
+        delivery_id: int,
+        attempt: int,
+        *,
+        succeeded: bool,
+        response_code: int | None,
+        response_ms: int,
+        error: str | None,
+        retry_after: timedelta,
+        max_failures: int,
+    ) -> bool:
+        d, ep = WEBHOOK_DELIVERIES.c, WEBHOOK_ENDPOINTS.c
+        async with self._own() as session:
+            row = (
+                await session.execute(
+                    select(
+                        d.endpoint_id,
+                        d.attempt,
+                        d.status,
+                        ep.space_id,
+                        ep.failure_streak,
+                        ep.enabled,
+                        SPACES.c.slug,
+                    )
+                    .join(WEBHOOK_ENDPOINTS, ep.id == d.endpoint_id)
+                    .join(SPACES, SPACES.c.id == ep.space_id)
+                    .where(d.id == delivery_id)
+                    .with_for_update(of=(WEBHOOK_DELIVERIES, WEBHOOK_ENDPOINTS)),
+                    execution_options=self.options,
+                )
+            ).one_or_none()
+            if (
+                row is None
+                or row.attempt != attempt
+                or row.status not in (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+            ):
+                return False
+            common = {
+                "response_code": response_code,
+                "response_ms": response_ms,
+                "error": error[:2000] if error else None,
+            }
+            if succeeded:
+                await session.execute(
+                    update(WEBHOOK_DELIVERIES)
+                    .where(d.id == delivery_id)
+                    .values(**common, status=DeliveryStatus.SUCCEEDED, delivered_at=func.now()),
+                    execution_options=self.options,
+                )
+                await session.execute(
+                    update(WEBHOOK_ENDPOINTS).where(ep.id == row.endpoint_id).values(failure_streak=0),
+                    execution_options=self.options,
+                )
+                return True
+
+            streak = row.failure_streak + 1
+            disabled = streak >= max_failures
+            await session.execute(
+                update(WEBHOOK_DELIVERIES)
+                .where(d.id == delivery_id)
+                .values(
+                    **common,
+                    status=DeliveryStatus.DEAD if disabled else DeliveryStatus.FAILED,
+                    next_attempt_at=func.now() + retry_after,
+                ),
+                execution_options=self.options,
+            )
+            await session.execute(
+                update(WEBHOOK_ENDPOINTS)
+                .where(ep.id == row.endpoint_id)
+                .values(
+                    failure_streak=streak,
+                    enabled=False if disabled else row.enabled,
+                    disabled_reason="consecutive_failures" if disabled else None,
+                ),
+                execution_options=self.options,
+            )
+            if disabled:
+                await session.execute(
+                    insert(EVENTS).values(
+                        event_id=new_id(),
+                        type="webhook.endpoint.disabled",
+                        severity=Severity.CRITICAL,
+                        space_id=row.space_id,
+                        actor="system:webhooks",
+                        data={"endpoint_id": str(row.endpoint_id), "failure_streak": streak},
+                        external=True,
+                    ),
+                    execution_options=self.options,
+                )
+                await session.execute(
+                    text("SELECT pg_notify(:channel, :payload)"),
+                    {"channel": NOTIFY_CHANNEL, "payload": row.slug},
+                )
+            return True
 
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:

@@ -16,6 +16,7 @@ from identity_hub.store.base import IdentityRow, SpaceRef, StoreTx
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from identity_hub.dispatch.webhooks import Webhooks
     from identity_hub.hub import IdentityHub
 
 __all__ = ["SpaceBase", "logger"]
@@ -45,6 +46,13 @@ class SpaceBase:
 
     async def ref(self) -> SpaceRef:
         return await self.hub._space_ref(self.slug, self._title, self._space_id)
+
+    @property
+    def webhooks(self) -> Webhooks:
+        """Управление исходящими webhook endpoint'ами пространства (FR-14)."""
+        from identity_hub.dispatch.webhooks import Webhooks
+
+        return Webhooks(self)
 
     @asynccontextmanager
     async def _tx(self, *, own: bool = False) -> AsyncIterator[StoreTx]:

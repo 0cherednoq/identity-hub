@@ -38,6 +38,7 @@ class Dispatcher:
         self.poll_interval = poll_interval
         self.batch_size = batch_size
         self._consumers: dict[str, Consumer] = {}
+        self._pumps: list[Callable[[], Awaitable[int]]] = []
 
     # --------------------------------------------------------- регистрация
 
@@ -45,6 +46,10 @@ class Dispatcher:
         if name in self._consumers:
             raise ValueError(f"потребитель {name} уже зарегистрирован")
         self._consumers[name] = Consumer(name, handler)
+
+    def add_pump(self, handler: Callable[[], Awaitable[int]]) -> None:
+        """Добавить обработчик due-очереди, запускаемый даже без новых событий."""
+        self._pumps.append(handler)
 
     def subscribe(self, name: str, callback: EventCallback, *, types: Iterable[str] | None = None) -> None:
         """Python-колбэк на события после коммита (FR-13.5); `types` — типы или маски (`pool.capacity.*`)."""
@@ -75,6 +80,11 @@ class Dispatcher:
                 logger.exception("потребитель %s упал; пачка будет повторена", consumer.name)
                 continue
             total += handled or 0
+        for pump in self._pumps:
+            try:
+                total += await pump()
+            except Exception:
+                logger.exception("обработчик due-очереди упал; элементы будут повторены")
         return total
 
     async def drain(self, *, max_rounds: int = 1000) -> int:

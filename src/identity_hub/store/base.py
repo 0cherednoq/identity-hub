@@ -37,6 +37,7 @@ __all__ = [
     "LinkRow",
     "NewIdentity",
     "NewProxy",
+    "NewWebhookEndpoint",
     "ProxyRow",
     "QuotaCharge",
     "QuotaWindow",
@@ -46,6 +47,9 @@ __all__ = [
     "Store",
     "StoreTx",
     "VerificationRow",
+    "WebhookAttempt",
+    "WebhookDeliveryRow",
+    "WebhookEndpointRow",
 ]
 
 
@@ -325,6 +329,59 @@ class LeaseStatsRow:
     operations: dict[str, int]
     succeeded: int
     failed: int
+
+
+@dataclass(frozen=True, slots=True)
+class NewWebhookEndpoint:
+    id: UUID
+    url: str
+    description: str | None
+    event_types: list[str]
+    filter: dict[str, Any]
+    min_severity: str
+    secret: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookEndpointRow:
+    id: UUID
+    space_id: UUID
+    space_slug: str
+    url: str
+    description: str | None
+    event_types: list[str]
+    filter: dict[str, Any]
+    min_severity: str
+    enabled: bool
+    disabled_reason: str | None
+    failure_streak: int
+    created_at: datetime
+    secret: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookDeliveryRow:
+    id: int
+    endpoint_id: UUID
+    event_id: UUID
+    status: str
+    attempt: int
+    next_attempt_at: datetime
+    response_code: int | None
+    response_ms: int | None
+    error: str | None
+    created_at: datetime
+    delivered_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookAttempt:
+    delivery_id: int
+    attempt: int
+    endpoint_id: UUID
+    url: str
+    secret: EncryptedPayload
+    event: Event
 
 
 class StoreTx(ABC):
@@ -685,6 +742,27 @@ class StoreTx(ABC):
     async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
         """(payload, status) сессии слота."""
 
+    # --------------------------------------------------------- исходящие вебхуки (P8.3)
+
+    @abstractmethod
+    async def insert_webhook_endpoint(self, row: NewWebhookEndpoint) -> WebhookEndpointRow: ...
+
+    @abstractmethod
+    async def get_webhook_endpoint(self, endpoint_id: UUID) -> WebhookEndpointRow | None: ...
+
+    @abstractmethod
+    async def update_webhook_secret(self, endpoint_id: UUID, secret: EncryptedPayload) -> bool: ...
+
+    @abstractmethod
+    async def set_webhook_enabled(self, endpoint_id: UUID, enabled: bool, reason: str | None) -> bool: ...
+
+    @abstractmethod
+    async def retry_webhook_delivery(self, delivery_id: int) -> bool:
+        """Вернуть доставку в pending и включить её endpoint (явное действие администратора)."""
+
+    @abstractmethod
+    async def webhook_deliveries(self, endpoint_id: UUID, limit: int) -> list[WebhookDeliveryRow]: ...
+
 
 class Store(ABC):
     @abstractmethod
@@ -726,3 +804,33 @@ class Store(ABC):
     @abstractmethod
     def listen(self, channel: str) -> AbstractAsyncContextManager[asyncio.Event | None]:
         """Подписка на NOTIFY: событие взводится при уведомлении; None — LISTEN недоступен (опрос)."""
+
+    # --------------------------------------------------------- исходящие вебхуки (P8.3)
+
+    @abstractmethod
+    async def enabled_webhook_endpoints(self) -> list[WebhookEndpointRow]: ...
+
+    @abstractmethod
+    async def identity_labels(self, identity_ids: Sequence[UUID]) -> dict[UUID, dict[str, Any]]: ...
+
+    @abstractmethod
+    async def enqueue_webhook_deliveries(self, pairs: Sequence[tuple[UUID, UUID]]) -> int: ...
+
+    @abstractmethod
+    async def claim_webhook_deliveries(self, *, limit: int, claim_for: timedelta) -> list[WebhookAttempt]:
+        """Коротко зарезервировать due-доставки; сетевой I/O выполняется после коммита."""
+
+    @abstractmethod
+    async def finish_webhook_delivery(
+        self,
+        delivery_id: int,
+        attempt: int,
+        *,
+        succeeded: bool,
+        response_code: int | None,
+        response_ms: int,
+        error: str | None,
+        retry_after: timedelta,
+        max_failures: int,
+    ) -> bool:
+        """Зафиксировать попытку; вернуть False, если резервирование уже устарело."""
