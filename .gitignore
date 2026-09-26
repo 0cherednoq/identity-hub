@@ -13,3 +13,5 @@ build/
 .idea/shelf/
 .env
 .idea/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
