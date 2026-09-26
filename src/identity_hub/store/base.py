@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from identity_hub.events import EventDraft
+
 __all__ = ["ServiceRow", "SpaceRef", "Store", "StoreTx"]
 
 
@@ -39,6 +41,14 @@ class StoreTx(ABC):
     @abstractmethod
     async def now(self) -> datetime:
         """Время БД (`now()`), единое для всей транзакции (ТЗ §8.6)."""
+
+    @abstractmethod
+    async def emit(self, drafts: Sequence[EventDraft]) -> list[UUID]:
+        """Записать события в журнал в этой транзакции (outbox, FR-13.1, G-4.1).
+
+        `data` уже очищены от секретов. Для событий аккаунта инкрементирует `event_seq`
+        и проставляет `sequence`. Внешние события будят диспетчер (NOTIFY при коммите).
+        """
 
 
 class Store(ABC):

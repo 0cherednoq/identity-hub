@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -12,6 +12,7 @@ from uuid import UUID
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
 from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.events import EventDraft, scrub
 from identity_hub.protocols import SecretsProvider
 from identity_hub.service import Service
 from identity_hub.store.base import ServiceRow, SpaceRef, Store, StoreTx
@@ -135,6 +136,12 @@ class SpaceHandle:
         session: Any = None if own else self._session
         async with self.hub.store.transaction(ref, session=session) as tx:
             yield tx
+
+    async def _emit(self, tx: StoreTx, *drafts: EventDraft) -> list[UUID]:
+        """Записать события в транзакции операции; данные очищаются от секретов (S-8)."""
+        strict = self.hub.strict_events
+        clean = [replace(d, data=scrub(d.data, strict=strict)) for d in drafts]
+        return await tx.emit(clean)
 
     def __repr__(self) -> str:
         return f"SpaceHandle({self.slug!r}{', using session' if self._session else ''})"

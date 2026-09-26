@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Result
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,13 +22,15 @@ from sqlalchemy.sql import Executable
 
 from identity_hub._ids import new_id
 from identity_hub.errors import SpaceMismatch
+from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
-from identity_hub.postgres.models import ServiceRecord, SpaceRecord
+from identity_hub.postgres.models import EventRecord, IdentityRecord, ServiceRecord, SpaceRecord
 from identity_hub.store.base import ServiceRow, SpaceRef, Store, StoreTx
 
-__all__ = ["PgStore", "PgTx"]
+__all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
 
 SESSION_SPACE_KEY = "identity_hub.space"
+NOTIFY_CHANNEL = "ih_events"
 
 
 class PgTx(StoreTx):
@@ -45,6 +47,48 @@ class PgTx(StoreTx):
         if self._now is None:
             self._now = (await self.session.execute(select(func.now()))).scalar_one()
         return self._now
+
+    async def emit(self, drafts: Sequence[EventDraft]) -> list[UUID]:
+        if not drafts:
+            return []
+        rows: list[dict[str, Any]] = []
+        for draft in drafts:
+            sequence = None
+            if draft.identity_id is not None:
+                sequence = (
+                    await self.execute(
+                        update(IdentityRecord)
+                        .where(
+                            IdentityRecord.id == draft.identity_id, IdentityRecord.space_id == self.space.id
+                        )
+                        .values(event_seq=IdentityRecord.event_seq + 1)
+                        .returning(IdentityRecord.event_seq)
+                    )
+                ).scalar_one_or_none()
+            rows.append(
+                {
+                    "event_id": new_id(),
+                    "type": draft.type,
+                    "severity": str(draft.effective_severity),
+                    "space_id": self.space.id,
+                    "service": draft.service,
+                    "identity_id": draft.identity_id,
+                    "proxy_id": draft.proxy_id,
+                    "lease_id": draft.lease_id,
+                    "sequence": sequence,
+                    "actor": draft.actor,
+                    "data": dict(draft.data),
+                    "external": draft.spec.external,
+                }
+            )
+        await self.execute(insert(EventRecord).values(rows))
+        if any(r["external"] for r in rows):
+            # доставляется слушателям при коммите; при откате — нет (FR-13.6)
+            await self.session.execute(
+                text("SELECT pg_notify(:channel, :payload)"),
+                {"channel": NOTIFY_CHANNEL, "payload": self.space.slug},
+            )
+        return [r["event_id"] for r in rows]
 
 
 class PgStore(Store):
