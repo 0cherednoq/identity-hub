@@ -8,10 +8,13 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P3.4 Fencing-записи и секреты под арендой, revoke
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] store: current_fencing, get_credentials, get_session, revoke_lease (fencing+1, история revoked)
+  - [ ] Lease: credentials(), session(), save_session() с fencing, mark_authenticated()
+  - [ ] space.revoke_lease(identity_id, reason, actor)
+  - [ ] pg-тесты: зомби после истечения, revoke, расшифровка только под арендой
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -39,7 +42,7 @@
 | P3.1 | Pool и SQL выборки кандидатов | P1.5, P2.4 | done |  |  |
 | P3.2 | Захват аренды | P3.1 | done |  |  |
 | P3.3 | Жизненный цикл Lease (heartbeat, fencing) | P3.2 | done |  |  |
-| P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | todo | | |
+| P3.4 | Fencing-записи и секреты под арендой, revoke | P3.3 | in_progress |  |  |
 | P4.1 | Квоты, pacing, ключи операций | P3.3 | todo | | |
 | P4.2 | lease.operation | P4.1 | todo | | |
 | P5.1 | Прокси и их здоровье | P4.2 | todo | | |
