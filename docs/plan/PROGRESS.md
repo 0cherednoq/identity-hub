@@ -8,12 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P1.5 Вычисление допустимости операции
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] IdentitySnapshot, QuotaUsage, evaluate() → blockers
-  - [ ] RuleFilter: компиляция правила для выборки
-  - [ ] юнит-тесты
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -28,7 +26,7 @@
 | P1.2 | RegionMachine | P1.1 | done |  |  |
 | P1.3 | VerificationFlow / Spec / Tier | P1.1 | done |  |  |
 | P1.4 | Декларация Service и протоколы | P1.1 | done |  |  |
-| P1.5 | Вычисление допустимости операции | P1.4 | in_progress |  |  |
+| P1.5 | Вычисление допустимости операции | P1.4 | done |  |  |
 | P1.6 | Данные аккаунта, search_text, парсер поиска | P1.1 | todo | | |
 | P1.7 | Криптография | P1.1 | todo | | |
 | P1.8 | Каталог событий | P1.1 | todo | | |
@@ -68,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 8 / 47 done
+**Итого:** 9 / 47 done
 
 ## Журнал сессий
 
@@ -82,3 +80,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P1.2 · done · RegionSpec/apply: команды, наблюдения (stale, unknown, pin/drift, confirm_leaving, sticky), override, таймер; спецификации 6 регионов; D-102..D-104 · дальше P1.3
 2026-09-26 · P1.3 · done · VerificationSpec/Tier, регион VERIFICATION (нормализация verified→missing⇒revoked), VerificationFlow, хелперы факторов · дальше P1.4
 2026-09-26 · P1.4 · done · Service/Quota/Pacing/OperationRule/ProxyPolicy, протоколы расширения, ImportRecord, FAKE_TG/FAKE_EXCHANGE · дальше P1.5
+2026-09-26 · P1.5 · done · evaluate() → blockers (lifecycle/standing/auth/availability lazy/verification+tiers/quota), compile_rule → RuleFilter · дальше P1.6
