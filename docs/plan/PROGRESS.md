@@ -8,12 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P6.1 Поиск
-- **Начата:** 2026-09-27
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] store: SearchFilter, search_identities (фильтры, trigram ILIKE, keyset, ограниченный счётчик)
-  - [ ] read/search.py: разрешение ключей в profile/labels, типизация значений меток, курсор
-  - [ ] pg-тесты: фильтры, UUID, пагинация, 1000+, EXPLAIN по GIN
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -51,7 +49,7 @@
 | P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | done |  |  |
 | P5.6 | Секреты для админки | P3.4 | done |  |  |
 | P5.7 | import_many | P5.2, P5.4, P2.6 | done |  |  |
-| P6.1 | Поиск | P2.5, P3.3 | in_progress |  |  |
+| P6.1 | Поиск | P2.5, P3.3 | done |  |  |
 | P6.2 | Карточки и статистика | P6.1 | todo | | |
 | P7.1 | Контекст логов | P3.3 | todo | | |
 | P7.2 | Sink ih_lease_logs | P7.1 | todo | | |
@@ -68,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 31 / 47 done
+**Итого:** 32 / 47 done
 
 ## Журнал сессий
 
@@ -106,3 +104,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P5.5 · done · resync (проба под арендой, квота probe через lease.operation, коды standing сервиса), reconcile (давно не сверявшиеся, занятые пропускаются), verification-пробы · дальше P5.6
 2026-09-26 · P5.6 · done · update_credentials, reveal_secret (credentials/session/profile/evidence) с аудитом identity.secret.revealed в той же tx · дальше P5.7
 2026-09-27 · P5.7 · done · import_many: валидация/шифрование до БД, пачки в своих tx, on_existing skip/update_session/fail, связи по service:external_ref (в т.ч. внутри пачки), прокси с дедупликацией и привязкой, начальные верификации, identity.imported, on_batch_committed; import_files (D-118) · фаза 5 закрыта, дальше P6.1
+2026-09-27 · P6.1 · done · search: фильтры сервис/регионы/status/теги, profile vs labels с типизацией, trigram по search_text с экранированием, UUID/короткий id, keyset (created_at,id) DESC, счётчик до 1000+; тест коллизий миксинов · дальше P6.2

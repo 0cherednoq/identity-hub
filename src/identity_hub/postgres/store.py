@@ -79,6 +79,7 @@ from identity_hub.store.base import (
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
+    SearchFilter,
     ServiceRow,
     SpaceRef,
     Store,
@@ -1326,6 +1327,49 @@ class PgTx(StoreTx):
             .limit(limit)
         )
         return list(rows.scalars())
+
+    # --------------------------------------------------------- поиск
+
+    async def search_identities(
+        self,
+        flt: SearchFilter,
+        *,
+        limit: int,
+        after: tuple[datetime, UUID] | None,
+        count_limit: int | None,
+    ) -> tuple[list[IdentityRow], int | None]:
+        i = IDENTITIES.c
+        conditions: list[Any] = [i.space_id == self.space.id]
+        if flt.exact_id is not None:
+            conditions.append(i.id == flt.exact_id)
+        if flt.services:
+            conditions.append(i.service.in_(sorted(flt.services)))
+        for column, values in flt.regions.items():
+            conditions.append(i[column].in_(sorted(values)))
+        if flt.any_region:
+            wanted = sorted(flt.any_region)
+            conditions.append(
+                or_(*(i[c].in_(wanted) for c in ("lifecycle", "standing", "auth_state", "availability")))
+            )
+        if flt.tags:
+            conditions.append(i.tags.contains(sorted(flt.tags)))
+        for column, variants in flt.contains:
+            conditions.append(or_(*(i[column].contains(v) for v in variants)))
+        for term in flt.terms:
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(i.search_text.ilike(f"%{escaped}%", escape="\\"))
+        page = select(IDENTITIES).where(*conditions)
+        if after is not None:
+            page = page.where(tuple_(i.created_at, i.id) < tuple_(literal(after[0]), literal(after[1])))
+        page = page.order_by(i.created_at.desc(), i.id.desc()).limit(limit)
+        rows = [
+            IdentityRow(**{f: r[f] for f in IDENTITY_FIELDS}) for r in (await self.execute(page)).mappings()
+        ]
+        total = None
+        if count_limit is not None:
+            capped = select(i.id).where(*conditions).limit(count_limit + 1).subquery()
+            total = int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
+        return rows, total
 
 
 def _challenge_row(row: Any) -> ChallengeRow:

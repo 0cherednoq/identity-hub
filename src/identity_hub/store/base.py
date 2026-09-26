@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -33,6 +33,7 @@ __all__ = [
     "ProxyRow",
     "QuotaCharge",
     "QuotaWindow",
+    "SearchFilter",
     "ServiceRow",
     "SpaceRef",
     "Store",
@@ -271,6 +272,19 @@ class VerificationRow:
     verified_at: datetime | None
     expires_at: datetime | None
     evidence: EncryptedPayload | None
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFilter:
+    """Разрешённый поисковый запрос (FR-11.1–11.4). Внутри списков — ИЛИ, между полями — И."""
+
+    services: frozenset[str] = frozenset()
+    regions: dict[str, frozenset[str]] = field(default_factory=dict)  # колонка → значения
+    any_region: frozenset[str] = frozenset()
+    tags: frozenset[str] = frozenset()
+    contains: tuple[tuple[str, tuple[dict[str, Any], ...]], ...] = ()  # (profile|labels, варианты @>)
+    terms: tuple[str, ...] = ()
+    exact_id: UUID | None = None
 
 
 class StoreTx(ABC):
@@ -539,6 +553,19 @@ class StoreTx(ABC):
         self, service: str, region: str, key: str, older_than_seconds: float, limit: int
     ) -> list[UUID]:
         """Аккаунты сервиса, чей регион не сверялся дольше порога (или ни разу) — кандидаты reconcile."""
+
+    # --------------------------------------------------------- поиск (P6.1)
+
+    @abstractmethod
+    async def search_identities(
+        self,
+        flt: SearchFilter,
+        *,
+        limit: int,
+        after: tuple[datetime, UUID] | None,
+        count_limit: int | None,
+    ) -> tuple[list[IdentityRow], int | None]:
+        """Страница (created_at DESC, id DESC) и ограниченный счётчик (до count_limit + 1)."""
 
     # --------------------------------------------------------- challenge (P5.3)
 
