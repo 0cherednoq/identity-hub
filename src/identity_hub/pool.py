@@ -16,7 +16,7 @@ from identity_hub.domain.data import validate_labels
 from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
-from identity_hub.service import LeaseMode, Pacing, ProxyPolicy, Service
+from identity_hub.service import LeaseMode, Pacing, ProxyDownPolicy, ProxyPolicy, Service
 from identity_hub.store.base import CandidateQuery, IdentityRow
 
 if TYPE_CHECKING:
@@ -108,6 +108,11 @@ class Pool:
             among=among,
             exclude=frozenset(exclude),
             shared=self.shared,
+            proxy_wait=bool(
+                self.proxy_policy
+                and self.proxy_policy.sticky
+                and self.proxy_policy.on_proxy_down is ProxyDownPolicy.WAIT
+            ),
         )
 
     def lease(self, *, on_lost: OnLost | None = None, **kwargs: Any) -> AbstractAsyncContextManager[Lease]:

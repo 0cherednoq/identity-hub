@@ -8,7 +8,7 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub.domain.verification import VerificationMode, VerificationSpec, VerificationTier
 from identity_hub.enums import Standing
-from identity_hub.service import OperationRule, ProxyPolicy, Quota, Service
+from identity_hub.service import OperationRule, Quota, Service
 
 
 class TgAttributes(BaseModel):
@@ -54,7 +54,6 @@ FAKE_TG = Service(
         "frozen": Standing.FROZEN,
         "banned": Standing.BANNED,
     },
-    proxy_policy=ProxyPolicy(pool="residential"),
 )
 
 

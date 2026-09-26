@@ -46,6 +46,7 @@ from identity_hub.errors import LeaseUnavailable, SpaceMismatch
 from identity_hub.events import EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
+    BindingRecord,
     CredentialsRecord,
     EventRecord,
     IdentityDataRecord,
@@ -93,6 +94,7 @@ HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
+BINDINGS = cast(Table, BindingRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
@@ -374,6 +376,15 @@ class PgTx(StoreTx):
         return [(r.identity_id, r.role) for r in rows]
 
     async def delete_identity(self, identity_id: UUID) -> bool:
+        bound = (
+            await self.execute(select(BINDINGS.c.proxy_id).where(BINDINGS.c.identity_id == identity_id))
+        ).scalar_one_or_none()
+        if bound is not None:  # ёмкость прокси освобождается вместе с привязкой (D-117)
+            await self.execute(
+                update(PROXIES)
+                .where(PROXIES.c.id == bound, PROXIES.c.bound_count > 0)
+                .values(bound_count=PROXIES.c.bound_count - 1)
+            )
         result = await self.execute(
             delete(IDENTITIES).where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
         )
@@ -567,6 +578,13 @@ class PgTx(StoreTx):
             conditions.append(i.id.not_in(list(query.exclude)))
         if not query.shared:
             conditions.append(or_(lease.identity_id.is_(None), lease.expires_at <= now))
+        if query.proxy_wait:
+            down = (
+                select(BINDINGS.c.identity_id)
+                .join(PROXIES, PROXIES.c.id == BINDINGS.c.proxy_id)
+                .where(BINDINGS.c.identity_id == i.id, PROXIES.c.status != ProxyStatus.ALIVE)
+            )
+            conditions.append(~down.exists())
         stmt = (
             select(IDENTITIES)
             .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
@@ -1026,6 +1044,70 @@ class PgTx(StoreTx):
         for column, value in (expected or {}).items():
             stmt = stmt.where(PROXIES.c[column].is_not_distinct_from(value))
         return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+
+    async def get_binding(self, identity_id: UUID) -> ProxyRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(PROXIES)
+                    .join(BINDINGS, BINDINGS.c.proxy_id == PROXIES.c.id)
+                    .where(BINDINGS.c.identity_id == identity_id, BINDINGS.c.space_id == self.space.id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _proxy_row(row) if row else None
+
+    async def choose_proxy(self, pool: str, max_identities: int | None, *, claim: bool) -> ProxyRow | None:
+        capacity = PROXIES.c.max_identities if max_identities is None else literal(max_identities)
+        alive = [
+            PROXIES.c.space_id == self.space.id,
+            PROXIES.c.pool == pool,
+            PROXIES.c.status == ProxyStatus.ALIVE,
+            PROXIES.c.bound_count < capacity,
+        ]
+        candidates = list(
+            (
+                await self.execute(
+                    select(PROXIES.c.id)
+                    .where(*alive)
+                    .order_by(PROXIES.c.bound_count, PROXIES.c.error_score, PROXIES.c.id)
+                    .limit(20)
+                )
+            ).scalars()
+        )
+        for proxy_id in candidates:
+            if not claim:
+                return await self.get_proxy(proxy_id)
+            row = (
+                (
+                    await self.execute(
+                        update(PROXIES)
+                        .where(PROXIES.c.id == proxy_id, *alive)
+                        .values(bound_count=PROXIES.c.bound_count + 1)
+                        .returning(*PROXIES.c)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is not None:
+                return _proxy_row(row)
+        return None
+
+    async def bind_proxy(self, identity_id: UUID, proxy_id: UUID, previous: UUID | None) -> None:
+        stmt = insert(BINDINGS).values(identity_id=identity_id, space_id=self.space.id, proxy_id=proxy_id)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[BINDINGS.c.identity_id], set_={"proxy_id": proxy_id, "bound_at": func.now()}
+        )
+        await self.execute(stmt)
+        if previous is not None and previous != proxy_id:
+            await self.execute(
+                update(PROXIES)
+                .where(PROXIES.c.id == previous, PROXIES.c.bound_count > 0)
+                .values(bound_count=PROXIES.c.bound_count - 1)
+            )
 
     async def due_proxies(self, limit: int) -> list[UUID]:
         rows = await self.execute(

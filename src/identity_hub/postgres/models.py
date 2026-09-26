@@ -712,6 +712,9 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
         String(16)
     )  # confirm_leaving (D-116, миграция 0003)
     max_identities: Mapped[int] = mapped_column(Integer, default=3)
+    bound_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )  # D-117, миграция 0004
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

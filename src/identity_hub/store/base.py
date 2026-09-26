@@ -137,6 +137,7 @@ class CandidateQuery:
     among: Any = None  # список id или подзапрос домена (Select) — FR-6.1
     exclude: frozenset[UUID] = frozenset()
     shared: bool = False  # FR-6.6: живая аренда не исключает аккаунт
+    proxy_wait: bool = False  # FR-8.3 on_proxy_down=wait: аккаунт с прокси не в alive недоступен
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,6 +460,21 @@ class StoreTx(ABC):
         self, proxy_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
     ) -> bool:
         """Обновить колонки прокси; `expected` — compare-and-set."""
+
+    @abstractmethod
+    async def get_binding(self, identity_id: UUID) -> ProxyRow | None:
+        """Прокси, к которому привязан аккаунт (sticky, FR-8.2)."""
+
+    @abstractmethod
+    async def choose_proxy(self, pool: str, max_identities: int | None, *, claim: bool) -> ProxyRow | None:
+        """Наименее загруженный живой прокси пула с запасом ёмкости.
+
+        `claim=True` — атомарно занять единицу ёмкости (`bound_count + 1`, D-117) для sticky-привязки.
+        """
+
+    @abstractmethod
+    async def bind_proxy(self, identity_id: UUID, proxy_id: UUID, previous: UUID | None) -> None:
+        """Привязать аккаунт к прокси; ёмкость прежнего прокси освобождается."""
 
     @abstractmethod
     async def due_proxies(self, limit: int) -> list[UUID]:

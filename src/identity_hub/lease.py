@@ -23,11 +23,12 @@ from identity_hub.context import LeaseContext, _current
 from identity_hub.crypto import associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.regions import Command
-from identity_hub.enums import AuthState, LeaseEndReason, SessionStatus
+from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
 from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing
 from identity_hub.events import EventDraft
+from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
-from identity_hub.store.base import IdentityRow, LeaseCounters, LeaseRow, StoreTx
+from identity_hub.store.base import IdentityRow, LeaseCounters, LeaseRow, ProxyRow, StoreTx
 
 if TYPE_CHECKING:
     from identity_hub.operation import Operation
@@ -49,8 +50,11 @@ class Lease:
     воркер (G-1.2): вызывается `on_lost`, блок прерывается, наружу выходит `LeaseLost` (D-112).
     """
 
-    def __init__(self, pool: Pool, row: LeaseRow, identity: IdentityRow) -> None:
+    def __init__(
+        self, pool: Pool, row: LeaseRow, identity: IdentityRow, proxy: ProxyRow | None = None
+    ) -> None:
         self.pool = pool
+        self.proxy_info = proxy
         self._row = row
         self._token = row.token  # приватный: только для продления и освобождения
         self.identity = identity
@@ -98,6 +102,13 @@ class Lease:
     @property
     def proxy_id(self) -> UUID | None:
         return self._row.proxy_id
+
+    @property
+    def proxy(self) -> str | None:
+        """URL прокси аренды с логином и паролем (для клиента платформы; не логировать)."""
+        if self.proxy_info is None:
+            return None
+        return self.pool.space.proxy_url_of(self.proxy_info)  # type: ignore[attr-defined, no-any-return]
 
     @property
     def lost(self) -> bool:
@@ -377,6 +388,15 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         _current.reset(token)
 
 
+class _PoolExhausted(Exception):
+    """В пуле прокси нет живого прокси с запасом ёмкости."""
+
+
+class _SkipCandidate(Exception):
+    def __init__(self, identity_id: UUID) -> None:
+        self.identity_id = identity_id
+
+
 async def acquire(
     pool: Pool,
     *,
@@ -389,7 +409,7 @@ async def acquire(
     wait: timedelta | float | None = None,
     idempotency_key: str | None = None,
 ) -> Lease:
-    """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + запись аренды + история.
+    """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
     `wait` — ждать освобождения подходящего аккаунта; по истечении — `LeaseUnavailable`.
     Повтор с тем же `idempotency_key`, пока аренда жива, возвращает ту же аренду (FR-6.5).
@@ -403,35 +423,104 @@ async def acquire(
     deadline = clock.monotonic() + wait_seconds
     delay = 0.05
     while True:
-        async with space._tx(own=True) as tx:
-            if idempotency_key is not None:
-                existing = await tx.find_live_lease(idempotency_key)
-                if existing is not None:
-                    identity = await space._identity(tx, existing.identity_id)
-                    return Lease(pool, existing, identity)
-            candidate = await tx.pick_candidate(query)
-            if candidate is not None:
-                row, reclaimed = await tx.acquire_lease(
-                    candidate,
-                    pool=pool.name,
-                    holder=pool.holder,
-                    ttl_seconds=pool.timing.ttl.total_seconds(),
-                    idempotency_key=idempotency_key,
-                    shared=pool.shared,
-                )
-                drafts = []
-                if reclaimed is not None:
-                    drafts.append(
-                        _lease_event("lease.expired", pool, reclaimed, {"expired_at": reclaimed.expires_at})
+        try:
+            async with space._tx(own=True) as tx:
+                if idempotency_key is not None:
+                    existing = await tx.find_live_lease(idempotency_key)
+                    if existing is not None:
+                        identity = await space._identity(tx, existing.identity_id)
+                        policy = pool.proxy_policy
+                        proxy = (
+                            await tx.get_binding(existing.identity_id) if policy and policy.sticky else None
+                        )
+                        if proxy is not None:
+                            existing = replace(existing, proxy_id=proxy.id)
+                        return Lease(pool, existing, identity, proxy)
+                candidate = await tx.pick_candidate(query)
+                if candidate is not None:
+                    proxy, drafts = await _resolve_proxy(pool, tx, candidate)
+                    row, reclaimed = await tx.acquire_lease(
+                        candidate,
+                        pool=pool.name,
+                        holder=pool.holder,
+                        ttl_seconds=pool.timing.ttl.total_seconds(),
+                        idempotency_key=idempotency_key,
+                        shared=pool.shared,
+                        proxy_id=proxy.id if proxy else None,
                     )
-                drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
-                await space._emit(tx, *drafts)
-                return Lease(pool, row, candidate)
+                    if reclaimed is not None:
+                        drafts.append(
+                            _lease_event(
+                                "lease.expired", pool, reclaimed, {"expired_at": reclaimed.expires_at}
+                            )
+                        )
+                    drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
+                    await space._emit(tx, *drafts)
+                    return Lease(pool, row, candidate, proxy)
+        except _SkipCandidate as skip:
+            query = replace(query, exclude=query.exclude | {skip.identity_id})
+            continue
+        except _PoolExhausted:
+            await _pool_exhausted(pool)
         remaining = deadline - clock.monotonic()
         if remaining <= 0:
             raise LeaseUnavailable(f"пул {pool.name}: нет свободного аккаунта")
         await asyncio.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)
+
+
+async def _resolve_proxy(
+    pool: Pool, tx: StoreTx, candidate: IdentityRow
+) -> tuple[ProxyRow | None, list[EventDraft]]:
+    """Прокси аренды по политике сервиса/пула (FR-8.2, 8.3). В той же транзакции, что и захват."""
+    policy = pool.proxy_policy
+    if policy is None:
+        return None, []
+    current = await tx.get_binding(candidate.id) if policy.sticky else None
+    if current is not None and current.status == ProxyStatus.ALIVE:
+        return current, []
+    if current is not None and policy.on_proxy_down is ProxyDownPolicy.WAIT:
+        raise _SkipCandidate(candidate.id)  # прокси упал между выборкой и захватом
+    chosen = await tx.choose_proxy(policy.pool, policy.max_identities, claim=policy.sticky)
+    if chosen is None:
+        raise _PoolExhausted
+    drafts: list[EventDraft] = []
+    if policy.sticky:
+        await tx.bind_proxy(candidate.id, chosen.id, current.id if current else None)
+        drafts.append(
+            EventDraft(
+                "proxy.binding.changed",
+                actor=pool.holder,
+                service=pool.service.name,
+                identity_id=candidate.id,
+                proxy_id=chosen.id,
+                data={
+                    "from_proxy_id": str(current.id) if current else None,
+                    "to_proxy_id": str(chosen.id),
+                    "reason": "rebind" if current else "initial",
+                    "pool": policy.pool,
+                },
+            )
+        )
+    return chosen, drafts
+
+
+async def _pool_exhausted(pool: Pool) -> None:
+    policy = pool.proxy_policy
+    assert policy is not None
+    try:
+        async with pool.space._tx(own=True) as tx:
+            await pool.space._emit(
+                tx,
+                EventDraft(
+                    "proxy.pool.exhausted",
+                    actor=pool.holder,
+                    service=pool.service.name,
+                    data={"proxy_pool": policy.pool, "pool": pool.name},
+                ),
+            )
+    except Exception:
+        logger.warning("не удалось записать proxy.pool.exhausted", exc_info=True)
 
 
 def _lease_event(event_type: str, pool: Pool, row: LeaseRow, extra: Mapping[str, Any]) -> EventDraft:
