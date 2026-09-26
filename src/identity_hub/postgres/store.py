@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import Table, Text, and_, delete, func, literal, or_, select, text, update
+from sqlalchemy import BigInteger, Table, Text, and_, delete, func, literal, or_, select, text, update
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -48,6 +48,7 @@ from identity_hub.store.base import (
     CandidateQuery,
     DataRow,
     IdentityRow,
+    LeaseCounters,
     LeaseRow,
     LinkRow,
     NewIdentity,
@@ -664,6 +665,87 @@ class PgTx(StoreTx):
             proxy_id=proxy_id,
         )
         return lease, reclaimed
+
+    async def extend_lease(
+        self, lease: LeaseRow, ttl_seconds: float, counters: LeaseCounters, *, shared: bool
+    ) -> datetime | None:
+        expires_at: datetime | None
+        if shared:
+            expires_at = await self.now() + timedelta(seconds=ttl_seconds)
+        else:
+            expires_at = (
+                await self.execute(
+                    update(LEASES)
+                    .where(
+                        LEASES.c.identity_id == lease.identity_id,
+                        LEASES.c.token == lease.token,
+                        LEASES.c.expires_at > func.now(),
+                    )
+                    .values(heartbeat_at=func.now(), expires_at=func.now() + timedelta(seconds=ttl_seconds))
+                    .returning(LEASES.c.expires_at)
+                )
+            ).scalar_one_or_none()
+            if expires_at is None:
+                return None
+        updated = await self.execute(
+            update(HISTORY)
+            .where(
+                HISTORY.c.lease_id == lease.lease_id,
+                HISTORY.c.token == lease.token,
+                HISTORY.c.released_at.is_(None),
+            )
+            .values(last_heartbeat_at=func.now(), **_counter_values(counters))
+        )
+        if shared and not updated.rowcount:  # type: ignore[attr-defined]
+            return None
+        return expires_at
+
+    async def release_lease(
+        self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
+    ) -> bool:
+        if not shared:
+            await self.execute(
+                update(LEASES)
+                .where(
+                    LEASES.c.identity_id == lease.identity_id,
+                    LEASES.c.token == lease.token,
+                    LEASES.c.expires_at > func.now(),
+                )
+                .values(expires_at=func.now(), idempotency_key=None)
+            )
+        closed = await self.execute(
+            update(HISTORY)
+            .where(
+                HISTORY.c.lease_id == lease.lease_id,
+                HISTORY.c.token == lease.token,
+                HISTORY.c.released_at.is_(None),
+            )
+            .values(released_at=func.now(), end_reason=reason, **_counter_values(counters))
+        )
+        return bool(closed.rowcount)  # type: ignore[attr-defined]
+
+
+def _counter_values(counters: LeaseCounters) -> dict[str, Any]:
+    if counters.is_empty:
+        return {}
+    values: dict[str, Any] = {
+        "succeeded": HISTORY.c.succeeded + counters.succeeded,
+        "failed": HISTORY.c.failed + counters.failed,
+    }
+    if counters.operations:
+        values["operations"] = _merge_operations(counters.operations)
+    if counters.last_error is not None:
+        values["last_error"] = counters.last_error
+    return values
+
+
+def _merge_operations(delta: dict[str, int]) -> Any:
+    """operations = operations || {k: operations[k] + delta[k]} для каждого вида операции."""
+    expr: Any = HISTORY.c.operations
+    for kind, n in sorted(delta.items()):
+        current = func.coalesce(HISTORY.c.operations[kind].astext.cast(BigInteger), 0)
+        expr = expr.op("||")(func.jsonb_build_object(kind, current + n))
+    return expr
 
 
 def _lease_row(row: Any) -> LeaseRow:

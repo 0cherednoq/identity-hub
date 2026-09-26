@@ -23,6 +23,7 @@ __all__ = [
     "CandidateQuery",
     "DataRow",
     "IdentityRow",
+    "LeaseCounters",
     "LeaseRow",
     "LinkRow",
     "NewIdentity",
@@ -147,6 +148,24 @@ class LeaseRow:
     expires_at: datetime
     idempotency_key: str | None = None
     proxy_id: UUID | None = None
+
+
+@dataclass(slots=True)
+class LeaseCounters:
+    """Приращения счётчиков истории аренды с прошлого сброса (FR-6.7)."""
+
+    operations: dict[str, int]
+    succeeded: int = 0
+    failed: int = 0
+    last_error: str | None = None
+
+    @classmethod
+    def empty(cls) -> LeaseCounters:
+        return cls(operations={})
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.operations and not self.succeeded and not self.failed and self.last_error is None
 
 
 class StoreTx(ABC):
@@ -300,6 +319,18 @@ class StoreTx(ABC):
         Истёкшая аренда перезаписывается, её история закрывается как `expired` временем `expires_at`
         (FR-6.8). Возвращает (новая аренда, перезахваченная истёкшая или None).
         """
+
+    @abstractmethod
+    async def extend_lease(
+        self, lease: LeaseRow, ttl_seconds: float, counters: LeaseCounters, *, shared: bool
+    ) -> datetime | None:
+        """Heartbeat: продлить живую аренду по token и сбросить счётчики. None — аренды больше нет."""
+
+    @abstractmethod
+    async def release_lease(
+        self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
+    ) -> bool:
+        """Освободить аренду по token (повтор и чужой token — no-op) и закрыть историю (G-4.2)."""
 
 
 class Store(ABC):

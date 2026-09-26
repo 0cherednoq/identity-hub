@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import socket
 from collections.abc import Iterable, Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -19,7 +20,7 @@ from identity_hub.store.base import CandidateQuery, IdentityRow
 
 if TYPE_CHECKING:
     from identity_hub._space import SpaceBase
-    from identity_hub.lease import Lease
+    from identity_hub.lease import Lease, OnLost
 
 __all__ = ["DEFAULT_STANDING", "LeaseTiming", "Pool", "PoolsMixin", "default_holder"]
 
@@ -107,6 +108,12 @@ class Pool:
             exclude=frozenset(exclude),
             shared=self.shared,
         )
+
+    def lease(self, *, on_lost: OnLost | None = None, **kwargs: Any) -> AbstractAsyncContextManager[Lease]:
+        """`async with pool.lease(for_operation=..., wait=..., on_lost=...) as lease:` (ТЗ §11)."""
+        from identity_hub.lease import lease_scope
+
+        return lease_scope(self, on_lost, **kwargs)
 
     async def acquire(self, **kwargs: Any) -> Lease:
         """Низкоуровневый захват (без heartbeat); обычный путь — `async with pool.lease(...)`."""
