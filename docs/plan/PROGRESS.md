@@ -8,12 +8,10 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** P1.1 Ошибки и примитивы
-- **Начата:** 2026-09-26
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] errors.py: иерархия исключений
-  - [ ] clock.py: Clock, SystemClock, FakeClock
-  - [ ] юнит-тесты
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -24,7 +22,7 @@
 | P0.2 | Перенос схемы и базовые типы | P0.1 | done |  |  |
 | P0.3 | Тестовая инфраструктура | P0.2 | done |  |  |
 | P0.4 | Миграции Alembic, exclude_identity_hub | P0.3 | done |  |  |
-| P1.1 | Ошибки и примитивы | P0.2 | in_progress |  |  |
+| P1.1 | Ошибки и примитивы | P0.2 | done |  |  |
 | P1.2 | RegionMachine | P1.1 | todo | | |
 | P1.3 | VerificationFlow / Spec / Tier | P1.1 | todo | | |
 | P1.4 | Декларация Service и протоколы | P1.1 | todo | | |
@@ -68,7 +66,7 @@
 | P10.4 | Документация и примеры | P10.3 | todo | | |
 | P10.5 | Финальный аудит и трассировка | P10.4 | todo | | |
 
-**Итого:** 4 / 47 done
+**Итого:** 5 / 47 done
 
 ## Журнал сессий
 
@@ -78,3 +76,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · корот�
 2026-09-26 · P0.2 · done · enums.py, _ids.py (без фолбэка uuid4), postgres/models.py, schema_options (D-013), pg-тесты схемы · дальше P0.3
 2026-09-26 · P0.3 · done · фикстуры database_url/engine/prepared_db/db (TRUNCATE), docker-compose · дальше P0.4
 2026-09-26 · P0.4 · done · ветка миграций (ih_alembic_version), 0001 с pg_trgm, migrate(engine, db_schema), exclude_identity_hub, тест отсутствия дрейфа · дальше P1.1
+2026-09-26 · P1.1 · done · иерархия исключений (picklable), Blocker, Clock/SystemClock/FakeClock · дальше P1.2
