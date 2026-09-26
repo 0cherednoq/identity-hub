@@ -8,10 +8,13 @@
 
 <!-- Заполняется при взятии задачи, очищается при её завершении. Это чекпоинт для продолжения после обрыва сессии. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** P5.3 Оркестрация входа, challenge
+- **Начата:** 2026-09-26
 - **Шаги:**
-  - [ ] —
+  - [ ] store: CandidateQuery.lifecycles/auth_states; open/get/answer/resolve challenge, просроченные challenge
+  - [ ] auth.py: LoginContext, LinkedIdentity (аренда связанного: зависимый → связанный), run_logins
+  - [ ] LoginChallenge → challenge (зашифрованный контекст, один открытый), answer_challenge, expire_challenges, события
+  - [ ] pg-тесты: успех, ошибка, challenge → ответ, повторный challenge, связанный аккаунт, истечение
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -44,7 +47,7 @@
 | P4.2 | lease.operation | P4.1 | done |  |  |
 | P5.1 | Прокси и их здоровье | P4.2 | done |  |  |
 | P5.2 | Привязка прокси | P5.1 | done |  |  |
-| P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | todo | | |
+| P5.3 | Оркестрация входа, challenge | P3.4, P2.6 | in_progress |  |  |
 | P5.4 | Верификации в БД | P1.3, P3.4 | todo | | |
 | P5.5 | Пробы, resync, reconcile | P5.3, P5.4, P4.2 | todo | | |
 | P5.6 | Секреты для админки | P3.4 | todo | | |
