@@ -57,9 +57,7 @@ uv run pytest
    from pydantic import BaseModel, SecretStr
    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-   from identity_hub.crypto import EnvSecretsProvider
-   from identity_hub.hub import IdentityHub
-   from identity_hub.service import OperationRule, Quota, Service
+   from identity_hub import EnvSecretsProvider, IdentityHub, OperationRule, Quota, Service
 
 
    class TelegramCredentials(BaseModel):
@@ -99,7 +97,7 @@ uv run pytest
    пространство и пул:
 
    ```python
-   from identity_hub.enums import AuthState, Lifecycle
+   from identity_hub import AuthState, Lifecycle
 
    await hub.start()
    space = hub.space("production", "Production")
@@ -144,6 +142,8 @@ uv run python examples/telegram_service.py
   PgBouncer, Dishka и жизненный цикл процессов.
 - [Нагрузочные характеристики](docs/perf.md) — воспроизводимый стенд и
   известные ограничения производительности.
+- [Трассировка требований](docs/traceability.md) — каждый FR/G/T/S и его
+  исполняемое тестовое доказательство.
 - [CHANGELOG](CHANGELOG.md) — пользовательские изменения по версиям.
 
 Для быстрых тестов без БД установите extra `testing`. Pytest-плагин предоставляет

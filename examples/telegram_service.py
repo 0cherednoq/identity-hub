@@ -13,11 +13,16 @@ from datetime import timedelta
 
 from pydantic import BaseModel, SecretStr
 
-from identity_hub.crypto import StaticSecretsProvider
-from identity_hub.enums import AuthState, Lifecycle
-from identity_hub.events import Event
-from identity_hub.hub import IdentityHub
-from identity_hub.service import OperationRule, Quota, Service
+from identity_hub import (
+    AuthState,
+    Event,
+    IdentityHub,
+    Lifecycle,
+    OperationRule,
+    Quota,
+    Service,
+    StaticSecretsProvider,
+)
 from identity_hub.testing import MemoryStore
 
 

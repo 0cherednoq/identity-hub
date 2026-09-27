@@ -872,7 +872,7 @@ wheels = [
 
 [[package]]
 name = "identity-hub"
-version = "0.1.0.dev0"
+version = "1.0.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

@@ -119,3 +119,28 @@ async def test_insecure_endpoint_is_rejected(space: SpaceHandle) -> None:
             secret=SecretStr("secret"),
             event_types=["*"],
         )
+
+
+@respx.mock
+async def test_redirect_is_recorded_without_following(
+    hub: IdentityHub,
+    space: SpaceHandle,
+) -> None:
+    source = "https://hooks.example.test/redirect"
+    target = "https://other.example.test/secret-target"
+    endpoint = await space.webhooks.create(
+        url=source,
+        secret=SecretStr("secret"),
+        event_types=["identity.registered"],
+    )
+    source_route = respx.post(source).mock(return_value=httpx.Response(302, headers={"Location": target}))
+    target_route = respx.post(target).mock(return_value=httpx.Response(204))
+    await space.register(service="fake_tg", external_ref="+redirect")
+
+    await hub.dispatcher.drain()
+
+    assert source_route.call_count == 1
+    assert target_route.call_count == 0
+    delivery = (await space.webhooks.deliveries(endpoint.id))[0]
+    assert delivery.status == "failed"
+    assert delivery.response_code == 302

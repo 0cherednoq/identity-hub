@@ -41,6 +41,10 @@ def test_retry_delay_is_exponential_and_capped_at_24_hours() -> None:
     assert policy.retry_after(99) == timedelta(hours=24)
 
 
+def test_default_request_timeout_is_ten_seconds() -> None:
+    assert WebhookPolicy().timeout == 10.0
+
+
 @pytest.mark.parametrize(
     "url,dev_hosts,ok",
     [

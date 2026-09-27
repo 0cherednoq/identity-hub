@@ -14,6 +14,7 @@ DOCUMENTS = (
     ROOT / "docs" / "cli.md",
     ROOT / "docs" / "integrations.md",
     ROOT / "docs" / "perf.md",
+    ROOT / "docs" / "traceability.md",
 )
 MARKDOWN_LINK = re.compile(r"\[[^]]+]\(([^)]+)\)")
 
