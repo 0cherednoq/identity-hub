@@ -16,6 +16,12 @@ from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import EventRecord, IdentityRecord, LeaseHistoryRecord, LeaseRecord
 from identity_hub.service import LeaseMode
 from tests.fixtures.services import FAKE_TG
+from tests.fixtures.shared_lease import (
+    SHARED_TG,
+    check_parallel_shared_leases_keep_writing,
+    check_shared_rejects_idempotency_key,
+    check_shared_rotates_least_recently_leased,
+)
 from tests.pg.helpers import make_identity
 
 pytestmark = pytest.mark.pg
@@ -137,3 +143,21 @@ async def test_shared_mode_does_not_block(
     assert a.lease_id != b.lease_id
     assert await _all(sessionmaker, LeaseRecord) == []
     assert len(await _all(sessionmaker, LeaseHistoryRecord)) == 2
+
+
+async def test_shared_parallel_leases_keep_writing(hub: IdentityHub) -> None:
+    hub.register_service(SHARED_TG)
+    await hub.start()
+    await check_parallel_shared_leases_keep_writing(hub)
+
+
+async def test_shared_rotates_least_recently_leased(hub: IdentityHub) -> None:
+    hub.register_service(SHARED_TG)
+    await hub.start()
+    await check_shared_rotates_least_recently_leased(hub)
+
+
+async def test_shared_rejects_idempotency_key(hub: IdentityHub) -> None:
+    hub.register_service(SHARED_TG)
+    await hub.start()
+    await check_shared_rejects_idempotency_key(hub)

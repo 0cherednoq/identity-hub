@@ -25,7 +25,7 @@ from identity_hub.crypto import associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
-from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing
+from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.service import ProxyDownPolicy
@@ -474,7 +474,10 @@ async def acquire(
 
     `wait` — ждать освобождения подходящего аккаунта; по истечении — `LeaseUnavailable`.
     Повтор с тем же `idempotency_key`, пока аренда жива, возвращает ту же аренду (FR-6.5).
+    В shared-режиме ключ не поддерживается: живые shared-аренды не хранятся (D-140).
     """
+    if idempotency_key is not None and pool.shared:
+        raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
     explicit_query = query
     if query is None:  # готовый запрос — внутренние выборки библиотеки (вход, сверка)
         query = pool.candidate_query(

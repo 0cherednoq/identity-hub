@@ -46,7 +46,7 @@
 | FR-6.3 | `tests/pg/test_lease_lifecycle.py::test_lost_before_ttl_when_heartbeat_fails` |
 | FR-6.4 | `tests/pg/test_outbox.py::test_secrets_never_reach_journal` |
 | FR-6.5 | `tests/pg/test_acquire.py::test_idempotency_key_returns_same_lease` |
-| FR-6.6 | `tests/pg/test_acquire.py::test_shared_mode_does_not_block` |
+| FR-6.6 | `tests/pg/test_acquire.py::test_shared_mode_does_not_block`, `tests/pg/test_acquire.py::test_shared_parallel_leases_keep_writing` |
 | FR-6.7 | `tests/pg/test_cards.py::test_lease_history_and_stats` |
 | FR-6.8 | `tests/pg/test_acquire.py::test_expired_lease_reclaimed_with_history_closed_at_expiry` |
 | FR-6.9 | `tests/pg/test_lease_fencing.py::test_revoke_from_admin` |

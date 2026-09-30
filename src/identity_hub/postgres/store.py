@@ -733,11 +733,18 @@ class PgTx(StoreTx):
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         i, lease = IDENTITIES.c, LEASES.c
         conditions = self._candidate_conditions(query)
+        # D-007: наименее недавно арендованный. Shared-аренды не пишут ih_leases,
+        # поэтому время последнего захвата берётся из истории (индекс identity_id, acquired_at).
+        last_acquired = (
+            select(func.max(HISTORY.c.acquired_at)).where(HISTORY.c.identity_id == i.id).scalar_subquery()
+            if query.shared
+            else lease.acquired_at
+        )
         stmt = (
             select(IDENTITIES)
             .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
             .where(*conditions)
-            .order_by(lease.acquired_at.asc().nulls_first(), i.id)
+            .order_by(last_acquired.asc().nulls_first(), i.id)
             .limit(1)
             .with_for_update(of=IDENTITIES, skip_locked=True)
         )
@@ -796,14 +803,15 @@ class PgTx(StoreTx):
     ) -> tuple[LeaseRow, LeaseRow | None]:
         now = await self.now()
         expires_at = now + timedelta(seconds=ttl_seconds)
-        fencing: int = (
-            await self.execute(
-                update(IDENTITIES)
-                .where(IDENTITIES.c.id == identity.id, IDENTITIES.c.space_id == self.space.id)
-                .values(fencing_seq=IDENTITIES.c.fencing_seq + 1)
-                .returning(IDENTITIES.c.fencing_seq)
-            )
-        ).scalar_one()
+        # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
+        fencing_stmt = (
+            select(IDENTITIES.c.fencing_seq)
+            if shared
+            else update(IDENTITIES)
+            .values(fencing_seq=IDENTITIES.c.fencing_seq + 1)
+            .returning(IDENTITIES.c.fencing_seq)
+        ).where(IDENTITIES.c.id == identity.id, IDENTITIES.c.space_id == self.space.id)
+        fencing: int = (await self.execute(fencing_stmt)).scalar_one()
         lease_id, token = new_id(), uuid4()
         reclaimed: LeaseRow | None = None
         if not shared:

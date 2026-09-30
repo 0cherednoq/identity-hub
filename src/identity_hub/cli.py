@@ -152,14 +152,14 @@ async def async_main(args: argparse.Namespace) -> int:
                     _aware_datetime(args.end),
                 )
             )
+            return 0
+        print(await hub.rollups.purge_minutes(before=_aware_datetime(args.before) if args.before else None))
         return 0
     if args.command == "snapshots":
         if args.backfill_current:
             print(await hub.state_snapshots.backfill_current())
             return 0
         print(await hub.state_snapshots.purge(before=_aware_datetime(args.before) if args.before else None))
-        return 0
-        print(await hub.rollups.purge_minutes(before=_aware_datetime(args.before) if args.before else None))
         return 0
     raise ValueError("укажите команду")
 

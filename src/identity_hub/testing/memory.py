@@ -548,8 +548,10 @@ class MemoryTx(StoreTx):
                     duration=old.expires_at - history.acquired_at,
                     end_reason="expired",
                 )
-        fencing = current.fencing_seq + 1
-        self.state.identities[identity.id] = replace(current, fencing_seq=fencing, updated_at=self._now)
+        # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
+        fencing = current.fencing_seq if shared else current.fencing_seq + 1
+        if not shared:
+            self.state.identities[identity.id] = replace(current, fencing_seq=fencing, updated_at=self._now)
         lease = LeaseRow(
             uuid4(),
             uuid4(),

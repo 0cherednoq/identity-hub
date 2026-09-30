@@ -28,6 +28,12 @@ from identity_hub.service import ProxyPolicy
 from identity_hub.state import Override
 from identity_hub.testing import MemoryStore
 from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG, KycEvidence, TgCredentials
+from tests.fixtures.shared_lease import (
+    SHARED_TG,
+    check_parallel_shared_leases_keep_writing,
+    check_shared_rejects_idempotency_key,
+    check_shared_rotates_least_recently_leased,
+)
 
 pytestmark = pytest.mark.anyio
 TEST_KEYS = {"k1": b"\x33" * 32, "k2": b"\x44" * 32}
@@ -616,3 +622,28 @@ async def test_proxy_reads_match_bindings_and_redact_userinfo(memory_hub: Identi
     with pytest.raises(NotFound, match="proxy"):
         await space.proxy_detail(foreign_id)
     await first.release()
+
+
+@pytest.fixture
+async def shared_memory_hub() -> IdentityHub:
+    # системные часы: порядок выдачи shared-аккаунтов зависит от времени захвата
+    hub = IdentityHub(
+        secrets=StaticSecretsProvider(TEST_KEYS, "k1"),
+        services=[FAKE_TG, SHARED_TG],
+        store=MemoryStore(),
+        strict_events=True,
+    )
+    await hub.start()
+    return hub
+
+
+async def test_shared_parallel_leases_keep_writing(shared_memory_hub: IdentityHub) -> None:
+    await check_parallel_shared_leases_keep_writing(shared_memory_hub)
+
+
+async def test_shared_rotates_least_recently_leased(shared_memory_hub: IdentityHub) -> None:
+    await check_shared_rotates_least_recently_leased(shared_memory_hub)
+
+
+async def test_shared_rejects_idempotency_key(shared_memory_hub: IdentityHub) -> None:
+    await check_shared_rejects_idempotency_key(shared_memory_hub)
