@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I0.2a Модель ошибок и маппинг HTTP/CLI
+- **Начата:** 2026-09-30
 - **Шаги:**
-  - [ ] —
+  - [ ] code и context у IdentityHubError и наследников
+  - [ ] новые типы ошибок
+  - [ ] чистые функции http_status и exit_code
+  - [ ] CLI возвращает exit code по коду ошибки
+  - [ ] unit-тесты кодов, context, маппинга
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -30,7 +35,7 @@
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  | ведёт параллельная сессия в worktree, ветка i8.7-namespaces |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
-| I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | todo |  |  |
+| I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | in_progress |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | todo |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | todo |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | todo |  |  |
