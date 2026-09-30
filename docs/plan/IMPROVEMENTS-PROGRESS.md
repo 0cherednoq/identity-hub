@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I8.1 API: каркас неймспейсов, allowlist, таблица миграции
-- **Начата:** 2026-09-30
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] пакет identity_hub/api: Namespace и deprecated
-  - [ ] тест allowlist поверхности SpaceHandle
-  - [ ] docs/api-migration.md и тест таблицы
-  - [ ] глоссарий identity и глаголов в руководстве
-  - [ ] check.sh и закрытие
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -25,7 +21,7 @@
 | ID | Задача | Зависит от | Статус | Коммит | Примечание |
 |---|---|---|---|---|---|
 | I0.1 | Scope и воспроизводимый baseline | — | done |  |  |
-| I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | in_progress |  |  |
+| I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | done |  |  |
 | I8.2 | API: space.identities — чтение | I8.1 | todo |  |  |
 | I8.3 | API: space.identities — create/ensure/create_many | I8.2 | todo |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | todo |  |  |
@@ -63,10 +59,11 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 1 / 38 done
+**Итого:** 2 / 38 done
 
 ## Журнал сессий
 
 <!-- Добавлять строку после завершения задачи или остановки. Формат:
 YYYY-MM-DD · ID · результат (done / partial / blocked) · что сделано · что дальше -->
 2026-09-30 · I0.1 · done · scope D-142, матрица IMP и baseline (lease p95 4801 мс, operation 24.9, search 163.5, import 103.7 с) · дальше I8.1
+2026-09-30 · I8.1 · done · каркас identity_hub/api, allowlist SpaceHandle, карта LEGACY (85 имён) и docs/api-migration.md · дальше I8.2
