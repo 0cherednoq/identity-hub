@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I8.2 API: space.identities — чтение
+- **Начата:** 2026-09-30
 - **Шаги:**
-  - [ ] —
+  - [ ] DTO Identity, IdentityRef, IdentityFilter
+  - [ ] get/find/get_by_ref/card
+  - [ ] search/list/count поверх query-движка
+  - [ ] conformance-тесты memory/pg
+  - [ ] алиасы identity_card и search
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -22,7 +27,7 @@
 |---|---|---|---|---|---|
 | I0.1 | Scope и воспроизводимый baseline | — | done |  |  |
 | I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | done |  |  |
-| I8.2 | API: space.identities — чтение | I8.1 | todo |  |  |
+| I8.2 | API: space.identities — чтение | I8.1 | in_progress |  |  |
 | I8.3 | API: space.identities — create/ensure/create_many | I8.2 | todo |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | todo |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | todo |  |  |
