@@ -27,7 +27,7 @@
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | done |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | done |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | done |  |  |
-| I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  | ведёт параллельная сессия в worktree, ветка i8.7-namespaces |
+| I8.7 | API: auth, sync, links, data, verifications | I8.1 | done |  | параллельная ветка i8.7-namespaces |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
 | I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
@@ -60,7 +60,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 8 / 39 done
+**Итого:** 9 / 39 done
 
 ## Журнал сессий
 
@@ -74,3 +74,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-09-30 · I8.5 · done · space.imports (run/run_files/stage/get/cancel) и space.secrets (describe/reveal SecretRef/replace_*), 9 алиасов, D-144 · дальше I8.6
 2026-09-30 · I8.6 · done · space.proxies (group, create/ensure/create_many/list/url/health/recheck*), space.pools (define/revoke), Pool.lease/acquire с явной сигнатурой, Pool.capacity, ProxyPolicy.group, D-145 · I8.7 ведёт параллельная сессия, дальше I0.2
 2026-09-30 · I0.2a · done · стабильные коды и context ошибок, 8 новых типов, http_status/exit_code, CLI error[code] · дальше слияние I8.7, затем I0.2b
+2026-09-30 · I8.7 · done · space.auth (LoginOutcome), sync.refresh/refresh_many, links, data, verifications + requirements; 15 алиасов; conformance memory+pg и онбординг на новых именах (параллельная ветка) · дальше I8.8

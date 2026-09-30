@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import ConcurrentModification, ValidationFailed
 
 __all__ = ["DataRecord", "IdentityDataMixin"]
@@ -31,7 +32,7 @@ class DataRecord[M: BaseModel]:
 
 
 class IdentityDataMixin(SpaceBase):
-    async def load_data[M: BaseModel](
+    async def _load_data[M: BaseModel](
         self, identity_id: UUID, namespace: str, schema: type[M], *, schema_version: int = 1
     ) -> DataRecord[M] | None:
         """Прочитать неймспейс. Другая версия схемы — ValidationFailed (миграция — у пользователя)."""
@@ -53,7 +54,7 @@ class IdentityDataMixin(SpaceBase):
             ) from None
         return DataRecord(value, row.schema_version, row.version, row.updated_at)
 
-    async def save_data(
+    async def _save_data(
         self,
         identity_id: UUID,
         namespace: str,
@@ -75,6 +76,9 @@ class IdentityDataMixin(SpaceBase):
         if version is None:
             raise ConcurrentModification("identity_data", f"{identity_id}/{namespace}", expected_version)
         return version
+
+    load_data = legacy(_load_data, "load_data")
+    save_data = legacy(_save_data, "save_data")
 
 
 def _check_namespace(namespace: str) -> None:

@@ -1,6 +1,6 @@
 """Оркестрация входа через аутентификатор сервиса (ТЗ FR-5.4–5.6, FR-4.3, §3.3).
 
-Вход выполняется только в явных точках — `run_logins(limit)` и `answer_challenge(id, answer)`;
+Вход выполняется только в явных точках — `space.auth.login/login_many` и `space.auth.answer_challenge`;
 внутри обычной аренды библиотека вход не делает. Связанные аккаунты (почта для рекавери и т.п.)
 берутся в аренду по запросу аутентификатора в порядке «зависимый → связанный».
 """
@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
+from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, Lifecycle, Standing
@@ -31,12 +33,20 @@ if TYPE_CHECKING:
     from identity_hub.lease import Lease
     from identity_hub.pool import Pool
 
-__all__ = ["LOGIN_POOL", "LoginMixin", "LoginReport"]
+__all__ = ["LOGIN_POOL", "LoginMixin", "LoginOutcome", "LoginReport"]
 
 LOGIN_POOL = "identity-hub:login"
 LOGIN_AUTH_STATES = frozenset({AuthState.NO_SESSION, AuthState.SESSION_INVALID})
 ALL_LIFECYCLES = frozenset({Lifecycle.PROVISIONING, Lifecycle.READY})
 LOGIN_STANDING = frozenset({Standing.GOOD, Standing.LIMITED, Standing.APPEALING})
+
+
+class LoginOutcome(StrEnum):
+    """Исход одной попытки входа; значения совпадают со строками до IMP-23."""
+
+    SUCCEEDED = "succeeded"
+    CHALLENGED = "challenged"  # платформа ждёт ответа человека — см. `answer_challenge`
+    FAILED = "failed"
 
 
 @dataclass
@@ -106,7 +116,7 @@ class _LoginContext:
         """Связанный аккаунт по роли, взятый в аренду (FR-4.3). Нет связи — None."""
         if role in self._linked:
             return _LinkedIdentity(self._linked[role])
-        links = await self._space.links_of(self.identity_id)  # type: ignore[attr-defined]
+        links = await self._space._links_of(self.identity_id)  # type: ignore[attr-defined]
         link = links.linked(role)
         if link is None:
             return None
@@ -130,7 +140,7 @@ class _LoginContext:
 
 
 class LoginMixin(SpaceBase):
-    async def run_login(self, identity_id: UUID) -> str:
+    async def _run_login(self, identity_id: UUID) -> LoginOutcome:
         """Run one explicit login attempt for a selected identity."""
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
@@ -151,7 +161,7 @@ class LoginMixin(SpaceBase):
         outcome, _error = await self._login(lease, service, None, None, None)
         return outcome
 
-    async def run_logins(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
+    async def _run_logins(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
         """Войти в аккаунты `no_session`/`session_invalid` сервисов с Authenticator (FR-5.4)."""
         services = [self.hub.service(service)] if service is not None else list(self.hub.services)
         report = LoginReport()
@@ -179,17 +189,17 @@ class LoginMixin(SpaceBase):
                 _record(report, lease.identity_id, outcome, error)
         return report
 
-    async def answer_challenge(
+    async def _answer_challenge(
         self,
         challenge_id: UUID,
         answer: str,
         *,
         actor: str = "admin",
         expected_identity_id: UUID | None = None,
-    ) -> str:
+    ) -> LoginOutcome:
         """Ответ человека на challenge (FR-5.5): сохраняется зашифрованным, вход продолжается сразу.
 
-        Возвращает исход: `succeeded`, `challenged` (платформа спросила ещё) или `failed`.
+        Возвращает `LoginOutcome`: `SUCCEEDED`, `CHALLENGED` (платформа спросила ещё) или `FAILED`.
         """
         if not answer:
             raise ValidationFailed("пустой ответ на challenge")
@@ -279,7 +289,7 @@ class LoginMixin(SpaceBase):
         challenge: ChallengeRow | None,
         answer: str | None,
         context: Mapping[str, Any] | None,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[LoginOutcome, str | None]:
         assert svc.authenticator is not None
         ctx = _LoginContext(self, lease, answer, context)
         try:
@@ -290,7 +300,7 @@ class LoginMixin(SpaceBase):
                 if challenge is not None:
                     await self._resolve(challenge.id)
                 await self._open_challenge(lease, asked)
-                return "challenged", None
+                return LoginOutcome.CHALLENGED, None
             except Exception as exc:
                 if challenge is not None:
                     await self._resolve(challenge.id)
@@ -298,15 +308,15 @@ class LoginMixin(SpaceBase):
                 await self._set_auth(
                     lease, AuthState.NO_SESSION, "identity.login.failed", {"error": type(exc).__name__}
                 )
-                return "failed", error
+                return LoginOutcome.FAILED, error
             await lease.save_session(session)
             if challenge is not None:
                 await self._resolve(challenge.id)
             await self._set_auth(lease, AuthState.AUTHENTICATED, "identity.login.succeeded", {})
-            return "succeeded", None
+            return LoginOutcome.SUCCEEDED, None
         except Exception as exc:
             logger.exception("вход аккаунта %s прерван", lease.identity_id)
-            return "failed", f"{type(exc).__name__}: {exc}"[:500]
+            return LoginOutcome.FAILED, f"{type(exc).__name__}: {exc}"[:500]
         finally:
             await ctx.close()
             await lease.release()
@@ -383,8 +393,12 @@ class LoginMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             await tx.resolve_challenge(challenge_id)
 
+    run_login = legacy(_run_login, "run_login")
+    run_logins = legacy(_run_logins, "run_logins")
+    answer_challenge = legacy(_answer_challenge, "answer_challenge")
 
-def _record(report: LoginReport, identity_id: UUID, outcome: str, error: str | None) -> None:
+
+def _record(report: LoginReport, identity_id: UUID, outcome: LoginOutcome, error: str | None) -> None:
     if outcome == "succeeded":
         report.succeeded.append(identity_id)
     elif outcome == "challenged":

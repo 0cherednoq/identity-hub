@@ -11,6 +11,7 @@ from identity_hub.api.identities import (
 )
 from identity_hub.api.proxies import Proxy, ProxyCreateManyResult
 from identity_hub.api.secrets import SecretRef
+from identity_hub.auth import LoginOutcome, LoginReport
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
 from identity_hub.crypto import EnvSecretsProvider, FileSecretsProvider, StaticSecretsProvider, generate_key
@@ -98,6 +99,7 @@ from identity_hub.service import (
     Service,
 )
 from identity_hub.state import Override
+from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
 __version__ = "1.0.0a1"
@@ -149,6 +151,8 @@ __all__ = [
     "LinkedIdentity",
     "LoginChallenge",
     "LoginContext",
+    "LoginOutcome",
+    "LoginReport",
     "MaintenanceSchedule",
     "Metric",
     "MetricsHook",
@@ -174,6 +178,7 @@ __all__ = [
     "ProxyStatus",
     "Quota",
     "QuotaExhausted",
+    "ReconcileReport",
     "RecordingMetrics",
     "Retention",
     "RevisionConflict",

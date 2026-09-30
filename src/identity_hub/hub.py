@@ -13,11 +13,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from identity_hub._space import SpaceBase
 from identity_hub.admin_audit import AdminAuditMixin
+from identity_hub.api.auth import Auth
+from identity_hub.api.data import IdentityData
 from identity_hub.api.identities import Identities
 from identity_hub.api.imports import Imports
+from identity_hub.api.links import IdentityLinks
 from identity_hub.api.pools import Pools
 from identity_hub.api.proxies import Proxies
 from identity_hub.api.secrets import Secrets
+from identity_hub.api.sync import Sync
+from identity_hub.api.verifications import Verifications
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
@@ -316,3 +321,28 @@ class SpaceHandle(
     def identities(self) -> Identities:
         """Identity пространства: чтение, создание, изменение (IMP-23)."""
         return Identities(self)
+
+    @cached_property
+    def auth(self) -> Auth:
+        """Вход через Authenticator сервиса и ответ на challenge (IMP-23)."""
+        return Auth(self)
+
+    @cached_property
+    def sync(self) -> Sync:
+        """Сверка регионов identity с платформой через пробы (IMP-23)."""
+        return Sync(self)
+
+    @cached_property
+    def links(self) -> IdentityLinks:
+        """Связи между identity пространства (IMP-23)."""
+        return IdentityLinks(self)
+
+    @cached_property
+    def data(self) -> IdentityData:
+        """Версионируемые данные приложения по неймспейсам identity (IMP-23)."""
+        return IdentityData(self)
+
+    @cached_property
+    def verifications(self) -> Verifications:
+        """Статус факторов, решение человека и требования платформы (IMP-23)."""
+        return Verifications(self)

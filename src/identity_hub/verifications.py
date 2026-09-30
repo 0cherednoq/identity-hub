@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.crypto import EncryptedPayload, associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.regions import Observation
@@ -240,7 +241,7 @@ class Verification:
 
 
 class VerificationsMixin(SpaceBase):
-    async def verification_status(self, identity_id: UUID, factor: str) -> VerificationStatus:
+    async def _verification_status(self, identity_id: UUID, factor: str) -> VerificationStatus:
         """Состояние фактора без аренды (админка, read-модели)."""
         async with self._tx(own=True) as tx:
             return (
@@ -254,7 +255,7 @@ class VerificationsMixin(SpaceBase):
                 )
             ).status
 
-    async def review_verification(
+    async def _review_verification(
         self,
         identity_id: UUID,
         factor: str,
@@ -316,11 +317,14 @@ class VerificationsMixin(SpaceBase):
                 changed += int(decision.changed)
         return changed
 
+    verification_status = legacy(_verification_status, "verification_status")
+    review_verification = legacy(_review_verification, "review_verification")
+
 
 class RequirementsMixin(SpaceBase):
     """Что платформа требует сейчас (`ih_identities.requirements`), события requirement.added/resolved."""
 
-    async def add_requirement(
+    async def _add_requirement(
         self, identity_id: UUID, code: str, *, deadline: datetime | None = None, actor: str = "platform"
     ) -> bool:
         async with self._tx(own=True) as tx:
@@ -337,7 +341,7 @@ class RequirementsMixin(SpaceBase):
             await self._requirement_event(tx, row, "identity.requirement.added", item, actor)
             return True
 
-    async def resolve_requirement(
+    async def _resolve_requirement(
         self, identity_id: UUID, code: str, *, actor: str = "platform", reason: str | None = None
     ) -> bool:
         # Resolution is an operator command and must join a caller transaction
@@ -363,3 +367,6 @@ class RequirementsMixin(SpaceBase):
         await self._emit(
             tx, EventDraft(event, actor=actor, service=row.service, identity_id=row.id, data=dict(data))
         )
+
+    add_requirement = legacy(_add_requirement, "add_requirement")
+    resolve_requirement = legacy(_resolve_requirement, "resolve_requirement")

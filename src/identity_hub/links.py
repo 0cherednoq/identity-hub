@@ -8,6 +8,7 @@ from datetime import datetime
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 
@@ -51,7 +52,7 @@ class Impact:
 
 
 class LinksMixin(SpaceBase):
-    async def link(
+    async def _link(
         self,
         identity_id: UUID,
         role: str,
@@ -86,7 +87,7 @@ class LinksMixin(SpaceBase):
                 ),
             )
 
-    async def unlink(
+    async def _unlink(
         self, identity_id: UUID, role: str, *, actor: str = "system", reason: str | None = None
     ) -> bool:
         """Удалить связь; False — её не было."""
@@ -111,7 +112,7 @@ class LinksMixin(SpaceBase):
             )
             return True
 
-    async def links_of(self, identity_id: UUID) -> Links:
+    async def _links_of(self, identity_id: UUID) -> Links:
         """Связи в обе стороны (FR-4.4)."""
         async with self._tx() as tx:
             await self._identity(tx, identity_id)
@@ -133,7 +134,7 @@ class LinksMixin(SpaceBase):
             counts = await tx.link_counts(ids)
         return {i: LinkSummary(*counts.get(i, (0, 0, []))) for i in ids}
 
-    async def impact_of(self, identity_id: UUID, max_depth: int = 5) -> list[Impact]:
+    async def _impact_of(self, identity_id: UUID, max_depth: int = 5) -> list[Impact]:
         """Кого затронет потеря аккаунта: транзитивно зависящие аккаунты (FR-4.4)."""
         if max_depth < 1:
             raise ValidationFailed("max_depth ≥ 1")
@@ -141,3 +142,8 @@ class LinksMixin(SpaceBase):
             await self._identity(tx, identity_id)
             rows = await tx.dependents(identity_id, max_depth)
         return [Impact(i, depth, path) for i, depth, path in rows]
+
+    link = legacy(_link, "link")
+    unlink = legacy(_unlink, "unlink")
+    links_of = legacy(_links_of, "links_of")
+    impact_of = legacy(_impact_of, "impact_of")

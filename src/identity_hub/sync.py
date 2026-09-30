@@ -15,6 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
+from identity_hub.api._base import legacy
 from identity_hub.auth import ALL_LIFECYCLES
 from identity_hub.domain.regions import Observation, Outcome
 from identity_hub.enums import ChangeSource, Standing
@@ -77,7 +78,7 @@ def _parse_regions(service: Service, regions: Iterable[str]) -> list[tuple[str, 
 
 
 class SyncMixin(SpaceBase):
-    async def resync(
+    async def _resync(
         self, identity_id: UUID, regions: Iterable[str] = ("auth", "standing")
     ) -> dict[str, str]:
         """Внеочередная проба регионов аккаунта (FR-9.7). Возвращает исход по региону."""
@@ -93,7 +94,7 @@ class SyncMixin(SpaceBase):
         finally:
             await lease.release()
 
-    async def reconcile(
+    async def _reconcile(
         self,
         regions: Iterable[str] = ("auth", "standing"),
         *,
@@ -197,3 +198,6 @@ class SyncMixin(SpaceBase):
         )
         outcome: Outcome = decision.outcome
         return str(outcome)
+
+    resync = legacy(_resync, "resync")
+    reconcile = legacy(_reconcile, "reconcile")

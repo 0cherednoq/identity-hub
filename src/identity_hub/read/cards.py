@@ -202,7 +202,7 @@ class CardsMixin(SpaceBase):
                             row is not None and row.evidence is not None,
                         )
                     )
-        links = await self.links_of(identity_id)  # type: ignore[attr-defined]
+        links = await self._links_of(identity_id)  # type: ignore[attr-defined]
         column_regions = [
             RegionInfo(
                 "lifecycle",
