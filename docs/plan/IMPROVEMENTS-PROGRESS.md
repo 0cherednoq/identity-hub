@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I0.4 Schema check и migration advisory lock
+- **Начата:** 2026-10-01
 - **Шаги:**
-  - [ ] —
+  - [ ] Store.schema_revision: PgStore и MemoryStore
+  - [ ] hub.start проверяет head, SchemaIncompatible
+  - [ ] advisory lock в migrate
+  - [ ] doctor и документация
+  - [ ] pg-тесты old/new/missing/head, конкурентный migrate
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -34,7 +39,7 @@
 | I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | done |  |  |
-| I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | todo |  |  |
+| I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | in_progress |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | todo |  |  |
 | I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | todo |  |  |
