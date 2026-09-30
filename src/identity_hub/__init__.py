@@ -1,5 +1,6 @@
 """Публичный API Identity Hub."""
 
+from identity_hub.api.identities import Identity, IdentityFilter, IdentityRef, Page
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
 from identity_hub.crypto import EnvSecretsProvider, FileSecretsProvider, StaticSecretsProvider, generate_key
@@ -101,8 +102,11 @@ __all__ = [
     "Fault",
     "FileImporter",
     "FileSecretsProvider",
+    "Identity",
+    "IdentityFilter",
     "IdentityHub",
     "IdentityHubError",
+    "IdentityRef",
     "ImportRecord",
     "ImportReport",
     "Lease",
@@ -129,6 +133,7 @@ __all__ = [
     "OperationRule",
     "Override",
     "Pacing",
+    "Page",
     "Pool",
     "ProbeContext",
     "ProbeResult",

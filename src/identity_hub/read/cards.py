@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.domain.data import build_search_text
 from identity_hub.domain.regions import RegionState
 from identity_hub.errors import ValidationFailed
@@ -172,7 +173,7 @@ def _region_info(region: str, key: str, state: RegionState) -> RegionInfo:
 
 
 class CardsMixin(SpaceBase):
-    async def identity_card(self, identity_id: UUID) -> IdentityCard:
+    async def _identity_card(self, identity_id: UUID) -> IdentityCard:
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
             regions = await tx.list_regions(identity_id)
@@ -272,6 +273,8 @@ class CardsMixin(SpaceBase):
             eligible=not blockers,
             blockers=blockers,
         )
+
+    identity_card = legacy(_identity_card, "identity_card")
 
     async def access_card(self, identity_id: UUID) -> AccessCard:
         """Secret-free credential/session metadata for an account card."""

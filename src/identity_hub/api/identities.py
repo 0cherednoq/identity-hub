@@ -1,0 +1,254 @@
+"""`space.identities` — чтение, создание и изменение identity (IMP-23)."""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+from identity_hub.api._base import Namespace
+from identity_hub.domain.query import SearchQuery, parse_query
+from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
+from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.service import Service
+from identity_hub.store.base import IdentityRow
+
+if TYPE_CHECKING:
+    from identity_hub.read.cards import IdentityCard
+
+__all__ = ["Identities", "Identity", "IdentityFilter", "IdentityRef", "Page"]
+
+# Счётчик `count()` точный до этого значения; дальше возвращается `COUNT_CAP + 1`.
+COUNT_CAP = 1_000_000
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityRef:
+    """Ссылка на identity: id и пара `(service, external_ref)`."""
+
+    id: UUID
+    service: str
+    external_ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class Identity:
+    """Identity (аккаунт во внешнем сервисе) без секретов.
+
+    `profile` — открытая часть профиля: при `Service.profile_encrypted` только
+    `filterable_profile`. `revision` растёт с каждым событием identity.
+    """
+
+    id: UUID
+    service: str
+    external_ref: str
+    lifecycle: Lifecycle
+    standing: Standing
+    standing_code: str | None
+    standing_until: datetime | None
+    auth: AuthState
+    availability: Availability
+    availability_until: datetime | None
+    verified_factors: frozenset[str]
+    tags: frozenset[str]
+    labels: Mapping[str, Any]
+    profile: Mapping[str, Any]
+    attributes: Mapping[str, Any]
+    note: str | None
+    error_score: float
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def ref(self) -> IdentityRef:
+        return IdentityRef(self.id, self.service, self.external_ref)
+
+    @classmethod
+    def from_row(cls, row: IdentityRow) -> Identity:
+        return cls(
+            id=row.id,
+            service=row.service,
+            external_ref=row.external_ref,
+            lifecycle=Lifecycle(row.lifecycle),
+            standing=Standing(row.standing),
+            standing_code=row.standing_code,
+            standing_until=row.standing_until,
+            auth=AuthState(row.auth_state),
+            availability=Availability(row.availability),
+            availability_until=row.availability_until,
+            verified_factors=frozenset(row.verified_factors),
+            tags=frozenset(row.tags),
+            labels=dict(row.labels),
+            profile=dict(row.profile),
+            attributes=dict(row.attributes),
+            note=row.note,
+            error_score=row.error_score,
+            revision=row.event_seq,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Page[T]:
+    """Страница результата. `next_cursor` передаётся в `after` следующего вызова."""
+
+    items: list[T]
+    next_cursor: str | None
+    total: int | None = None  # только при count=True; значение > 1000 означает «1000+»
+
+
+def _values(value: str | Collection[str] | None) -> frozenset[str]:
+    if value is None:
+        return frozenset()
+    if isinstance(value, str):
+        return frozenset({value})
+    return frozenset(str(v) for v in value)
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityFilter:
+    """Структурированный фильтр `identities.list()`/`count()`.
+
+    Внутри одного поля со списком значений — ИЛИ, между полями — И. `tags` требует все теги.
+    `profile` — только поля `filterable_profile` выбранных сервисов.
+    """
+
+    service: str | Service | Collection[str | Service] | None = None
+    lifecycle: str | Collection[str] | None = None
+    standing: str | Collection[str] | None = None
+    auth: str | Collection[str] | None = None
+    availability: str | Collection[str] | None = None
+    tags: Collection[str] = ()
+    labels: Mapping[str, Any] = field(default_factory=dict)
+    profile: Mapping[str, Any] = field(default_factory=dict)
+
+    def services(self) -> frozenset[str]:
+        raw = self.service
+        if raw is None:
+            return frozenset()
+        items = [raw] if isinstance(raw, str | Service) else list(raw)
+        return frozenset(s.name if isinstance(s, Service) else s for s in items)
+
+    def to_query(self, filterable: frozenset[str]) -> SearchQuery:
+        regions = {
+            name: values
+            for name, values in (
+                ("lifecycle", _values(self.lifecycle)),
+                ("standing", _values(self.standing)),
+                ("auth", _values(self.auth)),
+                ("availability", _values(self.availability)),
+            )
+            if values
+        }
+        unknown = set(self.profile) - filterable
+        if unknown:
+            raise ValidationFailed(f"поля профиля не в filterable_profile: {', '.join(sorted(unknown))}")
+        clash = set(self.labels) & filterable
+        if clash:
+            raise ValidationFailed(
+                f"метки совпадают с filterable_profile, фильтр неоднозначен: {', '.join(sorted(clash))}"
+            )
+        filters = {key: frozenset({str(value)}) for key, value in {**self.labels, **self.profile}.items()}
+        return SearchQuery(
+            services=self.services(),
+            regions=regions,
+            tags=frozenset(self.tags),
+            filters=filters,
+        )
+
+
+class Identities(Namespace):
+    """Identity пространства: `space.identities`."""
+
+    __slots__ = ()
+
+    # ------------------------------------------------------------------ чтение
+
+    async def get(self, identity_id: UUID) -> Identity:
+        """Identity этого пространства; нет или в другом пространстве — `NotFound`."""
+        identity = await self.find(identity_id)
+        if identity is None:
+            raise NotFound("identity", identity_id)
+        return identity
+
+    async def find(
+        self,
+        identity_id: UUID | None = None,
+        *,
+        service: str | Service | None = None,
+        external_ref: str | None = None,
+    ) -> Identity | None:
+        """Identity по id или по паре `(service, external_ref)`; нет в этом пространстве — `None`."""
+        by_ref = service is not None or external_ref is not None
+        if (identity_id is None) == (not by_ref) or (by_ref and (service is None or external_ref is None)):
+            raise ValidationFailed("укажите identity_id или пару service и external_ref")
+        async with self._space._tx(own=True) as tx:
+            if identity_id is None:
+                assert service is not None and external_ref is not None
+                name = service.name if isinstance(service, Service) else service
+                found = (await tx.find_by_refs([(name, external_ref)])).get((name, external_ref))
+                if found is None or found[1] != tx.space.id:
+                    return None
+                identity_id = found[0]
+            row = await tx.get_identity(identity_id)
+        return None if row is None else Identity.from_row(row)
+
+    async def get_by_ref(self, service: str | Service, external_ref: str) -> Identity:
+        """Identity по `(service, external_ref)` или `NotFound`."""
+        identity = await self.find(service=service, external_ref=external_ref)
+        if identity is None:
+            name = service.name if isinstance(service, Service) else service
+            raise NotFound("identity", f"{name}:{external_ref}")
+        return identity
+
+    async def card(self, identity_id: UUID) -> IdentityCard:
+        """Полная карточка: регионы, верификации, аренда, прокси, квоты, `eligible`, `blockers`."""
+        return await self._space._identity_card(identity_id)
+
+    async def search(
+        self,
+        query: str | SearchQuery = "",
+        *,
+        limit: int = 50,
+        after: str | None = None,
+        count: bool = False,
+    ) -> Page[Identity]:
+        """Поиск по строке запроса (синтаксис — руководство, раздел «Поиск»)."""
+        return await self._page(parse_query(query) if isinstance(query, str) else query, limit, after, count)
+
+    async def list(
+        self,
+        where: IdentityFilter | None = None,
+        *,
+        limit: int = 50,
+        after: str | None = None,
+        count: bool = False,
+    ) -> Page[Identity]:
+        """Страница по структурированному фильтру; порядок — от новых к старым."""
+        return await self._page(self._query(where), limit, after, count)
+
+    async def count(self, where: IdentityFilter | None = None) -> int:
+        """Число identity по фильтру (точное до `COUNT_CAP`)."""
+        flt = self._space._search_filter(self._query(where))
+        async with self._space._tx(own=True) as tx:
+            _rows, total = await tx.search_identities(flt, limit=1, after=None, count_limit=COUNT_CAP)
+        assert total is not None
+        return total
+
+    # ------------------------------------------------------------------ служебное
+
+    def _query(self, where: IdentityFilter | None) -> SearchQuery:
+        if where is None:
+            return SearchQuery()
+        names = where.services()
+        services = [s for s in self._space.hub.services if not names or s.name in names]
+        filterable = frozenset().union(*(s.filterable_profile for s in services)) if services else frozenset()
+        return where.to_query(frozenset(filterable))
+
+    async def _page(self, query: SearchQuery, limit: int, after: str | None, count: bool) -> Page[Identity]:
+        found = await self._space._search(query, limit=limit, after=after, count=count)
+        return Page([Identity.from_row(row) for row in found.items], found.next_cursor, found.total)

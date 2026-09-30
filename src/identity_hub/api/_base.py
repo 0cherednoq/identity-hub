@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import warnings
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from identity_hub.api._migration import LEGACY
@@ -10,7 +12,7 @@ from identity_hub.api._migration import LEGACY
 if TYPE_CHECKING:
     from identity_hub.hub import SpaceHandle
 
-__all__ = ["Namespace", "warn_deprecated"]
+__all__ = ["Namespace", "legacy", "warn_deprecated"]
 
 
 class Namespace:
@@ -36,3 +38,20 @@ def warn_deprecated(old: str, *, stacklevel: int = 3) -> None:
         DeprecationWarning,
         stacklevel=stacklevel,
     )
+
+
+def legacy[**P, R](impl: Callable[P, R], old: str) -> Callable[P, R]:
+    """Публичный алиас старого имени над приватной реализацией: предупреждает и делегирует.
+
+    Код библиотеки вызывает приватную реализацию или неймспейс, поэтому предупреждение видит
+    только внешний вызывающий код.
+    """
+    LEGACY[old]  # опечатка в имени ломает импорт модуля, а не первый вызов
+
+    @functools.wraps(impl)
+    def alias(*args: P.args, **kwargs: P.kwargs) -> R:
+        warn_deprecated(old)
+        return impl(*args, **kwargs)
+
+    alias.__name__ = alias.__qualname__ = old
+    return alias

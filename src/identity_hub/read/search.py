@@ -16,6 +16,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.errors import ValidationFailed
 from identity_hub.service import Service
@@ -295,7 +296,7 @@ class SearchMixin(SpaceBase):
             truncated=len(rows) > limit,
         )
 
-    async def search(
+    async def _search(
         self,
         query: str | SearchQuery = "",
         *,
@@ -316,6 +317,8 @@ class SearchMixin(SpaceBase):
         page = rows[:limit]
         next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
         return SearchPage(items=page, next_cursor=next_cursor, total=total)
+
+    search = legacy(_search, "search")
 
     async def account_search(
         self,

@@ -37,7 +37,7 @@
 | `space.expire_verifications` | `space.maintenance.expire_verifications` | — |  |
 | `space.get_proxy` | `space.proxies.get` | — |  |
 | `space.human_queue` | `space.admin.human_queue` | — |  |
-| `space.identity_card` | `space.identities.card` | — | Состояние, квоты, аренда, blockers; лёгкий объект — `identities.get` |
+| `space.identity_card` | `space.identities.card` | I8.2 | Состояние, квоты, аренда, blockers; лёгкий объект — `identities.get` |
 | `space.impact_of` | `space.links.impact` | — |  |
 | `space.import_files` | `space.imports.run_files` | — |  |
 | `space.import_many` | `space.imports.run` | — | Параметры и `ImportReport` без изменений; для простого атомарного создания — `identities.create_many` |
@@ -84,7 +84,7 @@
 | `space.run_login` | `space.auth.login` | — | Возвращает `LoginOutcome` (`StrEnum`, значения прежние) |
 | `space.run_logins` | `space.auth.login_many` | — |  |
 | `space.save_data` | `space.data.save` | — |  |
-| `space.search` | `space.identities.search` | — |  |
+| `space.search` | `space.identities.search` | I8.2 |  |
 | `space.set_attributes` | `space.identities.replace_attributes` | — | Полная замена, как и раньше |
 | `space.set_labels` | `space.identities.replace_labels` | — | Полная замена; для слияния — `identities.update(labels=...)` |
 | `space.set_lifecycle` | `space.identities.set_lifecycle` | — |  |
@@ -98,3 +98,13 @@
 | `space.update_profile` | `space.identities.update` | — | Слияние; `replace=True` → `identities.replace_profile` |
 | `space.update_session` | `space.secrets.replace_session` | — | Вне аренды; под арендой — `lease.save_session` |
 | `space.verification_status` | `space.verifications.status` | — |  |
+
+## Новое без старого аналога
+
+| Метод | Готово | Что делает |
+|---|---|---|
+| `space.identities.get(id)` | I8.2 | `Identity` без секретов или `NotFound` |
+| `space.identities.find(id)` / `find(service=, external_ref=)` | I8.2 | `Identity` или `None` |
+| `space.identities.get_by_ref(service, ref)` | I8.2 | `Identity` или `NotFound` |
+| `space.identities.list(IdentityFilter(...))` | I8.2 | страница по структурированному фильтру |
+| `space.identities.count(IdentityFilter(...))` | I8.2 | число identity по фильтру |

@@ -34,7 +34,7 @@ Scope зафиксирован решением `D-142`. Задачи — в
 | IMP-20 | `run_once(limit)` для фоновых работ | I5.2 | partial | planned: `tests/pg/test_workers.py::test_run_once_respects_limit`. Сейчас `Dispatcher.run_once()` без `limit` и без фасада `hub.workers` |
 | IMP-21 | Ordered outbox | I5.3 | missing | planned: `tests/pg/test_ordered_outbox.py::test_next_revision_waits` |
 | IMP-22 | RuntimeProfile | — | deferred | post-v1, отдельный запрос владельца |
-| IMP-23 | Публичное API: неймспейсы и глаголы | I8.1–I8.10 | partial | `tests/test_space_surface.py::test_space_surface_allowlist`, `tests/test_space_surface.py::test_migration_doc_matches_legacy_map`. Каркас и карта миграции готовы (I8.1), неймспейсов ещё нет |
+| IMP-23 | Публичное API: неймспейсы и глаголы | I8.1–I8.10 | partial | `tests/test_space_surface.py::test_space_surface_allowlist`, `tests/test_space_surface.py::test_migration_doc_matches_legacy_map`. Готовы каркас (I8.1) и чтение `space.identities` (I8.2) |
 
 ## Baseline перед очередью (2026-09-30)
 

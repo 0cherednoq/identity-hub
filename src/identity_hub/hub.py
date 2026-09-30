@@ -6,12 +6,14 @@ from collections import Counter
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import cached_property
 from typing import TYPE_CHECKING
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from identity_hub._space import SpaceBase
 from identity_hub.admin_audit import AdminAuditMixin
+from identity_hub.api.identities import Identities
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
@@ -285,3 +287,8 @@ class SpaceHandle(
 
     Операции разложены по миксинам: регионы — `state.StateMixin`, далее по задачам плана.
     """
+
+    @cached_property
+    def identities(self) -> Identities:
+        """Identity пространства: чтение, создание, изменение (IMP-23)."""
+        return Identities(self)
