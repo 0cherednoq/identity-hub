@@ -25,7 +25,7 @@ from identity_hub.domain import regions as machine
 from identity_hub.domain.region_specs import PROXY_HEALTH
 from identity_hub.domain.regions import Change, Command, Observation, Outcome, RegionDecision, RegionState
 from identity_hub.enums import ChangeSource, ProxyStatus
-from identity_hub.errors import ConcurrentModification, NotFound, ValidationFailed
+from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.store.base import NewProxy, ProxyRow, StoreTx
 
@@ -328,6 +328,41 @@ class ProxiesMixin(SpaceBase):
                 extra = {"next_check_at": await tx.now() + self.proxy_health.base_backoff}
             change = machine.Override(to=str(status), reason=reason, actor=actor, pin_for=pin_for)
             return (await self._apply(tx, row, change, extra)).state.state
+
+    async def rebind_proxy(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
+        """Move an account's sticky binding without exceeding target capacity."""
+        if not reason.strip():
+            raise ValidationFailed("proxy rebind requires a reason")
+        async with self._tx() as tx:
+            identity = await tx.get_identity(identity_id)
+            if identity is None:
+                raise NotFound("identity", identity_id)
+            target = await self._proxy(tx, proxy_id)
+            if target.status != ProxyStatus.ALIVE:
+                raise ValidationFailed("target proxy must be alive")
+            result = await tx.rebind_proxy(identity_id, proxy_id)
+            if result is None:
+                raise LeaseUnavailable("target proxy has no available capacity")
+            previous, claimed = result
+            if previous == claimed.id:
+                return False
+            await self._emit(
+                tx,
+                EventDraft(
+                    "proxy.binding.changed",
+                    actor=actor,
+                    service=identity.service,
+                    identity_id=identity_id,
+                    proxy_id=claimed.id,
+                    data={
+                        "from_proxy_id": str(previous) if previous else None,
+                        "to_proxy_id": str(claimed.id),
+                        "reason": reason,
+                        "pool": claimed.pool,
+                    },
+                ),
+            )
+            return True
 
     async def _apply(
         self, tx: StoreTx, row: ProxyRow, change: Change, extra: dict[str, Any]

@@ -64,6 +64,8 @@ __all__ = [
     "IdentityHubBase",
     "IdentityLinkRecord",
     "IdentityRecord",
+    "ImportItemRecord",
+    "ImportRunRecord",
     "LeaseHistoryRecord",
     "LeaseLogRecord",
     "LeaseRecord",
@@ -71,12 +73,17 @@ __all__ = [
     "NotificationRecord",
     "NotificationRuleRecord",
     "OperationKeyRecord",
+    "ProviderOperationRecord",
     "ProxyRecord",
     "QuotaUsageRecord",
     "RegionStateRecord",
     "ServiceRecord",
     "SessionRecord",
     "SpaceRecord",
+    "StateSnapshotCoverageRecord",
+    "StateSnapshotRecord",
+    "StatsMetricBatchRecord",
+    "StatsRollupRecord",
     "VerificationRecord",
     "WebhookDeliveryRecord",
     "WebhookEndpointRecord",
@@ -146,6 +153,7 @@ class SpaceRecord(IdentityHubBase):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
     slug: Mapped[str] = mapped_column(String(64), unique=True)
     title: Mapped[str] = mapped_column(String(200))
+    timezone: Mapped[str] = mapped_column(String(64), server_default=text("'UTC'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -158,6 +166,88 @@ class ServiceRecord(IdentityHubBase):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ImportRunRecord(IdentityHubBase):
+    """Durable, secret-free progress and report for one admin import."""
+
+    __tablename__ = "ih_import_runs"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
+    space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
+    service: Mapped[str] = mapped_column(ForeignKey("ih_services.name", ondelete="RESTRICT"))
+    actor: Mapped[str] = mapped_column(String(256))
+    source: Mapped[str] = mapped_column(String(256))
+    state: Mapped[str] = mapped_column(String(16), default="pending", server_default=text("'pending'"))
+    on_existing: Mapped[str] = mapped_column(String(24), default="skip", server_default=text("'skip'"))
+    verify_sessions: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    labels: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    total: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    processed: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    updated: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    skipped: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    failed: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    report: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_ih_import_runs_id_space"),
+        CheckConstraint(
+            "state IN ('pending', 'running', 'succeeded', 'failed', 'cancelling', 'cancelled')",
+            name="state_valid",
+        ),
+        CheckConstraint("on_existing IN ('skip', 'update_session', 'fail')", name="on_existing_valid"),
+        CheckConstraint(
+            "total >= 0 AND processed >= 0 AND created >= 0 AND updated >= 0 "
+            "AND skipped >= 0 AND failed >= 0",
+            name="counts_nonnegative",
+        ),
+        Index("ix_ih_import_runs_space_started", "space_id", "started_at"),
+        Index(
+            "ix_ih_import_runs_active",
+            "updated_at",
+            postgresql_where=text("state IN ('pending', 'running', 'cancelling')"),
+        ),
+    )
+
+
+class ImportItemRecord(EncryptedPayloadMixin, IdentityHubBase):
+    """Encrypted normalized input retained only while its import can resume."""
+
+    __tablename__ = "ih_import_items"
+
+    run_id: Mapped[UUID] = mapped_column(primary_key=True)
+    position: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    space_id: Mapped[UUID]
+    state: Mapped[str] = mapped_column(String(16), default="pending", server_default=text("'pending'"))
+    claim_token: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    claimed_by: Mapped[str | None] = mapped_column(String(256))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "space_id"],
+            ["ih_import_runs.id", "ih_import_runs.space_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("position >= 0", name="position_nonnegative"),
+        CheckConstraint(
+            "state IN ('pending', 'running', 'succeeded', 'skipped', 'failed')",
+            name="state_valid",
+        ),
+        Index(
+            "ix_ih_import_items_claim",
+            "run_id",
+            "position",
+            postgresql_where=text("state IN ('pending', 'running')"),
+        ),
+    )
 
 
 # ---------------------------------------------------------------- идентичности
@@ -605,6 +695,8 @@ class LeaseHistoryRecord(IdentityHubBase):
         ),
         Index("ix_ih_lease_history_identity", "identity_id", "acquired_at"),
         Index("ix_ih_lease_history_space_acquired", "space_id", "acquired_at"),
+        Index("ix_ih_lease_history_space_released", "space_id", "released_at"),
+        Index("ix_ih_lease_history_space_holder_acquired", "space_id", "holder", "acquired_at"),
         Index(
             "ix_ih_lease_history_open",
             "last_heartbeat_at",
@@ -679,6 +771,50 @@ class OperationKeyRecord(IdentityHubBase):
     __table_args__ = (
         _identity_fk(),
         Index("ix_ih_operation_keys_created_at", "created_at"),
+    )
+
+
+class ProviderOperationRecord(IdentityHubBase):
+    """Durable claim/call/apply state for login, refresh and probe adapters."""
+
+    __tablename__ = "ih_provider_operations"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
+    space_id: Mapped[UUID]
+    identity_id: Mapped[UUID]
+    kind: Mapped[str] = mapped_column(String(128))
+    state: Mapped[str] = mapped_column(String(16), default="pending", server_default=text("'pending'"))
+    attempt: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    claim_id: Mapped[UUID | None]
+    claim_token: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    claimed_by: Mapped[str | None] = mapped_column(String(256))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        _identity_fk(),
+        CheckConstraint("attempt >= 0 AND claim_token >= 0", name="counters_nonnegative"),
+        CheckConstraint(
+            "state IN ('pending', 'running', 'retryable', 'succeeded', 'failed', 'cancelled')",
+            name="state_valid",
+        ),
+        Index(
+            "ix_ih_provider_operations_claim",
+            "available_at",
+            postgresql_where=text("state IN ('pending', 'retryable')"),
+        ),
+        Index("ix_ih_provider_operations_identity", "identity_id", "created_at"),
+        Index(
+            "ix_ih_provider_operations_stale",
+            "claim_expires_at",
+            postgresql_where=text("state = 'running'"),
+        ),
     )
 
 
@@ -783,6 +919,7 @@ class EventRecord(IdentityHubBase):
         _enum_check("severity", Severity),
         Index("ix_ih_events_cursor", "tx_id", "id", postgresql_where=text("external")),
         Index("ix_ih_events_identity", "identity_id", "occurred_at"),
+        Index("ix_ih_events_identity_type_occurred", "identity_id", "type", "occurred_at"),
         Index("ix_ih_events_space_occurred", "space_id", "occurred_at"),
         Index("ix_ih_events_type", "space_id", "type", "occurred_at"),
     )
@@ -800,6 +937,107 @@ class EventCursorRecord(IdentityHubBase):
     last_tx_id: Mapped[str] = mapped_column(XID8, server_default=text("'0'::xid8"))
     last_id: Mapped[int] = mapped_column(BigInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StatsRollupRecord(IdentityHubBase):
+    """Absolute event aggregates; unique keys make dispatcher retries idempotent."""
+
+    __tablename__ = "ih_stats_rollup"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
+    service: Mapped[str] = mapped_column(String(64), default="")
+    metric: Mapped[str] = mapped_column(String(128))
+    dims: Mapped[dict[str, str]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    bucket_size: Mapped[str] = mapped_column(String(2))
+    value: Mapped[float] = mapped_column(Float, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bucket_size IN ('1m', '1h', '1d')", name="bucket_size_valid"),
+        UniqueConstraint(
+            "space_id",
+            "service",
+            "metric",
+            "dims",
+            "bucket_start",
+            "bucket_size",
+            name="uq_ih_stats_rollup_key",
+        ),
+        Index(
+            "ix_ih_stats_rollup_series",
+            "space_id",
+            "metric",
+            "bucket_size",
+            "bucket_start",
+        ),
+        Index(
+            "ix_ih_stats_rollup_minute_retention",
+            "bucket_start",
+            postgresql_where=text("bucket_size = '1m'"),
+        ),
+    )
+
+
+class StatsMetricBatchRecord(IdentityHubBase):
+    """Exactly-once receipt for one process-local buffered MetricsHook flush."""
+
+    __tablename__ = "ih_stats_metric_batches"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StateSnapshotCoverageRecord(IdentityHubBase):
+    """One explicit coverage marker per space/hour, including empty spaces."""
+
+    __tablename__ = "ih_state_snapshot_coverage"
+
+    space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"), primary_key=True)
+    taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    source: Mapped[str] = mapped_column(String(16))
+    complete: Mapped[bool] = mapped_column(default=True)
+
+
+class StateSnapshotRecord(IdentityHubBase):
+    """Count for one service/region/state in an explicitly covered hour."""
+
+    __tablename__ = "ih_state_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    space_id: Mapped[UUID]
+    service: Mapped[str] = mapped_column(String(64))
+    region: Mapped[str] = mapped_column(String(192))
+    state: Mapped[str] = mapped_column(String(64))
+    taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    count: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        CheckConstraint("count >= 0", name="count_nonnegative"),
+        ForeignKeyConstraint(
+            ["space_id", "taken_at"],
+            ["ih_state_snapshot_coverage.space_id", "ih_state_snapshot_coverage.taken_at"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "space_id",
+            "service",
+            "region",
+            "state",
+            "taken_at",
+            name="uq_ih_state_snapshots_key",
+        ),
+        Index(
+            "ix_ih_state_snapshots_series",
+            "space_id",
+            "region",
+            "taken_at",
+        ),
+    )
 
 
 # ---------------------------------------------------------------- исходящие вебхуки

@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from identity_hub._space import logger
@@ -30,6 +31,14 @@ BatchHandler = Callable[[list[Event]], Awaitable[None]]
 class Consumer:
     name: str  # имя курсора в ih_event_cursors
     handler: BatchHandler
+    external_only: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerRuntime:
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    retrying: bool = False
 
 
 class Dispatcher:
@@ -38,14 +47,16 @@ class Dispatcher:
         self.poll_interval = poll_interval
         self.batch_size = batch_size
         self._consumers: dict[str, Consumer] = {}
+        self._runtime: dict[str, ConsumerRuntime] = {}
         self._pumps: list[Callable[[], Awaitable[int]]] = []
 
     # --------------------------------------------------------- регистрация
 
-    def add_consumer(self, name: str, handler: BatchHandler) -> None:
+    def add_consumer(self, name: str, handler: BatchHandler, *, include_internal: bool = False) -> None:
         if name in self._consumers:
             raise ValueError(f"потребитель {name} уже зарегистрирован")
-        self._consumers[name] = Consumer(name, handler)
+        self._consumers[name] = Consumer(name, handler, not include_internal)
+        self._runtime[name] = ConsumerRuntime()
 
     def add_pump(self, handler: Callable[[], Awaitable[int]]) -> None:
         """Добавить обработчик due-очереди, запускаемый даже без новых событий."""
@@ -66,19 +77,30 @@ class Dispatcher:
     def consumers(self) -> tuple[str, ...]:
         return tuple(self._consumers)
 
+    @property
+    def runtime(self) -> dict[str, ConsumerRuntime]:
+        return dict(self._runtime)
+
     # --------------------------------------------------------- работа
 
     async def run_once(self) -> int:
         """Одна пачка на каждого потребителя; возвращает число обработанных событий."""
         total = 0
         for consumer in list(self._consumers.values()):
+            attempted_at = self.hub.clock.now()
+            self._runtime[consumer.name] = replace(self._runtime[consumer.name], last_attempt_at=attempted_at)
             try:
                 handled = await self.hub.store.process_events(
-                    consumer.name, consumer.handler, limit=self.batch_size
+                    consumer.name,
+                    consumer.handler,
+                    limit=self.batch_size,
+                    external_only=consumer.external_only,
                 )
             except Exception:
+                self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)
                 logger.exception("потребитель %s упал; пачка будет повторена", consumer.name)
                 continue
+            self._runtime[consumer.name] = ConsumerRuntime(attempted_at, self.hub.clock.now(), False)
             total += handled or 0
         for pump in self._pumps:
             try:

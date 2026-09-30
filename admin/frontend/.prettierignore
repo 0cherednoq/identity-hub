@@ -1,0 +1,3 @@
+node_modules
+../src/identity_hub_admin/static
+package-lock.json

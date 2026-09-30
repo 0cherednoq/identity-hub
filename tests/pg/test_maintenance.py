@@ -18,10 +18,12 @@ from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import (
     EventRecord,
     IdentityRecord,
+    ImportRunRecord,
     LeaseHistoryRecord,
     LeaseLogRecord,
     LeaseRecord,
     OperationKeyRecord,
+    ProviderOperationRecord,
     QuotaUsageRecord,
     WebhookDeliveryRecord,
 )
@@ -124,6 +126,42 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
         await session.execute(update(LeaseHistoryRecord).values(released_at=old))
         await session.execute(update(EventRecord).values(occurred_at=old))
         await session.execute(update(WebhookDeliveryRecord).values(created_at=old))
+        await session.execute(
+            insert(ImportRunRecord).values(
+                space_id=ref.id,
+                service="fake_tg",
+                actor="admin:test",
+                source="old.jsonl",
+                state="succeeded",
+                finished_at=old,
+            )
+        )
+        await session.execute(
+            insert(ImportRunRecord).values(
+                space_id=ref.id,
+                service="fake_tg",
+                actor="admin:test",
+                source="active.jsonl",
+                state="running",
+            )
+        )
+        await session.execute(
+            insert(ProviderOperationRecord).values(
+                space_id=ref.id,
+                identity_id=identity_id,
+                kind="probe:auth",
+                state="succeeded",
+                finished_at=old,
+            )
+        )
+        await session.execute(
+            insert(ProviderOperationRecord).values(
+                space_id=ref.id,
+                identity_id=identity_id,
+                kind="login",
+                state="running",
+            )
+        )
 
     report = await hub.maintenance.run_all()
 
@@ -133,6 +171,8 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
     assert report.counts["lease_history"] == 1
     assert report.counts["webhook_deliveries"] == 1
     assert report.counts["events"] >= 1
+    assert report.counts["import_runs"] == 1
+    assert report.counts["provider_operations"] == 1
     async with sessionmaker() as session:
         for model in (
             QuotaUsageRecord,
@@ -143,3 +183,7 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
             EventRecord,
         ):
             assert (await session.execute(select(func.count()).select_from(model))).scalar_one() == 0
+        assert (await session.execute(select(func.count()).select_from(ImportRunRecord))).scalar_one() == 1
+        assert (
+            await session.execute(select(func.count()).select_from(ProviderOperationRecord))
+        ).scalar_one() == 1

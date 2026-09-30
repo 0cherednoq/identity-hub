@@ -79,6 +79,21 @@ async def test_full_kyc_cycle(space: SpaceHandle, sessionmaker: async_sessionmak
             if e.type == "identity.verification.changed"
         ]
     assert ("kyc_id", "under_review") in events and ("kyc_id", "verified") in events
+    async with sessionmaker() as s:
+        tier_events = [
+            (event.type, event.data["tier"], event.data["factor"])
+            for event in (
+                await s.execute(
+                    select(EventRecord).where(
+                        EventRecord.type.in_(("identity.tier.reached", "identity.tier.lost"))
+                    )
+                )
+            ).scalars()
+        ]
+    assert tier_events == [
+        ("identity.tier.reached", "basic", "email"),
+        ("identity.tier.reached", "full", "kyc_id"),
+    ]
 
 
 async def test_reject_attempts_and_revocation(

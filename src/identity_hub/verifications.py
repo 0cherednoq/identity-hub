@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ from identity_hub.domain.verification import (
     VerificationDecision,
     VerificationFlow,
     VerificationStatus,
+    achieved_tiers,
     effective_factors,
     verified_factors_after,
 )
@@ -67,6 +68,7 @@ async def apply_verification(
             verified_at=row.verified_at if row else None,
         )
         verified = effective_factors(identity.verified_factors, service.factor_names)
+        tiers_before = achieved_tiers(verified, service.tiers)
         decision = step(flow, status, verified, now)
         if not decision.changed and evidence is None:
             return decision
@@ -89,23 +91,53 @@ async def apply_verification(
             evidence,
         )
         factors = sorted(verified_factors_after(identity.verified_factors, factor, new.state))
+        tiers_after = achieved_tiers(factors, service.tiers)
         if factors != sorted(identity.verified_factors):
             await tx.update_identity(identity_id, {"verified_factors": factors})
+        actor_name = (
+            decision.region.state.changed_by
+            if decision.region is not None and decision.region.state.changed_by
+            else actor
+        )
+        drafts = [
+            EventDraft(
+                "identity.tier.reached",
+                actor=actor_name,
+                data={"tier": tier, "factor": factor},
+                service=identity.service,
+                identity_id=identity_id,
+                lease_id=lease_id,
+            )
+            for tier in sorted(tiers_after - tiers_before)
+        ]
+        drafts.extend(
+            EventDraft(
+                "identity.tier.lost",
+                actor=actor_name,
+                data={"tier": tier, "factor": factor},
+                service=identity.service,
+                identity_id=identity_id,
+                lease_id=lease_id,
+            )
+            for tier in sorted(tiers_before - tiers_after)
+        )
         if decision.region is not None and decision.region.events:
+            drafts[:0] = [
+                EventDraft(
+                    e.type,
+                    actor=decision.region.state.changed_by or actor,
+                    data={**e.data, "attempts": new.attempts},
+                    severity=e.severity,
+                    service=identity.service,
+                    identity_id=identity_id,
+                    lease_id=lease_id,
+                )
+                for e in decision.region.events
+            ]
+        if drafts:
             await space._emit(
                 tx,
-                *(
-                    EventDraft(
-                        e.type,
-                        actor=decision.region.state.changed_by or actor,
-                        data={**e.data, "attempts": new.attempts},
-                        severity=e.severity,
-                        service=identity.service,
-                        identity_id=identity_id,
-                        lease_id=lease_id,
-                    )
-                    for e in decision.region.events
-                ),
+                *drafts,
             )
         return decision
     raise ConcurrentModification("verification", f"{identity_id}/{factor}")
@@ -222,6 +254,47 @@ class VerificationsMixin(SpaceBase):
                 )
             ).status
 
+    async def review_verification(
+        self,
+        identity_id: UUID,
+        factor: str,
+        action: Literal["approve", "reject", "abandon"],
+        *,
+        actor: str,
+        reason: str,
+        code: str | None = None,
+    ) -> VerificationStatus:
+        """Apply a human verification decision without exposing encrypted evidence."""
+        if not actor.strip() or not reason.strip():
+            raise ValidationFailed("actor and reason are required for manual verification")
+
+        def step(
+            flow: VerificationFlow,
+            status: VerificationStatus,
+            verified: frozenset[str],
+            now: datetime,
+        ) -> VerificationDecision:
+            del verified
+            if action == "approve":
+                return flow.approve(status, now, actor, reason)
+            if action == "reject":
+                if not code:
+                    raise ValidationFailed("verification reject code is required")
+                return flow.reject(status, code, now, actor, reason)
+            return flow.abandon(status, now, actor, reason)
+
+        async with self._tx() as tx:
+            return (
+                await apply_verification(
+                    self,
+                    tx,
+                    identity_id,
+                    factor,
+                    step,
+                    actor=actor,
+                )
+            ).status
+
     async def expire_verifications(self, *, limit: int = 100) -> int:
         """Истёкшие сроки: verified → expired, pending → missing (ТЗ §8.9, обслуживание)."""
         async with self._tx(own=True) as tx:
@@ -264,14 +337,24 @@ class RequirementsMixin(SpaceBase):
             await self._requirement_event(tx, row, "identity.requirement.added", item, actor)
             return True
 
-    async def resolve_requirement(self, identity_id: UUID, code: str, *, actor: str = "platform") -> bool:
-        async with self._tx(own=True) as tx:
+    async def resolve_requirement(
+        self, identity_id: UUID, code: str, *, actor: str = "platform", reason: str | None = None
+    ) -> bool:
+        # Resolution is an operator command and must join a caller transaction
+        # (the admin command gateway holds the identity revision lock there).
+        async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
             rest = [r for r in row.requirements if r.get("code") != code]
             if len(rest) == len(row.requirements):
                 return False
             await tx.update_identity(identity_id, {"requirements": rest})
-            await self._requirement_event(tx, row, "identity.requirement.resolved", {"code": code}, actor)
+            await self._requirement_event(
+                tx,
+                row,
+                "identity.requirement.resolved",
+                {"code": code, "reason": reason},
+                actor,
+            )
             return True
 
     async def _requirement_event(

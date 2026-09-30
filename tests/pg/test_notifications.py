@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from identity_hub.dispatch.notifications import TelegramRateLimited
+from identity_hub.dispatch.notifications import TelegramRateLimited, TelegramRejected
 from identity_hub.enums import Severity
 from identity_hub.events import EventDraft
 from identity_hub.hub import IdentityHub, SpaceHandle
@@ -136,6 +136,26 @@ async def test_digest_accumulates_one_open_notification(
     assert await hub.notification_dispatcher.deliver_due() == 1
     assert len(transport.sent) == 1
     assert transport.sent[0]["text"].count("identity.standing.changed") == 2
+
+
+async def test_telegram_rejection_is_dead_without_retries(
+    hub: IdentityHub,
+    space: SpaceHandle,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    transport = FakeTelegramTransport()
+    transport.failures.append(TelegramRejected(403, "HTTP 403: Forbidden: bot was blocked by the user"))
+    await _setup(hub, space, transport)
+    identity = await space.register(service="fake_tg", external_ref="+14")
+    await _standing_event(space, identity.identity_id, "banned")
+
+    await hub.dispatcher.run_once()
+
+    async with sessionmaker() as session:
+        notification = (await session.execute(select(NotificationRecord))).scalar_one()
+    assert notification.status == "dead" and notification.attempt == 1
+    assert notification.error == "TelegramRejected: HTTP 403: Forbidden: bot was blocked by the user"
+    assert transport.sent == []
 
 
 async def test_telegram_429_uses_retry_after(

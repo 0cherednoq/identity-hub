@@ -86,10 +86,17 @@ class TransitionNotAllowed(IdentityHubError):
 class ConcurrentModification(IdentityHubError):
     """Оптимистическая блокировка: запись изменена параллельно."""
 
-    def __init__(self, entity: str, key: object, expected_version: int | None = None) -> None:
+    def __init__(
+        self,
+        entity: str,
+        key: object,
+        expected_version: int | None = None,
+        actual_version: int | None = None,
+    ) -> None:
         self.entity = entity
         self.key = key
         self.expected_version = expected_version
+        self.actual_version = actual_version
         super().__init__(f"{entity} {key} изменён параллельно (ожидалась версия {expected_version})")
 
 

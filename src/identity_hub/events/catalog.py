@@ -49,10 +49,13 @@ def _specs() -> dict[str, EventSpec]:
             ("identity.standing.changed", Severity.INFO),
             ("identity.auth.changed", Severity.INFO),
             ("identity.verification.changed", Severity.INFO),
+            ("identity.tier.reached", Severity.INFO),
+            ("identity.tier.lost", Severity.WARNING),
             ("identity.requirement.added", Severity.WARNING),
             ("identity.requirement.resolved", Severity.INFO),
             ("identity.availability.changed", Severity.INFO),
             ("identity.state.overridden", Severity.WARNING),
+            ("identity.state.unpinned", Severity.WARNING),
             ("identity.state.drift", Severity.WARNING),
         ],
         "login": [
@@ -64,6 +67,7 @@ def _specs() -> dict[str, EventSpec]:
         ],
         "secrets": [
             ("identity.credentials.updated", Severity.INFO),
+            ("identity.session.updated", Severity.INFO),
             ("identity.secret.revealed", Severity.WARNING),
             ("identity.linked", Severity.INFO),
             ("identity.unlinked", Severity.INFO),
@@ -80,6 +84,13 @@ def _specs() -> dict[str, EventSpec]:
             ("worker.leases_lost", Severity.WARNING),
         ],
         "delivery": [("webhook.endpoint.disabled", Severity.CRITICAL)],
+        "admin": [
+            ("admin.bulk.executed", Severity.INFO),
+            ("admin.accounts.exported", Severity.INFO),
+            ("admin.events.exported", Severity.INFO),
+            ("admin.integration.changed", Severity.INFO),
+            ("admin.import.changed", Severity.INFO),
+        ],
     }
     journal = [
         "lease.acquired",

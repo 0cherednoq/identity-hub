@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+import json
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
+from uuid import UUID
 
 import httpx
 import pytest
@@ -14,11 +16,18 @@ from pydantic import BaseModel, SecretStr
 from identity_hub._ids import new_id
 from identity_hub.clock import FakeClock
 from identity_hub.crypto import Envelope, StaticSecretsProvider, associated_data
-from identity_hub.enums import Severity
+from identity_hub.domain.regions import Command, Observation
+from identity_hub.enums import Availability, Severity, Standing
+from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.hub import IdentityHub
+from identity_hub.read.background import classify_health
+from identity_hub.read.proxies import ProxyFilters
+from identity_hub.read.search import AccountSearchOptions
+from identity_hub.service import ProxyPolicy
+from identity_hub.state import Override
 from identity_hub.testing import MemoryStore
-from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG, TgCredentials
+from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG, KycEvidence, TgCredentials
 
 pytestmark = pytest.mark.anyio
 TEST_KEYS = {"k1": b"\x33" * 32, "k2": b"\x44" * 32}
@@ -95,6 +104,179 @@ async def test_public_register_mutate_search_and_lease(memory_hub: IdentityHub) 
     assert card.identity.note == "Проверить в пятницу"
     assert card.lease is None
     assert stats.count == 1
+
+
+async def test_service_catalog_is_deterministic_safe_and_scoped(memory_hub: IdentityHub) -> None:
+    visible = memory_hub.space("catalog-visible", "Catalog visible")
+    hidden = memory_hub.space("catalog-hidden", "Catalog hidden")
+    for space, suffix in ((visible, "visible"), (hidden, "hidden")):
+        await space.register(
+            service="fake_tg",
+            external_ref=f"catalog-{suffix}",
+            credentials={"phone": f"+100{suffix}"},
+            session={"auth_key": f"key-{suffix}", "dc_id": 2},
+        )
+
+    catalog = await memory_hub.service_catalog({"catalog-visible"})
+    assert [service.name for service in catalog] == ["fake_exchange", "fake_tg"]
+    telegram = next(service for service in catalog if service.name == "fake_tg")
+    assert telegram.total == 1
+    assert [(item.space_slug, item.count) for item in telegram.spaces] == [("catalog-visible", 1)]
+    credentials = next(schema for schema in telegram.schemas if schema.category == "credentials")
+    password = next(field for field in credentials.fields if field.name == "password")
+    assert password.kind == "secret" and password.sensitive
+    profile = next(schema for schema in telegram.schemas if schema.category == "profile")
+    assert next(field for field in profile.fields if field.name == "country").filterable
+    assert [operation.kind for operation in telegram.operations] == sorted(
+        operation.kind for operation in telegram.operations
+    )
+    exchange = next(service for service in catalog if service.name == "fake_exchange")
+    assert next(item for item in exchange.verifications if item.name == "kyc_id").evidence_required
+    rendered = json.dumps([asdict(item) for item in catalog], default=str)
+    assert "SecretStr" not in rendered
+    assert "KycEvidence" not in rendered
+    assert "function" not in rendered
+    assert "catalog-hidden" not in rendered
+
+
+async def test_background_health_distinguishes_all_states(memory_hub: IdentityHub) -> None:
+    now = memory_hub.clock.now()
+    assert classify_health(heartbeat_at=now, now=now, delayed_after=10, stopped_after=60) == "healthy"
+    assert (
+        classify_health(heartbeat_at=now - timedelta(seconds=20), now=now, delayed_after=10, stopped_after=60)
+        == "delayed"
+    )
+    assert (
+        classify_health(heartbeat_at=now, now=now, delayed_after=10, stopped_after=60, retrying=True)
+        == "retrying"
+    )
+    assert classify_health(heartbeat_at=None, now=now, delayed_after=10, stopped_after=60) == "stopped"
+
+    before = await memory_hub.background_snapshot({"catalog-visible"})
+    assert all(item.status != "healthy" for item in before.processes)
+    await memory_hub.dispatcher.run_once()
+    after = await memory_hub.background_snapshot({"catalog-visible"})
+    assert next(item for item in after.processes if item.name == "webhooks").status == "healthy"
+    stale = next(item for item in after.processes if item.name == "stale-probes")
+    assert stale.status == "stopped" and not stale.heartbeat_available
+
+
+async def test_lease_dashboard_clips_boundaries_and_uses_stable_cursor(
+    memory_hub: IdentityHub,
+) -> None:
+    clock = cast(FakeClock, memory_hub.clock)
+    boundary = memory_hub.space("lease-boundary", "Lease boundary")
+    await boundary.register(
+        service="fake_tg",
+        external_ref="boundary",
+        lifecycle="ready",
+        session={"auth_key": "fake", "dc_id": 1},
+    )
+    async with boundary.pool("workers", service="fake_tg", holder="worker-a").lease():
+        clock.advance(timedelta(minutes=20))
+    dashboard = await boundary.lease_dashboard(group_by="holder")
+    quarter = dashboard.windows[0]
+    assert quarter.acquired == 0
+    assert quarter.completed == 1
+    assert quarter.leased_seconds == 15 * 60
+    assert quarter.utilization == 1.0
+    assert dashboard.slices[0].value == "worker-a"
+
+    percentiles = memory_hub.space("lease-percentiles", "Lease percentiles")
+    await percentiles.register(
+        service="fake_tg",
+        external_ref="percentiles",
+        lifecycle="ready",
+        session={"auth_key": "fake", "dc_id": 1},
+    )
+    pool = percentiles.pool("p95", service="fake_tg", holder="worker-p95")
+    for seconds in range(1, 21):
+        async with pool.lease():
+            clock.advance(seconds)
+    p95 = (await percentiles.lease_dashboard()).windows[-1]
+    assert p95.completed == 20
+    assert p95.p95_seconds == pytest.approx(19.05)
+
+    first = await percentiles.lease_history_page(limit=7)
+    second = await percentiles.lease_history_page(limit=7, before=first.next_before)
+    assert len(first.items) == len(second.items) == 7
+    assert {item.lease_id for item in first.items}.isdisjoint(item.lease_id for item in second.items)
+
+
+async def test_overview_handles_empty_single_large_and_allowed_spaces(memory_hub: IdentityHub) -> None:
+    await memory_hub.space("empty", "Empty").ref()
+    single = memory_hub.space("single", "Single")
+    await single.register(
+        service="fake_tg",
+        external_ref="single",
+        lifecycle="ready",
+        auth_state="authenticated",
+    )
+    large = memory_hub.space("large", "Large")
+    for index in range(250):
+        await large.register(
+            service="fake_tg",
+            external_ref=f"large-{index:04d}",
+            lifecycle="ready" if index % 5 else "provisioning",
+            auth_state="authenticated",
+        )
+
+    matrix = await memory_hub.spaces_matrix({"empty", "single", "large"})
+    assert [(item.space.slug, item.total) for item in matrix.spaces] == [
+        ("empty", 0),
+        ("large", 250),
+        ("single", 1),
+    ]
+    assert next(item for item in matrix.spaces if item.space.slug == "large").eligible == 200
+    assert [space.slug for space in await memory_hub.list_spaces({"single"})] == ["single"]
+
+
+async def test_account_search_filters_and_equal_timestamp_keyset(memory_hub: IdentityHub) -> None:
+    space = memory_hub.space("accounts", "Accounts")
+    ids = []
+    for index in range(5):
+        result = await space.register(
+            service="fake_tg",
+            external_ref=f"account-{index}",
+            lifecycle="ready" if index != 4 else "provisioning",
+            auth_state="authenticated",
+            tags=["selected"] if index == 0 else [],
+        )
+        ids.append(result.identity_id)
+    await space.add_requirement(ids[0], "captcha")
+
+    eligible = await space.account_search(options=AccountSearchOptions(eligible=True))
+    assert len(eligible.items) == 4
+    requirement = await space.account_search(options=AccountSearchOptions(requirement="captcha"))
+    assert [item.id for item in requirement.items] == [ids[0]]
+    assert requirement.items[0].requirements == ("captcha",)
+    assert requirement.items[0].eligible is True
+    assert requirement.items[0].blockers == ()
+
+    seen: list[UUID] = []
+    cursor = None
+    while True:
+        page = await space.account_search(limit=2, after=cursor, count=cursor is None)
+        seen.extend(item.id for item in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    assert len(seen) == len(set(seen)) == 5
+    assert set(seen) == set(ids)
+
+    sorted_refs: list[str] = []
+    cursor = None
+    while True:
+        page = await space.account_search(
+            options=AccountSearchOptions(sort_by="external_ref", sort_desc=False),
+            limit=2,
+            after=cursor,
+        )
+        sorted_refs.extend(item.external_ref for item in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    assert sorted_refs == [f"account-{index}" for index in range(5)]
 
 
 async def test_public_links_and_identity_data(memory_hub: IdentityHub) -> None:
@@ -176,6 +358,35 @@ async def test_public_notification_dispatch(memory_hub: IdentityHub) -> None:
     assert "identity.standing.changed" in transport.sent[0]["text"]
 
 
+@respx.mock
+async def test_direct_delivery_tests_do_not_touch_production_queues_or_cursors(
+    memory_hub: IdentityHub,
+) -> None:
+    transport = FakeTelegramTransport()
+    memory_hub.notification_dispatcher.transport = transport
+    space = memory_hub.space("delivery-tests")
+    channel = await space.notifications.create_telegram_channel(
+        "Probe", bot_token=SecretStr("123456:test-token"), chat_id=-200
+    )
+    endpoint = await space.webhooks.create(
+        url="https://hooks.example.test/probe",
+        secret=SecretStr("signing-probe"),
+        event_types=["identity.*"],
+    )
+    route = respx.post(endpoint.url).mock(return_value=httpx.Response(202))
+
+    await space.notifications.send_test(channel.id, "direct probe")
+    response_code = await space.webhooks.send_test(endpoint.id)
+
+    store = cast(MemoryStore, memory_hub.store)
+    assert response_code == 202
+    assert route.call_count == 1
+    assert transport.sent[0]["text"] == "direct probe"
+    assert store._state.notifications == {}
+    assert store._state.webhook_deliveries == {}
+    assert store._state.cursors == {}
+
+
 async def test_public_key_rotation_covers_all_secret_kinds(memory_hub: IdentityHub) -> None:
     secret_service = replace(FAKE_TG, name="memory_secret_tg", profile_encrypted=True)
     memory_hub.register_service(secret_service)
@@ -222,3 +433,186 @@ async def test_public_key_rotation_covers_all_secret_kinds(memory_hub: IdentityH
         "notification_channels",
         "profiles",
     }
+
+
+async def test_human_queue_prioritizes_and_isolates_secret_free_attention(
+    memory_hub: IdentityHub,
+) -> None:
+    space = memory_hub.space("attention", "Attention")
+    other = memory_hub.space("other", "Other")
+    clock = cast(FakeClock, memory_hub.clock)
+    now = clock.now()
+
+    async def exchange(external_ref: str) -> UUID:
+        registered = await space.register(
+            service="fake_exchange",
+            external_ref=external_ref,
+            credentials={"email": external_ref, "password": "secret-password"},
+            session={"cookies": {"sid": "secret-cookie"}},
+            lifecycle="ready",
+        )
+        return registered.identity_id
+
+    challenge_id = await exchange("challenge@example.test")
+    challenge_row_id = new_id()
+    sealed = memory_hub.envelope.seal(
+        b'{"answer":"never-return-this-secret"}',
+        associated_data("ih_challenges", challenge_id, str(challenge_row_id)),
+    )
+    async with space._tx() as transaction:
+        assert await transaction.open_challenge(
+            challenge_row_id,
+            challenge_id,
+            "otp",
+            "***42",
+            sealed,
+            now - timedelta(minutes=1),
+        )
+
+    requirement_id = await exchange("requirement@example.test")
+    await space.add_requirement(requirement_id, "identity_document", deadline=now + timedelta(hours=2))
+
+    manual_id = await exchange("manual@example.test")
+    lease = await space.pool("manual", service="fake_exchange").acquire(among=[manual_id])
+    for factor in ("email", "phone"):
+        verification = lease.verification(factor)
+        await verification.start()
+        await verification.submit()
+    kyc = lease.verification("kyc_id")
+    await kyc.start(KycEvidence(document_number=SecretStr("SECRET-DOCUMENT")))
+    await kyc.submit()
+
+    drift_id = await exchange("drift@example.test")
+    await space.override(
+        drift_id,
+        Override(
+            "standing",
+            "",
+            Standing.GOOD,
+            reason="false positive",
+            actor="admin",
+            pin_for=timedelta(hours=6),
+        ),
+    )
+    await space._observe(
+        drift_id,
+        "standing",
+        Observation(Standing.BANNED, now, raw_status="BAN"),
+    )
+
+    quarantine_id = await exchange("quarantine@example.test")
+    await space._command(
+        quarantine_id,
+        "availability",
+        Command(Availability.QUARANTINED, actor="worker"),
+    )
+
+    foreign = await other.register(
+        service="fake_tg",
+        external_ref="foreign",
+        credentials={"phone": "foreign"},
+        lifecycle="ready",
+    )
+    await other.add_requirement(foreign.identity_id, "must-not-leak")
+
+    first = await space.human_queue(limit=2)
+    second = await space.human_queue(limit=20, after=first.next_cursor)
+    items = (*first.items, *second.items)
+
+    assert first.next_cursor is not None
+    assert {item.kind for item in items} == {
+        "challenge",
+        "requirement",
+        "manual_review",
+        "drift",
+        "quarantine",
+    }
+    assert [item.urgency for item in items] == ["critical", "high", "high", "high", "high"]
+    challenge = next(item for item in items if item.kind == "challenge")
+    assert challenge.expired and challenge.details == {"kind": "otp", "hint": "***42"}
+    assert all(item.action_unavailable_reason for item in items)
+    assert {item.kind: item.action_available for item in items} == {
+        "challenge": False,
+        "requirement": True,
+        "manual_review": True,
+        "drift": True,
+        "quarantine": True,
+    }
+    assert "never-return-this-secret" not in repr(items)
+    assert "SECRET-DOCUMENT" not in repr(items)
+    assert "secret-password" not in repr(items)
+    assert foreign.identity_id not in {item.identity_id for item in items}
+    assert first.counts == {
+        "challenge": 1,
+        "drift": 1,
+        "manual_review": 1,
+        "quarantine": 1,
+        "requirement": 1,
+    }
+    assert [item.kind for item in (await space.human_queue(kind="requirement")).items] == ["requirement"]
+    with pytest.raises(ValidationFailed):
+        await space.human_queue(after="not-valid-base64!")
+
+
+async def test_proxy_reads_match_bindings_and_redact_userinfo(memory_hub: IdentityHub) -> None:
+    service = replace(
+        FAKE_TG,
+        name="proxy_read_tg",
+        proxy_policy=ProxyPolicy(pool="res", max_identities=2),
+    )
+    memory_hub.register_service(service)
+    await memory_hub.start()
+    space = memory_hub.space("proxy-read", "Proxy read")
+    proxy_id, _ = await space.add_proxy(
+        "socks5://private-user:private-password@1.2.3.4:1080",
+        pool="res",
+        max_identities=2,
+    )
+    async with space._tx() as transaction:
+        assert await transaction.update_proxy(proxy_id, {"status": "alive"})
+    await space.add_proxy("http://5.6.7.8:3128", pool="backup", max_identities=4)
+    identities = []
+    for index in range(2):
+        registered = await space.register(
+            service=service.name,
+            external_ref=f"proxy-{index}",
+            credentials={"phone": f"+1000{index}"},
+            session={"auth_key": f"key-{index}", "dc_id": 2},
+            lifecycle="ready",
+        )
+        identities.append(registered.identity_id)
+    first = await space.pool("workers", service=service.name).acquire(among=[identities[0]])
+    second = await space.pool("workers", service=service.name).acquire(among=[identities[1]])
+    await second.release()
+
+    page_one = await space.proxy_overview(limit=1)
+    page_two = await space.proxy_overview(limit=10, before=page_one.next_before)
+    all_items = (*page_one.items, *page_two.items)
+    selected = next(item for item in all_items if item.id == proxy_id)
+    full = await space.proxy_overview(filters=ProxyFilters(capacity="full"))
+    detail_one = await space.proxy_detail(proxy_id, history_limit=1)
+    detail_two = await space.proxy_detail(
+        proxy_id,
+        history_limit=10,
+        history_before=detail_one.history.next_before,
+    )
+
+    assert page_one.next_before is not None
+    assert selected.masked_url == "socks5://1.2.3.4:1080"
+    assert selected.bound_count == 2 and selected.available_capacity == 0
+    assert selected.in_lease_count == 1
+    assert [item.id for item in full.items] == [proxy_id]
+    assert len(detail_one.bound_identities) == 2
+    assert detail_one.history.next_before is not None
+    assert len(detail_one.history.items) + len(detail_two.history.items) == 2
+    assert "private-user" not in repr((page_one, page_two, detail_one, detail_two))
+    assert "private-password" not in repr((page_one, page_two, detail_one, detail_two))
+    pool = next(item for item in page_one.pools if item.pool == "res")
+    assert (pool.bound_count, pool.max_identities, pool.in_lease_count) == (2, 2, 1)
+    assert not selected.actions_available
+
+    other = memory_hub.space("proxy-other", "Proxy other")
+    foreign_id, _ = await other.add_proxy("http://9.9.9.9:80", pool="res")
+    with pytest.raises(NotFound, match="proxy"):
+        await space.proxy_detail(foreign_id)
+    await first.release()

@@ -137,9 +137,34 @@ async def test_challenge_expiry(
     assert await space.expire_challenges() == 0
     async with sessionmaker() as s, s.begin():
         await s.execute(update(ChallengeRecord).values(expires_at=text("now() - interval '1 second'")))
+    with pytest.raises(ValidationFailed, match="истёк"):
+        await space.answer_challenge(await _open_challenge_id(sessionmaker, identity_id), "12345")
     assert await space.expire_challenges() == 1
     assert await _auth_state(sessionmaker, identity_id) == "no_session"
     assert "identity.challenge.expired" in await _types(sessionmaker)
+
+
+async def _open_challenge_id(sm: async_sessionmaker[AsyncSession], identity_id: UUID) -> UUID:
+    async with sm() as session:
+        return (
+            await session.execute(
+                select(ChallengeRecord.id).where(
+                    ChallengeRecord.identity_id == identity_id,
+                    ChallengeRecord.resolved_at.is_(None),
+                )
+            )
+        ).scalar_one()
+
+
+async def test_run_one_selected_login(
+    auth: FakeAuth, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    selected = await _reg(space, "selected")
+    untouched = await _reg(space, "untouched")
+    assert await space.run_login(selected) == "succeeded"
+    assert "selected" in auth.calls and "untouched" not in auth.calls
+    assert await _auth_state(sessionmaker, selected) == "authenticated"
+    assert await _auth_state(sessionmaker, untouched) == "no_session"
 
 
 async def test_linked_identity_leased_during_login(

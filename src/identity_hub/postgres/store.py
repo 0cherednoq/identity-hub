@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import fields
-from datetime import datetime, timedelta
+from dataclasses import fields, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -54,7 +55,7 @@ from identity_hub.enums import (
     ProxyStatus,
     Severity,
 )
-from identity_hub.errors import LeaseUnavailable, SpaceMismatch
+from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, SpaceMismatch
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.models import (
@@ -67,6 +68,8 @@ from identity_hub.postgres.models import (
     IdentityDataRecord,
     IdentityLinkRecord,
     IdentityRecord,
+    ImportItemRecord,
+    ImportRunRecord,
     LeaseHistoryRecord,
     LeaseLogRecord,
     LeaseRecord,
@@ -74,57 +77,89 @@ from identity_hub.postgres.models import (
     NotificationRecord,
     NotificationRuleRecord,
     OperationKeyRecord,
+    ProviderOperationRecord,
     ProxyRecord,
     QuotaUsageRecord,
     RegionStateRecord,
     ServiceRecord,
     SessionRecord,
     SpaceRecord,
+    StateSnapshotCoverageRecord,
+    StateSnapshotRecord,
+    StatsMetricBatchRecord,
+    StatsRollupRecord,
     VerificationRecord,
     WebhookDeliveryRecord,
     WebhookEndpointRecord,
 )
+from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
+from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
     NOTIFY_CHANNEL,
+    AttentionChallengeRow,
+    AttentionIdentityRow,
     CandidateQuery,
     ChallengeRow,
     ChargeOutcome,
+    CredentialMetadataRow,
     DataRow,
     DoctorIssue,
+    EventReadFilter,
+    EventReadRow,
     IdentityRow,
+    ImportItemResult,
+    ImportItemRow,
+    ImportRunRow,
     LeaseCounters,
     LeaseHistoryRow,
+    LeaseReadRow,
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
     MetricsSnapshot,
     NewIdentity,
+    NewImportItem,
+    NewImportRun,
     NewNotificationChannel,
     NewNotificationRule,
     NewProxy,
     NewWebhookEndpoint,
     NotificationAttempt,
     NotificationChannelRow,
+    NotificationChannelSecretRow,
+    NotificationDeliveryReadRow,
     NotificationEnqueue,
     NotificationRuleRow,
     NotificationTargetRow,
+    OverviewRequirementRow,
+    OverviewServiceRow,
+    OverviewSnapshot,
+    ProviderOperationRow,
+    ProxyBindingHistoryRow,
+    ProxyBoundIdentityRow,
+    ProxyPoolCapacityRow,
+    ProxyReadRow,
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
     SearchFilter,
     ServiceRow,
+    SessionMetadataRow,
     SpaceRef,
     Store,
     StoreTx,
     VerificationRow,
     WebhookAttempt,
     WebhookDeliveryRow,
+    WebhookEndpointReadRow,
     WebhookEndpointRow,
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
 
 IDENTITIES = cast(Table, IdentityRecord.__table__)
+IMPORT_RUNS = cast(Table, ImportRunRecord.__table__)
+IMPORT_ITEMS = cast(Table, ImportItemRecord.__table__)
 REGION_STATES = cast(Table, RegionStateRecord.__table__)
 CREDENTIALS = cast(Table, CredentialsRecord.__table__)
 SESSIONS = cast(Table, SessionRecord.__table__)
@@ -135,12 +170,17 @@ HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 LEASE_LOGS = cast(Table, LeaseLogRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
+PROVIDER_OPERATIONS = cast(Table, ProviderOperationRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
 BINDINGS = cast(Table, BindingRecord.__table__)
 CHALLENGES = cast(Table, ChallengeRecord.__table__)
 VERIFICATIONS = cast(Table, VerificationRecord.__table__)
 EVENTS = cast(Table, EventRecord.__table__)
 CURSORS = cast(Table, EventCursorRecord.__table__)
+ROLLUPS = cast(Table, StatsRollupRecord.__table__)
+METRIC_BATCHES = cast(Table, StatsMetricBatchRecord.__table__)
+STATE_SNAPSHOTS = cast(Table, StateSnapshotRecord.__table__)
+SNAPSHOT_COVERAGE = cast(Table, StateSnapshotCoverageRecord.__table__)
 SPACES = cast(Table, SpaceRecord.__table__)
 WEBHOOK_ENDPOINTS = cast(Table, WebhookEndpointRecord.__table__)
 WEBHOOK_DELIVERIES = cast(Table, WebhookDeliveryRecord.__table__)
@@ -150,9 +190,32 @@ NOTIFICATIONS = cast(Table, NotificationRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 LEASE_HISTORY_FIELDS = tuple(f.name for f in fields(LeaseHistoryRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
+IMPORT_RUN_FIELDS = tuple(f.name for f in fields(ImportRunRow))
+PROVIDER_OPERATION_FIELDS = tuple(f.name for f in fields(ProviderOperationRow))
 REGION_FIELDS = tuple(f.name for f in fields(RegionState))
 
 SESSION_SPACE_KEY = "identity_hub.space"
+
+
+def _requirement_deadline(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _optional_uuid(value: Any) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return value if isinstance(value, UUID) else UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 class PgTx(StoreTx):
@@ -227,6 +290,21 @@ class PgTx(StoreTx):
             .one_or_none()
         )
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
+
+    async def lock_identity_revision(self, identity_id: UUID, expected_revision: int) -> int:
+        revision = (
+            await self.execute(
+                select(IDENTITIES.c.event_seq)
+                .where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise NotFound("identity", identity_id)
+        actual = int(revision)
+        if actual != expected_revision:
+            raise ConcurrentModification("identity", identity_id, expected_revision, actual)
+        return actual
 
     async def update_identity(
         self, identity_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
@@ -677,6 +755,18 @@ class PgTx(StoreTx):
         )
         return int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
 
+    async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
+        i, lease = IDENTITIES.c, LEASES.c
+        unrestricted = replace(query, shared=True)
+        capped = (
+            select(i.id)
+            .select_from(IDENTITIES.join(LEASES, lease.identity_id == i.id))
+            .where(*self._candidate_conditions(unrestricted), lease.expires_at > func.now())
+            .limit(limit)
+            .subquery()
+        )
+        return int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
+
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
         row = (
             (
@@ -788,6 +878,7 @@ class PgTx(StoreTx):
             expires_at=expires_at,
             idempotency_key=idempotency_key,
             proxy_id=proxy_id,
+            heartbeat_at=now,
         )
         return lease, reclaimed
 
@@ -914,6 +1005,46 @@ class PgTx(StoreTx):
         if row is None:
             return None
         return EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext), row.status
+
+    async def access_metadata(
+        self, identity_id: UUID
+    ) -> tuple[CredentialMetadataRow, list[SessionMetadataRow]]:
+        credential_row = (
+            await self.execute(
+                select(CREDENTIALS.c.version, CREDENTIALS.c.updated_at).where(
+                    CREDENTIALS.c.identity_id == identity_id,
+                    CREDENTIALS.c.space_id == self.space.id,
+                )
+            )
+        ).one_or_none()
+        credential = CredentialMetadataRow(
+            credential_row is not None,
+            credential_row.version if credential_row is not None else None,
+            credential_row.updated_at if credential_row is not None else None,
+        )
+        rows = await self.execute(
+            select(
+                SESSIONS.c.slot,
+                SESSIONS.c.status,
+                SESSIONS.c.expires_at,
+                SESSIONS.c.version,
+                SESSIONS.c.written_by_fencing,
+                SESSIONS.c.updated_at,
+            )
+            .where(SESSIONS.c.identity_id == identity_id, SESSIONS.c.space_id == self.space.id)
+            .order_by(SESSIONS.c.slot)
+        )
+        return credential, [
+            SessionMetadataRow(
+                row.slot,
+                row.status,
+                row.expires_at,
+                row.version,
+                row.written_by_fencing,
+                row.updated_at,
+            )
+            for row in rows
+        ]
 
     # --------------------------------------------------------- квоты
 
@@ -1190,6 +1321,49 @@ class PgTx(StoreTx):
                 .values(bound_count=PROXIES.c.bound_count - 1)
             )
 
+    async def rebind_proxy(self, identity_id: UUID, proxy_id: UUID) -> tuple[UUID | None, ProxyRow] | None:
+        owned = (
+            await self.execute(
+                select(IDENTITIES.c.id)
+                .where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if owned is None:
+            return None
+        previous = (
+            await self.execute(
+                select(BINDINGS.c.proxy_id).where(
+                    BINDINGS.c.identity_id == identity_id,
+                    BINDINGS.c.space_id == self.space.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if previous == proxy_id:
+            current = await self.get_proxy(proxy_id)
+            return (previous, current) if current is not None else None
+        claimed = (
+            (
+                await self.execute(
+                    update(PROXIES)
+                    .where(
+                        PROXIES.c.id == proxy_id,
+                        PROXIES.c.space_id == self.space.id,
+                        PROXIES.c.status == ProxyStatus.ALIVE,
+                        PROXIES.c.bound_count < PROXIES.c.max_identities,
+                    )
+                    .values(bound_count=PROXIES.c.bound_count + 1)
+                    .returning(*PROXIES.c)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if claimed is None:
+            return None
+        await self.bind_proxy(identity_id, proxy_id, previous)
+        return previous, _proxy_row(claimed)
+
     async def adjust_proxy_load(self, proxy_id: UUID, delta: int) -> None:
         await self.execute(
             update(PROXIES)
@@ -1209,6 +1383,334 @@ class PgTx(StoreTx):
             .limit(limit)
         )
         return list(rows.scalars())
+
+    async def proxy_read_page(
+        self,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+        pool: str | None,
+        status: str | None,
+        capacity: str | None,
+    ) -> list[ProxyReadRow]:
+        binding_counts = (
+            select(BINDINGS.c.proxy_id, func.count().label("bound_count"))
+            .where(BINDINGS.c.space_id == self.space.id)
+            .group_by(BINDINGS.c.proxy_id)
+            .subquery()
+        )
+        lease_counts = (
+            select(HISTORY.c.proxy_id, func.count().label("in_lease_count"))
+            .where(
+                HISTORY.c.space_id == self.space.id,
+                HISTORY.c.proxy_id.is_not(None),
+                HISTORY.c.released_at.is_(None),
+            )
+            .group_by(HISTORY.c.proxy_id)
+            .subquery()
+        )
+        bound = func.coalesce(binding_counts.c.bound_count, 0)
+        stmt = (
+            select(
+                PROXIES.c.id,
+                PROXIES.c.pool,
+                PROXIES.c.scheme,
+                PROXIES.c.host,
+                PROXIES.c.port,
+                PROXIES.c.status,
+                PROXIES.c.error_score,
+                PROXIES.c.fail_streak,
+                PROXIES.c.next_check_at,
+                PROXIES.c.status_changed_at,
+                PROXIES.c.status_source,
+                PROXIES.c.checked_at,
+                PROXIES.c.pinned_until,
+                PROXIES.c.pending_observation,
+                PROXIES.c.max_identities,
+                bound.label("bound_count"),
+                func.coalesce(lease_counts.c.in_lease_count, 0).label("in_lease_count"),
+                PROXIES.c.created_at,
+            )
+            .outerjoin(binding_counts, binding_counts.c.proxy_id == PROXIES.c.id)
+            .outerjoin(lease_counts, lease_counts.c.proxy_id == PROXIES.c.id)
+            .where(PROXIES.c.space_id == self.space.id)
+        )
+        if pool is not None:
+            stmt = stmt.where(PROXIES.c.pool == pool)
+        if status is not None:
+            stmt = stmt.where(PROXIES.c.status == status)
+        if capacity == "available":
+            stmt = stmt.where(bound < PROXIES.c.max_identities)
+        elif capacity == "full":
+            stmt = stmt.where(bound >= PROXIES.c.max_identities)
+        elif capacity == "unbound":
+            stmt = stmt.where(bound == 0)
+        if before is not None:
+            created_at, proxy_id = before
+            stmt = stmt.where(
+                or_(
+                    PROXIES.c.created_at < created_at,
+                    and_(PROXIES.c.created_at == created_at, PROXIES.c.id < proxy_id),
+                )
+            )
+        rows = (
+            await self.execute(stmt.order_by(PROXIES.c.created_at.desc(), PROXIES.c.id.desc()).limit(limit))
+        ).mappings()
+        return [ProxyReadRow(**dict(row)) for row in rows]
+
+    async def proxy_bound_identities(self, proxy_id: UUID) -> list[ProxyBoundIdentityRow]:
+        rows = (
+            await self.execute(
+                select(
+                    BINDINGS.c.identity_id,
+                    IDENTITIES.c.service,
+                    IDENTITIES.c.external_ref,
+                    BINDINGS.c.bound_at,
+                )
+                .join(
+                    IDENTITIES,
+                    and_(
+                        IDENTITIES.c.id == BINDINGS.c.identity_id,
+                        IDENTITIES.c.space_id == BINDINGS.c.space_id,
+                    ),
+                )
+                .where(BINDINGS.c.space_id == self.space.id, BINDINGS.c.proxy_id == proxy_id)
+                .order_by(BINDINGS.c.bound_at.desc(), BINDINGS.c.identity_id.desc())
+            )
+        ).mappings()
+        return [ProxyBoundIdentityRow(**dict(row)) for row in rows]
+
+    async def proxy_read_one(self, proxy_id: UUID) -> ProxyReadRow | None:
+        bound_count = (
+            select(func.count())
+            .where(BINDINGS.c.space_id == self.space.id, BINDINGS.c.proxy_id == PROXIES.c.id)
+            .scalar_subquery()
+        )
+        in_lease_count = (
+            select(func.count())
+            .where(
+                HISTORY.c.space_id == self.space.id,
+                HISTORY.c.proxy_id == PROXIES.c.id,
+                HISTORY.c.released_at.is_(None),
+            )
+            .scalar_subquery()
+        )
+        row = (
+            (
+                await self.execute(
+                    select(
+                        PROXIES.c.id,
+                        PROXIES.c.pool,
+                        PROXIES.c.scheme,
+                        PROXIES.c.host,
+                        PROXIES.c.port,
+                        PROXIES.c.status,
+                        PROXIES.c.error_score,
+                        PROXIES.c.fail_streak,
+                        PROXIES.c.next_check_at,
+                        PROXIES.c.status_changed_at,
+                        PROXIES.c.status_source,
+                        PROXIES.c.checked_at,
+                        PROXIES.c.pinned_until,
+                        PROXIES.c.pending_observation,
+                        PROXIES.c.max_identities,
+                        bound_count.label("bound_count"),
+                        in_lease_count.label("in_lease_count"),
+                        PROXIES.c.created_at,
+                    ).where(PROXIES.c.space_id == self.space.id, PROXIES.c.id == proxy_id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return ProxyReadRow(**dict(row)) if row is not None else None
+
+    async def proxy_pool_capacities(self) -> list[ProxyPoolCapacityRow]:
+        binding_counts = (
+            select(BINDINGS.c.proxy_id, func.count().label("bound_count"))
+            .where(BINDINGS.c.space_id == self.space.id)
+            .group_by(BINDINGS.c.proxy_id)
+            .subquery()
+        )
+        lease_counts = (
+            select(HISTORY.c.proxy_id, func.count().label("in_lease_count"))
+            .where(
+                HISTORY.c.space_id == self.space.id,
+                HISTORY.c.proxy_id.is_not(None),
+                HISTORY.c.released_at.is_(None),
+            )
+            .group_by(HISTORY.c.proxy_id)
+            .subquery()
+        )
+        rows = (
+            await self.execute(
+                select(
+                    PROXIES.c.pool,
+                    func.count().label("proxies"),
+                    func.count().filter(PROXIES.c.status == "alive").label("alive"),
+                    func.count().filter(PROXIES.c.status == "quarantined").label("quarantined"),
+                    func.count().filter(PROXIES.c.status == "dead").label("dead"),
+                    func.count()
+                    .filter(PROXIES.c.status.not_in(("alive", "quarantined", "dead")))
+                    .label("other"),
+                    func.sum(PROXIES.c.max_identities).label("max_identities"),
+                    func.sum(func.coalesce(binding_counts.c.bound_count, 0)).label("bound_count"),
+                    func.sum(func.coalesce(lease_counts.c.in_lease_count, 0)).label("in_lease_count"),
+                )
+                .outerjoin(binding_counts, binding_counts.c.proxy_id == PROXIES.c.id)
+                .outerjoin(lease_counts, lease_counts.c.proxy_id == PROXIES.c.id)
+                .where(PROXIES.c.space_id == self.space.id)
+                .group_by(PROXIES.c.pool)
+                .order_by(PROXIES.c.pool)
+            )
+        ).mappings()
+        return [ProxyPoolCapacityRow(**dict(row)) for row in rows]
+
+    async def proxy_binding_history(
+        self,
+        proxy_id: UUID,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+    ) -> list[ProxyBindingHistoryRow]:
+        stmt = (
+            select(
+                EVENTS.c.event_id,
+                EVENTS.c.identity_id,
+                EVENTS.c.service,
+                IDENTITIES.c.external_ref,
+                EVENTS.c.data,
+                EVENTS.c.actor,
+                EVENTS.c.occurred_at,
+            )
+            .outerjoin(
+                IDENTITIES,
+                and_(
+                    IDENTITIES.c.id == EVENTS.c.identity_id,
+                    IDENTITIES.c.space_id == EVENTS.c.space_id,
+                ),
+            )
+            .where(
+                EVENTS.c.space_id == self.space.id,
+                EVENTS.c.type == "proxy.binding.changed",
+                or_(
+                    EVENTS.c.proxy_id == proxy_id,
+                    EVENTS.c.data["from_proxy_id"].astext == str(proxy_id),
+                    EVENTS.c.data["to_proxy_id"].astext == str(proxy_id),
+                ),
+            )
+        )
+        if before is not None:
+            occurred_at, event_id = before
+            stmt = stmt.where(
+                or_(
+                    EVENTS.c.occurred_at < occurred_at,
+                    and_(EVENTS.c.occurred_at == occurred_at, EVENTS.c.event_id < event_id),
+                )
+            )
+        rows = (
+            await self.execute(
+                stmt.order_by(EVENTS.c.occurred_at.desc(), EVENTS.c.event_id.desc()).limit(limit)
+            )
+        ).mappings()
+        result = []
+        for row in rows:
+            data = row["data"]
+            result.append(
+                ProxyBindingHistoryRow(
+                    event_id=row["event_id"],
+                    identity_id=row["identity_id"],
+                    service=row["service"],
+                    external_ref=row["external_ref"],
+                    from_proxy_id=_optional_uuid(data.get("from_proxy_id")),
+                    to_proxy_id=_optional_uuid(data.get("to_proxy_id")),
+                    reason=str(data.get("reason") or "unknown"),
+                    pool=str(data.get("pool") or ""),
+                    actor=row["actor"],
+                    occurred_at=row["occurred_at"],
+                )
+            )
+        return result
+
+    async def event_read_page(
+        self,
+        filters: EventReadFilter,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+    ) -> list[EventReadRow]:
+        stmt = select(
+            EVENTS.c.event_id,
+            EVENTS.c.type,
+            EVENTS.c.severity,
+            EVENTS.c.service,
+            EVENTS.c.identity_id,
+            EVENTS.c.proxy_id,
+            EVENTS.c.lease_id,
+            EVENTS.c.sequence,
+            EVENTS.c.actor,
+            EVENTS.c.data,
+            EVENTS.c.external,
+            EVENTS.c.occurred_at,
+        ).where(
+            EVENTS.c.space_id == self.space.id,
+            EVENTS.c.type.in_(filters.allowed_types),
+        )
+        if filters.severities:
+            stmt = stmt.where(EVENTS.c.severity.in_(filters.severities))
+        if filters.service is not None:
+            stmt = stmt.where(EVENTS.c.service == filters.service)
+        if filters.identity_id is not None:
+            stmt = stmt.where(EVENTS.c.identity_id == filters.identity_id)
+        if filters.proxy_id is not None:
+            stmt = stmt.where(EVENTS.c.proxy_id == filters.proxy_id)
+        if filters.lease_id is not None:
+            stmt = stmt.where(EVENTS.c.lease_id == filters.lease_id)
+        if filters.actor is not None:
+            stmt = stmt.where(EVENTS.c.actor.contains(filters.actor, autoescape=True))
+        if filters.occurred_from is not None:
+            stmt = stmt.where(EVENTS.c.occurred_at >= filters.occurred_from)
+        if filters.occurred_to is not None:
+            stmt = stmt.where(EVENTS.c.occurred_at <= filters.occurred_to)
+        if before is not None:
+            occurred_at, event_id = before
+            stmt = stmt.where(
+                or_(
+                    EVENTS.c.occurred_at < occurred_at,
+                    and_(EVENTS.c.occurred_at == occurred_at, EVENTS.c.event_id < event_id),
+                )
+            )
+        rows = (
+            await self.execute(
+                stmt.order_by(EVENTS.c.occurred_at.desc(), EVENTS.c.event_id.desc()).limit(limit)
+            )
+        ).mappings()
+        return [EventReadRow(**dict(row)) for row in rows]
+
+    async def event_read_one(self, event_id: UUID) -> EventReadRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(
+                        EVENTS.c.event_id,
+                        EVENTS.c.type,
+                        EVENTS.c.severity,
+                        EVENTS.c.service,
+                        EVENTS.c.identity_id,
+                        EVENTS.c.proxy_id,
+                        EVENTS.c.lease_id,
+                        EVENTS.c.sequence,
+                        EVENTS.c.actor,
+                        EVENTS.c.data,
+                        EVENTS.c.external,
+                        EVENTS.c.occurred_at,
+                    ).where(EVENTS.c.space_id == self.space.id, EVENTS.c.event_id == event_id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return EventReadRow(**dict(row)) if row is not None else None
 
     # --------------------------------------------------------- challenge
 
@@ -1334,6 +1836,8 @@ class PgTx(StoreTx):
             verified_at=row["verified_at"],
             expires_at=row["expires_at"],
             evidence=evidence,
+            via_identity_id=row["via_identity_id"],
+            details=dict(row["details"]),
         )
 
     async def save_verification(
@@ -1395,13 +1899,15 @@ class PgTx(StoreTx):
         flt: SearchFilter,
         *,
         limit: int,
-        after: tuple[datetime, UUID] | None,
+        after: tuple[Any, UUID] | None,
         count_limit: int | None,
     ) -> tuple[list[IdentityRow], int | None]:
         i = IDENTITIES.c
         conditions: list[Any] = [i.space_id == self.space.id]
         if flt.exact_id is not None:
             conditions.append(i.id == flt.exact_id)
+        if flt.short_id is not None:
+            conditions.append(sa_cast(i.id, Text).endswith(flt.short_id))
         if flt.services:
             conditions.append(i.service.in_(sorted(flt.services)))
         for column, values in flt.regions.items():
@@ -1418,10 +1924,189 @@ class PgTx(StoreTx):
         for term in flt.terms:
             escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             conditions.append(i.search_text.ilike(f"%{escaped}%", escape="\\"))
+        now = await self.now()
+        live_lease = (
+            select(literal(1))
+            .where(
+                LEASES.c.identity_id == i.id,
+                LEASES.c.expires_at > now,
+            )
+            .exists()
+        )
+        currently_available = or_(
+            i.availability == Availability.AVAILABLE,
+            and_(
+                i.availability.in_([Availability.PAUSED, Availability.COOLING]),
+                i.availability_until.is_not(None),
+                i.availability_until <= now,
+            ),
+        )
+        eligible = and_(
+            i.lifecycle == Lifecycle.READY,
+            i.standing.in_(["good", "limited"]),
+            i.auth_state == AuthState.AUTHENTICATED,
+            currently_available,
+        )
+        if flt.leased is not None:
+            conditions.append(live_lease if flt.leased else ~live_lease)
+        if flt.attention is not None:
+            open_challenge = (
+                select(literal(1))
+                .where(CHALLENGES.c.identity_id == i.id, CHALLENGES.c.resolved_at.is_(None))
+                .exists()
+            )
+            attention = or_(
+                i.auth_state == AuthState.CHALLENGE,
+                func.jsonb_array_length(i.requirements) > 0,
+                open_challenge,
+            )
+            conditions.append(attention if flt.attention else ~attention)
+        if flt.eligible is not None:
+            conditions.append(eligible if flt.eligible else ~eligible)
+        if flt.has_override is not None:
+            override = (
+                select(literal(1))
+                .where(
+                    REGION_STATES.c.identity_id == i.id,
+                    REGION_STATES.c.pinned_until.is_not(None),
+                    REGION_STATES.c.pinned_until > now,
+                )
+                .exists()
+            )
+            conditions.append(override if flt.has_override else ~override)
+        if flt.requirement is not None:
+            conditions.append(i.requirements.contains([{"code": flt.requirement}]))
+        if flt.factor is not None:
+            conditions.append(i.verified_factors.contains([flt.factor]))
+        if flt.factor_state is not None:
+            factor_state = select(literal(1)).where(
+                REGION_STATES.c.identity_id == i.id,
+                REGION_STATES.c.region == "verification",
+                REGION_STATES.c.state == flt.factor_state,
+            )
+            if flt.factor is not None:
+                factor_state = factor_state.where(REGION_STATES.c.key == flt.factor)
+            conditions.append(factor_state.exists())
+        if flt.tier_factors:
+            conditions.append(
+                or_(
+                    *(
+                        and_(i.service == service, i.verified_factors.contains(sorted(factors)))
+                        for service, factors in sorted(flt.tier_factors.items())
+                    )
+                )
+            )
+        if flt.proxy is not None:
+            escaped_proxy = flt.proxy.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            proxy_match = (
+                select(literal(1))
+                .select_from(BINDINGS.join(PROXIES, BINDINGS.c.proxy_id == PROXIES.c.id))
+                .where(
+                    BINDINGS.c.identity_id == i.id,
+                    or_(
+                        PROXIES.c.host.ilike(f"%{escaped_proxy}%", escape="\\"),
+                        sa_cast(PROXIES.c.id, Text).ilike(f"{escaped_proxy}%", escape="\\"),
+                    ),
+                )
+                .exists()
+            )
+            conditions.append(proxy_match)
+        if flt.linked is not None:
+            linked = (
+                select(literal(1))
+                .where(or_(LINKS.c.identity_id == i.id, LINKS.c.linked_identity_id == i.id))
+                .exists()
+            )
+            conditions.append(linked if flt.linked else ~linked)
+        if flt.created_from is not None:
+            conditions.append(i.created_at >= flt.created_from)
+        if flt.created_to is not None:
+            conditions.append(i.created_at < flt.created_to)
+        if flt.last_leased_from is not None or flt.last_leased_to is not None:
+            last_lease = select(literal(1)).where(HISTORY.c.identity_id == i.id)
+            if flt.last_leased_from is not None:
+                last_lease = last_lease.where(HISTORY.c.acquired_at >= flt.last_leased_from)
+            if flt.last_leased_to is not None:
+                last_lease = last_lease.where(HISTORY.c.acquired_at < flt.last_leased_to)
+            conditions.append(last_lease.exists())
+        if flt.synced_from is not None or flt.synced_to is not None:
+            synced = select(literal(1)).where(
+                REGION_STATES.c.identity_id == i.id,
+                REGION_STATES.c.synced_at.is_not(None),
+            )
+            if flt.synced_from is not None:
+                synced = synced.where(REGION_STATES.c.synced_at >= flt.synced_from)
+            if flt.synced_to is not None:
+                synced = synced.where(REGION_STATES.c.synced_at < flt.synced_to)
+            conditions.append(synced.exists())
+        if flt.standing_changed_from is not None or flt.standing_changed_to is not None:
+            standing_changed = select(literal(1)).where(
+                REGION_STATES.c.identity_id == i.id,
+                REGION_STATES.c.region == "standing",
+            )
+            if flt.standing_changed_from is not None:
+                standing_changed = standing_changed.where(
+                    REGION_STATES.c.changed_at >= flt.standing_changed_from
+                )
+            if flt.standing_changed_to is not None:
+                standing_changed = standing_changed.where(
+                    REGION_STATES.c.changed_at < flt.standing_changed_to
+                )
+            conditions.append(standing_changed.exists())
+        direct_sort = {
+            "auth_state": i.auth_state,
+            "availability": i.availability,
+            "created_at": i.created_at,
+            "error_score": i.error_score,
+            "external_ref": i.external_ref,
+            "lifecycle": i.lifecycle,
+            "service": i.service,
+            "standing": i.standing,
+        }
+        if flt.sort_by.startswith("profile:"):
+            sort_expr = i.profile[flt.sort_by.partition(":")[2]].astext
+        elif flt.sort_by == "eligible":
+            sort_expr = case((eligible, 1), else_=0)
+        elif flt.sort_by == "leased":
+            sort_expr = case((live_lease, 1), else_=0)
+        elif flt.sort_by == "last_leased_at":
+            sort_expr = (
+                select(func.max(HISTORY.c.acquired_at)).where(HISTORY.c.identity_id == i.id).scalar_subquery()
+            )
+        elif flt.sort_by == "synced_at":
+            sort_expr = (
+                select(func.max(REGION_STATES.c.synced_at))
+                .where(REGION_STATES.c.identity_id == i.id)
+                .scalar_subquery()
+            )
+        elif flt.sort_by == "verification_tier":
+            tier_cases = [
+                (
+                    and_(i.service == service, i.verified_factors.contains(sorted(factors))),
+                    index,
+                )
+                for service, tiers in sorted(flt.sort_tiers.items())
+                for index, factors in reversed(tuple(enumerate(tiers)))
+            ]
+            sort_expr = case(*tier_cases, else_=None) if tier_cases else literal(None)
+        else:
+            sort_expr = direct_sort[flt.sort_by]
         page = select(IDENTITIES).where(*conditions)
         if after is not None:
-            page = page.where(tuple_(i.created_at, i.id) < tuple_(literal(after[0]), literal(after[1])))
-        page = page.order_by(i.created_at.desc(), i.id.desc()).limit(limit)
+            after_value, after_id = after
+            if after_value is None:
+                page = page.where(sort_expr.is_(None), i.id < after_id)
+            else:
+                comparison = sort_expr < after_value if flt.sort_desc else sort_expr > after_value
+                page = page.where(
+                    or_(
+                        sort_expr.is_(None),
+                        comparison,
+                        and_(sort_expr == after_value, i.id < after_id),
+                    )
+                )
+        ordering = sort_expr.desc().nulls_last() if flt.sort_desc else sort_expr.asc().nulls_last()
+        page = page.order_by(ordering, i.id.desc()).limit(limit)
         rows = [
             IdentityRow(**{f: r[f] for f in IDENTITY_FIELDS}) for r in (await self.execute(page)).mappings()
         ]
@@ -1489,6 +2174,244 @@ class PgTx(StoreTx):
             result.extend((str(r[0]), column, str(r[1]), int(r[2])) for r in grouped)
         return result
 
+    async def overview_snapshot(self) -> OverviewSnapshot:
+        i = IDENTITIES.c
+        now = await self.now()
+        live_lease = (
+            select(literal(1)).where(LEASES.c.identity_id == i.id, LEASES.c.expires_at > now).exists()
+        )
+        open_challenge = (
+            select(literal(1))
+            .where(CHALLENGES.c.identity_id == i.id, CHALLENGES.c.resolved_at.is_(None))
+            .exists()
+        )
+        currently_available = or_(
+            i.availability == Availability.AVAILABLE,
+            and_(
+                i.availability.in_([Availability.PAUSED, Availability.COOLING]),
+                i.availability_until.is_not(None),
+                i.availability_until <= now,
+            ),
+        )
+        eligible = and_(
+            i.lifecycle == Lifecycle.READY,
+            i.standing.in_(["good", "limited"]),
+            i.auth_state == AuthState.AUTHENTICATED,
+            currently_available,
+        )
+        heavy = or_(
+            i.standing.in_(["frozen", "banned", "deleted"]),
+            i.auth_state == AuthState.SESSION_INVALID,
+            i.availability == Availability.QUARANTINED,
+        )
+        action_required = or_(
+            i.auth_state == AuthState.CHALLENGE,
+            func.jsonb_array_length(i.requirements) > 0,
+            open_challenge,
+        )
+        summary_rows = (
+            await self.execute(
+                select(
+                    i.service,
+                    func.count().label("total"),
+                    func.count().filter(eligible).label("eligible"),
+                    func.count().filter(live_lease).label("leased"),
+                    func.count().filter(heavy).label("heavy"),
+                    func.count().filter(open_challenge).label("open_challenges"),
+                    func.count().filter(action_required).label("action_required"),
+                    func.count().filter(i.created_at >= now - timedelta(days=1)).label("added_24h"),
+                    func.count().filter(i.created_at >= now - timedelta(days=7)).label("added_7d"),
+                )
+                .where(i.space_id == self.space.id)
+                .group_by(i.service)
+                .order_by(i.service)
+            )
+        ).mappings()
+        services = tuple(
+            OverviewServiceRow(
+                service=str(row["service"]),
+                total=int(row["total"]),
+                eligible=int(row["eligible"]),
+                leased=int(row["leased"]),
+                heavy=int(row["heavy"]),
+                open_challenges=int(row["open_challenges"]),
+                action_required=int(row["action_required"]),
+                added_24h=int(row["added_24h"]),
+                added_7d=int(row["added_7d"]),
+            )
+            for row in summary_rows
+        )
+
+        factor_rows = await self.execute(
+            select(i.service, i.verified_factors, func.count().label("count"))
+            .where(i.space_id == self.space.id)
+            .group_by(i.service, i.verified_factors)
+            .order_by(i.service, i.verified_factors)
+        )
+        factor_sets = tuple(
+            (
+                str(row["service"]),
+                tuple(sorted(row["verified_factors"])),
+                int(row["count"]),
+            )
+            for row in factor_rows.mappings()
+        )
+
+        verification_rows = await self.execute(
+            select(
+                i.service,
+                REGION_STATES.c.key,
+                REGION_STATES.c.state,
+                func.count().label("count"),
+            )
+            .select_from(REGION_STATES.join(IDENTITIES, i.id == REGION_STATES.c.identity_id))
+            .where(i.space_id == self.space.id, REGION_STATES.c.region == "verification")
+            .group_by(i.service, REGION_STATES.c.key, REGION_STATES.c.state)
+            .order_by(i.service, REGION_STATES.c.key, REGION_STATES.c.state)
+        )
+        verification_states = tuple(
+            (str(row["service"]), str(row["key"]), str(row["state"]), int(row["count"]))
+            for row in verification_rows.mappings()
+        )
+
+        requirement_rows = await self.execute(
+            select(i.service, i.requirements).where(
+                i.space_id == self.space.id, func.jsonb_array_length(i.requirements) > 0
+            )
+        )
+        requirement_counts: dict[tuple[str, str], int] = {}
+        requirement_deadlines: dict[tuple[str, str], datetime] = {}
+        for row in requirement_rows.mappings():
+            service = row["service"]
+            requirements = row["requirements"]
+            seen: set[str] = set()
+            for requirement in requirements:
+                if not isinstance(requirement, dict) or not isinstance(requirement.get("code"), str):
+                    continue
+                code = requirement["code"]
+                key = (str(service), code)
+                if code not in seen:
+                    requirement_counts[key] = requirement_counts.get(key, 0) + 1
+                    seen.add(code)
+                deadline = _requirement_deadline(requirement.get("deadline"))
+                if deadline is not None and (
+                    key not in requirement_deadlines or deadline < requirement_deadlines[key]
+                ):
+                    requirement_deadlines[key] = deadline
+
+        return OverviewSnapshot(
+            services=services,
+            factor_sets=factor_sets,
+            verification_states=verification_states,
+            requirements=tuple(
+                OverviewRequirementRow(service, code, count, requirement_deadlines.get((service, code)))
+                for (service, code), count in sorted(requirement_counts.items())
+            ),
+        )
+
+    async def attention_rows(self) -> list[AttentionIdentityRow]:
+        identity = IDENTITIES
+        open_challenge = (
+            select(literal(1))
+            .where(
+                CHALLENGES.c.identity_id == identity.c.id,
+                CHALLENGES.c.space_id == self.space.id,
+                CHALLENGES.c.resolved_at.is_(None),
+            )
+            .exists()
+        )
+        attention_region = (
+            select(literal(1))
+            .where(
+                REGION_STATES.c.identity_id == identity.c.id,
+                REGION_STATES.c.space_id == self.space.id,
+                or_(
+                    and_(
+                        REGION_STATES.c.region == "verification",
+                        REGION_STATES.c.state == "under_review",
+                    ),
+                    and_(
+                        REGION_STATES.c.pinned_until.is_not(None),
+                        REGION_STATES.c.pinned_until > func.now(),
+                        REGION_STATES.c.raw_status.is_not(None),
+                        REGION_STATES.c.raw_status != REGION_STATES.c.state,
+                    ),
+                ),
+            )
+            .exists()
+        )
+        identities = list(
+            (
+                await self.execute(
+                    select(
+                        identity.c.id,
+                        identity.c.service,
+                        identity.c.external_ref,
+                        identity.c.availability,
+                        identity.c.error_score,
+                        identity.c.requirements,
+                        identity.c.updated_at,
+                    ).where(
+                        identity.c.space_id == self.space.id,
+                        or_(
+                            func.jsonb_array_length(identity.c.requirements) > 0,
+                            identity.c.availability == Availability.QUARANTINED,
+                            open_challenge,
+                            attention_region,
+                        ),
+                    )
+                )
+            ).mappings()
+        )
+        if not identities:
+            return []
+        identity_ids = [row["id"] for row in identities]
+        region_rows = await self.execute(
+            select(REGION_STATES).where(
+                REGION_STATES.c.space_id == self.space.id,
+                REGION_STATES.c.identity_id.in_(identity_ids),
+            )
+        )
+        regions: dict[UUID, list[tuple[str, str, RegionState]]] = {}
+        for row in region_rows.mappings():
+            values = {field: row[field] for field in REGION_FIELDS}
+            values["change_source"] = ChangeSource(values["change_source"])
+            regions.setdefault(row["identity_id"], []).append(
+                (row["region"], row["key"], RegionState(**values))
+            )
+        challenge_rows = await self.execute(
+            select(
+                CHALLENGES.c.id,
+                CHALLENGES.c.identity_id,
+                CHALLENGES.c.kind,
+                CHALLENGES.c.hint,
+                CHALLENGES.c.created_at,
+                CHALLENGES.c.expires_at,
+            ).where(
+                CHALLENGES.c.space_id == self.space.id,
+                CHALLENGES.c.identity_id.in_(identity_ids),
+                CHALLENGES.c.resolved_at.is_(None),
+            )
+        )
+        challenges = {
+            row.identity_id: AttentionChallengeRow(row.id, row.kind, row.hint, row.created_at, row.expires_at)
+            for row in challenge_rows
+        }
+        return [
+            AttentionIdentityRow(
+                id=row["id"],
+                service=row["service"],
+                external_ref=row["external_ref"],
+                availability=row["availability"],
+                error_score=row["error_score"],
+                requirements=tuple(item for item in row["requirements"] if isinstance(item, dict)),
+                regions=tuple(regions.get(row["id"], [])),
+                challenge=challenges.get(row["id"]),
+                updated_at=row["updated_at"],
+            )
+            for row in identities
+        ]
+
     async def lease_history(
         self, identity_id: UUID, *, limit: int, before: datetime | None
     ) -> list[LeaseHistoryRow]:
@@ -1549,6 +2472,74 @@ class PgTx(StoreTx):
             failed=int(agg[5]),
         )
 
+    def _lease_read_statement(self) -> Select[Any]:
+        return select(
+            *(HISTORY.c[field] for field in LEASE_HISTORY_FIELDS),
+            IDENTITIES.c.service,
+            IDENTITIES.c.external_ref,
+            LEASES.c.expires_at,
+        ).select_from(
+            HISTORY.join(
+                IDENTITIES,
+                and_(
+                    IDENTITIES.c.id == HISTORY.c.identity_id,
+                    IDENTITIES.c.space_id == HISTORY.c.space_id,
+                ),
+            ).outerjoin(
+                LEASES,
+                and_(
+                    LEASES.c.lease_id == HISTORY.c.lease_id,
+                    LEASES.c.space_id == HISTORY.c.space_id,
+                ),
+            )
+        )
+
+    @staticmethod
+    def _lease_read_row(row: Any) -> LeaseReadRow:
+        return LeaseReadRow(
+            **{field: row[field] for field in LEASE_HISTORY_FIELDS},
+            service=row["service"],
+            external_ref=row["external_ref"],
+            expires_at=row["expires_at"],
+        )
+
+    async def lease_read_rows(self, since: datetime) -> list[LeaseReadRow]:
+        stmt = self._lease_read_statement().where(
+            HISTORY.c.space_id == self.space.id,
+            or_(
+                HISTORY.c.acquired_at >= since,
+                HISTORY.c.released_at.is_(None),
+                HISTORY.c.released_at >= since,
+            ),
+        )
+        rows = (await self.execute(stmt.order_by(HISTORY.c.acquired_at.desc()))).mappings()
+        return [self._lease_read_row(row) for row in rows]
+
+    async def lease_read_page(
+        self,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+        pool: str | None,
+        service: str | None,
+        holder: str | None,
+    ) -> list[LeaseReadRow]:
+        stmt = self._lease_read_statement().where(HISTORY.c.space_id == self.space.id)
+        if pool is not None:
+            stmt = stmt.where(HISTORY.c.pool == pool)
+        if service is not None:
+            stmt = stmt.where(IDENTITIES.c.service == service)
+        if holder is not None:
+            stmt = stmt.where(HISTORY.c.holder == holder)
+        if before is not None:
+            stmt = stmt.where(tuple_(HISTORY.c.acquired_at, HISTORY.c.lease_id) < before)
+        rows = (
+            await self.execute(
+                stmt.order_by(HISTORY.c.acquired_at.desc(), HISTORY.c.lease_id.desc()).limit(limit)
+            )
+        ).mappings()
+        return [self._lease_read_row(row) for row in rows]
+
     async def identities_page(self, service: str, after: UUID | None, limit: int) -> list[IdentityRow]:
         stmt = select(IDENTITIES).where(
             IDENTITIES.c.space_id == self.space.id, IDENTITIES.c.service == service
@@ -1601,6 +2592,41 @@ class PgTx(StoreTx):
                 WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
             )
             .values(**secret.columns())
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def update_webhook_endpoint(
+        self,
+        endpoint_id: UUID,
+        *,
+        url: str,
+        description: str | None,
+        event_types: list[str],
+        filter: dict[str, Any],
+        min_severity: str,
+    ) -> bool:
+        result = await self.execute(
+            update(WEBHOOK_ENDPOINTS)
+            .where(
+                WEBHOOK_ENDPOINTS.c.id == endpoint_id,
+                WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+            )
+            .values(
+                url=url,
+                description=description,
+                event_types=event_types,
+                filter=filter,
+                min_severity=min_severity,
+            )
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def delete_webhook_endpoint(self, endpoint_id: UUID) -> bool:
+        result = await self.execute(
+            delete(WEBHOOK_ENDPOINTS).where(
+                WEBHOOK_ENDPOINTS.c.id == endpoint_id,
+                WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
+            )
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -1676,6 +2702,42 @@ class PgTx(StoreTx):
         ).mappings()
         return [_webhook_delivery_row(row) for row in rows]
 
+    async def webhook_endpoint_reads(self) -> list[WebhookEndpointReadRow]:
+        e = WEBHOOK_ENDPOINTS.c
+        rows = (
+            await self.execute(
+                select(
+                    e.id,
+                    e.url,
+                    e.description,
+                    e.event_types,
+                    e.filter,
+                    e.min_severity,
+                    e.enabled,
+                    e.disabled_reason,
+                    e.failure_streak,
+                    e.created_at,
+                )
+                .where(e.space_id == self.space.id)
+                .order_by(e.created_at.desc(), e.id.desc())
+            )
+        ).mappings()
+        return [WebhookEndpointReadRow(**dict(row)) for row in rows]
+
+    async def webhook_delivery_read_page(
+        self, *, limit: int, before: tuple[datetime, int] | None = None
+    ) -> list[WebhookDeliveryRow]:
+        d, e = WEBHOOK_DELIVERIES.c, WEBHOOK_ENDPOINTS.c
+        query = (
+            select(WEBHOOK_DELIVERIES)
+            .join(WEBHOOK_ENDPOINTS, e.id == d.endpoint_id)
+            .where(e.space_id == self.space.id)
+        )
+        if before is not None:
+            query = query.where(tuple_(d.created_at, d.id) < before)
+        rows = (await self.execute(query.order_by(d.created_at.desc(), d.id.desc()).limit(limit))).mappings()
+        return [_webhook_delivery_row(row) for row in rows]
+
     # --------------------------------------------------------- Telegram-уведомления
 
     async def insert_notification_channel(self, row: NewNotificationChannel) -> NotificationChannelRow:
@@ -1708,6 +2770,27 @@ class PgTx(StoreTx):
             )
         ).mappings()
         return [_notification_channel_row(row) for row in rows]
+
+    async def get_notification_channel_secret(self, channel_id: UUID) -> NotificationChannelSecretRow | None:
+        row = (
+            (
+                await self.execute(
+                    select(NOTIFICATION_CHANNELS).where(
+                        NOTIFICATION_CHANNELS.c.id == channel_id,
+                        NOTIFICATION_CHANNELS.c.space_id == self.space.id,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return NotificationChannelSecretRow(
+            id=row["id"],
+            config=dict(row["config"]),
+            secret=EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]),
+        )
 
     async def update_notification_channel(
         self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
@@ -1785,6 +2868,60 @@ class PgTx(StoreTx):
         ).mappings()
         return [_notification_rule_row(row) for row in rows]
 
+    async def notification_delivery_read_page(
+        self, *, limit: int, before: tuple[datetime, int] | None = None
+    ) -> list[NotificationDeliveryReadRow]:
+        n, r, c = NOTIFICATIONS.c, NOTIFICATION_RULES.c, NOTIFICATION_CHANNELS.c
+        query = (
+            select(
+                n.id,
+                n.rule_id,
+                r.name.label("rule_name"),
+                n.channel_id,
+                c.title.label("channel_title"),
+                n.event_ids,
+                n.status,
+                n.attempt,
+                n.scheduled_at,
+                n.sent_at,
+                n.error,
+            )
+            .join(NOTIFICATION_RULES, r.id == n.rule_id)
+            .join(NOTIFICATION_CHANNELS, c.id == n.channel_id)
+            .where(r.space_id == self.space.id, c.space_id == self.space.id)
+        )
+        if before is not None:
+            query = query.where(tuple_(n.scheduled_at, n.id) < before)
+        rows = (
+            await self.execute(query.order_by(n.scheduled_at.desc(), n.id.desc()).limit(limit))
+        ).mappings()
+        return [NotificationDeliveryReadRow(**dict(row)) for row in rows]
+
+    async def retry_notification_delivery(self, delivery_id: int) -> bool:
+        n, r = NOTIFICATIONS.c, NOTIFICATION_RULES.c
+        owned = (
+            await self.execute(
+                select(n.id)
+                .join(NOTIFICATION_RULES, r.id == n.rule_id)
+                .where(n.id == delivery_id, r.space_id == self.space.id)
+                .with_for_update(of=NOTIFICATIONS)
+            )
+        ).scalar_one_or_none()
+        if owned is None:
+            return False
+        await self.execute(
+            update(NOTIFICATIONS)
+            .where(n.id == delivery_id)
+            .values(
+                status=DeliveryStatus.PENDING,
+                attempt=0,
+                scheduled_at=func.now(),
+                sent_at=None,
+                error=None,
+            )
+        )
+        return True
+
     async def update_notification_rule(self, rule_id: UUID, values: dict[str, Any]) -> bool:
         changes = {**values, "updated_at": func.now()}
         result = await self.execute(
@@ -1807,6 +2944,366 @@ class PgTx(StoreTx):
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
     # --------------------------------------------------------- обслуживание
+
+    # --------------------------------------------------------- admin durable state (A4.1)
+
+    @staticmethod
+    def _import_run_row(row: Any) -> ImportRunRow:
+        values = row._mapping if hasattr(row, "_mapping") else row
+        return ImportRunRow(**{name: values[name] for name in IMPORT_RUN_FIELDS})
+
+    async def get_import_run(self, run_id: UUID) -> ImportRunRow | None:
+        row = (
+            await self.execute(
+                select(*(IMPORT_RUNS.c[name] for name in IMPORT_RUN_FIELDS)).where(
+                    IMPORT_RUNS.c.id == run_id,
+                    IMPORT_RUNS.c.space_id == self.space.id,
+                )
+            )
+        ).one_or_none()
+        return self._import_run_row(row) if row is not None else None
+
+    async def list_import_runs(self, *, limit: int = 100) -> list[ImportRunRow]:
+        rows = (
+            await self.execute(
+                select(*(IMPORT_RUNS.c[name] for name in IMPORT_RUN_FIELDS))
+                .where(IMPORT_RUNS.c.space_id == self.space.id)
+                .order_by(IMPORT_RUNS.c.started_at.desc(), IMPORT_RUNS.c.id.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [self._import_run_row(row) for row in rows]
+
+    async def create_import_run(self, run: NewImportRun, items: Sequence[NewImportItem]) -> bool:
+        inserted = await self.execute(
+            insert(IMPORT_RUNS)
+            .values(
+                id=run.id,
+                space_id=self.space.id,
+                service=run.service,
+                actor=run.actor,
+                source=run.source,
+                on_existing=run.on_existing,
+                verify_sessions=run.verify_sessions,
+                labels=run.labels,
+                total=run.total,
+            )
+            .on_conflict_do_nothing(index_elements=[IMPORT_RUNS.c.id])
+        )
+        if not inserted.rowcount:  # type: ignore[attr-defined]
+            return False
+        if items:
+            await self.execute(
+                insert(IMPORT_ITEMS).values(
+                    [
+                        {
+                            "run_id": run.id,
+                            "position": item.position,
+                            "space_id": self.space.id,
+                            "key_id": item.payload.key_id,
+                            "wrapped_dek": item.payload.wrapped_dek,
+                            "nonce": item.payload.nonce,
+                            "ciphertext": item.payload.ciphertext,
+                        }
+                        for item in items
+                    ]
+                )
+            )
+        return True
+
+    async def active_import_runs(self, *, limit: int = 10) -> list[ImportRunRow]:
+        rows = (
+            await self.execute(
+                select(*(IMPORT_RUNS.c[name] for name in IMPORT_RUN_FIELDS))
+                .where(
+                    IMPORT_RUNS.c.space_id == self.space.id,
+                    IMPORT_RUNS.c.state.in_(("pending", "running", "cancelling")),
+                )
+                .order_by(IMPORT_RUNS.c.started_at, IMPORT_RUNS.c.id)
+                .limit(limit)
+            )
+        ).all()
+        return [self._import_run_row(row) for row in rows]
+
+    async def claim_import_items(
+        self,
+        run_id: UUID,
+        *,
+        worker: str,
+        limit: int,
+        claim_for: timedelta,
+    ) -> list[ImportItemRow]:
+        run = (
+            await self.execute(
+                select(IMPORT_RUNS.c.state, IMPORT_RUNS.c.cancel_requested_at)
+                .where(
+                    IMPORT_RUNS.c.id == run_id,
+                    IMPORT_RUNS.c.space_id == self.space.id,
+                )
+                .with_for_update()
+            )
+        ).one_or_none()
+        if run is None or run.cancel_requested_at is not None or run.state not in {"pending", "running"}:
+            return []
+        await self.execute(
+            update(IMPORT_ITEMS)
+            .where(
+                IMPORT_ITEMS.c.run_id == run_id,
+                IMPORT_ITEMS.c.space_id == self.space.id,
+                IMPORT_ITEMS.c.state == "running",
+                IMPORT_ITEMS.c.claim_expires_at <= func.now(),
+            )
+            .values(state="pending", claimed_by=None, claim_expires_at=None)
+        )
+        candidates = (
+            (
+                await self.execute(
+                    select(IMPORT_ITEMS.c.position)
+                    .where(
+                        IMPORT_ITEMS.c.run_id == run_id,
+                        IMPORT_ITEMS.c.space_id == self.space.id,
+                        IMPORT_ITEMS.c.state == "pending",
+                    )
+                    .order_by(IMPORT_ITEMS.c.position)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not candidates:
+            return []
+        rows = (
+            await self.execute(
+                update(IMPORT_ITEMS)
+                .where(
+                    IMPORT_ITEMS.c.run_id == run_id,
+                    IMPORT_ITEMS.c.space_id == self.space.id,
+                    IMPORT_ITEMS.c.position.in_(candidates),
+                    IMPORT_ITEMS.c.state == "pending",
+                )
+                .values(
+                    state="running",
+                    claim_token=IMPORT_ITEMS.c.claim_token + 1,
+                    claimed_by=worker,
+                    claim_expires_at=func.now() + claim_for,
+                )
+                .returning(
+                    IMPORT_ITEMS.c.run_id,
+                    IMPORT_ITEMS.c.position,
+                    IMPORT_ITEMS.c.claim_token,
+                    IMPORT_ITEMS.c.key_id,
+                    IMPORT_ITEMS.c.wrapped_dek,
+                    IMPORT_ITEMS.c.nonce,
+                    IMPORT_ITEMS.c.ciphertext,
+                )
+            )
+        ).all()
+        await self.execute(
+            update(IMPORT_RUNS)
+            .where(IMPORT_RUNS.c.id == run_id)
+            .values(state="running", updated_at=func.now())
+        )
+        return [
+            ImportItemRow(
+                run_id=row.run_id,
+                position=row.position,
+                claim_token=row.claim_token,
+                payload=EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext),
+            )
+            for row in sorted(rows, key=lambda item: item.position)
+        ]
+
+    async def finish_import_items(
+        self, run_id: UUID, results: Sequence[ImportItemResult]
+    ) -> ImportRunRow | None:
+        run = (
+            await self.execute(
+                select(*(IMPORT_RUNS.c[name] for name in IMPORT_RUN_FIELDS))
+                .where(
+                    IMPORT_RUNS.c.id == run_id,
+                    IMPORT_RUNS.c.space_id == self.space.id,
+                )
+                .with_for_update()
+            )
+        ).one_or_none()
+        if run is None:
+            return None
+        counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        report = dict(run.report)
+        report.setdefault("created_ids", [])
+        report.setdefault("skipped", [])
+        report.setdefault("failed", [])
+        accepted = 0
+        for item in results:
+            item_state = "succeeded" if item.outcome in {"created", "updated"} else item.outcome
+            updated_item = await self.execute(
+                update(IMPORT_ITEMS)
+                .where(
+                    IMPORT_ITEMS.c.run_id == run_id,
+                    IMPORT_ITEMS.c.position == item.position,
+                    IMPORT_ITEMS.c.space_id == self.space.id,
+                    IMPORT_ITEMS.c.state == "running",
+                    IMPORT_ITEMS.c.claim_token == item.claim_token,
+                )
+                .values(
+                    state=item_state,
+                    claimed_by=None,
+                    claim_expires_at=None,
+                    error_code=item.error_code,
+                    error=item.error[:500] if item.error else None,
+                )
+            )
+            if not updated_item.rowcount:  # type: ignore[attr-defined]
+                continue
+            accepted += 1
+            counts[item.outcome] += 1
+            if item.outcome == "created" and item.identity_id is not None:
+                report["created_ids"] = [*report["created_ids"][-4999:], str(item.identity_id)]
+            elif item.outcome in {"skipped", "failed"}:
+                entry = {
+                    "position": item.position,
+                    "external_ref": item.external_ref,
+                    "code": item.error_code,
+                    "reason": item.error,
+                }
+                report[item.outcome] = [*report[item.outcome][-999:], entry]
+        remaining_running = (
+            await self.execute(
+                select(func.count())
+                .select_from(IMPORT_ITEMS)
+                .where(
+                    IMPORT_ITEMS.c.run_id == run_id,
+                    IMPORT_ITEMS.c.space_id == self.space.id,
+                    IMPORT_ITEMS.c.state == "running",
+                )
+            )
+        ).scalar_one()
+        remaining_open = (
+            await self.execute(
+                select(func.count())
+                .select_from(IMPORT_ITEMS)
+                .where(
+                    IMPORT_ITEMS.c.run_id == run_id,
+                    IMPORT_ITEMS.c.space_id == self.space.id,
+                    IMPORT_ITEMS.c.state.in_(("pending", "running")),
+                )
+            )
+        ).scalar_one()
+        terminal: str | None = None
+        if run.cancel_requested_at is not None and remaining_running == 0:
+            terminal = "cancelled"
+        elif remaining_open == 0:
+            terminal = "succeeded"
+        values: dict[str, Any] = {
+            "processed": IMPORT_RUNS.c.processed + accepted,
+            "created": IMPORT_RUNS.c.created + counts["created"],
+            "updated": IMPORT_RUNS.c.updated + counts["updated"],
+            "skipped": IMPORT_RUNS.c.skipped + counts["skipped"],
+            "failed": IMPORT_RUNS.c.failed + counts["failed"],
+            "report": report,
+            "updated_at": func.now(),
+        }
+        if terminal is not None:
+            values.update(state=terminal, finished_at=func.now())
+        await self.execute(update(IMPORT_RUNS).where(IMPORT_RUNS.c.id == run_id).values(**values))
+        if terminal is not None:
+            await self.execute(delete(IMPORT_ITEMS).where(IMPORT_ITEMS.c.run_id == run_id))
+        return await self.get_import_run(run_id)
+
+    async def request_import_cancel(self, run_id: UUID) -> ImportRunRow | None:
+        run = (
+            await self.execute(
+                select(IMPORT_RUNS.c.state)
+                .where(
+                    IMPORT_RUNS.c.id == run_id,
+                    IMPORT_RUNS.c.space_id == self.space.id,
+                )
+                .with_for_update()
+            )
+        ).one_or_none()
+        if run is None:
+            return None
+        if run.state in {"succeeded", "failed", "cancelled"}:
+            return await self.get_import_run(run_id)
+        await self.execute(
+            update(IMPORT_ITEMS)
+            .where(
+                IMPORT_ITEMS.c.run_id == run_id,
+                IMPORT_ITEMS.c.state == "running",
+                IMPORT_ITEMS.c.claim_expires_at <= func.now(),
+            )
+            .values(state="pending", claimed_by=None, claim_expires_at=None)
+        )
+        running = (
+            await self.execute(
+                select(func.count())
+                .select_from(IMPORT_ITEMS)
+                .where(IMPORT_ITEMS.c.run_id == run_id, IMPORT_ITEMS.c.state == "running")
+            )
+        ).scalar_one()
+        state = "cancelling" if running else "cancelled"
+        await self.execute(
+            update(IMPORT_RUNS)
+            .where(IMPORT_RUNS.c.id == run_id)
+            .values(
+                state=state,
+                cancel_requested_at=func.now(),
+                finished_at=func.now() if state == "cancelled" else None,
+                updated_at=func.now(),
+            )
+        )
+        if state == "cancelled":
+            await self.execute(delete(IMPORT_ITEMS).where(IMPORT_ITEMS.c.run_id == run_id))
+        return await self.get_import_run(run_id)
+
+    async def list_provider_operations(
+        self,
+        *,
+        identity_id: UUID | None = None,
+        states: frozenset[str] | None = None,
+        limit: int = 100,
+    ) -> list[ProviderOperationRow]:
+        stmt = select(*(PROVIDER_OPERATIONS.c[name] for name in PROVIDER_OPERATION_FIELDS)).where(
+            PROVIDER_OPERATIONS.c.space_id == self.space.id
+        )
+        if identity_id is not None:
+            stmt = stmt.where(PROVIDER_OPERATIONS.c.identity_id == identity_id)
+        if states is not None:
+            if not states:
+                return []
+            stmt = stmt.where(PROVIDER_OPERATIONS.c.state.in_(sorted(states)))
+        rows = (
+            await self.execute(
+                stmt.order_by(
+                    PROVIDER_OPERATIONS.c.created_at.desc(),
+                    PROVIDER_OPERATIONS.c.id.desc(),
+                ).limit(limit)
+            )
+        ).all()
+        return [
+            ProviderOperationRow(
+                id=row.id,
+                space_id=row.space_id,
+                identity_id=row.identity_id,
+                kind=row.kind,
+                state=row.state,
+                attempt=row.attempt,
+                claim_id=row.claim_id,
+                claim_token=row.claim_token,
+                claimed_by=row.claimed_by,
+                claim_expires_at=row.claim_expires_at,
+                available_at=row.available_at,
+                deadline_at=row.deadline_at,
+                result=dict(row.result),
+                error_code=row.error_code,
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                finished_at=row.finished_at,
+            )
+            for row in rows
+        ]
 
     async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
         rows = (
@@ -2017,6 +3514,8 @@ def _lease_row(row: Any) -> LeaseRow:
         acquired_at=row["acquired_at"],
         expires_at=row["expires_at"],
         idempotency_key=row["idempotency_key"],
+        proxy_id=row.get("proxy_id"),
+        heartbeat_at=row.get("heartbeat_at", row["acquired_at"]),
     )
 
 
@@ -2073,13 +3572,25 @@ class PgStore(Store):
         async with self.sessionmaker() as session:
             row = (
                 await session.execute(
-                    select(SpaceRecord.id, SpaceRecord.slug, SpaceRecord.title).where(
+                    select(SpaceRecord.id, SpaceRecord.slug, SpaceRecord.title, SpaceRecord.timezone).where(
                         SpaceRecord.slug == slug
                     ),
                     execution_options=self.options,
                 )
             ).one_or_none()
-        return SpaceRef(row.id, row.slug, row.title) if row else None
+        return SpaceRef(row.id, row.slug, row.title, row.timezone) if row else None
+
+    async def list_spaces(self, slugs: frozenset[str] | None = None) -> list[SpaceRef]:
+        stmt = select(SpaceRecord.id, SpaceRecord.slug, SpaceRecord.title, SpaceRecord.timezone).order_by(
+            SpaceRecord.slug
+        )
+        if slugs is not None:
+            if not slugs:
+                return []
+            stmt = stmt.where(SpaceRecord.slug.in_(sorted(slugs)))
+        async with self.sessionmaker() as session:
+            rows = await session.execute(stmt, execution_options=self.options)
+        return [SpaceRef(row.id, row.slug, row.title, row.timezone) for row in rows]
 
     # --------------------------------------------------------- журнал событий
 
@@ -2089,6 +3600,7 @@ class PgStore(Store):
         handler: Callable[[list[Event]], Awaitable[None]],
         *,
         limit: int,
+        external_only: bool = True,
     ) -> int | None:
         opts = self.options
         async with self._own() as session:
@@ -2114,14 +3626,14 @@ class PgStore(Store):
             )
             horizon = func.pg_snapshot_xmin(func.pg_current_snapshot())
             e = EVENTS.c
+            conditions = [e.tx_id < horizon]
+            if external_only:
+                conditions.append(e.external.is_(True))
             stmt = (
                 select(e, SPACES.c.slug)
                 .join(SPACES, SPACES.c.id == e.space_id)
                 .join(cursor, tuple_(e.tx_id, e.id) > tuple_(cursor.c.last_tx_id, cursor.c.last_id))
-                .where(
-                    e.external.is_(True),
-                    e.tx_id < horizon,
-                )
+                .where(*conditions)
                 .order_by(e.tx_id, e.id)
                 .limit(limit)
             )
@@ -2142,6 +3654,311 @@ class PgStore(Store):
                 execution_options=opts,
             )
             return len(events)
+
+    async def rollup_source_events(self, space_slug: str, start: datetime, end: datetime) -> list[Event]:
+        async with self.sessionmaker() as session:
+            rows = (
+                await session.execute(
+                    select(EVENTS, SPACES.c.slug)
+                    .join(SPACES, SPACES.c.id == EVENTS.c.space_id)
+                    .where(
+                        SPACES.c.slug == space_slug,
+                        EVENTS.c.occurred_at >= start,
+                        EVENTS.c.occurred_at < end,
+                    )
+                    .order_by(EVENTS.c.occurred_at, EVENTS.c.id),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            return [_event(row) for row in rows]
+
+    async def replace_rollups(self, rows: Sequence[RollupRow]) -> None:
+        if not rows:
+            return
+        values = [
+            {
+                "space_id": row.key.space_id,
+                "service": row.key.service,
+                "metric": row.key.metric,
+                "dims": row.key.dimensions,
+                "bucket_start": row.key.bucket_start,
+                "bucket_size": str(row.key.bucket_size),
+                "value": row.value,
+            }
+            for row in rows
+        ]
+        stmt = insert(ROLLUPS).values(values)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_ih_stats_rollup_key",
+            set_={"value": stmt.excluded.value, "updated_at": func.now()},
+        )
+        async with self._own() as session:
+            await session.execute(stmt, execution_options=self.options)
+
+    async def apply_metric_rollup_batch(self, batch_id: UUID, rows: Sequence[RollupDelta]) -> bool:
+        async with self._own() as session:
+            inserted = (
+                await session.execute(
+                    insert(METRIC_BATCHES)
+                    .values(id=batch_id)
+                    .on_conflict_do_nothing()
+                    .returning(METRIC_BATCHES.c.id),
+                    execution_options=self.options,
+                )
+            ).scalar_one_or_none()
+            if inserted is None:
+                return False
+            for delta in rows:
+                row = delta.row
+                stmt = insert(ROLLUPS).values(
+                    space_id=row.key.space_id,
+                    service=row.key.service,
+                    metric=row.key.metric,
+                    dims=row.key.dimensions,
+                    bucket_start=row.key.bucket_start,
+                    bucket_size=str(row.key.bucket_size),
+                    value=row.value,
+                )
+                value = ROLLUPS.c.value + stmt.excluded.value if delta.additive else stmt.excluded.value
+                await session.execute(
+                    stmt.on_conflict_do_update(
+                        constraint="uq_ih_stats_rollup_key",
+                        set_={"value": value, "updated_at": func.now()},
+                    ),
+                    execution_options=self.options,
+                )
+            return True
+
+    async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int:
+        async with self._own() as session:
+            result: Any = await session.execute(
+                delete(ROLLUPS).where(
+                    ROLLUPS.c.space_id == space_id,
+                    ROLLUPS.c.bucket_start >= start,
+                    ROLLUPS.c.bucket_start < end,
+                ),
+                execution_options=self.options,
+            )
+            return int(result.rowcount or 0)
+
+    async def purge_minute_rollups(self, before: datetime) -> int:
+        async with self._own() as session:
+            result: Any = await session.execute(
+                delete(ROLLUPS).where(
+                    ROLLUPS.c.bucket_size == str(BucketSize.MINUTE),
+                    ROLLUPS.c.bucket_start < before,
+                ),
+                execution_options=self.options,
+            )
+            return int(result.rowcount or 0)
+
+    async def read_rollups(
+        self,
+        space_slug: str,
+        *,
+        metric: str,
+        bucket_size: BucketSize,
+        start: datetime,
+        end: datetime,
+        service: str | None,
+        dims: tuple[tuple[str, str], ...] | None,
+    ) -> list[RollupRow]:
+        stmt = (
+            select(ROLLUPS)
+            .join(SPACES, SPACES.c.id == ROLLUPS.c.space_id)
+            .where(
+                SPACES.c.slug == space_slug,
+                ROLLUPS.c.metric == metric,
+                ROLLUPS.c.bucket_size == str(bucket_size),
+                ROLLUPS.c.bucket_start >= start,
+                ROLLUPS.c.bucket_start < end,
+            )
+            .order_by(ROLLUPS.c.bucket_start, ROLLUPS.c.service, ROLLUPS.c.dims)
+        )
+        if service is not None:
+            stmt = stmt.where(ROLLUPS.c.service == service)
+        if dims is not None:
+            stmt = stmt.where(ROLLUPS.c.dims == dict(dims))
+        async with self.sessionmaker() as session:
+            records = (await session.execute(stmt, execution_options=self.options)).mappings()
+            return [
+                RollupRow(
+                    RollupKey(
+                        row["space_id"],
+                        row["service"],
+                        row["metric"],
+                        tuple(sorted(row["dims"].items())),
+                        row["bucket_start"],
+                        BucketSize(row["bucket_size"]),
+                    ),
+                    float(row["value"]),
+                )
+                for row in records
+            ]
+
+    async def capture_state_snapshot(self, taken_at: datetime, *, source: str) -> int:
+        async with self._own() as session:
+            space_ids: list[UUID] = list(
+                (
+                    await session.execute(
+                        select(SPACES.c.id).order_by(SPACES.c.id),
+                        execution_options=self.options,
+                    )
+                ).scalars()
+            )
+            if not space_ids:
+                return 0
+            await session.execute(
+                insert(SNAPSHOT_COVERAGE)
+                .values(
+                    [
+                        {
+                            "space_id": space_id,
+                            "taken_at": taken_at,
+                            "source": source,
+                            "complete": True,
+                        }
+                        for space_id in space_ids
+                    ]
+                )
+                .on_conflict_do_nothing(),
+                execution_options=self.options,
+            )
+            await session.execute(
+                select(SNAPSHOT_COVERAGE.c.space_id)
+                .where(SNAPSHOT_COVERAGE.c.taken_at == taken_at)
+                .order_by(SNAPSHOT_COVERAGE.c.space_id)
+                .with_for_update(),
+                execution_options=self.options,
+            )
+            await session.execute(
+                update(SNAPSHOT_COVERAGE)
+                .where(SNAPSHOT_COVERAGE.c.taken_at == taken_at)
+                .values(captured_at=func.now(), source=source, complete=True),
+                execution_options=self.options,
+            )
+            await session.execute(
+                delete(STATE_SNAPSHOTS).where(STATE_SNAPSHOTS.c.taken_at == taken_at),
+                execution_options=self.options,
+            )
+            region_name = case(
+                (
+                    REGION_STATES.c.key != "",
+                    func.concat(REGION_STATES.c.region, literal(":"), REGION_STATES.c.key),
+                ),
+                else_=REGION_STATES.c.region,
+            )
+            grouped = list(
+                (
+                    await session.execute(
+                        select(
+                            IDENTITIES.c.space_id,
+                            IDENTITIES.c.service,
+                            region_name.label("region"),
+                            REGION_STATES.c.state,
+                            func.count().label("count"),
+                        )
+                        .join(REGION_STATES, REGION_STATES.c.identity_id == IDENTITIES.c.id)
+                        .group_by(
+                            IDENTITIES.c.space_id,
+                            IDENTITIES.c.service,
+                            region_name,
+                            REGION_STATES.c.state,
+                        ),
+                        execution_options=self.options,
+                    )
+                ).mappings()
+            )
+            if grouped:
+                await session.execute(
+                    insert(STATE_SNAPSHOTS).values(
+                        [
+                            {
+                                "space_id": row["space_id"],
+                                "service": row["service"],
+                                "region": row["region"],
+                                "state": row["state"],
+                                "taken_at": taken_at,
+                                "count": row["count"],
+                            }
+                            for row in grouped
+                        ]
+                    ),
+                    execution_options=self.options,
+                )
+            return len(grouped)
+
+    async def read_state_snapshots(
+        self, space_slug: str, start: datetime, end: datetime
+    ) -> list[StateSnapshotFrame]:
+        async with self.sessionmaker() as session:
+            coverage = list(
+                (
+                    await session.execute(
+                        select(SNAPSHOT_COVERAGE)
+                        .join(SPACES, SPACES.c.id == SNAPSHOT_COVERAGE.c.space_id)
+                        .where(
+                            SPACES.c.slug == space_slug,
+                            SNAPSHOT_COVERAGE.c.taken_at >= start,
+                            SNAPSHOT_COVERAGE.c.taken_at < end,
+                        )
+                        .order_by(SNAPSHOT_COVERAGE.c.taken_at),
+                        execution_options=self.options,
+                    )
+                ).mappings()
+            )
+            if not coverage:
+                return []
+            space_id = coverage[0]["space_id"]
+            rows = list(
+                (
+                    await session.execute(
+                        select(STATE_SNAPSHOTS)
+                        .where(
+                            STATE_SNAPSHOTS.c.space_id == space_id,
+                            STATE_SNAPSHOTS.c.taken_at >= start,
+                            STATE_SNAPSHOTS.c.taken_at < end,
+                        )
+                        .order_by(
+                            STATE_SNAPSHOTS.c.taken_at,
+                            STATE_SNAPSHOTS.c.service,
+                            STATE_SNAPSHOTS.c.region,
+                            STATE_SNAPSHOTS.c.state,
+                        ),
+                        execution_options=self.options,
+                    )
+                ).mappings()
+            )
+        by_hour: defaultdict[datetime, list[StateSnapshotRow]] = defaultdict(list)
+        for row in rows:
+            by_hour[row["taken_at"]].append(
+                StateSnapshotRow(
+                    row["space_id"],
+                    row["service"],
+                    row["region"],
+                    row["state"],
+                    row["taken_at"],
+                    row["count"],
+                )
+            )
+        return [
+            StateSnapshotFrame(
+                row["taken_at"],
+                row["captured_at"],
+                row["source"],
+                row["complete"],
+                tuple(by_hour[row["taken_at"]]),
+            )
+            for row in coverage
+        ]
+
+    async def purge_state_snapshots(self, before: datetime) -> int:
+        async with self._own() as session:
+            result: Any = await session.execute(
+                delete(SNAPSHOT_COVERAGE).where(SNAPSHOT_COVERAGE.c.taken_at < before),
+                execution_options=self.options,
+            )
+            return int(result.rowcount or 0)
 
     # --------------------------------------------------------- исходящие вебхуки
 
@@ -2552,10 +4369,10 @@ class PgStore(Store):
     async def maintenance_spaces(self) -> list[SpaceRef]:
         async with self.sessionmaker() as session:
             rows = await session.execute(
-                select(SPACES.c.id, SPACES.c.slug, SPACES.c.title).order_by(SPACES.c.slug),
+                select(SPACES.c.id, SPACES.c.slug, SPACES.c.title, SPACES.c.timezone).order_by(SPACES.c.slug),
                 execution_options=self.options,
             )
-        return [SpaceRef(row.id, row.slug, row.title) for row in rows]
+        return [SpaceRef(row.id, row.slug, row.title, row.timezone) for row in rows]
 
     async def cleanup_maintenance(
         self, retention: Mapping[str, timedelta], names: frozenset[str]
@@ -2584,6 +4401,14 @@ class PgStore(Store):
                     < func.now() - retention["deliveries"]
                 ),
                 "events": delete(EVENTS).where(EVENTS.c.occurred_at < func.now() - retention["events"]),
+                "import_runs": delete(IMPORT_RUNS).where(
+                    IMPORT_RUNS.c.finished_at.is_not(None),
+                    IMPORT_RUNS.c.finished_at < func.now() - retention["import_runs"],
+                ),
+                "provider_operations": delete(PROVIDER_OPERATIONS).where(
+                    PROVIDER_OPERATIONS.c.finished_at.is_not(None),
+                    PROVIDER_OPERATIONS.c.finished_at < func.now() - retention["provider_operations"],
+                ),
             }
             counts: dict[str, int] = {}
             for name, stmt in statements.items():
@@ -2784,11 +4609,12 @@ class PgStore(Store):
                     remaining -= len(rows)
         return counts
 
-    async def metrics_snapshot(self) -> MetricsSnapshot:
+    async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         cursor_lag: dict[str, int] = {}
+        cursor_updated_at: dict[str, datetime] = {}
         async with self.sessionmaker() as session:
             cursors = await session.execute(
-                select(CURSORS.c.consumer, CURSORS.c.last_tx_id, CURSORS.c.last_id),
+                select(CURSORS.c.consumer, CURSORS.c.last_tx_id, CURSORS.c.last_id, CURSORS.c.updated_at),
                 execution_options=self.options,
             )
             horizon = func.pg_snapshot_xmin(func.pg_current_snapshot())
@@ -2798,6 +4624,11 @@ class PgStore(Store):
                     .select_from(EVENTS)
                     .where(
                         EVENTS.c.external.is_(True),
+                        *(
+                            [EVENTS.c.space_id.in_(select(SPACES.c.id).where(SPACES.c.slug.in_(slugs)))]
+                            if slugs is not None
+                            else []
+                        ),
                         EVENTS.c.tx_id < horizon,
                         tuple_(EVENTS.c.tx_id, EVENTS.c.id)
                         > tuple_(sa_cast(literal(str(cursor.last_tx_id)), XID8()), cursor.last_id),
@@ -2805,24 +4636,64 @@ class PgStore(Store):
                     execution_options=self.options,
                 )
                 cursor_lag[cursor.consumer] = int(lag.scalar_one())
-            webhook_queue = await session.execute(
-                select(func.count())
-                .select_from(WEBHOOK_DELIVERIES)
-                .where(WEBHOOK_DELIVERIES.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED])),
-                execution_options=self.options,
-            )
-            notification_queue = await session.execute(
-                select(func.count())
-                .select_from(NOTIFICATIONS)
-                .where(NOTIFICATIONS.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED])),
-                execution_options=self.options,
-            )
+                cursor_updated_at[cursor.consumer] = cursor.updated_at
+            webhook_scope = [WEBHOOK_ENDPOINTS.c.space_id == SPACES.c.id]
+            notification_scope = [NOTIFICATION_RULES.c.space_id == SPACES.c.id]
+            if slugs is not None:
+                webhook_scope.append(SPACES.c.slug.in_(slugs))
+                notification_scope.append(SPACES.c.slug.in_(slugs))
+            webhook = (
+                await session.execute(
+                    select(
+                        func.count()
+                        .filter(
+                            WEBHOOK_DELIVERIES.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED])
+                        )
+                        .label("queued"),
+                        func.count()
+                        .filter(WEBHOOK_DELIVERIES.c.status == DeliveryStatus.FAILED)
+                        .label("failed"),
+                        func.min(WEBHOOK_DELIVERIES.c.next_attempt_at)
+                        .filter(
+                            WEBHOOK_DELIVERIES.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED])
+                        )
+                        .label("next_attempt_at"),
+                        func.max(WEBHOOK_DELIVERIES.c.delivered_at).label("last_success_at"),
+                        func.count().filter(WEBHOOK_DELIVERIES.c.error.is_not(None)).label("errors"),
+                    )
+                    .select_from(WEBHOOK_DELIVERIES)
+                    .join(WEBHOOK_ENDPOINTS, WEBHOOK_ENDPOINTS.c.id == WEBHOOK_DELIVERIES.c.endpoint_id)
+                    .join(SPACES, *webhook_scope),
+                    execution_options=self.options,
+                )
+            ).one()
+            notification = (
+                await session.execute(
+                    select(
+                        func.count()
+                        .filter(NOTIFICATIONS.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]))
+                        .label("queued"),
+                        func.count().filter(NOTIFICATIONS.c.status == DeliveryStatus.FAILED).label("failed"),
+                        func.min(NOTIFICATIONS.c.scheduled_at)
+                        .filter(NOTIFICATIONS.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]))
+                        .label("next_attempt_at"),
+                        func.max(NOTIFICATIONS.c.sent_at).label("last_success_at"),
+                        func.count().filter(NOTIFICATIONS.c.error.is_not(None)).label("errors"),
+                    )
+                    .select_from(NOTIFICATIONS)
+                    .join(NOTIFICATION_RULES, NOTIFICATION_RULES.c.id == NOTIFICATIONS.c.rule_id)
+                    .join(SPACES, *notification_scope),
+                    execution_options=self.options,
+                )
+            ).one()
         return MetricsSnapshot(
             cursor_lag,
-            {
-                "webhooks": int(webhook_queue.scalar_one()),
-                "notifications": int(notification_queue.scalar_one()),
-            },
+            {"webhooks": int(webhook.queued), "notifications": int(notification.queued)},
+            cursor_updated_at,
+            {"webhooks": int(webhook.failed), "notifications": int(notification.failed)},
+            {"webhooks": webhook.next_attempt_at, "notifications": notification.next_attempt_at},
+            {"webhooks": webhook.last_success_at, "notifications": notification.last_success_at},
+            {"webhooks": bool(webhook.errors), "notifications": bool(notification.errors)},
         )
 
     @asynccontextmanager
@@ -2861,11 +4732,16 @@ class PgStore(Store):
             await conn.close()
 
     async def ensure_space(
-        self, slug: str, title: str | None = None, space_id: UUID | None = None
+        self,
+        slug: str,
+        title: str | None = None,
+        space_id: UUID | None = None,
+        *,
+        timezone: str = "UTC",
     ) -> SpaceRef:
         stmt = (
             insert(SpaceRecord)
-            .values(id=space_id or new_id(), slug=slug, title=title or slug)
+            .values(id=space_id or new_id(), slug=slug, title=title or slug, timezone=timezone)
             .on_conflict_do_nothing(index_elements=[SpaceRecord.slug])
         )
         async with self._own() as session:

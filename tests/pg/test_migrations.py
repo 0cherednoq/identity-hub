@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import text
@@ -12,7 +13,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from identity_hub.postgres import metadata
-from identity_hub.postgres.migrate import migrate
+from identity_hub.postgres.migrate import alembic_config, migrate
 
 pytestmark = pytest.mark.pg
 
@@ -42,7 +43,7 @@ async def test_migrate_is_idempotent_and_uses_own_version_table(prepared_db: Asy
     async with prepared_db.connect() as conn:
         version = (await conn.execute(text("SELECT version_num FROM ih_alembic_version"))).scalar_one()
         trgm = (await conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'"))).scalar()
-    assert version == "0004"
+    assert version == "0007"
     assert trgm == 1
 
 
@@ -58,3 +59,62 @@ async def test_migrate_into_separate_schema(engine: AsyncEngine) -> None:
         )
     assert "ih_alembic_version" in tables
     assert set(metadata.tables) <= tables
+
+
+async def test_admin_foundations_upgrade_from_0004_and_downgrade(engine: AsyncEngine) -> None:
+    schema = "ih_admin_upgrade_test"
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
+    await migrate(engine, db_schema=schema, revision="0004")
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                f'INSERT INTO "{schema}".ih_spaces (id, slug, title) '
+                "VALUES (gen_random_uuid(), 'legacy', 'Legacy')"
+            )
+        )
+    await migrate(engine, db_schema=schema)
+    async with engine.connect() as conn:
+        timezone = (
+            await conn.execute(text(f"SELECT timezone FROM \"{schema}\".ih_spaces WHERE slug = 'legacy'"))
+        ).scalar_one()
+        version = (
+            await conn.execute(text(f'SELECT version_num FROM "{schema}".ih_alembic_version'))
+        ).scalar_one()
+        tables = set(
+            (
+                await conn.execute(
+                    text("SELECT tablename FROM pg_tables WHERE schemaname = :schema"),
+                    {"schema": schema},
+                )
+            ).scalars()
+        )
+    assert timezone == "UTC"
+    assert version == "0007"
+    assert {
+        "ih_import_runs",
+        "ih_import_items",
+        "ih_provider_operations",
+        "ih_stats_rollup",
+        "ih_state_snapshots",
+        "ih_state_snapshot_coverage",
+    } <= tables
+
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: command.downgrade(alembic_config(schema, sync_conn), "0004"))
+    async with engine.connect() as conn:
+        version = (
+            await conn.execute(text(f'SELECT version_num FROM "{schema}".ih_alembic_version'))
+        ).scalar_one()
+        timezone_exists = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = :schema AND table_name = 'ih_spaces' "
+                    "AND column_name = 'timezone'"
+                ),
+                {"schema": schema},
+            )
+        ).scalar()
+    assert version == "0004"
+    assert timezone_exists is None

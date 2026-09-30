@@ -20,6 +20,9 @@ EXPECTED_TABLES = {
     "ih_events", "ih_event_cursors",
     "ih_webhook_endpoints", "ih_webhook_deliveries",
     "ih_notification_channels", "ih_notification_rules", "ih_notifications",
+    "ih_import_runs", "ih_import_items", "ih_provider_operations",
+    "ih_stats_rollup", "ih_stats_metric_batches",
+    "ih_state_snapshots", "ih_state_snapshot_coverage",
 }  # fmt: skip
 
 EXPECTED_INDEXES = {
@@ -40,6 +43,15 @@ EXPECTED_INDEXES = {
     "ix_ih_notifications_due",
     "uq_ih_challenges_open",
     "uq_ih_leases_idempotency",
+    "ix_ih_import_runs_active",
+    "ix_ih_import_items_claim",
+    "ix_ih_provider_operations_claim",
+    "ix_ih_lease_history_space_released",
+    "ix_ih_lease_history_space_holder_acquired",
+    "ix_ih_events_identity_type_occurred",
+    "ix_ih_stats_rollup_series",
+    "ix_ih_stats_rollup_minute_retention",
+    "ix_ih_state_snapshots_series",
 }
 
 

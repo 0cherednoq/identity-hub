@@ -46,7 +46,15 @@ async def test_identity_card(space: SpaceHandle) -> None:
     assert card.lease is not None and card.lease.lease_id == lease.lease_id
     assert [link.role for link in card.links.outgoing] == ["recovery_email"]
     assert [(q.kind, q.used) for q in card.quotas] == [("read_channel", 1)]
-    assert card.data_namespaces == ["farm.notcoin"]
+    assert [item.namespace for item in card.data_namespaces] == ["farm.notcoin"]
+    assert card.data_namespaces[0].schema_version == 1
+    assert card.data_namespaces[0].version == 1
+    assert card.lease.heartbeat_at is not None
+    access = await space.access_card(r.identity_id)
+    assert access.credential.present is True
+    assert access.credential.version == 1
+    assert access.sessions[0].slot == "default"
+    assert not hasattr(access.credential, "ciphertext")
     assert card.admin_url == f"https://admin.test/identities/{r.identity_id}"
     dump = repr(card)
     assert "SECRET" not in dump and str(lease._token) not in dump
@@ -85,6 +93,13 @@ async def test_lease_history_and_stats(space: SpaceHandle) -> None:
     assert stats.operations == {"read_channel": 3}
     assert (stats.succeeded, stats.failed) == (3, 0)
     assert 0 <= stats.utilization <= 1 and stats.longest is not None
+    dashboard = await space.lease_dashboard(group_by="holder")
+    assert dashboard.windows[-1].completed == 4
+    assert dashboard.windows[-1].p95_seconds is not None
+    assert dashboard.slices[0].value == history[0].holder
+    page = await space.lease_history_page(limit=2)
+    assert len(page.items) == 2 and page.next_before is not None
+    assert not hasattr(page.items[0], "token")
 
 
 async def test_reindex_search(

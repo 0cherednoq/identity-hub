@@ -19,7 +19,7 @@ async def test_metrics_hook_called_at_required_points(hub: IdentityHub, space: S
     pool = space.pool("metrics", service="fake_tg", capacity_low=1)
     assert await pool.check_capacity() == 1
 
-    async with pool.lease() as lease:
+    async with pool.lease(wait=0.1) as lease:
         async with lease.operation("read_channel"):
             pass
         with pytest.raises(RuntimeError, match="boom"):
@@ -34,6 +34,8 @@ async def test_metrics_hook_called_at_required_points(hub: IdentityHub, space: S
     names = {event.name for event in metrics.events}
     assert names >= {
         "identity_hub_lease_duration_seconds",
+        "identity_hub_lease_acquisition_seconds",
+        "identity_hub_lease_wait_seconds",
         "identity_hub_operation_duration_seconds",
         "identity_hub_failures_total",
         "identity_hub_pool_available",
@@ -50,3 +52,5 @@ async def test_metrics_hook_called_at_required_points(hub: IdentityHub, space: S
         event.labels["queue"] for event in metrics.events if event.name == "identity_hub_delivery_queue"
     }
     assert queues == {"webhooks", "notifications"}
+    forbidden = {"identity_id", "lease_id", "event_id", "run_id", "external_ref"}
+    assert all(not (forbidden & event.labels.keys()) for event in metrics.events)

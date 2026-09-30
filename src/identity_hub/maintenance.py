@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -42,6 +43,20 @@ class Maintenance:
         self.hub = hub
         self.schedule = schedule or MaintenanceSchedule()
         self._last: dict[str, float] = {}
+        self.last_success_at: dict[str, datetime] = {}
+        self.retrying: set[str] = set()
+
+    async def _run_task(
+        self, name: str, task: Callable[[], Awaitable[MaintenanceReport]]
+    ) -> MaintenanceReport:
+        try:
+            report = await task()
+        except Exception:
+            self.retrying.add(name)
+            raise
+        self.retrying.discard(name)
+        self.last_success_at[name] = self.hub.clock.now()
+        return report
 
     async def run_due(self) -> int:
         """Запустить только задачи, чей монотонный интервал наступил; используется диспетчером."""
@@ -56,7 +71,7 @@ class Maintenance:
         for name, interval, task in groups:
             if name in self._last and now - self._last[name] < interval:
                 continue
-            result = await task()
+            result = await self._run_task(name, task)
             report.counts.update(result.counts)
             self._last[name] = now
         return report.total
@@ -64,8 +79,13 @@ class Maintenance:
     async def run_all(self) -> MaintenanceReport:
         """Принудительно выполнить все задачи один раз (`identity-hub maintenance --once`)."""
         report = MaintenanceReport()
-        for task in (self._normalize, self._leases, self._hourly, self._daily):
-            current = await task()
+        for name, task in (
+            ("normalize", self._normalize),
+            ("leases", self._leases),
+            ("hourly", self._hourly),
+            ("daily", self._daily),
+        ):
+            current = await self._run_task(name, task)
             report.counts.update(current.counts)
         return report
 
@@ -101,6 +121,8 @@ class Maintenance:
             "lease_logs": retention.lease_logs,
             "deliveries": retention.deliveries,
             "operation_keys": retention.operation_keys,
+            "import_runs": retention.import_runs,
+            "provider_operations": retention.provider_operations,
         }
 
     async def _hourly(self) -> MaintenanceReport:
@@ -119,6 +141,8 @@ class Maintenance:
                     "webhook_deliveries",
                     "notifications",
                     "events",
+                    "import_runs",
+                    "provider_operations",
                 }
             ),
         )

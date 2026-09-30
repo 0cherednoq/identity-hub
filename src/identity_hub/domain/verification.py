@@ -182,20 +182,33 @@ class VerificationFlow:
         region = self._command(status, Command(V.UNDER_REVIEW, actor=actor), now)
         return self._decided(status, region, attempts=attempts, submitted_at=now)
 
-    def approve(self, status: VerificationStatus, now: datetime, actor: str) -> VerificationDecision:
-        region = self._command(status, Command(V.VERIFIED, actor=actor, until=self._valid_until(now)), now)
+    def approve(
+        self, status: VerificationStatus, now: datetime, actor: str, reason: str | None = None
+    ) -> VerificationDecision:
+        region = self._command(
+            status,
+            Command(V.VERIFIED, actor=actor, until=self._valid_until(now), reason=reason),
+            now,
+        )
         return self._decided(status, region, verified_at=now)
 
     def reject(
-        self, status: VerificationStatus, code: str, now: datetime, actor: str
+        self,
+        status: VerificationStatus,
+        code: str,
+        now: datetime,
+        actor: str,
+        reason: str | None = None,
     ) -> VerificationDecision:
         if self.spec.reject_codes and code not in self.spec.reject_codes:
             raise ValidationFailed(f"верификация {self.spec.name}: неизвестный код отказа {code!r}")
-        region = self._command(status, Command(V.REJECTED, actor=actor, code=code), now)
+        region = self._command(status, Command(V.REJECTED, actor=actor, code=code, reason=reason), now)
         return self._decided(status, region)
 
-    def abandon(self, status: VerificationStatus, now: datetime, actor: str) -> VerificationDecision:
-        region = self._command(status, Command(V.MISSING, actor=actor), now)
+    def abandon(
+        self, status: VerificationStatus, now: datetime, actor: str, reason: str | None = None
+    ) -> VerificationDecision:
+        region = self._command(status, Command(V.MISSING, actor=actor, reason=reason), now)
         return self._decided(status, region)
 
     def revoke(

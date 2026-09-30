@@ -16,3 +16,8 @@ build/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 .check.log
+admin/.venv/
+admin/frontend/node_modules/
+admin/src/identity_hub_admin/static/
+admin/test-results/
+/.*.log

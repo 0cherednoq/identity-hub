@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from identity_hub.domain.region_specs import AUTH, AVAILABILITY, LIFECYCLE, PROXY_HEALTH, STANDING
@@ -27,10 +29,17 @@ pytestmark = pytest.mark.unit
 
 
 def test_catalog_covers_spec_and_region_events() -> None:
-    assert len([s for s in CATALOG.values() if s.external]) == 30
+    assert len([s for s in CATALOG.values() if s.external]) == 39
     for spec in (LIFECYCLE, STANDING, AUTH, AVAILABILITY, PROXY_HEALTH, VERIFICATION):
         assert spec.event_type in CATALOG
     assert "identity.state.drift" in CATALOG
+    assert CATALOG["identity.session.updated"].external
+    assert CATALOG["identity.tier.reached"].group == "regions"
+    assert CATALOG["identity.tier.lost"].group == "regions"
+    assert CATALOG["admin.accounts.exported"].group == "admin"
+    assert CATALOG["admin.events.exported"].group == "admin"
+    assert CATALOG["admin.integration.changed"].group == "admin"
+    assert CATALOG["admin.import.changed"].group == "admin"
     assert not CATALOG["lease.acquired"].external
     assert not CATALOG["session.saved"].external
 
@@ -89,6 +98,19 @@ def test_scrub_strict_mode_raises() -> None:
     with pytest.raises(SecretLeak):
         scrub({"session": {"auth_key": "k"}}, strict=True)
     assert scrub({"reason": "бан ложный"}, strict=True) == {"reason": "бан ложный"}
+
+
+@given(
+    secret_key=st.sampled_from(
+        ["token", "password", "passwd", "secret", "auth_key", "cookie", "credential", "evidence", "totp"]
+    ),
+    value=st.one_of(st.text(), st.integers(), st.binary(), st.lists(st.text(), max_size=4)),
+)
+def test_scrub_property_redacts_secret_keys_at_any_depth(secret_key: str, value: object) -> None:
+    cleaned = scrub({"outer": [{"safe": True}, {secret_key: value}]})
+    assert cleaned == {"outer": [{"safe": True}, {secret_key: "[redacted]"}]}
+    with pytest.raises(SecretLeak):
+        scrub({"outer": {secret_key: value}}, strict=True)
 
 
 def test_event_to_dict() -> None:

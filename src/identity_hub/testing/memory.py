@@ -20,43 +20,68 @@ from uuid import UUID, uuid4
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import EncryptedPayload, associated_data
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import Severity
-from identity_hub.errors import LeaseUnavailable, SpaceMismatch
+from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
+from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, SpaceMismatch
 from identity_hub.events import Event, EventDraft
+from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
+from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
+    AttentionChallengeRow,
+    AttentionIdentityRow,
     CandidateQuery,
     ChallengeRow,
     ChargeOutcome,
+    CredentialMetadataRow,
     DataRow,
     DoctorIssue,
+    EventReadFilter,
+    EventReadRow,
     IdentityRow,
+    ImportItemResult,
+    ImportItemRow,
+    ImportRunRow,
     LeaseCounters,
     LeaseHistoryRow,
+    LeaseReadRow,
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
     MetricsSnapshot,
     NewIdentity,
+    NewImportItem,
+    NewImportRun,
     NewNotificationChannel,
     NewNotificationRule,
     NewProxy,
     NewWebhookEndpoint,
     NotificationAttempt,
     NotificationChannelRow,
+    NotificationChannelSecretRow,
+    NotificationDeliveryReadRow,
     NotificationEnqueue,
     NotificationRuleRow,
     NotificationTargetRow,
+    OverviewRequirementRow,
+    OverviewServiceRow,
+    OverviewSnapshot,
+    ProviderOperationRow,
+    ProxyBindingHistoryRow,
+    ProxyBoundIdentityRow,
+    ProxyPoolCapacityRow,
+    ProxyReadRow,
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
     SearchFilter,
     ServiceRow,
+    SessionMetadataRow,
     SpaceRef,
     Store,
     StoreTx,
     VerificationRow,
     WebhookAttempt,
     WebhookDeliveryRow,
+    WebhookEndpointReadRow,
     WebhookEndpointRow,
 )
 
@@ -80,14 +105,22 @@ class _MemoryState:
     history: dict[UUID, LeaseHistoryRow] = field(default_factory=dict)
     quotas: dict[tuple[UUID, str, int, datetime], int] = field(default_factory=dict)
     operation_keys: dict[str, tuple[UUID, str, str | None, datetime]] = field(default_factory=dict)
+    import_runs: dict[UUID, ImportRunRow] = field(default_factory=dict)
+    import_items: dict[tuple[UUID, int], dict[str, Any]] = field(default_factory=dict)
+    provider_operations: dict[UUID, ProviderOperationRow] = field(default_factory=dict)
     proxies: dict[UUID, ProxyRow] = field(default_factory=dict)
     proxy_load: dict[UUID, int] = field(default_factory=dict)
     bindings: dict[UUID, UUID] = field(default_factory=dict)
+    binding_times: dict[UUID, datetime] = field(default_factory=dict)
     verifications: dict[tuple[UUID, str], VerificationRow] = field(default_factory=dict)
     challenges: dict[UUID, ChallengeRow] = field(default_factory=dict)
     lease_logs: list[dict[str, Any]] = field(default_factory=list)
     events: list[tuple[Event, UUID, bool]] = field(default_factory=list)
     cursors: dict[str, int] = field(default_factory=dict)
+    rollups: dict[RollupKey, float] = field(default_factory=dict)
+    metric_batches: set[UUID] = field(default_factory=set)
+    state_snapshots: dict[tuple[UUID, str, str, str, datetime], int] = field(default_factory=dict)
+    snapshot_coverage: dict[tuple[UUID, datetime], tuple[datetime, str, bool]] = field(default_factory=dict)
     webhook_endpoints: dict[UUID, WebhookEndpointRow] = field(default_factory=dict)
     webhook_deliveries: dict[int, WebhookDeliveryRow] = field(default_factory=dict)
     notification_channels: dict[UUID, tuple[NotificationChannelRow, EncryptedPayload, UUID]] = field(
@@ -103,6 +136,26 @@ class _MemoryState:
 
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return _utc(value)
+    if isinstance(value, str):
+        try:
+            return _utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return None
+
+
+def _memory_uuid(value: Any) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return value if isinstance(value, UUID) else UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _window_start(now: datetime, charge: QuotaCharge) -> datetime:
@@ -177,6 +230,14 @@ class MemoryTx(StoreTx):
 
     async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
         return self._own(identity_id)
+
+    async def lock_identity_revision(self, identity_id: UUID, expected_revision: int) -> int:
+        row = self._own(identity_id)
+        if row is None:
+            raise NotFound("identity", identity_id)
+        if row.event_seq != expected_revision:
+            raise ConcurrentModification("identity", identity_id, expected_revision, row.event_seq)
+        return row.event_seq
 
     async def update_identity(
         self, identity_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
@@ -434,6 +495,19 @@ class MemoryTx(StoreTx):
             ),
         )
 
+    async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
+        unrestricted = replace(query, shared=True)
+        return min(
+            limit,
+            sum(
+                row.space_id == self.space.id
+                and self._candidate(row, unrestricted)
+                and (lease := self.state.leases.get(row.id)) is not None
+                and lease.expires_at > self._now
+                for row in self.state.identities.values()
+            ),
+        )
+
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
         return next(
             (
@@ -487,6 +561,7 @@ class MemoryTx(StoreTx):
             self._now + timedelta(seconds=ttl_seconds),
             idempotency_key,
             proxy_id,
+            self._now,
         )
         if not shared:
             self.state.leases[identity.id] = lease
@@ -521,7 +596,9 @@ class MemoryTx(StoreTx):
             return None
         expires_at = self._now + timedelta(seconds=ttl_seconds)
         if not shared and current is not None:
-            self.state.leases[lease.identity_id] = replace(current, expires_at=expires_at)
+            self.state.leases[lease.identity_id] = replace(
+                current, expires_at=expires_at, heartbeat_at=self._now
+            )
         self.state.history[lease.lease_id] = replace(
             history, last_heartbeat_at=self._now, **_merge_counters(history, counters)
         )
@@ -643,12 +720,12 @@ class MemoryTx(StoreTx):
             host=row.host,
             port=row.port,
             fingerprint=row.fingerprint,
-            status="unknown",
+            status="alive",
             error_score=0.0,
             fail_streak=0,
             next_check_at=None,
             status_changed_at=self._now,
-            status_source="system",
+            status_source="command",
             checked_at=None,
             pinned_until=None,
             pending_observation=None,
@@ -703,8 +780,25 @@ class MemoryTx(StoreTx):
         if self._own(identity_id) is None or await self.get_proxy(proxy_id) is None:
             return
         self.state.bindings[identity_id] = proxy_id
+        self.state.binding_times[identity_id] = self._now
         if previous is not None and previous != proxy_id:
             self.state.proxy_load[previous] = max(0, self.state.proxy_load.get(previous, 0) - 1)
+
+    async def rebind_proxy(self, identity_id: UUID, proxy_id: UUID) -> tuple[UUID | None, ProxyRow] | None:
+        if self._own(identity_id) is None:
+            return None
+        target = await self.get_proxy(proxy_id)
+        if target is None:
+            return None
+        previous = self.state.bindings.get(identity_id)
+        if previous == proxy_id:
+            return previous, target
+        load = self.state.proxy_load.get(proxy_id, 0)
+        if target.status != "alive" or load >= target.max_identities:
+            return None
+        self.state.proxy_load[proxy_id] = load + 1
+        await self.bind_proxy(identity_id, proxy_id, previous)
+        return previous, target
 
     async def adjust_proxy_load(self, proxy_id: UUID, delta: int) -> None:
         if await self.get_proxy(proxy_id) is not None:
@@ -721,6 +815,222 @@ class MemoryTx(StoreTx):
         ]
         due.sort(key=lambda row: row.next_check_at or self._now)
         return [row.id for row in due[:limit]]
+
+    async def proxy_read_page(
+        self,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+        pool: str | None,
+        status: str | None,
+        capacity: str | None,
+    ) -> list[ProxyReadRow]:
+        result = []
+        for proxy in self.state.proxies.values():
+            if proxy.space_id != self.space.id:
+                continue
+            bound_count = sum(value == proxy.id for value in self.state.bindings.values())
+            if pool is not None and proxy.pool != pool:
+                continue
+            if status is not None and proxy.status != status:
+                continue
+            if capacity == "available" and bound_count >= proxy.max_identities:
+                continue
+            if capacity == "full" and bound_count < proxy.max_identities:
+                continue
+            if capacity == "unbound" and bound_count != 0:
+                continue
+            in_lease_count = sum(
+                row.proxy_id == proxy.id and row.released_at is None for row in self.state.history.values()
+            )
+            result.append(
+                ProxyReadRow(
+                    id=proxy.id,
+                    pool=proxy.pool,
+                    scheme=proxy.scheme,
+                    host=proxy.host,
+                    port=proxy.port,
+                    status=proxy.status,
+                    error_score=proxy.error_score,
+                    fail_streak=proxy.fail_streak,
+                    next_check_at=proxy.next_check_at,
+                    status_changed_at=proxy.status_changed_at,
+                    status_source=proxy.status_source,
+                    checked_at=proxy.checked_at,
+                    pinned_until=proxy.pinned_until,
+                    pending_observation=proxy.pending_observation,
+                    max_identities=proxy.max_identities,
+                    bound_count=bound_count,
+                    in_lease_count=in_lease_count,
+                    created_at=proxy.created_at,
+                )
+            )
+        result.sort(key=lambda row: (row.created_at, row.id), reverse=True)
+        if before is not None:
+            result = [row for row in result if (row.created_at, row.id) < before]
+        return result[:limit]
+
+    async def proxy_bound_identities(self, proxy_id: UUID) -> list[ProxyBoundIdentityRow]:
+        if await self.get_proxy(proxy_id) is None:
+            return []
+        rows = [
+            ProxyBoundIdentityRow(
+                identity_id=identity_id,
+                service=identity.service,
+                external_ref=identity.external_ref,
+                bound_at=self.state.binding_times.get(identity_id, identity.updated_at),
+            )
+            for identity_id, bound_proxy_id in self.state.bindings.items()
+            if bound_proxy_id == proxy_id and (identity := self._own(identity_id)) is not None
+        ]
+        return sorted(rows, key=lambda row: (row.bound_at, row.identity_id), reverse=True)
+
+    async def proxy_read_one(self, proxy_id: UUID) -> ProxyReadRow | None:
+        rows = await self.proxy_read_page(
+            limit=max(1, len(self.state.proxies)),
+            before=None,
+            pool=None,
+            status=None,
+            capacity=None,
+        )
+        return next((row for row in rows if row.id == proxy_id), None)
+
+    async def proxy_pool_capacities(self) -> list[ProxyPoolCapacityRow]:
+        pools: dict[str, dict[str, int]] = {}
+        for proxy in self.state.proxies.values():
+            if proxy.space_id != self.space.id:
+                continue
+            values = pools.setdefault(
+                proxy.pool,
+                {
+                    "proxies": 0,
+                    "alive": 0,
+                    "quarantined": 0,
+                    "dead": 0,
+                    "other": 0,
+                    "max_identities": 0,
+                    "bound_count": 0,
+                    "in_lease_count": 0,
+                },
+            )
+            values["proxies"] += 1
+            values[proxy.status if proxy.status in {"alive", "quarantined", "dead"} else "other"] += 1
+            values["max_identities"] += proxy.max_identities
+            values["bound_count"] += sum(value == proxy.id for value in self.state.bindings.values())
+            values["in_lease_count"] += sum(
+                row.proxy_id == proxy.id and row.released_at is None for row in self.state.history.values()
+            )
+        return [ProxyPoolCapacityRow(pool=pool, **values) for pool, values in sorted(pools.items())]
+
+    async def proxy_binding_history(
+        self,
+        proxy_id: UUID,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+    ) -> list[ProxyBindingHistoryRow]:
+        if await self.get_proxy(proxy_id) is None:
+            return []
+        rows = []
+        for event, space_id, _ in self.state.events:
+            data = event.data
+            if (
+                space_id != self.space.id
+                or event.type != "proxy.binding.changed"
+                or str(proxy_id)
+                not in {
+                    str(event.proxy_id) if event.proxy_id is not None else "",
+                    str(data.get("from_proxy_id") or ""),
+                    str(data.get("to_proxy_id") or ""),
+                }
+            ):
+                continue
+            identity = self._own(event.identity_id) if event.identity_id is not None else None
+            rows.append(
+                ProxyBindingHistoryRow(
+                    event_id=event.event_id,
+                    identity_id=event.identity_id,
+                    service=event.service,
+                    external_ref=identity.external_ref if identity is not None else None,
+                    from_proxy_id=_memory_uuid(data.get("from_proxy_id")),
+                    to_proxy_id=_memory_uuid(data.get("to_proxy_id")),
+                    reason=str(data.get("reason") or "unknown"),
+                    pool=str(data.get("pool") or ""),
+                    actor=event.actor,
+                    occurred_at=event.occurred_at,
+                )
+            )
+        rows.sort(key=lambda row: (row.occurred_at, row.event_id), reverse=True)
+        if before is not None:
+            rows = [row for row in rows if (row.occurred_at, row.event_id) < before]
+        return rows[:limit]
+
+    async def event_read_page(
+        self,
+        filters: EventReadFilter,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+    ) -> list[EventReadRow]:
+        rows = []
+        for event, space_id, external in self.state.events:
+            if space_id != self.space.id or event.type not in filters.allowed_types:
+                continue
+            if filters.severities and event.severity.value not in filters.severities:
+                continue
+            if filters.service is not None and event.service != filters.service:
+                continue
+            if filters.identity_id is not None and event.identity_id != filters.identity_id:
+                continue
+            if filters.proxy_id is not None and event.proxy_id != filters.proxy_id:
+                continue
+            if filters.lease_id is not None and event.lease_id != filters.lease_id:
+                continue
+            if filters.actor is not None and filters.actor not in event.actor:
+                continue
+            if filters.occurred_from is not None and event.occurred_at < filters.occurred_from:
+                continue
+            if filters.occurred_to is not None and event.occurred_at > filters.occurred_to:
+                continue
+            if before is not None and (event.occurred_at, event.event_id) >= before:
+                continue
+            rows.append(
+                EventReadRow(
+                    event_id=event.event_id,
+                    type=event.type,
+                    severity=event.severity.value,
+                    service=event.service,
+                    identity_id=event.identity_id,
+                    proxy_id=event.proxy_id,
+                    lease_id=event.lease_id,
+                    sequence=event.sequence,
+                    actor=event.actor,
+                    data=event.data,
+                    external=external,
+                    occurred_at=event.occurred_at,
+                )
+            )
+        rows.sort(key=lambda row: (row.occurred_at, row.event_id), reverse=True)
+        return rows[:limit]
+
+    async def event_read_one(self, event_id: UUID) -> EventReadRow | None:
+        for event, space_id, external in self.state.events:
+            if space_id == self.space.id and event.event_id == event_id:
+                return EventReadRow(
+                    event_id=event.event_id,
+                    type=event.type,
+                    severity=event.severity.value,
+                    service=event.service,
+                    identity_id=event.identity_id,
+                    proxy_id=event.proxy_id,
+                    lease_id=event.lease_id,
+                    sequence=event.sequence,
+                    actor=event.actor,
+                    data=event.data,
+                    external=external,
+                    occurred_at=event.occurred_at,
+                )
+        return None
 
     async def load_verification(self, identity_id: UUID, factor: str) -> VerificationRow | None:
         return self.state.verifications.get((identity_id, factor)) if self._own(identity_id) else None
@@ -781,6 +1091,8 @@ class MemoryTx(StoreTx):
     def _matches_search(self, row: IdentityRow, flt: SearchFilter) -> bool:
         if flt.exact_id is not None and row.id != flt.exact_id:
             return False
+        if flt.short_id is not None and not row.id.hex.endswith(flt.short_id):
+            return False
         if flt.services and row.service not in flt.services:
             return False
         if flt.tags and not flt.tags.issubset(row.tags):
@@ -797,14 +1109,106 @@ class MemoryTx(StoreTx):
             if not any(self._contains(value, variant) for variant in variants):
                 return False
         haystack = row.search_text.casefold()
-        return all(term.casefold() in haystack for term in flt.terms)
+        if not all(term.casefold() in haystack for term in flt.terms):
+            return False
+        lease = self.state.leases.get(row.id)
+        is_leased = lease is not None and lease.expires_at > self._now
+        if flt.leased is not None and is_leased != flt.leased:
+            return False
+        has_open_challenge = any(
+            challenge.identity_id == row.id and challenge.resolved_at is None
+            for challenge in self.state.challenges.values()
+        )
+        needs_attention = (
+            row.auth_state == AuthState.CHALLENGE or bool(row.requirements) or has_open_challenge
+        )
+        if flt.attention is not None and needs_attention != flt.attention:
+            return False
+        is_available = row.availability == Availability.AVAILABLE or (
+            row.availability in (Availability.PAUSED, Availability.COOLING)
+            and row.availability_until is not None
+            and row.availability_until <= self._now
+        )
+        is_eligible = (
+            row.lifecycle == Lifecycle.READY
+            and row.standing in ("good", "limited")
+            and row.auth_state == AuthState.AUTHENTICATED
+            and is_available
+        )
+        if flt.eligible is not None and is_eligible != flt.eligible:
+            return False
+        regions = [
+            (region, key, state)
+            for (owner, region, key), state in self.state.regions.items()
+            if owner == row.id
+        ]
+        has_override = any(
+            state.pinned_until is not None and state.pinned_until > self._now for _, _, state in regions
+        )
+        if flt.has_override is not None and has_override != flt.has_override:
+            return False
+        if flt.requirement is not None and not any(
+            isinstance(item, dict) and item.get("code") == flt.requirement for item in row.requirements
+        ):
+            return False
+        if flt.factor is not None and flt.factor not in row.verified_factors:
+            return False
+        if flt.factor_state is not None and not any(
+            region == "verification"
+            and state.state == flt.factor_state
+            and (flt.factor is None or key == flt.factor)
+            for region, key, state in regions
+        ):
+            return False
+        if flt.tier_factors:
+            tier_factors = flt.tier_factors.get(row.service)
+            if tier_factors is None or not tier_factors.issubset(row.verified_factors):
+                return False
+        if flt.proxy is not None:
+            proxy_id = self.state.bindings.get(row.id)
+            proxy = self.state.proxies.get(proxy_id) if proxy_id is not None else None
+            wanted = flt.proxy.casefold()
+            if proxy is None or not (
+                wanted in proxy.host.casefold() or str(proxy.id).casefold().startswith(wanted)
+            ):
+                return False
+        is_linked = any(
+            identity_id == row.id or linked_id == row.id
+            for (identity_id, _), linked_id in self.state.links.items()
+        )
+        if flt.linked is not None and is_linked != flt.linked:
+            return False
+        if flt.created_from is not None and row.created_at < flt.created_from:
+            return False
+        if flt.created_to is not None and row.created_at >= flt.created_to:
+            return False
+        history = [item for item in self.state.history.values() if item.identity_id == row.id]
+        if (flt.last_leased_from is not None or flt.last_leased_to is not None) and not any(
+            (flt.last_leased_from is None or item.acquired_at >= flt.last_leased_from)
+            and (flt.last_leased_to is None or item.acquired_at < flt.last_leased_to)
+            for item in history
+        ):
+            return False
+        if (flt.synced_from is not None or flt.synced_to is not None) and not any(
+            state.synced_at is not None
+            and (flt.synced_from is None or state.synced_at >= flt.synced_from)
+            and (flt.synced_to is None or state.synced_at < flt.synced_to)
+            for _, _, state in regions
+        ):
+            return False
+        return not (flt.standing_changed_from is not None or flt.standing_changed_to is not None) or any(
+            region == "standing"
+            and (flt.standing_changed_from is None or state.changed_at >= flt.standing_changed_from)
+            and (flt.standing_changed_to is None or state.changed_at < flt.standing_changed_to)
+            for region, _, state in regions
+        )
 
     async def search_identities(
         self,
         flt: SearchFilter,
         *,
         limit: int,
-        after: tuple[datetime, UUID] | None,
+        after: tuple[Any, UUID] | None,
         count_limit: int | None,
     ) -> tuple[list[IdentityRow], int | None]:
         rows = [
@@ -812,11 +1216,81 @@ class MemoryTx(StoreTx):
             for row in self.state.identities.values()
             if row.space_id == self.space.id and self._matches_search(row, flt)
         ]
-        rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
+        rows.sort(key=lambda row: row.id, reverse=True)
+        non_null = [row for row in rows if self._search_sort_value(row, flt) is not None]
+        nulls = [row for row in rows if self._search_sort_value(row, flt) is None]
+        non_null.sort(
+            key=lambda row: self._search_sort_value(row, flt),
+            reverse=flt.sort_desc,
+        )
+        rows = non_null + nulls
         count = None if count_limit is None else min(len(rows), count_limit + 1)
         if after is not None:
-            rows = [row for row in rows if (row.created_at, row.id) < after]
+            after_value, after_id = after
+            if after_value is None:
+                rows = [
+                    row for row in rows if self._search_sort_value(row, flt) is None and row.id < after_id
+                ]
+            else:
+                remaining: list[IdentityRow] = []
+                for row in rows:
+                    value = self._search_sort_value(row, flt)
+                    if (
+                        value is None
+                        or (value == after_value and row.id < after_id)
+                        or (flt.sort_desc and value < after_value)
+                        or (not flt.sort_desc and value > after_value)
+                    ):
+                        remaining.append(row)
+                rows = remaining
         return rows[:limit], count
+
+    def _search_sort_value(self, row: IdentityRow, flt: SearchFilter) -> Any:
+        if flt.sort_by.startswith("profile:"):
+            value = row.profile.get(flt.sort_by.partition(":")[2])
+            return None if value is None else str(value)
+        if flt.sort_by == "eligible":
+            return int(
+                row.lifecycle == "ready"
+                and row.standing in {"good", "limited"}
+                and row.auth_state == "authenticated"
+                and (
+                    row.availability == "available"
+                    or (
+                        row.availability in {"paused", "cooling"}
+                        and row.availability_until is not None
+                        and row.availability_until <= self._now
+                    )
+                )
+            )
+        if flt.sort_by == "leased":
+            lease = self.state.leases.get(row.id)
+            return int(lease is not None and lease.expires_at > self._now)
+        if flt.sort_by == "last_leased_at":
+            values = [
+                history.acquired_at
+                for history in self.state.history.values()
+                if history.identity_id == row.id
+            ]
+            return max(values, default=None)
+        if flt.sort_by == "synced_at":
+            values = [
+                state.synced_at
+                for (identity_id, _, _), state in self.state.regions.items()
+                if identity_id == row.id and state.synced_at is not None
+            ]
+            return max(values, default=None)
+        if flt.sort_by == "verification_tier":
+            factors = frozenset(row.verified_factors)
+            return max(
+                (
+                    index
+                    for index, required in enumerate(flt.sort_tiers.get(row.service, ()))
+                    if required <= factors
+                ),
+                default=None,
+            )
+        return getattr(row, flt.sort_by)
 
     async def insert_lease_logs(self, rows: Sequence[dict[str, Any]]) -> None:
         for row in rows:
@@ -862,6 +1336,156 @@ class MemoryTx(StoreTx):
                 counts[(row.service, column, str(getattr(row, column)))] += 1
         return [(*key, count) for key, count in sorted(counts.items())]
 
+    async def overview_snapshot(self) -> OverviewSnapshot:
+        rows = [row for row in self.state.identities.values() if row.space_id == self.space.id]
+        open_challenge_ids = {
+            row.identity_id
+            for row in self.state.challenges.values()
+            if row.resolved_at is None and self._own(row.identity_id) is not None
+        }
+        service_names = sorted({row.service for row in rows})
+        services: list[OverviewServiceRow] = []
+        for service in service_names:
+            owned = [row for row in rows if row.service == service]
+            services.append(
+                OverviewServiceRow(
+                    service=service,
+                    total=len(owned),
+                    eligible=sum(
+                        row.lifecycle == "ready"
+                        and row.standing in {"good", "limited"}
+                        and row.auth_state == "authenticated"
+                        and (
+                            row.availability == "available"
+                            or (
+                                row.availability in {"paused", "cooling"}
+                                and row.availability_until is not None
+                                and row.availability_until <= self._now
+                            )
+                        )
+                        for row in owned
+                    ),
+                    leased=sum(
+                        (lease := self.state.leases.get(row.id)) is not None and lease.expires_at > self._now
+                        for row in owned
+                    ),
+                    heavy=sum(
+                        row.standing in {"frozen", "banned", "deleted"}
+                        or row.auth_state == "session_invalid"
+                        or row.availability == "quarantined"
+                        for row in owned
+                    ),
+                    open_challenges=sum(row.id in open_challenge_ids for row in owned),
+                    action_required=sum(
+                        row.id in open_challenge_ids
+                        or row.auth_state == "challenge"
+                        or bool(row.requirements)
+                        for row in owned
+                    ),
+                    added_24h=sum(row.created_at >= self._now - timedelta(days=1) for row in owned),
+                    added_7d=sum(row.created_at >= self._now - timedelta(days=7) for row in owned),
+                )
+            )
+
+        factor_sets: dict[tuple[str, tuple[str, ...]], int] = defaultdict(int)
+        for row in rows:
+            factor_sets[(row.service, tuple(sorted(row.verified_factors)))] += 1
+
+        verification_states: dict[tuple[str, str, str], int] = defaultdict(int)
+        by_id = {row.id: row for row in rows}
+        for (identity_id, region, factor), state in self.state.regions.items():
+            identity = by_id.get(identity_id)
+            if identity is not None and region == "verification":
+                verification_states[(identity.service, factor, state.state)] += 1
+
+        requirement_counts: dict[tuple[str, str], int] = defaultdict(int)
+        requirement_deadlines: dict[tuple[str, str], datetime] = {}
+        for row in rows:
+            seen: set[str] = set()
+            for requirement in row.requirements:
+                if not isinstance(requirement, dict) or not isinstance(requirement.get("code"), str):
+                    continue
+                code = requirement["code"]
+                key = (row.service, code)
+                if code not in seen:
+                    requirement_counts[key] += 1
+                    seen.add(code)
+                deadline = _as_datetime(requirement.get("deadline"))
+                if deadline is not None and (
+                    key not in requirement_deadlines or deadline < requirement_deadlines[key]
+                ):
+                    requirement_deadlines[key] = deadline
+
+        return OverviewSnapshot(
+            services=tuple(services),
+            factor_sets=tuple((*key, count) for key, count in sorted(factor_sets.items())),
+            verification_states=tuple((*key, count) for key, count in sorted(verification_states.items())),
+            requirements=tuple(
+                OverviewRequirementRow(service, code, count, requirement_deadlines.get((service, code)))
+                for (service, code), count in sorted(requirement_counts.items())
+            ),
+        )
+
+    async def attention_rows(self) -> list[AttentionIdentityRow]:
+        result = []
+        for identity in self.state.identities.values():
+            if identity.space_id != self.space.id:
+                continue
+            regions = tuple(
+                (region, key, state)
+                for (owner, region, key), state in self.state.regions.items()
+                if owner == identity.id
+            )
+            challenge = next(
+                (
+                    row
+                    for row in self.state.challenges.values()
+                    if row.identity_id == identity.id and row.resolved_at is None
+                ),
+                None,
+            )
+            region_attention = any(
+                (region == "verification" and state.state == "under_review")
+                or (
+                    state.pinned_until is not None
+                    and state.pinned_until > self._now
+                    and state.raw_status is not None
+                    and state.raw_status != state.state
+                )
+                for region, _, state in regions
+            )
+            if not (
+                identity.requirements
+                or identity.availability == Availability.QUARANTINED
+                or challenge is not None
+                or region_attention
+            ):
+                continue
+            result.append(
+                AttentionIdentityRow(
+                    id=identity.id,
+                    service=identity.service,
+                    external_ref=identity.external_ref,
+                    availability=identity.availability,
+                    error_score=identity.error_score,
+                    requirements=tuple(item for item in identity.requirements if isinstance(item, dict)),
+                    regions=regions,
+                    challenge=(
+                        AttentionChallengeRow(
+                            challenge.id,
+                            challenge.kind,
+                            challenge.hint,
+                            challenge.created_at,
+                            challenge.expires_at,
+                        )
+                        if challenge is not None
+                        else None
+                    ),
+                    updated_at=identity.updated_at,
+                )
+            )
+        return result
+
     async def lease_history(
         self, identity_id: UUID, *, limit: int, before: datetime | None
     ) -> list[LeaseHistoryRow]:
@@ -899,6 +1523,54 @@ class MemoryTx(StoreTx):
             sum(row.succeeded for row in rows),
             sum(row.failed for row in rows),
         )
+
+    def _lease_read_row(self, row: LeaseHistoryRow) -> LeaseReadRow:
+        identity = self.state.identities[row.identity_id]
+        live = self.state.leases.get(row.identity_id)
+        expires_at = live.expires_at if live is not None and live.lease_id == row.lease_id else None
+        return LeaseReadRow(
+            **asdict(row),
+            service=identity.service,
+            external_ref=identity.external_ref,
+            expires_at=expires_at,
+        )
+
+    async def lease_read_rows(self, since: datetime) -> list[LeaseReadRow]:
+        rows = [
+            row
+            for row in self.state.history.values()
+            if self._own(row.identity_id)
+            and (row.acquired_at >= since or row.released_at is None or row.released_at >= since)
+        ]
+        return [
+            self._lease_read_row(row) for row in sorted(rows, key=lambda item: item.acquired_at, reverse=True)
+        ]
+
+    async def lease_read_page(
+        self,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+        pool: str | None,
+        service: str | None,
+        holder: str | None,
+    ) -> list[LeaseReadRow]:
+        rows = []
+        for row in self.state.history.values():
+            identity = self._own(row.identity_id)
+            if identity is None:
+                continue
+            if pool is not None and row.pool != pool:
+                continue
+            if service is not None and identity.service != service:
+                continue
+            if holder is not None and row.holder != holder:
+                continue
+            if before is not None and (row.acquired_at, row.lease_id) >= before:
+                continue
+            rows.append(row)
+        rows.sort(key=lambda item: (item.acquired_at, item.lease_id), reverse=True)
+        return [self._lease_read_row(row) for row in rows[:limit]]
 
     async def identities_page(self, service: str, after: UUID | None, limit: int) -> list[IdentityRow]:
         rows = [
@@ -976,6 +1648,19 @@ class MemoryTx(StoreTx):
         row = self.state.sessions.get((identity_id, slot)) if self._own(identity_id) else None
         return (row[0], row[1]) if row is not None else None
 
+    async def access_metadata(
+        self, identity_id: UUID
+    ) -> tuple[CredentialMetadataRow, list[SessionMetadataRow]]:
+        if self._own(identity_id) is None:
+            return CredentialMetadataRow(False, None, None), []
+        credential = CredentialMetadataRow(identity_id in self.state.credentials, 1, None)
+        sessions = [
+            SessionMetadataRow(slot, status, expires_at, 1, fencing, None)
+            for (owner, slot), (_, status, fencing, expires_at) in sorted(self.state.sessions.items())
+            if owner == identity_id
+        ]
+        return credential, sessions
+
     async def insert_webhook_endpoint(self, row: NewWebhookEndpoint) -> WebhookEndpointRow:
         endpoint = WebhookEndpointRow(
             row.id,
@@ -1006,6 +1691,42 @@ class MemoryTx(StoreTx):
         self.state.webhook_endpoints[endpoint_id] = replace(row, secret=secret)
         return True
 
+    async def update_webhook_endpoint(
+        self,
+        endpoint_id: UUID,
+        *,
+        url: str,
+        description: str | None,
+        event_types: list[str],
+        filter: dict[str, Any],
+        min_severity: str,
+    ) -> bool:
+        row = await self.get_webhook_endpoint(endpoint_id)
+        if row is None:
+            return False
+        self.state.webhook_endpoints[endpoint_id] = replace(
+            row,
+            url=url,
+            description=description,
+            event_types=list(event_types),
+            filter=deepcopy(filter),
+            min_severity=min_severity,
+        )
+        return True
+
+    async def delete_webhook_endpoint(self, endpoint_id: UUID) -> bool:
+        row = await self.get_webhook_endpoint(endpoint_id)
+        if row is None:
+            return False
+        del self.state.webhook_endpoints[endpoint_id]
+        for delivery_id in [
+            key
+            for key, delivery in self.state.webhook_deliveries.items()
+            if delivery.endpoint_id == endpoint_id
+        ]:
+            del self.state.webhook_deliveries[delivery_id]
+        return True
+
     async def set_webhook_enabled(self, endpoint_id: UUID, enabled: bool, reason: str | None) -> bool:
         row = await self.get_webhook_endpoint(endpoint_id)
         if row is None:
@@ -1024,7 +1745,14 @@ class MemoryTx(StoreTx):
         if row is None or endpoint is None:
             return False
         self.state.webhook_deliveries[delivery_id] = replace(
-            row, status="pending", next_attempt_at=self._now, error=None, delivered_at=None
+            row,
+            status="pending",
+            attempt=0,
+            next_attempt_at=self._now,
+            response_code=None,
+            response_ms=None,
+            error=None,
+            delivered_at=None,
         )
         self.state.webhook_endpoints[endpoint.id] = replace(
             endpoint, enabled=True, disabled_reason=None, failure_streak=0
@@ -1036,6 +1764,41 @@ class MemoryTx(StoreTx):
             return []
         rows = [row for row in self.state.webhook_deliveries.values() if row.endpoint_id == endpoint_id]
         return sorted(rows, key=lambda row: row.id, reverse=True)[:limit]
+
+    async def webhook_endpoint_reads(self) -> list[WebhookEndpointReadRow]:
+        return [
+            WebhookEndpointReadRow(
+                row.id,
+                row.url,
+                row.description,
+                deepcopy(row.event_types),
+                deepcopy(row.filter),
+                row.min_severity,
+                row.enabled,
+                row.disabled_reason,
+                row.failure_streak,
+                row.created_at,
+            )
+            for row in sorted(
+                self.state.webhook_endpoints.values(),
+                key=lambda item: (item.created_at, item.id),
+                reverse=True,
+            )
+            if row.space_id == self.space.id
+        ]
+
+    async def webhook_delivery_read_page(
+        self, *, limit: int, before: tuple[datetime, int] | None = None
+    ) -> list[WebhookDeliveryRow]:
+        endpoint_ids = {
+            row.id for row in self.state.webhook_endpoints.values() if row.space_id == self.space.id
+        }
+        rows = [
+            row
+            for row in self.state.webhook_deliveries.values()
+            if row.endpoint_id in endpoint_ids and (before is None or (row.created_at, row.id) < before)
+        ]
+        return sorted(rows, key=lambda row: (row.created_at, row.id), reverse=True)[:limit]
 
     async def insert_notification_channel(self, row: NewNotificationChannel) -> NotificationChannelRow:
         channel = NotificationChannelRow(row.id, row.title, deepcopy(row.config), True, self._now)
@@ -1051,6 +1814,13 @@ class MemoryTx(StoreTx):
             ],
             key=lambda row: (row.created_at, row.id),
         )
+
+    async def get_notification_channel_secret(self, channel_id: UUID) -> NotificationChannelSecretRow | None:
+        item = self.state.notification_channels.get(channel_id)
+        if item is None or item[2] != self.space.id:
+            return None
+        channel, secret, _ = item
+        return NotificationChannelSecretRow(channel.id, deepcopy(channel.config), secret)
 
     async def update_notification_channel(
         self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
@@ -1111,6 +1881,54 @@ class MemoryTx(StoreTx):
             key=lambda row: (row.name, row.id),
         )
 
+    async def notification_delivery_read_page(
+        self, *, limit: int, before: tuple[datetime, int] | None = None
+    ) -> list[NotificationDeliveryReadRow]:
+        rows: list[NotificationDeliveryReadRow] = []
+        for item in self.state.notifications.values():
+            rule = self.state.notification_rules.get(item["rule_id"])
+            channel = self.state.notification_channels.get(item["channel_id"])
+            if (
+                rule is None
+                or channel is None
+                or self.state.notification_rule_spaces.get(rule.id) != self.space.id
+                or channel[2] != self.space.id
+                or (before is not None and (item["scheduled_at"], item["id"]) >= before)
+            ):
+                continue
+            rows.append(
+                NotificationDeliveryReadRow(
+                    item["id"],
+                    rule.id,
+                    rule.name,
+                    channel[0].id,
+                    channel[0].title,
+                    list(item["event_ids"]),
+                    item["status"],
+                    item["attempt"],
+                    item["scheduled_at"],
+                    item.get("sent_at"),
+                    item.get("error"),
+                )
+            )
+        return sorted(rows, key=lambda row: (row.scheduled_at, row.id), reverse=True)[:limit]
+
+    async def retry_notification_delivery(self, delivery_id: int) -> bool:
+        row = self.state.notifications.get(delivery_id)
+        if row is None:
+            return False
+        rule = self.state.notification_rules.get(row["rule_id"])
+        if rule is None or self.state.notification_rule_spaces.get(rule.id) != self.space.id:
+            return False
+        row.update(
+            status="pending",
+            attempt=0,
+            scheduled_at=self._now,
+            sent_at=None,
+            error=None,
+        )
+        return True
+
     async def update_notification_rule(self, rule_id: UUID, values: dict[str, Any]) -> bool:
         rule = self.state.notification_rules.get(rule_id)
         if rule is None or self.state.notification_rule_spaces.get(rule_id) != self.space.id:
@@ -1123,6 +1941,219 @@ class MemoryTx(StoreTx):
             return False
         self.state.notification_rule_spaces.pop(rule_id, None)
         return self.state.notification_rules.pop(rule_id, None) is not None
+
+    # --------------------------------------------------------- admin durable state (A4.1)
+
+    async def get_import_run(self, run_id: UUID) -> ImportRunRow | None:
+        row = self.state.import_runs.get(run_id)
+        return deepcopy(row) if row is not None and row.space_id == self.space.id else None
+
+    async def list_import_runs(self, *, limit: int = 100) -> list[ImportRunRow]:
+        rows = [row for row in self.state.import_runs.values() if row.space_id == self.space.id]
+        rows.sort(key=lambda row: (row.started_at, row.id), reverse=True)
+        return deepcopy(rows[:limit])
+
+    async def create_import_run(self, run: NewImportRun, items: Sequence[NewImportItem]) -> bool:
+        if run.id in self.state.import_runs:
+            return False
+        self.state.import_runs[run.id] = ImportRunRow(
+            id=run.id,
+            space_id=self.space.id,
+            service=run.service,
+            actor=run.actor,
+            source=run.source,
+            state="pending",
+            on_existing=run.on_existing,
+            verify_sessions=run.verify_sessions,
+            labels=dict(run.labels),
+            started_at=self._now,
+            updated_at=self._now,
+            finished_at=None,
+            cancel_requested_at=None,
+            total=run.total,
+            processed=0,
+            created=0,
+            updated=0,
+            skipped=0,
+            failed=0,
+            report={},
+        )
+        for item in items:
+            self.state.import_items[(run.id, item.position)] = {
+                "space_id": self.space.id,
+                "state": "pending",
+                "claim_token": 0,
+                "claimed_by": None,
+                "claim_expires_at": None,
+                "payload": item.payload,
+            }
+        return True
+
+    async def active_import_runs(self, *, limit: int = 10) -> list[ImportRunRow]:
+        rows = [
+            row
+            for row in self.state.import_runs.values()
+            if row.space_id == self.space.id and row.state in {"pending", "running", "cancelling"}
+        ]
+        rows.sort(key=lambda row: (row.started_at, row.id))
+        return deepcopy(rows[:limit])
+
+    async def claim_import_items(
+        self,
+        run_id: UUID,
+        *,
+        worker: str,
+        limit: int,
+        claim_for: timedelta,
+    ) -> list[ImportItemRow]:
+        run = self.state.import_runs.get(run_id)
+        if (
+            run is None
+            or run.space_id != self.space.id
+            or run.cancel_requested_at is not None
+            or run.state not in {"pending", "running"}
+        ):
+            return []
+        for key, item in self.state.import_items.items():
+            if (
+                key[0] == run_id
+                and item["state"] == "running"
+                and item["claim_expires_at"] is not None
+                and item["claim_expires_at"] <= self._now
+            ):
+                item.update(state="pending", claimed_by=None, claim_expires_at=None)
+        positions = sorted(
+            position
+            for (item_run, position), item in self.state.import_items.items()
+            if item_run == run_id and item["state"] == "pending"
+        )[:limit]
+        claimed: list[ImportItemRow] = []
+        for position in positions:
+            item = self.state.import_items[(run_id, position)]
+            item["state"] = "running"
+            item["claim_token"] += 1
+            item["claimed_by"] = worker
+            item["claim_expires_at"] = self._now + claim_for
+            claimed.append(ImportItemRow(run_id, position, item["claim_token"], deepcopy(item["payload"])))
+        if claimed:
+            self.state.import_runs[run_id] = replace(run, state="running", updated_at=self._now)
+        return claimed
+
+    async def finish_import_items(
+        self, run_id: UUID, results: Sequence[ImportItemResult]
+    ) -> ImportRunRow | None:
+        run = self.state.import_runs.get(run_id)
+        if run is None or run.space_id != self.space.id:
+            return None
+        counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        report = deepcopy(run.report)
+        report.setdefault("created_ids", [])
+        report.setdefault("skipped", [])
+        report.setdefault("failed", [])
+        accepted = 0
+        for result in results:
+            item = self.state.import_items.get((run_id, result.position))
+            if item is None or item["state"] != "running" or item["claim_token"] != result.claim_token:
+                continue
+            item.update(
+                state=("succeeded" if result.outcome in {"created", "updated"} else result.outcome),
+                claimed_by=None,
+                claim_expires_at=None,
+                error_code=result.error_code,
+                error=result.error,
+            )
+            accepted += 1
+            counts[result.outcome] += 1
+            if result.outcome == "created" and result.identity_id is not None:
+                report["created_ids"] = [*report["created_ids"][-4999:], str(result.identity_id)]
+            elif result.outcome in {"skipped", "failed"}:
+                report[result.outcome] = [
+                    *report[result.outcome][-999:],
+                    {
+                        "position": result.position,
+                        "external_ref": result.external_ref,
+                        "code": result.error_code,
+                        "reason": result.error,
+                    },
+                ]
+        open_items = [
+            item
+            for (item_run, _), item in self.state.import_items.items()
+            if item_run == run_id and item["state"] in {"pending", "running"}
+        ]
+        running = [item for item in open_items if item["state"] == "running"]
+        terminal = None
+        if run.cancel_requested_at is not None and not running:
+            terminal = "cancelled"
+        elif not open_items:
+            terminal = "succeeded"
+        row = replace(
+            run,
+            state=terminal or run.state,
+            updated_at=self._now,
+            finished_at=self._now if terminal else None,
+            processed=run.processed + accepted,
+            created=run.created + counts["created"],
+            updated=run.updated + counts["updated"],
+            skipped=run.skipped + counts["skipped"],
+            failed=run.failed + counts["failed"],
+            report=report,
+        )
+        self.state.import_runs[run_id] = row
+        if terminal:
+            for key in [key for key in self.state.import_items if key[0] == run_id]:
+                del self.state.import_items[key]
+        return deepcopy(row)
+
+    async def request_import_cancel(self, run_id: UUID) -> ImportRunRow | None:
+        run = self.state.import_runs.get(run_id)
+        if run is None or run.space_id != self.space.id:
+            return None
+        if run.state in {"succeeded", "failed", "cancelled"}:
+            return deepcopy(run)
+        for (item_run, _), item in self.state.import_items.items():
+            if (
+                item_run == run_id
+                and item["state"] == "running"
+                and item["claim_expires_at"] is not None
+                and item["claim_expires_at"] <= self._now
+            ):
+                item.update(state="pending", claimed_by=None, claim_expires_at=None)
+        running = any(
+            item["state"] == "running"
+            for (item_run, _), item in self.state.import_items.items()
+            if item_run == run_id
+        )
+        state = "cancelling" if running else "cancelled"
+        row = replace(
+            run,
+            state=state,
+            cancel_requested_at=self._now,
+            updated_at=self._now,
+            finished_at=self._now if state == "cancelled" else None,
+        )
+        self.state.import_runs[run_id] = row
+        if state == "cancelled":
+            for key in [key for key in self.state.import_items if key[0] == run_id]:
+                del self.state.import_items[key]
+        return deepcopy(row)
+
+    async def list_provider_operations(
+        self,
+        *,
+        identity_id: UUID | None = None,
+        states: frozenset[str] | None = None,
+        limit: int = 100,
+    ) -> list[ProviderOperationRow]:
+        rows = [
+            row
+            for row in self.state.provider_operations.values()
+            if row.space_id == self.space.id
+            and (identity_id is None or row.identity_id == identity_id)
+            and (states is None or row.state in states)
+        ]
+        rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
+        return deepcopy(rows[:limit])
 
     async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
         due: list[tuple[datetime, UUID, str]] = []
@@ -1203,7 +2234,12 @@ class MemoryStore(Store):
             self._state.services = {service.name: deepcopy(service) for service in services}
 
     async def ensure_space(
-        self, slug: str, title: str | None = None, space_id: UUID | None = None
+        self,
+        slug: str,
+        title: str | None = None,
+        space_id: UUID | None = None,
+        *,
+        timezone: str = "UTC",
     ) -> SpaceRef:
         async with self._lock:
             existing = self._state.spaces.get(slug)
@@ -1211,7 +2247,7 @@ class MemoryStore(Store):
                 if space_id is not None and existing.id != space_id:
                     raise SpaceMismatch(f"пространство {slug!r} уже существует с другим id")
                 return existing
-            space = SpaceRef(space_id or uuid4(), slug, title or slug)
+            space = SpaceRef(space_id or uuid4(), slug, title or slug, timezone)
             self._state.spaces[slug] = space
             return space
 
@@ -1219,12 +2255,21 @@ class MemoryStore(Store):
         async with self._lock:
             return self._state.spaces.get(slug)
 
+    async def list_spaces(self, slugs: frozenset[str] | None = None) -> list[SpaceRef]:
+        async with self._lock:
+            return [
+                deepcopy(space)
+                for slug, space in sorted(self._state.spaces.items())
+                if slugs is None or slug in slugs
+            ]
+
     async def process_events(
         self,
         consumer: str,
         handler: Callable[[list[Event]], Awaitable[None]],
         *,
         limit: int,
+        external_only: bool = True,
     ) -> int | None:
         consumer_lock = self._consumer_locks[consumer]
         if consumer_lock.locked():
@@ -1233,7 +2278,9 @@ class MemoryStore(Store):
             async with self._lock:
                 cursor = self._state.cursors.get(consumer, 0)
                 events = [
-                    event for event, _, external in self._state.events if external and event.id > cursor
+                    event
+                    for event, _, external in self._state.events
+                    if (external or not external_only) and event.id > cursor
                 ][:limit]
             if not events:
                 return 0
@@ -1241,6 +2288,137 @@ class MemoryStore(Store):
             async with self._lock:
                 self._state.cursors[consumer] = max(self._state.cursors.get(consumer, 0), events[-1].id)
             return len(events)
+
+    async def rollup_source_events(self, space_slug: str, start: datetime, end: datetime) -> list[Event]:
+        async with self._lock:
+            return [
+                deepcopy(event)
+                for event, _, _ in self._state.events
+                if event.space == space_slug and start <= event.occurred_at < end
+            ]
+
+    async def replace_rollups(self, rows: Sequence[RollupRow]) -> None:
+        async with self._lock:
+            for row in rows:
+                self._state.rollups[row.key] = row.value
+
+    async def apply_metric_rollup_batch(self, batch_id: UUID, rows: Sequence[RollupDelta]) -> bool:
+        async with self._lock:
+            if batch_id in self._state.metric_batches:
+                return False
+            self._state.metric_batches.add(batch_id)
+            for delta in rows:
+                row = delta.row
+                if delta.additive:
+                    self._state.rollups[row.key] = self._state.rollups.get(row.key, 0) + row.value
+                else:
+                    self._state.rollups[row.key] = row.value
+            return True
+
+    async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int:
+        async with self._lock:
+            keys = [
+                key
+                for key in self._state.rollups
+                if key.space_id == space_id and start <= key.bucket_start < end
+            ]
+            for key in keys:
+                del self._state.rollups[key]
+            return len(keys)
+
+    async def purge_minute_rollups(self, before: datetime) -> int:
+        async with self._lock:
+            keys = [
+                key
+                for key in self._state.rollups
+                if key.bucket_size is BucketSize.MINUTE and key.bucket_start < before
+            ]
+            for key in keys:
+                del self._state.rollups[key]
+            return len(keys)
+
+    async def read_rollups(
+        self,
+        space_slug: str,
+        *,
+        metric: str,
+        bucket_size: BucketSize,
+        start: datetime,
+        end: datetime,
+        service: str | None,
+        dims: tuple[tuple[str, str], ...] | None,
+    ) -> list[RollupRow]:
+        async with self._lock:
+            space = self._state.spaces.get(space_slug)
+            if space is None:
+                return []
+            return sorted(
+                (
+                    RollupRow(key, value)
+                    for key, value in self._state.rollups.items()
+                    if key.space_id == space.id
+                    and key.metric == metric
+                    and key.bucket_size is bucket_size
+                    and start <= key.bucket_start < end
+                    and (service is None or key.service == service)
+                    and (dims is None or key.dims == dims)
+                ),
+                key=lambda row: (row.key.bucket_start, row.key.service, row.key.dims),
+            )
+
+    async def capture_state_snapshot(self, taken_at: datetime, *, source: str) -> int:
+        async with self._lock:
+            space_ids = {space.id for space in self._state.spaces.values()}
+            for space_id in space_ids:
+                self._state.snapshot_coverage[space_id, taken_at] = (
+                    self.clock.now(),
+                    source,
+                    True,
+                )
+            for key in [key for key in self._state.state_snapshots if key[-1] == taken_at]:
+                del self._state.state_snapshots[key]
+            counts: defaultdict[tuple[UUID, str, str, str, datetime], int] = defaultdict(int)
+            for (identity_id, region, region_key), row in self._state.regions.items():
+                identity = self._state.identities.get(identity_id)
+                if identity is None:
+                    continue
+                name = f"{region}:{region_key}" if region_key else region
+                counts[identity.space_id, identity.service, name, row.state, taken_at] += 1
+            self._state.state_snapshots.update(counts)
+            return len(counts)
+
+    async def read_state_snapshots(
+        self, space_slug: str, start: datetime, end: datetime
+    ) -> list[StateSnapshotFrame]:
+        async with self._lock:
+            space = self._state.spaces.get(space_slug)
+            if space is None:
+                return []
+            frames: list[StateSnapshotFrame] = []
+            for (space_id, taken_at), (captured_at, source, complete) in sorted(
+                self._state.snapshot_coverage.items(), key=lambda item: item[0][1]
+            ):
+                if space_id != space.id or not (start <= taken_at < end):
+                    continue
+                rows = tuple(
+                    StateSnapshotRow(space_id, service, region, state, at, count)
+                    for (row_space, service, region, state, at), count in sorted(
+                        self._state.state_snapshots.items(), key=lambda item: item[0][1:]
+                    )
+                    if row_space == space_id and at == taken_at
+                )
+                frames.append(StateSnapshotFrame(taken_at, captured_at, source, complete, rows))
+            return frames
+
+    async def purge_state_snapshots(self, before: datetime) -> int:
+        async with self._lock:
+            coverage = [key for key in self._state.snapshot_coverage if key[1] < before]
+            for coverage_key in coverage:
+                del self._state.snapshot_coverage[coverage_key]
+            rows = [key for key in self._state.state_snapshots if key[-1] < before]
+            for row_key in rows:
+                del self._state.state_snapshots[row_key]
+            return len(coverage)
 
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:
@@ -1500,6 +2678,14 @@ class MemoryStore(Store):
                 "events": (self._state.events, lambda item: item[0].occurred_at),
                 "webhook_deliveries": (self._state.webhook_deliveries, lambda item: item.created_at),
                 "notifications": (self._state.notifications, lambda item: item["scheduled_at"]),
+                "import_runs": (
+                    self._state.import_runs,
+                    lambda item: item.finished_at or now,
+                ),
+                "provider_operations": (
+                    self._state.provider_operations,
+                    lambda item: item.finished_at or now,
+                ),
             }
             for name in names & cleanups.keys():
                 collection, timestamp = cleanups[name]
@@ -1513,6 +2699,11 @@ class MemoryStore(Store):
                     keys = [key for key, item in collection.items() if timestamp(item) < cutoff]
                     for key in keys:
                         del collection[key]
+                    if name == "import_runs":
+                        for item_key in [
+                            item_key for item_key in self._state.import_items if item_key[0] in keys
+                        ]:
+                            del self._state.import_items[item_key]
                     result[name] = len(keys)
             return result
 
@@ -1652,22 +2843,65 @@ class MemoryStore(Store):
             )
         return counts
 
-    async def metrics_snapshot(self) -> MetricsSnapshot:
+    async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         async with self._lock:
             external_ids = [event.id for event, _, external in self._state.events if external]
             cursor_lag = {
                 consumer: sum(event_id > cursor for event_id in external_ids)
                 for consumer, cursor in self._state.cursors.items()
             }
+            allowed_space_ids = {
+                ref.id for ref in self._state.spaces.values() if slugs is None or ref.slug in slugs
+            }
+            webhook_rows = [
+                row
+                for row in self._state.webhook_deliveries.values()
+                if (endpoint := self._state.webhook_endpoints.get(row.endpoint_id)) is not None
+                and endpoint.space_id in allowed_space_ids
+            ]
+            notification_rows = [
+                row
+                for row in self._state.notifications.values()
+                if self._state.notification_rule_spaces.get(row["rule_id"]) in allowed_space_ids
+            ]
             return MetricsSnapshot(
                 cursor_lag,
                 {
-                    "webhooks": sum(
-                        row.status in {"pending", "failed"} for row in self._state.webhook_deliveries.values()
+                    "webhooks": sum(row.status in {"pending", "failed"} for row in webhook_rows),
+                    "notifications": sum(row["status"] in {"pending", "failed"} for row in notification_rows),
+                },
+                {},
+                {
+                    "webhooks": sum(row.status == "failed" for row in webhook_rows),
+                    "notifications": sum(row["status"] == "failed" for row in notification_rows),
+                },
+                {
+                    "webhooks": min(
+                        (row.next_attempt_at for row in webhook_rows if row.status in {"pending", "failed"}),
+                        default=None,
                     ),
-                    "notifications": sum(
-                        row["status"] in {"pending", "failed"} for row in self._state.notifications.values()
+                    "notifications": min(
+                        (
+                            row["scheduled_at"]
+                            for row in notification_rows
+                            if row["status"] in {"pending", "failed"}
+                        ),
+                        default=None,
                     ),
+                },
+                {
+                    "webhooks": max(
+                        (row.delivered_at for row in webhook_rows if row.delivered_at is not None),
+                        default=None,
+                    ),
+                    "notifications": max(
+                        (row["sent_at"] for row in notification_rows if row.get("sent_at") is not None),
+                        default=None,
+                    ),
+                },
+                {
+                    "webhooks": any(row.error is not None for row in webhook_rows),
+                    "notifications": any(row.get("error") is not None for row in notification_rows),
                 },
             )
 

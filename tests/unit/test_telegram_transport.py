@@ -1,81 +1,114 @@
-"""FR-15.1: опциональный aiogram-транспорт Telegram."""
+"""FR-15.1: Telegram-транспорт на httpx (прямой вызов Bot API, D-139)."""
 
 from __future__ import annotations
 
-from typing import ClassVar
+import json
 
-import aiogram
+import httpx
 import pytest
+import respx
 from pydantic import SecretStr
 
-from identity_hub.dispatch.notifications import TelegramRateLimited
-from identity_hub.telegram_notify import AiogramTelegramTransport
+from identity_hub.dispatch.notifications import TelegramRateLimited, TelegramRejected
+from identity_hub.telegram_notify import HttpTelegramTransport
 
 pytestmark = pytest.mark.unit
 
-
-class _FakeSession:
-    def __init__(self) -> None:
-        self.closed = False
-
-    async def close(self) -> None:
-        self.closed = True
+TOKEN = "123456:telegram-secret"
+URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 
-class _FakeBot:
-    instances: ClassVar[list[_FakeBot]] = []
-    error: ClassVar[Exception | None] = None
+@respx.mock
+async def test_sends_message_with_thread() -> None:
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"ok": True, "result": {}}))
 
-    def __init__(self, token: str) -> None:
-        self.token = token
-        self.session = _FakeSession()
-        self.calls: list[tuple[int | str, str, int | None]] = []
-        self.instances.append(self)
+    await HttpTelegramTransport().send_message(SecretStr(TOKEN), -100123, "alert", thread_id=7)
 
-    async def send_message(
-        self,
-        chat_id: int | str,
-        text: str,
-        *,
-        message_thread_id: int | None,
-    ) -> None:
-        self.calls.append((chat_id, text, message_thread_id))
-        if self.error is not None:
-            raise self.error
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {
+        "chat_id": -100123,
+        "text": "alert",
+        "message_thread_id": 7,
+    }
 
 
-async def test_aiogram_transport_sends_and_closes_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    _FakeBot.instances.clear()
-    _FakeBot.error = None
-    monkeypatch.setattr(aiogram, "Bot", _FakeBot)
+@respx.mock
+async def test_thread_is_omitted_when_absent() -> None:
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"ok": True, "result": {}}))
 
-    await AiogramTelegramTransport().send_message(
-        SecretStr("123:secret"),
-        -100123,
-        "alert",
-        thread_id=7,
+    await HttpTelegramTransport().send_message(SecretStr(TOKEN), "@ops", "alert")
+
+    assert json.loads(route.calls.last.request.content) == {"chat_id": "@ops", "text": "alert"}
+
+
+@respx.mock
+async def test_injected_client_is_reused_and_not_closed() -> None:
+    respx.post(URL).mock(return_value=httpx.Response(200, json={"ok": True, "result": {}}))
+    async with httpx.AsyncClient() as client:
+        transport = HttpTelegramTransport(client=client)
+        await transport.send_message(SecretStr(TOKEN), 1, "a")
+        await transport.send_message(SecretStr(TOKEN), 1, "b")
+        await transport.aclose()
+        assert not client.is_closed
+
+
+@respx.mock
+async def test_429_is_normalized_to_retry_after() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            429,
+            json={
+                "ok": False,
+                "error_code": 429,
+                "description": "Too Many Requests: retry after 5",
+                "parameters": {"retry_after": 5},
+            },
+        )
     )
 
-    bot = _FakeBot.instances[-1]
-    assert bot.token == "123:secret"
-    assert bot.calls == [(-100123, "alert", 7)]
-    assert bot.session.closed
-
-
-async def test_aiogram_retry_after_is_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeRetryAfter(Exception):
-        def __init__(self, retry_after: float) -> None:
-            self.retry_after = retry_after
-
-    import aiogram.exceptions
-
-    _FakeBot.instances.clear()
-    _FakeBot.error = FakeRetryAfter(4.5)
-    monkeypatch.setattr(aiogram, "Bot", _FakeBot)
-    monkeypatch.setattr(aiogram.exceptions, "TelegramRetryAfter", FakeRetryAfter)
-
     with pytest.raises(TelegramRateLimited) as caught:
-        await AiogramTelegramTransport().send_message(SecretStr("123:secret"), "chat", "alert")
+        await HttpTelegramTransport().send_message(SecretStr(TOKEN), 1, "alert")
 
-    assert caught.value.retry_after == 4.5
-    assert _FakeBot.instances[-1].session.closed
+    assert caught.value.retry_after == 5
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+@respx.mock
+async def test_client_errors_are_permanent_rejections(status: int) -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            status,
+            json={"ok": False, "error_code": status, "description": "Forbidden: bot was blocked by the user"},
+        )
+    )
+
+    with pytest.raises(TelegramRejected) as caught:
+        await HttpTelegramTransport().send_message(SecretStr(TOKEN), 1, "alert")
+
+    assert caught.value.status == status
+    assert "bot was blocked" in str(caught.value)
+    assert TOKEN not in str(caught.value)
+
+
+@respx.mock
+async def test_server_error_is_transient_and_hides_token() -> None:
+    respx.post(URL).mock(return_value=httpx.Response(502, text="Bad Gateway"))
+
+    with pytest.raises(Exception) as caught:
+        await HttpTelegramTransport().send_message(SecretStr(TOKEN), 1, "alert")
+
+    assert not isinstance(caught.value, TelegramRejected | TelegramRateLimited)
+    assert str(caught.value) == "HTTP 502"
+
+
+@respx.mock
+async def test_network_error_hides_token() -> None:
+    respx.post(URL).mock(side_effect=httpx.ConnectError(f"cannot connect to {URL}"))
+
+    with pytest.raises(Exception) as caught:
+        await HttpTelegramTransport().send_message(SecretStr(TOKEN), 1, "alert")
+
+    assert TOKEN not in str(caught.value)
+    assert TOKEN not in repr(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__

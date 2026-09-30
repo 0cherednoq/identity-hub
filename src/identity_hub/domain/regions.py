@@ -8,6 +8,7 @@
 - `Command` — наше намерение, проходит таблицу переходов и guard-ы;
 - `Observation` — факт от платформы, применяется из любого состояния (кроме sticky, D-102);
 - `Override` — ручная правка, обязательны причина и автор, опционально закрепление `pin_for`;
+- `Unpin` — явное снятие закрепления с обязательными причиной и автором;
 - `Timer` — истёк срок `until` временного состояния.
 """
 
@@ -33,6 +34,7 @@ __all__ = [
     "RegionSpec",
     "RegionState",
     "Timer",
+    "Unpin",
     "apply",
 ]
 
@@ -85,13 +87,21 @@ class Override:
 
 
 @dataclass(frozen=True, slots=True)
+class Unpin:
+    """Снять ручное закрепление, не меняя наблюдаемое состояние региона."""
+
+    reason: str
+    actor: str
+
+
+@dataclass(frozen=True, slots=True)
 class Timer:
     """Истёк срок временного состояния (`until <= now`)."""
 
     actor: str = "timer"
 
 
-Change = Command | Observation | Override | Timer
+Change = Command | Observation | Override | Unpin | Timer
 
 
 # ---------------------------------------------------------------- состояние и решение
@@ -213,6 +223,8 @@ def apply(
             return _apply_observation(spec, current, change, now, key)
         case Override():
             return _apply_override(spec, current, change, now, key)
+        case Unpin():
+            return _apply_unpin(spec, current, change, now, key)
         case Timer():
             return _apply_timer(spec, current, change, now, key)
 
@@ -339,6 +351,38 @@ def _apply_override(
     )
     events = (*_changed_events(spec, cur, new, key), overridden) if new.state != cur.state else (overridden,)
     return RegionDecision(Outcome.APPLIED, cur, new, events)
+
+
+def _apply_unpin(
+    spec: RegionSpec, cur: RegionState, command: Unpin, now: datetime, key: str
+) -> RegionDecision:
+    if not command.reason or not command.reason.strip():
+        raise ValidationFailed("unpin требует причину")
+    if not command.actor or not command.actor.strip():
+        raise ValidationFailed("unpin требует автора")
+    if cur.pinned_until is None:
+        raise TransitionNotAllowed(spec.name, cur.state, cur.state, "регион не закреплён")
+    new = replace(
+        cur,
+        changed_at=now,
+        change_source=ChangeSource.OVERRIDE,
+        changed_by=command.actor,
+        change_reason=command.reason,
+        pinned_until=None,
+        version=cur.version + 1,
+    )
+    event = RegionEvent(
+        type="identity.state.unpinned",
+        severity=Severity.WARNING,
+        data={
+            "region": spec.name,
+            "key": key,
+            "state": cur.state,
+            "reason": command.reason,
+            "actor": command.actor,
+        },
+    )
+    return RegionDecision(Outcome.APPLIED, cur, new, (event,))
 
 
 def _apply_timer(spec: RegionSpec, cur: RegionState, timer: Timer, now: datetime, key: str) -> RegionDecision:

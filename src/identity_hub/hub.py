@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from identity_hub._space import SpaceBase
+from identity_hub.admin_audit import AdminAuditMixin
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
@@ -21,18 +23,36 @@ from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
-from identity_hub.importing import ImportingMixin
+from identity_hub.importing import ImportingMixin, ImportRunner
 from identity_hub.links import LinksMixin
 from identity_hub.logging import LeaseLogPolicy, LeaseLogSink
 from identity_hub.maintenance import Maintenance, MaintenanceSchedule
-from identity_hub.metrics import MetricsHook, MetricsReporter, NullMetrics
+from identity_hub.metrics import (
+    CompositeMetrics,
+    MetricsHook,
+    MetricsReporter,
+    NullMetrics,
+    RollupMetricsBuffer,
+)
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
+from identity_hub.read.admin_state import AdminStateMixin
+from identity_hub.read.analytics import AnalyticsMixin
+from identity_hub.read.background import BackgroundSnapshot
 from identity_hub.read.cards import CardsMixin
+from identity_hub.read.deliveries import DeliveriesReadMixin
+from identity_hub.read.events import EventsReadMixin
+from identity_hub.read.human_queue import HumanQueueMixin
+from identity_hub.read.leases import LeasesMixin
+from identity_hub.read.overview import OverviewMixin
+from identity_hub.read.proxies import ProxyReadMixin
 from identity_hub.read.search import SearchMixin
+from identity_hub.read.services import ServiceDescriptor
+from identity_hub.rollups import StatsRollups
 from identity_hub.secrets_admin import SecretsAdminMixin
 from identity_hub.service import Service
+from identity_hub.snapshots import StateSnapshots
 from identity_hub.state import StateMixin
 from identity_hub.store.base import ServiceRow, SpaceRef, Store
 from identity_hub.sync import SyncMixin
@@ -40,6 +60,8 @@ from identity_hub.verifications import RequirementsMixin, VerificationsMixin
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from identity_hub.read.overview import SpaceInfo, SpacesMatrix
 
 __all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle"]
 
@@ -53,6 +75,10 @@ class Retention:
     lease_logs: timedelta = timedelta(days=30)
     deliveries: timedelta = timedelta(days=30)
     operation_keys: timedelta = timedelta(days=7)
+    import_runs: timedelta = timedelta(days=90)
+    provider_operations: timedelta = timedelta(days=30)
+    rollup_minutes: timedelta = timedelta(hours=48)
+    state_snapshots: timedelta = timedelta(days=365)
 
 
 class IdentityHub:
@@ -77,6 +103,7 @@ class IdentityHub:
         telegram_transport: TelegramTransport | None = None,
         maintenance: MaintenanceSchedule | None = None,
         metrics: MetricsHook | None = None,
+        timezone: str = "UTC",
     ) -> None:
         if store is None:
             if sessionmaker is None:
@@ -90,6 +117,11 @@ class IdentityHub:
         self.envelope = Envelope(secrets)
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValidationFailed(f"unknown IANA timezone: {timezone}") from exc
+        self.timezone = timezone
         self.clock: Clock = clock or SystemClock()
         self.proxy_health = proxy_health or ProxyHealthPolicy()
         # sink ih_lease_logs (FR-12.2): подключить `logging.getLogger().addHandler(hub.lease_log_sink)`
@@ -100,20 +132,29 @@ class IdentityHub:
         self.dispatcher.add_consumer("webhooks", self.webhook_dispatcher.handle_events)
         self.dispatcher.add_pump(self.webhook_dispatcher.deliver_due)
         if telegram_transport is None:
-            from identity_hub.telegram_notify import AiogramTelegramTransport
+            from identity_hub.telegram_notify import HttpTelegramTransport
 
-            telegram_transport = AiogramTelegramTransport()
+            telegram_transport = HttpTelegramTransport(timeout=self.webhook_dispatcher.policy.timeout)
         self.notification_dispatcher = NotificationDispatcher(
             self, telegram_transport, policy=self.webhook_dispatcher.policy
         )
         self.dispatcher.add_consumer("notifications", self.notification_dispatcher.handle_events)
         self.dispatcher.add_pump(self.notification_dispatcher.deliver_due)
+        self.import_runner = ImportRunner(self)
+        self.dispatcher.add_pump(self.import_runner.run_once)
         self.maintenance = Maintenance(self, maintenance)
         self.dispatcher.add_pump(self.maintenance.run_due)
         self.doctor = Doctor(self)
-        self.metrics: MetricsHook = metrics or NullMetrics()
+        self.metric_rollups = RollupMetricsBuffer(self)
+        self.metrics: MetricsHook = CompositeMetrics(self.metric_rollups, metrics or NullMetrics())
+        self.dispatcher.add_pump(self.metric_rollups.flush)
         self.metrics_reporter = MetricsReporter(self)
         self.dispatcher.add_pump(self.metrics_reporter.run_due)
+        self.rollups = StatsRollups(self)
+        self.dispatcher.add_consumer("stats-rollups", self.rollups.handle_events, include_internal=True)
+        self.dispatcher.add_pump(self.rollups.run_due)
+        self.state_snapshots = StateSnapshots(self)
+        self.dispatcher.add_pump(self.state_snapshots.run_due)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         self._services: dict[str, Service] = {}
@@ -150,6 +191,46 @@ class IdentityHub:
         """Пространство создаётся при первом обращении к БД."""
         return SpaceHandle(self, slug, title=title, space_id=space_id)
 
+    async def get_space(self, slug: str) -> SpaceHandle | None:
+        """Вернуть существующее пространство, не создавая новое."""
+        ref = self._spaces.get(slug)
+        if ref is None:
+            ref = await self.store.get_space(slug)
+            if ref is None:
+                return None
+            self._spaces[slug] = ref
+        return SpaceHandle(self, ref.slug, title=ref.title, space_id=ref.id)
+
+    async def list_spaces(self, allowed_spaces: Collection[str] | None = None) -> tuple[SpaceInfo, ...]:
+        """List safe space references, applying an optional authorization scope first."""
+        from identity_hub.read.overview import list_spaces
+
+        return await list_spaces(self, allowed_spaces)
+
+    async def spaces_matrix(
+        self,
+        allowed_spaces: Collection[str] | None = None,
+        *,
+        service: str | None = None,
+    ) -> SpacesMatrix:
+        """Return current overview rows for authorized spaces."""
+        from identity_hub.read.overview import spaces_matrix
+
+        return await spaces_matrix(self, allowed_spaces, service=service)
+
+    async def service_catalog(
+        self, allowed_spaces: Collection[str] | None = None
+    ) -> tuple[ServiceDescriptor, ...]:
+        """Return deterministic declarations and counts for authorized spaces."""
+        from identity_hub.read.services import service_catalog
+
+        return await service_catalog(self, allowed_spaces)
+
+    async def background_snapshot(self, allowed_spaces: Collection[str] | None = None) -> BackgroundSnapshot:
+        from identity_hub.read.background import background_snapshot
+
+        return await background_snapshot(self, allowed_spaces)
+
     # --------------------------------------------------------- агрегаты событий
 
     def _record_lease_loss(self, space_slug: str, holder: str) -> None:
@@ -170,13 +251,22 @@ class IdentityHub:
     async def _space_ref(self, slug: str, title: str | None, space_id: UUID | None) -> SpaceRef:
         ref = self._spaces.get(slug)
         if ref is None:
-            ref = await self.store.ensure_space(slug, title, space_id)
+            ref = await self.store.ensure_space(slug, title, space_id, timezone=self.timezone)
             self._spaces[slug] = ref
         return ref
 
 
 class SpaceHandle(
+    AdminStateMixin,
+    AnalyticsMixin,
+    AdminAuditMixin,
     CardsMixin,
+    DeliveriesReadMixin,
+    EventsReadMixin,
+    HumanQueueMixin,
+    LeasesMixin,
+    OverviewMixin,
+    ProxyReadMixin,
     IdentitiesMixin,
     IdentityDataMixin,
     ImportingMixin,

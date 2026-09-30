@@ -24,6 +24,7 @@ from identity_hub.domain.regions import (
     RegionSpec,
     RegionState,
     Timer,
+    Unpin,
     apply,
 )
 from identity_hub.enums import (
@@ -303,6 +304,26 @@ def test_override_same_state_records_event() -> None:
         STANDING, at(Standing.GOOD), Override(Standing.GOOD, reason="проверено", actor="a"), sec(1)
     )
     assert [e.type for e in decision.events] == ["identity.state.overridden"]
+
+
+def test_unpin_preserves_state_and_records_actor_reason() -> None:
+    pinned = apply(
+        STANDING,
+        at(Standing.BANNED),
+        Override(Standing.GOOD, reason="false positive", actor="operator", pin_for=timedelta(hours=1)),
+        sec(1),
+    ).state
+    decision = apply(STANDING, pinned, Unpin(reason="platform fixed", actor="admin"), sec(2))
+
+    assert decision.state.state == Standing.GOOD
+    assert decision.state.pinned_until is None
+    assert decision.state.changed_by == "admin"
+    assert decision.state.change_reason == "platform fixed"
+    assert decision.events[0].type == "identity.state.unpinned"
+    assert decision.events[0].data["reason"] == "platform fixed"
+
+    with pytest.raises(TransitionNotAllowed):
+        apply(STANDING, decision.state, Unpin(reason="again", actor="admin"), sec(3))
 
 
 # ---------------------------------------------------------------- таймер

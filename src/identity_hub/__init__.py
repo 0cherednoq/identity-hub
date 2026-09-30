@@ -3,7 +3,12 @@
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
 from identity_hub.crypto import EnvSecretsProvider, FileSecretsProvider, StaticSecretsProvider, generate_key
-from identity_hub.dispatch.notifications import TelegramRateLimited, TelegramTransport
+from identity_hub.dispatch.notifications import (
+    TelegramRateLimited,
+    TelegramRejected,
+    TelegramTransport,
+    TelegramUnavailable,
+)
 from identity_hub.dispatch.webhooks import WebhookPolicy
 from identity_hub.domain.verification import VerificationMode, VerificationSpec, VerificationTier
 from identity_hub.enums import (
@@ -147,7 +152,9 @@ __all__ = [
     "StaticSecretsProvider",
     "SystemClock",
     "TelegramRateLimited",
+    "TelegramRejected",
     "TelegramTransport",
+    "TelegramUnavailable",
     "TransitionNotAllowed",
     "ValidationFailed",
     "Verification",

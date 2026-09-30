@@ -95,12 +95,12 @@
 | FR-14.3 | `tests/pg/test_webhooks.py::test_5xx_retries_disable_endpoint_and_manual_retry_recovers` |
 | FR-14.4 | `tests/pg/test_webhooks.py::test_5xx_retries_disable_endpoint_and_manual_retry_recovers` |
 | FR-14.5 | `tests/pg/test_webhooks.py::test_redirect_is_recorded_without_following` |
-| FR-15.1 | `tests/unit/test_telegram_transport.py::test_aiogram_transport_sends_and_closes_session` |
+| FR-15.1 | `tests/unit/test_telegram_transport.py::test_sends_message_with_thread` |
 | FR-15.2 | `tests/pg/test_notifications.py::test_immediate_notification_filters_data_and_encrypts_token` |
 | FR-15.3 | `tests/pg/test_notifications.py::test_immediate_notification_filters_data_and_encrypts_token` |
 | FR-15.4 | `tests/pg/test_notifications.py::test_digest_accumulates_one_open_notification` |
 | FR-15.5 | `tests/pg/test_notifications.py::test_immediate_notification_filters_data_and_encrypts_token` |
-| FR-15.6 | `tests/pg/test_notifications.py::test_telegram_429_uses_retry_after` |
+| FR-15.6 | `tests/pg/test_notifications.py::test_telegram_429_uses_retry_after`, `tests/pg/test_notifications.py::test_telegram_rejection_is_dead_without_retries` |
 | FR-15.7 | `tests/pg/test_notifications.py::test_immediate_notification_filters_data_and_encrypts_token` |
 
 ## Гарантии

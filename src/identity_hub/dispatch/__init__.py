@@ -6,7 +6,9 @@ from identity_hub.dispatch.notifications import (
     NotificationRule,
     Notifications,
     TelegramRateLimited,
+    TelegramRejected,
     TelegramTransport,
+    TelegramUnavailable,
 )
 from identity_hub.dispatch.webhooks import (
     WebhookDelivery,
@@ -23,7 +25,9 @@ __all__ = [
     "NotificationRule",
     "Notifications",
     "TelegramRateLimited",
+    "TelegramRejected",
     "TelegramTransport",
+    "TelegramUnavailable",
     "WebhookDelivery",
     "WebhookEndpoint",
     "WebhookPolicy",

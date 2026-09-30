@@ -98,7 +98,10 @@ def build_search_text(
     note: str | None,
 ) -> str:
     """Денормализованная строка для pg_trgm (FR-11.3). `profile` — открытая часть (D-106)."""
-    parts: list[str] = [external_ref, short_id(identity_id)]
+    # UUID lookup has a dedicated exact/id: path. Keeping a random short UUID in
+    # free text makes ordinary terms nondeterministically match unrelated rows.
+    del identity_id
+    parts: list[str] = [external_ref]
     searchable = service.searchable_profile
     if service.profile_encrypted:
         searchable = searchable & service.filterable_profile

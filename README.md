@@ -19,7 +19,7 @@ uv add "identity-hub[postgres,alembic]"
 ```
 
 Дополнительные зависимости подключаются отдельно: `telegram` для транспорта
-уведомлений через aiogram, `webhooks` для HTTP-вебхуков, `structlog` для
+уведомлений через Telegram Bot API (`httpx`, без SDK), `webhooks` для HTTP-вебхуков, `structlog` для
 структурированных логов и `testing` для тестового `MemoryStore` и pytest-плагина.
 
 Для разработки самого репозитория:

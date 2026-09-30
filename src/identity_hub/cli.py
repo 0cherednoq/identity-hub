@@ -8,6 +8,7 @@ import importlib
 import inspect
 import os
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import datetime
 from typing import cast
 
 from identity_hub.hub import IdentityHub
@@ -40,6 +41,29 @@ def _parser() -> argparse.ArgumentParser:
     rotate = sub.add_parser("rotate-key", help="переобернуть DEK активным мастер-ключом")
     _factory_argument(rotate)
     rotate.add_argument("--batch-size", type=int, default=500)
+
+    rollups = sub.add_parser("rollups", help="перестроить или очистить временные роллапы")
+    _factory_argument(rollups)
+    action = rollups.add_mutually_exclusive_group(required=True)
+    action.add_argument("--rebuild", action="store_true", help="перестроить диапазон из ih_events")
+    action.add_argument(
+        "--purge-minutes", action="store_true", help="удалить минутные корзины старше 48 часов"
+    )
+    rollups.add_argument("--space", help="slug пространства для --rebuild")
+    rollups.add_argument("--start", help="начало диапазона ISO 8601 для --rebuild")
+    rollups.add_argument("--end", help="конец диапазона ISO 8601 для --rebuild")
+    rollups.add_argument("--before", help="необязательная граница ISO 8601 для --purge-minutes")
+
+    snapshots = sub.add_parser("snapshots", help="создать или очистить почасовые снимки состояния")
+    _factory_argument(snapshots)
+    snapshot_action = snapshots.add_mutually_exclusive_group(required=True)
+    snapshot_action.add_argument(
+        "--backfill-current",
+        action="store_true",
+        help="снять только текущее состояние без синтетической истории",
+    )
+    snapshot_action.add_argument("--purge", action="store_true", help="удалить старые снимки")
+    snapshots.add_argument("--before", help="граница ISO 8601 для --purge")
     return parser
 
 
@@ -117,6 +141,26 @@ async def async_main(args: argparse.Namespace) -> int:
                 break
         print(total)
         return 0
+    if args.command == "rollups":
+        if args.rebuild:
+            if not args.space or not args.start or not args.end:
+                raise ValueError("--rebuild требует --space, --start и --end")
+            print(
+                await hub.rollups.rebuild(
+                    args.space,
+                    _aware_datetime(args.start),
+                    _aware_datetime(args.end),
+                )
+            )
+        return 0
+    if args.command == "snapshots":
+        if args.backfill_current:
+            print(await hub.state_snapshots.backfill_current())
+            return 0
+        print(await hub.state_snapshots.purge(before=_aware_datetime(args.before) if args.before else None))
+        return 0
+        print(await hub.rollups.purge_minutes(before=_aware_datetime(args.before) if args.before else None))
+        return 0
     raise ValueError("укажите команду")
 
 
@@ -135,3 +179,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
     return 2
+
+
+def _aware_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("время должно содержать timezone offset")
+    return parsed

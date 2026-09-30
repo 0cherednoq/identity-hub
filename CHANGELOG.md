@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Extra `telegram` больше не тянет `aiogram`: уведомления отправляются прямым
+  вызовом Bot API `sendMessage` через `httpx` (`HttpTelegramTransport`).
+  `AiogramTelegramTransport` удалён; протокол `TelegramTransport` не изменился.
+- Ответы Bot API 400/401/403/404 (`TelegramRejected`) сразу переводят уведомление
+  в `dead` без исчерпания ретраев; сеть и 5xx (`TelegramUnavailable`) повторяются.
+
 ## [1.0.0rc1] - 2026-09-27
 
 ### Added

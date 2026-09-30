@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from string import Formatter
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
@@ -34,7 +35,9 @@ __all__ = [
     "NotificationRule",
     "Notifications",
     "TelegramRateLimited",
+    "TelegramRejected",
     "TelegramTransport",
+    "TelegramUnavailable",
 ]
 
 
@@ -53,6 +56,21 @@ class TelegramRateLimited(Exception):
     def __init__(self, retry_after: int | float) -> None:
         self.retry_after = float(retry_after)
         super().__init__("Telegram rate limit")
+
+
+class TelegramRejected(Exception):
+    """Bot API отклонил запрос (неверный токен, чат не найден, бот заблокирован): повтор бесполезен."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        super().__init__(detail[:300])
+
+
+class TelegramUnavailable(Exception):
+    """Временная ошибка сети или Bot API (5xx): доставка повторяется по политике ретраев."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail[:300])
 
 
 class _TelegramSecret(BaseModel):
@@ -122,6 +140,31 @@ def _validate_patterns(patterns: Iterable[str]) -> list[str]:
             except ValueError as exc:
                 raise ValidationFailed(str(exc)) from exc
     return result
+
+
+def _validate_filter(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    result = dict(value or {})
+    for key, expected in result.items():
+        if key not in {"service", "labels"} and not key.startswith("data."):
+            raise ValidationFailed("фильтр уведомления содержит неизвестные поля")
+        if key == "labels" and not isinstance(expected, Mapping):
+            raise ValidationFailed("labels в фильтре уведомления должен быть объектом")
+    return result
+
+
+def _validate_template(template: str | None) -> str | None:
+    if template is None:
+        return None
+    if not template.strip() or len(template) > 4096:
+        raise ValidationFailed("шаблон уведомления должен содержать от 1 до 4096 символов")
+    allowed = {"type", "severity", "service", "actor", "link", "identity_id", "occurred_at"}
+    try:
+        fields = [name for _, name, _, _ in Formatter().parse(template) if name is not None]
+    except ValueError as exc:
+        raise ValidationFailed("ошибка шаблона уведомления") from exc
+    if any(name not in allowed for name in fields):
+        raise ValidationFailed("шаблон уведомления содержит неизвестное или небезопасное поле")
+    return template
 
 
 class Notifications:
@@ -223,9 +266,9 @@ class Notifications:
                     name,
                     _validate_patterns(event_types),
                     str(min_severity),
-                    dict(filter or {}),
+                    _validate_filter(filter),
                     digest_seconds,
-                    template,
+                    _validate_template(template),
                     created_by,
                 )
             )
@@ -249,6 +292,16 @@ class Notifications:
             raise ValidationFailed("неизвестные поля правила уведомлений")
         if "event_types" in values:
             values["event_types"] = _validate_patterns(values["event_types"])
+        if "filter" in values:
+            values["filter"] = _validate_filter(values["filter"])
+        if "template" in values:
+            values["template"] = _validate_template(values["template"])
+        if (
+            "digest_seconds" in values
+            and values["digest_seconds"] is not None
+            and not 10 <= values["digest_seconds"] <= 86400
+        ):
+            raise ValidationFailed("digest_seconds должен быть от 10 до 86400")
         if isinstance(values.get("min_severity"), Severity):
             values["min_severity"] = str(values["min_severity"])
         async with self.space._tx() as tx:
@@ -259,6 +312,31 @@ class Notifications:
         async with self.space._tx() as tx:
             if not await tx.delete_notification_rule(rule_id):
                 raise NotFound("notification rule", rule_id)
+
+    async def send_test(self, channel_id: UUID, text: str) -> None:
+        """Send a direct probe without creating a notification delivery or touching cursors."""
+        if not text.strip() or len(text) > 4096:
+            raise ValidationFailed("тестовое сообщение должно содержать от 1 до 4096 символов")
+        async with self.space._tx() as tx:
+            row = await tx.get_notification_channel_secret(channel_id)
+        if row is None:
+            raise NotFound("notification channel", channel_id)
+        token = self.space.hub.envelope.open_model(
+            _TelegramSecret,
+            row.secret,
+            associated_data("ih_notification_channels", channel_id),
+        ).bot_token
+        await self.space.hub.notification_dispatcher.transport.send_message(
+            token,
+            row.config["chat_id"],
+            text,
+            thread_id=row.config.get("thread_id"),
+        )
+
+    async def retry(self, delivery_id: int) -> None:
+        async with self.space._tx() as tx:
+            if not await tx.retry_notification_delivery(delivery_id):
+                raise NotFound("notification delivery", delivery_id)
 
 
 class NotificationDispatcher:
@@ -311,6 +389,7 @@ class NotificationDispatcher:
             retry_after = self.policy.retry_after(attempt.attempt)
             succeeded = False
             error: str | None = None
+            max_attempts = self.policy.max_failures
             try:
                 token = self.hub.envelope.open_model(
                     _TelegramSecret,
@@ -328,6 +407,12 @@ class NotificationDispatcher:
             except TelegramRateLimited as exc:
                 retry_after = timedelta(seconds=exc.retry_after)
                 error = "TelegramRateLimited"
+            except TelegramRejected as exc:
+                # постоянная ошибка: сразу в dead, без исчерпания ретраев
+                max_attempts = attempt.attempt
+                error = f"TelegramRejected: {exc}"
+            except TelegramUnavailable as exc:
+                error = f"TelegramUnavailable: {exc}"
             except Exception as exc:
                 error = type(exc).__name__
             await self.hub.store.finish_notification(
@@ -336,7 +421,7 @@ class NotificationDispatcher:
                 succeeded=succeeded,
                 error=error,
                 retry_after=retry_after,
-                max_attempts=self.policy.max_failures,
+                max_attempts=max_attempts,
             )
         return len(attempts)
 

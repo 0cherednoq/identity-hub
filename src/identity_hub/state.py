@@ -15,8 +15,8 @@ from uuid import UUID
 from identity_hub._space import SpaceBase, logger
 from identity_hub.domain import regions as machine
 from identity_hub.domain.regions import Change, Command, Observation, RegionDecision, RegionState, Timer
-from identity_hub.enums import Lifecycle
-from identity_hub.errors import ConcurrentModification, ValidationFailed
+from identity_hub.enums import Lifecycle, Standing
+from identity_hub.errors import ConcurrentModification, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.store.base import IdentityRow, StoreTx
 
@@ -165,6 +165,23 @@ class StateMixin(SpaceBase):
     async def retire(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
         return await self.set_lifecycle(identity_id, Lifecycle.RETIRED, actor=actor, reason=reason)
 
+    async def restore_standing(self, identity_id: UUID, *, actor: str, reason: str) -> RegionDecision:
+        """Restore a sticky banned account through the guarded domain transition."""
+        async with self._tx() as tx:
+            identity = await self._identity(tx, identity_id)
+            if identity.standing != Standing.BANNED:
+                raise TransitionNotAllowed(
+                    "standing", identity.standing, Standing.GOOD, "restore разрешён только из banned"
+                )
+            return await apply_region_change(
+                self,
+                tx,
+                identity_id,
+                "standing",
+                "",
+                Command(Standing.GOOD, actor=actor, reason=reason),
+            )
+
     async def override(self, identity_id: UUID, override: Override) -> RegionDecision:
         """Ручная правка из админки (FR-9.1, 9.3). Для lifecycle/availability закрепления нет."""
         if override.pin_for is not None and override.region in COLUMN_REGIONS:
@@ -179,6 +196,22 @@ class StateMixin(SpaceBase):
         )
         async with self._tx() as tx:
             return await apply_region_change(self, tx, identity_id, override.region, override.key, change)
+
+    async def unpin(
+        self, identity_id: UUID, region: str, key: str, *, actor: str, reason: str
+    ) -> RegionDecision:
+        """Remove an override pin without changing the region state."""
+        if region in COLUMN_REGIONS:
+            raise ValidationFailed(f"регион {region} не поддерживает закрепление")
+        async with self._tx() as tx:
+            return await apply_region_change(
+                self,
+                tx,
+                identity_id,
+                region,
+                key,
+                machine.Unpin(reason=reason, actor=actor),
+            )
 
     # --------------------------------------------------------- внутреннее: факты внешнего мира
 

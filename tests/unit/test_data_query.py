@@ -72,7 +72,7 @@ def test_search_text() -> None:
         {"farm": 3, "vip": True},
         "Куплен  у Ивана",
     )
-    assert text == "+380501112233 0000abcd olena shevchenko farm:3 vip:true куплен у ивана"
+    assert text == "+380501112233 olena shevchenko farm:3 vip:true куплен у ивана"
     assert short_id(ID) == "0000abcd"
 
 
@@ -98,7 +98,7 @@ def test_parse_query_regions_status_and_uuid() -> None:
     assert q.any_region == {"cooling"}
     assert q.exact_id == ID
     assert parse_query(f"id:{ID.hex}").exact_id == ID
-    assert parse_query("id:0000abcd").terms == ("0000abcd",)
+    assert parse_query("id:0000abcd").short_id == "0000abcd"
 
 
 def test_parse_query_tolerates_unbalanced_quotes() -> None:

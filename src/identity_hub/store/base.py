@@ -19,34 +19,56 @@ from uuid import UUID
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.events import Event, EventDraft
+from identity_hub.rollups import BucketSize, RollupDelta, RollupRow
+from identity_hub.snapshots import StateSnapshotFrame
 
 NOTIFY_CHANNEL = "ih_events"
 """Канал NOTIFY внешних событий: будит диспетчер при коммите (FR-13.6)."""
 
 __all__ = [
     "NOTIFY_CHANNEL",
+    "AttentionChallengeRow",
+    "AttentionIdentityRow",
     "CandidateQuery",
     "ChallengeRow",
     "ChargeOutcome",
     "DataRow",
     "DoctorIssue",
+    "EventReadFilter",
+    "EventReadRow",
     "IdentityRow",
+    "ImportItemResult",
+    "ImportItemRow",
+    "ImportRunRow",
     "LeaseCounters",
     "LeaseHistoryRow",
+    "LeaseReadRow",
     "LeaseRow",
     "LeaseStatsRow",
     "LinkRow",
     "MetricsSnapshot",
     "NewIdentity",
+    "NewImportItem",
+    "NewImportRun",
     "NewNotificationChannel",
     "NewNotificationRule",
     "NewProxy",
     "NewWebhookEndpoint",
     "NotificationAttempt",
     "NotificationChannelRow",
+    "NotificationChannelSecretRow",
+    "NotificationDeliveryReadRow",
     "NotificationEnqueue",
     "NotificationRuleRow",
     "NotificationTargetRow",
+    "OverviewRequirementRow",
+    "OverviewServiceRow",
+    "OverviewSnapshot",
+    "ProviderOperationRow",
+    "ProxyBindingHistoryRow",
+    "ProxyBoundIdentityRow",
+    "ProxyPoolCapacityRow",
+    "ProxyReadRow",
     "ProxyRow",
     "QuotaCharge",
     "QuotaWindow",
@@ -58,6 +80,7 @@ __all__ = [
     "VerificationRow",
     "WebhookAttempt",
     "WebhookDeliveryRow",
+    "WebhookEndpointReadRow",
     "WebhookEndpointRow",
 ]
 
@@ -67,6 +90,89 @@ class SpaceRef:
     id: UUID
     slug: str
     title: str
+    timezone: str = "UTC"
+
+
+@dataclass(frozen=True, slots=True)
+class ImportRunRow:
+    id: UUID
+    space_id: UUID
+    service: str
+    actor: str
+    source: str
+    state: str
+    on_existing: str
+    verify_sessions: bool
+    labels: dict[str, Any]
+    started_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+    cancel_requested_at: datetime | None
+    total: int
+    processed: int
+    created: int
+    updated: int
+    skipped: int
+    failed: int
+    report: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class NewImportRun:
+    id: UUID
+    service: str
+    actor: str
+    source: str
+    on_existing: str
+    verify_sessions: bool
+    labels: dict[str, Any]
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class NewImportItem:
+    position: int
+    payload: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class ImportItemRow:
+    run_id: UUID
+    position: int
+    claim_token: int
+    payload: EncryptedPayload
+
+
+@dataclass(frozen=True, slots=True)
+class ImportItemResult:
+    position: int
+    claim_token: int
+    outcome: str
+    identity_id: UUID | None = None
+    external_ref: str | None = None
+    error_code: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderOperationRow:
+    id: UUID
+    space_id: UUID
+    identity_id: UUID
+    kind: str
+    state: str
+    attempt: int
+    claim_id: UUID | None
+    claim_token: int
+    claimed_by: str | None
+    claim_expires_at: datetime | None
+    available_at: datetime
+    deadline_at: datetime | None
+    result: dict[str, Any]
+    error_code: str | None
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +188,66 @@ class DoctorIssue:
 class MetricsSnapshot:
     cursor_lag: dict[str, int]
     delivery_queue: dict[str, int]
+    cursor_updated_at: dict[str, datetime] = field(default_factory=dict)
+    delivery_failed: dict[str, int] = field(default_factory=dict)
+    delivery_next_attempt_at: dict[str, datetime | None] = field(default_factory=dict)
+    delivery_last_success_at: dict[str, datetime | None] = field(default_factory=dict)
+    delivery_has_error: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class OverviewServiceRow:
+    """Aggregated, non-secret current facts for one service in a space."""
+
+    service: str
+    total: int
+    eligible: int
+    leased: int
+    heavy: int
+    open_challenges: int
+    action_required: int
+    added_24h: int
+    added_7d: int
+
+
+@dataclass(frozen=True, slots=True)
+class OverviewRequirementRow:
+    service: str
+    code: str
+    count: int
+    next_deadline: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class OverviewSnapshot:
+    """Storage aggregate consumed by the public overview read model."""
+
+    services: tuple[OverviewServiceRow, ...]
+    factor_sets: tuple[tuple[str, tuple[str, ...], int], ...]
+    verification_states: tuple[tuple[str, str, str, int], ...]
+    requirements: tuple[OverviewRequirementRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AttentionChallengeRow:
+    id: UUID
+    kind: str
+    hint: str
+    created_at: datetime
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class AttentionIdentityRow:
+    id: UUID
+    service: str
+    external_ref: str
+    availability: str
+    error_score: float
+    requirements: tuple[dict[str, Any], ...]
+    regions: tuple[tuple[str, str, RegionState], ...]
+    challenge: AttentionChallengeRow | None
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +360,7 @@ class LeaseRow:
     expires_at: datetime
     idempotency_key: str | None = None
     proxy_id: UUID | None = None
+    heartbeat_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -283,6 +450,94 @@ class ProxyRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ProxyReadRow:
+    """Secret-free proxy projection for administrative reads."""
+
+    id: UUID
+    pool: str
+    scheme: str
+    host: str
+    port: int
+    status: str
+    error_score: float
+    fail_streak: int
+    next_check_at: datetime | None
+    status_changed_at: datetime
+    status_source: str
+    checked_at: datetime | None
+    pinned_until: datetime | None
+    pending_observation: str | None
+    max_identities: int
+    bound_count: int
+    in_lease_count: int
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyBoundIdentityRow:
+    identity_id: UUID
+    service: str
+    external_ref: str
+    bound_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyBindingHistoryRow:
+    event_id: UUID
+    identity_id: UUID | None
+    service: str | None
+    external_ref: str | None
+    from_proxy_id: UUID | None
+    to_proxy_id: UUID | None
+    reason: str
+    pool: str
+    actor: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyPoolCapacityRow:
+    pool: str
+    proxies: int
+    alive: int
+    quarantined: int
+    dead: int
+    other: int
+    max_identities: int
+    bound_count: int
+    in_lease_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class EventReadFilter:
+    allowed_types: frozenset[str]
+    severities: frozenset[str] = frozenset()
+    service: str | None = None
+    identity_id: UUID | None = None
+    proxy_id: UUID | None = None
+    lease_id: UUID | None = None
+    actor: str | None = None
+    occurred_from: datetime | None = None
+    occurred_to: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EventReadRow:
+    event_id: UUID
+    type: str
+    severity: str
+    service: str | None
+    identity_id: UUID | None
+    proxy_id: UUID | None
+    lease_id: UUID | None
+    sequence: int | None
+    actor: str
+    data: Mapping[str, Any]
+    external: bool
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ChallengeRow:
     id: UUID
     identity_id: UUID
@@ -307,6 +562,25 @@ class VerificationRow:
     verified_at: datetime | None
     expires_at: datetime | None
     evidence: EncryptedPayload | None
+    via_identity_id: UUID | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialMetadataRow:
+    present: bool
+    version: int | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionMetadataRow:
+    slot: str
+    status: str
+    expires_at: datetime | None
+    version: int
+    written_by_fencing: int
+    updated_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +594,28 @@ class SearchFilter:
     contains: tuple[tuple[str, tuple[dict[str, Any], ...]], ...] = ()  # (profile|labels, варианты @>)
     terms: tuple[str, ...] = ()
     exact_id: UUID | None = None
+    short_id: str | None = None
+    attention: bool | None = None
+    eligible: bool | None = None
+    leased: bool | None = None
+    has_override: bool | None = None
+    requirement: str | None = None
+    factor: str | None = None
+    factor_state: str | None = None
+    tier_factors: dict[str, frozenset[str]] = field(default_factory=dict)
+    sort_tiers: dict[str, tuple[frozenset[str], ...]] = field(default_factory=dict)
+    proxy: str | None = None
+    linked: bool | None = None
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+    last_leased_from: datetime | None = None
+    last_leased_to: datetime | None = None
+    synced_from: datetime | None = None
+    synced_to: datetime | None = None
+    standing_changed_from: datetime | None = None
+    standing_changed_to: datetime | None = None
+    sort_by: str = "created_at"
+    sort_desc: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +637,30 @@ class LeaseHistoryRow:
     succeeded: int
     failed: int
     last_error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseReadRow:
+    """Secret-free space-level lease fact used by operational read models."""
+
+    lease_id: UUID
+    identity_id: UUID
+    service: str
+    external_ref: str
+    fencing: int
+    pool: str
+    holder: str
+    proxy_id: UUID | None
+    acquired_at: datetime
+    last_heartbeat_at: datetime
+    released_at: datetime | None
+    duration: timedelta | None
+    end_reason: str | None
+    operations: dict[str, int]
+    succeeded: int
+    failed: int
+    last_error: str | None
+    expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +719,22 @@ class WebhookDeliveryRow:
 
 
 @dataclass(frozen=True, slots=True)
+class WebhookEndpointReadRow:
+    """Secret-free endpoint projection used by administration reads."""
+
+    id: UUID
+    url: str
+    description: str | None
+    event_types: list[str]
+    filter: dict[str, Any]
+    min_severity: str
+    enabled: bool
+    disabled_reason: str | None
+    failure_streak: int
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class WebhookAttempt:
     delivery_id: int
     attempt: int
@@ -423,6 +759,13 @@ class NotificationChannelRow:
     config: dict[str, Any]
     enabled: bool
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationChannelSecretRow:
+    id: UUID
+    config: dict[str, Any]
+    secret: EncryptedPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,6 +825,23 @@ class NotificationAttempt:
     events: tuple[Event, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class NotificationDeliveryReadRow:
+    """Space-scoped notification journal row without channel secrets."""
+
+    id: int
+    rule_id: UUID
+    rule_name: str
+    channel_id: UUID
+    channel_title: str
+    event_ids: list[UUID]
+    status: str
+    attempt: int
+    scheduled_at: datetime
+    sent_at: datetime | None
+    error: str | None
+
+
 class StoreTx(ABC):
     """Единица работы в рамках одного пространства (своя транзакция или savepoint пользователя)."""
 
@@ -504,6 +864,10 @@ class StoreTx(ABC):
     @abstractmethod
     async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
         """Аккаунт этого пространства (чужое пространство — None)."""
+
+    @abstractmethod
+    async def lock_identity_revision(self, identity_id: UUID, expected_revision: int) -> int:
+        """Lock an identity and atomically verify its event revision for an admin command."""
 
     @abstractmethod
     async def update_identity(
@@ -621,6 +985,10 @@ class StoreTx(ABC):
         """Сколько аккаунтов сейчас можно выдать под запрос (до `limit`) — ёмкость пула."""
 
     @abstractmethod
+    async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
+        """Сколько подходящих аккаунтов сейчас имеют живую аренду."""
+
+    @abstractmethod
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
         """Живая аренда с этим ключом идемпотентности (FR-6.5)."""
 
@@ -725,12 +1093,63 @@ class StoreTx(ABC):
         """Привязать аккаунт к прокси; ёмкость прежнего прокси освобождается."""
 
     @abstractmethod
+    async def rebind_proxy(self, identity_id: UUID, proxy_id: UUID) -> tuple[UUID | None, ProxyRow] | None:
+        """Atomically move one sticky binding when the target is alive and has capacity.
+
+        The identity row serializes competing rebinds. ``None`` means that the target
+        disappeared, became unhealthy or filled up before it could be claimed.
+        """
+
+    @abstractmethod
     async def adjust_proxy_load(self, proxy_id: UUID, delta: int) -> None:
         """bound_count += delta (не ниже 0) — привязка вне выбора прокси (импорт)."""
 
     @abstractmethod
     async def due_proxies(self, limit: int) -> list[UUID]:
         """Прокси в карантине, у которых наступил `next_check_at` (перепроверка по расписанию)."""
+
+    @abstractmethod
+    async def proxy_read_page(
+        self,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+        pool: str | None,
+        status: str | None,
+        capacity: str | None,
+    ) -> list[ProxyReadRow]: ...
+
+    @abstractmethod
+    async def proxy_read_one(self, proxy_id: UUID) -> ProxyReadRow | None: ...
+
+    @abstractmethod
+    async def proxy_bound_identities(self, proxy_id: UUID) -> list[ProxyBoundIdentityRow]: ...
+
+    @abstractmethod
+    async def proxy_pool_capacities(self) -> list[ProxyPoolCapacityRow]: ...
+
+    @abstractmethod
+    async def proxy_binding_history(
+        self,
+        proxy_id: UUID,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+    ) -> list[ProxyBindingHistoryRow]: ...
+
+    # --------------------------------------------------------- журнал событий (P8.1)
+
+    @abstractmethod
+    async def event_read_page(
+        self,
+        filters: EventReadFilter,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+    ) -> list[EventReadRow]: ...
+
+    @abstractmethod
+    async def event_read_one(self, event_id: UUID) -> EventReadRow | None: ...
 
     # --------------------------------------------------------- верификации (P5.4)
 
@@ -761,7 +1180,7 @@ class StoreTx(ABC):
         flt: SearchFilter,
         *,
         limit: int,
-        after: tuple[datetime, UUID] | None,
+        after: tuple[Any, UUID] | None,
         count_limit: int | None,
     ) -> tuple[list[IdentityRow], int | None]:
         """Страница (created_at DESC, id DESC) и ограниченный счётчик (до count_limit + 1)."""
@@ -790,12 +1209,36 @@ class StoreTx(ABC):
         """(service, колонка региона, значение, число аккаунтов) — сводка пула (FR-11.6)."""
 
     @abstractmethod
+    async def overview_snapshot(self) -> OverviewSnapshot:
+        """Агрегаты текущего space без выдачи строк аккаунтов наружу."""
+
+    @abstractmethod
+    async def attention_rows(self) -> list[AttentionIdentityRow]:
+        """Secret-free facts for identities that may require human attention."""
+
+    @abstractmethod
     async def lease_history(
         self, identity_id: UUID, *, limit: int, before: datetime | None
     ) -> list[LeaseHistoryRow]: ...
 
     @abstractmethod
     async def lease_stats(self, identity_id: UUID, since: datetime) -> LeaseStatsRow: ...
+
+    @abstractmethod
+    async def lease_read_rows(self, since: datetime) -> list[LeaseReadRow]:
+        """Lease facts touching ``since..now`` plus open rows, without tokens."""
+
+    @abstractmethod
+    async def lease_read_page(
+        self,
+        *,
+        limit: int,
+        before: tuple[datetime, UUID] | None,
+        pool: str | None,
+        service: str | None,
+        holder: str | None,
+    ) -> list[LeaseReadRow]:
+        """Stable page ordered by ``(acquired_at, lease_id) DESC``."""
 
     @abstractmethod
     async def identities_page(self, service: str, after: UUID | None, limit: int) -> list[IdentityRow]:
@@ -840,6 +1283,12 @@ class StoreTx(ABC):
     async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
         """(payload, status) сессии слота."""
 
+    @abstractmethod
+    async def access_metadata(
+        self, identity_id: UUID
+    ) -> tuple[CredentialMetadataRow, list[SessionMetadataRow]]:
+        """Только metadata доступов; encrypted payload намеренно не возвращается."""
+
     # --------------------------------------------------------- исходящие вебхуки (P8.3)
 
     @abstractmethod
@@ -852,6 +1301,21 @@ class StoreTx(ABC):
     async def update_webhook_secret(self, endpoint_id: UUID, secret: EncryptedPayload) -> bool: ...
 
     @abstractmethod
+    async def update_webhook_endpoint(
+        self,
+        endpoint_id: UUID,
+        *,
+        url: str,
+        description: str | None,
+        event_types: list[str],
+        filter: dict[str, Any],
+        min_severity: str,
+    ) -> bool: ...
+
+    @abstractmethod
+    async def delete_webhook_endpoint(self, endpoint_id: UUID) -> bool: ...
+
+    @abstractmethod
     async def set_webhook_enabled(self, endpoint_id: UUID, enabled: bool, reason: str | None) -> bool: ...
 
     @abstractmethod
@@ -861,6 +1325,14 @@ class StoreTx(ABC):
     @abstractmethod
     async def webhook_deliveries(self, endpoint_id: UUID, limit: int) -> list[WebhookDeliveryRow]: ...
 
+    @abstractmethod
+    async def webhook_endpoint_reads(self) -> list[WebhookEndpointReadRow]: ...
+
+    @abstractmethod
+    async def webhook_delivery_read_page(
+        self, *, limit: int, before: tuple[datetime, int] | None = None
+    ) -> list[WebhookDeliveryRow]: ...
+
     # --------------------------------------------------------- Telegram-уведомления (P8.4)
 
     @abstractmethod
@@ -868,6 +1340,11 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def notification_channels(self) -> list[NotificationChannelRow]: ...
+
+    @abstractmethod
+    async def get_notification_channel_secret(
+        self, channel_id: UUID
+    ) -> NotificationChannelSecretRow | None: ...
 
     @abstractmethod
     async def update_notification_channel(
@@ -884,10 +1361,66 @@ class StoreTx(ABC):
     async def notification_rules(self) -> list[NotificationRuleRow]: ...
 
     @abstractmethod
+    async def notification_delivery_read_page(
+        self, *, limit: int, before: tuple[datetime, int] | None = None
+    ) -> list[NotificationDeliveryReadRow]: ...
+
+    @abstractmethod
+    async def retry_notification_delivery(self, delivery_id: int) -> bool: ...
+
+    @abstractmethod
     async def update_notification_rule(self, rule_id: UUID, values: dict[str, Any]) -> bool: ...
 
     @abstractmethod
     async def delete_notification_rule(self, rule_id: UUID) -> bool: ...
+
+    # --------------------------------------------------------- admin durable state (A4.1)
+
+    @abstractmethod
+    async def get_import_run(self, run_id: UUID) -> ImportRunRow | None:
+        """Return a secret-free import run scoped to this transaction's space."""
+
+    @abstractmethod
+    async def list_import_runs(self, *, limit: int = 100) -> list[ImportRunRow]:
+        """Newest import runs, with redacted reports and without staged payloads."""
+
+    @abstractmethod
+    async def create_import_run(self, run: NewImportRun, items: Sequence[NewImportItem]) -> bool:
+        """Atomically create a run and its encrypted, resumable staging rows."""
+
+    @abstractmethod
+    async def active_import_runs(self, *, limit: int = 10) -> list[ImportRunRow]: ...
+
+    @abstractmethod
+    async def claim_import_items(
+        self,
+        run_id: UUID,
+        *,
+        worker: str,
+        limit: int,
+        claim_for: timedelta,
+    ) -> list[ImportItemRow]:
+        """Claim one committed batch; expired claims become eligible again."""
+
+    @abstractmethod
+    async def finish_import_items(
+        self, run_id: UUID, results: Sequence[ImportItemResult]
+    ) -> ImportRunRow | None:
+        """Fence item results, advance counters and finalize or cancel at a batch boundary."""
+
+    @abstractmethod
+    async def request_import_cancel(self, run_id: UUID) -> ImportRunRow | None:
+        """Stop new claims and cancel now or after the currently claimed batch."""
+
+    @abstractmethod
+    async def list_provider_operations(
+        self,
+        *,
+        identity_id: UUID | None = None,
+        states: frozenset[str] | None = None,
+        limit: int = 100,
+    ) -> list[ProviderOperationRow]:
+        """Durable provider operation state; result must never contain secrets."""
 
     # --------------------------------------------------------- обслуживание (P9.1)
 
@@ -913,12 +1446,21 @@ class Store(ABC):
 
     @abstractmethod
     async def ensure_space(
-        self, slug: str, title: str | None = None, space_id: UUID | None = None
+        self,
+        slug: str,
+        title: str | None = None,
+        space_id: UUID | None = None,
+        *,
+        timezone: str = "UTC",
     ) -> SpaceRef:
         """Получить или создать пространство."""
 
     @abstractmethod
     async def get_space(self, slug: str) -> SpaceRef | None: ...
+
+    @abstractmethod
+    async def list_spaces(self, slugs: frozenset[str] | None = None) -> list[SpaceRef]:
+        """Пространства, отфильтрованные до выполнения дочерних агрегатов."""
 
     # --------------------------------------------------------- журнал событий (P8.1)
 
@@ -929,6 +1471,7 @@ class Store(ABC):
         handler: Callable[[list[Event]], Awaitable[None]],
         *,
         limit: int,
+        external_only: bool = True,
     ) -> int | None:
         """Обработать пачку внешних событий потребителя (G-5.2, G-5.5).
 
@@ -936,6 +1479,48 @@ class Store(ABC):
         экземпляром). Читаются события по `(tx_id, id)` строго после курсора и ниже горизонта
         `pg_snapshot_xmin`. Курсор продвигается только если `handler` завершился без ошибки.
         """
+
+    @abstractmethod
+    async def rollup_source_events(self, space_slug: str, start: datetime, end: datetime) -> list[Event]:
+        """Read committed internal and external events in an occurrence-time range."""
+
+    @abstractmethod
+    async def replace_rollups(self, rows: Sequence[RollupRow]) -> None:
+        """Upsert absolute values for rollup keys; repeating the call is a no-op."""
+
+    @abstractmethod
+    async def apply_metric_rollup_batch(self, batch_id: UUID, rows: Sequence[RollupDelta]) -> bool:
+        """Apply a buffered metric batch exactly once and return whether it was new."""
+
+    @abstractmethod
+    async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int: ...
+
+    @abstractmethod
+    async def purge_minute_rollups(self, before: datetime) -> int: ...
+
+    @abstractmethod
+    async def read_rollups(
+        self,
+        space_slug: str,
+        *,
+        metric: str,
+        bucket_size: BucketSize,
+        start: datetime,
+        end: datetime,
+        service: str | None,
+        dims: tuple[tuple[str, str], ...] | None,
+    ) -> list[RollupRow]: ...
+
+    @abstractmethod
+    async def capture_state_snapshot(self, taken_at: datetime, *, source: str) -> int: ...
+
+    @abstractmethod
+    async def read_state_snapshots(
+        self, space_slug: str, start: datetime, end: datetime
+    ) -> list[StateSnapshotFrame]: ...
+
+    @abstractmethod
+    async def purge_state_snapshots(self, before: datetime) -> int: ...
 
     @abstractmethod
     def listen(self, channel: str) -> AbstractAsyncContextManager[asyncio.Event | None]:
@@ -1016,4 +1601,4 @@ class Store(ABC):
     # --------------------------------------------------------- метрики (P9.3)
 
     @abstractmethod
-    async def metrics_snapshot(self) -> MetricsSnapshot: ...
+    async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot: ...

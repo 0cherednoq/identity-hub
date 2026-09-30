@@ -26,9 +26,10 @@ async def test_update_and_reveal_with_audit(
         session={"auth_key": "K"},
     )
     await space.update_credentials(r.identity_id, {"phone": "+1", "password": "new"}, actor="admin")
+    await space.update_session(r.identity_id, {"auth_key": "K2"}, actor="admin", slot="default")
     creds = await space.reveal_secret(r.identity_id, "credentials", actor="evgeny", reason="поддержка")
     assert creds == {"phone": "+1", "password": "new"}
-    assert (await space.reveal_secret(r.identity_id, "session", actor="evgeny"))["auth_key"] == "K"
+    assert (await space.reveal_secret(r.identity_id, "session", actor="evgeny"))["auth_key"] == "K2"
     with pytest.raises(NotFound):
         await space.reveal_secret(r.identity_id, "session:backup", actor="evgeny")
     with pytest.raises(ValidationFailed):
@@ -43,7 +44,8 @@ async def test_update_and_reveal_with_audit(
     ]
     assert revealed[0].data["reason"] == "поддержка"
     assert any(e.type == "identity.credentials.updated" for e in events)
-    assert all("new" not in str(e.data) and e.data.get("auth_key") != "K" for e in events)
+    assert any(e.type == "identity.session.updated" for e in events)
+    assert all("new" not in str(e.data) and e.data.get("auth_key") not in {"K", "K2"} for e in events)
 
 
 def test_read_models_have_no_secret_fields() -> None:

@@ -364,7 +364,7 @@ flowchart LR
 
 ### 4.15. Уведомления (Telegram)
 
-- **FR-15.1.** В v1 из коробки только канал Telegram-бота (через aiogram). Токен бота хранится зашифрованным, `chat_id` и `thread_id` — в конфигурации канала.
+- **FR-15.1.** В v1 из коробки только канал Telegram-бота (прямой вызов Bot API `sendMessage` через `httpx`, без SDK; D-139). Токен бота хранится зашифрованным, `chat_id` и `thread_id` — в конфигурации канала.
 - **FR-15.2.** Каналы и правила хранятся в БД и редактируются из админки.
 - **FR-15.3.** Правило: типы событий, минимальная severity, декларативный фильтр (`service`, поля `data`, метки аккаунта), окно дайджеста или немедленная отправка, шаблон.
 - **FR-15.4.** Дайджест: события копятся в одном открытом уведомлении на правило до конца окна и отправляются одним сообщением со сводкой.
@@ -395,7 +395,7 @@ IdentityHub                 точка входа: хранилище, шифр�
 |---|---|---|
 | `identity_hub` (ядро) | доменные модели, машины регионов, правила, API | `pydantic`, `sqlalchemy[asyncio]`, `cryptography` |
 | `identity_hub.postgres` | хранилище, миграции, SQL-функции, диспетчер | `asyncpg` или `psycopg` |
-| `identity_hub.telegram_notify` (extra) | канал уведомлений Telegram | `aiogram` |
+| `identity_hub.telegram_notify` (extra) | канал уведомлений Telegram | `httpx` |
 | `identity_hub.logging` | процессор structlog, фильтр logging | — (structlog опционально) |
 | `identity_hub.alembic` | `exclude_identity_hub` для env.py пользователя | `alembic` |
 | `identity_hub.testing` | in-memory хранилище, фабрики, conformance-набор | `pytest` |

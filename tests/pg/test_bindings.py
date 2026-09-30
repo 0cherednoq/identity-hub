@@ -136,3 +136,28 @@ async def test_capacity_released_on_rebind_and_delete(
     assert await counts() == {first.proxy_id: 0, second.proxy_id: 1}
     await space.delete(identity_id)
     assert await counts() == {first.proxy_id: 0, second.proxy_id: 0}
+
+
+async def test_manual_rebind_race_preserves_capacity_and_bound_count(
+    hub: IdentityHub, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    proxy_id, _ = await space.add_proxy("http://10.0.0.9:80", pool="manual", max_identities=1)
+    await space.override_proxy(proxy_id, "alive", reason="ready for manual binding", actor="test:admin")
+    identities = [await make_identity(space) for _ in range(2)]
+
+    results = await asyncio.gather(
+        *(
+            space.rebind_proxy(identity_id, proxy_id, reason="manual support rebind", actor="test:operator")
+            for identity_id in identities
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(result is True for result in results) == 1
+    assert sum(isinstance(result, LeaseUnavailable) for result in results) == 1
+    async with sessionmaker() as session:
+        proxy = (await session.execute(select(ProxyRecord).where(ProxyRecord.id == proxy_id))).scalar_one()
+        bindings = list(
+            (await session.execute(select(BindingRecord).where(BindingRecord.proxy_id == proxy_id))).scalars()
+        )
+    assert proxy.bound_count == len(bindings) == 1

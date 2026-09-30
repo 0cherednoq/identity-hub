@@ -130,6 +130,27 @@ class _LoginContext:
 
 
 class LoginMixin(SpaceBase):
+    async def run_login(self, identity_id: UUID) -> str:
+        """Run one explicit login attempt for a selected identity."""
+        async with self._tx(own=True) as tx:
+            identity = await self._identity(tx, identity_id)
+        service = self.hub.service(identity.service)
+        if service.authenticator is None:
+            raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
+        if identity.auth_state not in LOGIN_AUTH_STATES:
+            raise ValidationFailed(f"вход недоступен из состояния auth={identity.auth_state}")
+        pool: Pool = self.pool(LOGIN_POOL, service=service)  # type: ignore[attr-defined]
+        query = replace(
+            pool.candidate_query(for_operation="probe"),
+            standing=LOGIN_STANDING,
+            lifecycles=ALL_LIFECYCLES,
+            auth_states=LOGIN_AUTH_STATES,
+            among=[identity_id],
+        )
+        lease = await pool.acquire(query=query, wait=pool.timing.ttl)
+        outcome, _error = await self._login(lease, service, None, None, None)
+        return outcome
+
     async def run_logins(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
         """Войти в аккаунты `no_session`/`session_invalid` сервисов с Authenticator (FR-5.4)."""
         services = [self.hub.service(service)] if service is not None else list(self.hub.services)
@@ -158,7 +179,14 @@ class LoginMixin(SpaceBase):
                 _record(report, lease.identity_id, outcome, error)
         return report
 
-    async def answer_challenge(self, challenge_id: UUID, answer: str, *, actor: str = "admin") -> str:
+    async def answer_challenge(
+        self,
+        challenge_id: UUID,
+        answer: str,
+        *,
+        actor: str = "admin",
+        expected_identity_id: UUID | None = None,
+    ) -> str:
         """Ответ человека на challenge (FR-5.5): сохраняется зашифрованным, вход продолжается сразу.
 
         Возвращает исход: `succeeded`, `challenged` (платформа спросила ещё) или `failed`.
@@ -172,10 +200,16 @@ class LoginMixin(SpaceBase):
                 raise NotFound("challenge", challenge_id)
             if challenge.resolved_at is not None:
                 raise ValidationFailed("challenge уже закрыт")
+            if expected_identity_id is not None and challenge.identity_id != expected_identity_id:
+                raise NotFound("challenge", challenge_id)
+            now = await tx.now()
+            if challenge.expires_at is not None and challenge.expires_at <= now:
+                raise ValidationFailed("challenge истёк")
             identity = await self._identity(tx, challenge.identity_id)
             aad = associated_data("ih_challenges", challenge.identity_id, str(challenge.id))
             nonce, ciphertext = envelope.seal_sibling(challenge.context, aad, answer.encode(), "answer")
-            await tx.answer_challenge(challenge_id, nonce, ciphertext)
+            if not await tx.answer_challenge(challenge_id, nonce, ciphertext):
+                raise ValidationFailed("challenge уже закрыт")
             await self._emit(
                 tx,
                 EventDraft(

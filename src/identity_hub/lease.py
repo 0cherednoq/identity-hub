@@ -367,6 +367,7 @@ class Lease:
             "histogram",
             "identity_hub_lease_duration_seconds",
             max(0.0, self.pool.space.hub.clock.monotonic() - self._started_at),
+            space=self.pool.space.slug,
             service=self.service,
             pool=self.pool.name,
             reason=metric_reason,
@@ -376,6 +377,7 @@ class Lease:
                 self.pool.space.hub.metrics,
                 "counter",
                 "identity_hub_failures_total",
+                space=self.pool.space.slug,
                 service=self.service,
                 scope="lease",
                 reason=metric_reason,
@@ -485,6 +487,7 @@ async def acquire(
         )
     space = pool.space
     clock = space.hub.clock
+    started = clock.monotonic()
     wait_seconds = wait.total_seconds() if isinstance(wait, timedelta) else float(wait or 0)
     deadline = clock.monotonic() + wait_seconds
     delay = 0.05
@@ -501,6 +504,7 @@ async def acquire(
                         )
                         if proxy is not None:
                             existing = replace(existing, proxy_id=proxy.id)
+                        _observe_acquisition(pool, started, wait_seconds, "reused")
                         return Lease(pool, existing, identity, proxy)
                 candidate = await tx.pick_candidate(query)
                 if candidate is not None:
@@ -528,6 +532,7 @@ async def acquire(
                         )
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
                     await space._emit(tx, *drafts)
+                    _observe_acquisition(pool, started, wait_seconds, "acquired")
                     return Lease(pool, row, candidate, proxy)
         except _SkipCandidate as skip:
             query = replace(query, exclude=query.exclude | {skip.identity_id})
@@ -536,12 +541,67 @@ async def acquire(
             await _pool_exhausted(pool)
         remaining = deadline - clock.monotonic()
         if remaining <= 0:
+            elapsed = max(0.0, clock.monotonic() - started)
+            record_metric(
+                space.hub.metrics,
+                "histogram",
+                "identity_hub_lease_acquisition_seconds",
+                elapsed,
+                space=space.slug,
+                service=pool.service.name,
+                pool=pool.name,
+                status="empty",
+            )
+            record_metric(
+                space.hub.metrics,
+                "counter",
+                "identity_hub_lease_empty_total",
+                space=space.slug,
+                service=pool.service.name,
+                pool=pool.name,
+            )
+            if wait_seconds > 0:
+                record_metric(
+                    space.hub.metrics,
+                    "histogram",
+                    "identity_hub_lease_wait_seconds",
+                    elapsed,
+                    space=space.slug,
+                    service=pool.service.name,
+                    pool=pool.name,
+                    outcome="timeout",
+                )
             if explicit_query is None:  # внутренние выборки (вход, сверка) ёмкость пула не оценивают
                 with contextlib.suppress(Exception):
                     await pool.check_capacity()
             raise LeaseUnavailable(f"пул {pool.name}: нет свободного аккаунта")
         await asyncio.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)
+
+
+def _observe_acquisition(pool: Pool, started: float, wait_seconds: float, status: str) -> None:
+    elapsed = max(0.0, pool.space.hub.clock.monotonic() - started)
+    record_metric(
+        pool.space.hub.metrics,
+        "histogram",
+        "identity_hub_lease_acquisition_seconds",
+        elapsed,
+        space=pool.space.slug,
+        service=pool.service.name,
+        pool=pool.name,
+        status=status,
+    )
+    if wait_seconds > 0:
+        record_metric(
+            pool.space.hub.metrics,
+            "histogram",
+            "identity_hub_lease_wait_seconds",
+            elapsed,
+            space=pool.space.slug,
+            service=pool.service.name,
+            pool=pool.name,
+            outcome="acquired",
+        )
 
 
 async def _resolve_proxy(

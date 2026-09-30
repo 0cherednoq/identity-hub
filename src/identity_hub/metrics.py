@@ -3,13 +3,40 @@
 from __future__ import annotations
 
 import contextlib
+from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
+from uuid import UUID, uuid4
+
+from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow, bucket_start
 
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub
 
-__all__ = ["Metric", "MetricsHook", "NullMetrics", "RecordingMetrics", "record_metric"]
+__all__ = [
+    "CompositeMetrics",
+    "Metric",
+    "MetricsHook",
+    "NullMetrics",
+    "RecordingMetrics",
+    "RollupMetricsBuffer",
+    "record_metric",
+]
+
+
+_BUILTIN_LABELS: dict[str, frozenset[str]] = {
+    "identity_hub_delivery_queue": frozenset({"queue"}),
+    "identity_hub_dispatcher_cursor_lag": frozenset({"consumer"}),
+    "identity_hub_failures_total": frozenset({"space", "service", "scope", "reason"}),
+    "identity_hub_lease_acquisition_seconds": frozenset({"space", "service", "pool", "status"}),
+    "identity_hub_lease_duration_seconds": frozenset({"space", "service", "pool", "reason"}),
+    "identity_hub_lease_empty_total": frozenset({"space", "service", "pool"}),
+    "identity_hub_lease_wait_seconds": frozenset({"space", "service", "pool", "outcome"}),
+    "identity_hub_operation_duration_seconds": frozenset({"space", "service", "operation", "status"}),
+    "identity_hub_pool_available": frozenset({"space", "service", "pool"}),
+}
+_FORBIDDEN_LABELS = frozenset({"identity_id", "lease_id", "event_id", "run_id", "external_ref"})
 
 
 class MetricsHook(Protocol):
@@ -55,10 +82,102 @@ class RecordingMetrics:
         self.events.append(Metric("histogram", name, float(value), labels))
 
 
+@dataclass(slots=True)
+class CompositeMetrics:
+    rollups: RollupMetricsBuffer
+    downstream: MetricsHook
+
+    def counter(self, name: str, value: float = 1, **labels: str) -> None:
+        self.rollups.counter(name, value, **labels)
+        self.downstream.counter(name, value, **labels)
+
+    def gauge(self, name: str, value: float, **labels: str) -> None:
+        self.rollups.gauge(name, value, **labels)
+        self.downstream.gauge(name, value, **labels)
+
+    def histogram(self, name: str, value: float, **labels: str) -> None:
+        self.rollups.histogram(name, value, **labels)
+        self.downstream.histogram(name, value, **labels)
+
+
+_BufferKey = tuple[str, str, datetime, str, tuple[tuple[str, str], ...]]
+
+
+class RollupMetricsBuffer:
+    """Non-blocking MetricsHook adapter flushed in exactly-once batches by dispatcher."""
+
+    def __init__(self, hub: IdentityHub) -> None:
+        self.hub = hub
+        self._pending: defaultdict[_BufferKey, float] = defaultdict(float)
+        self._retries: list[tuple[UUID, dict[_BufferKey, float]]] = []
+
+    def counter(self, name: str, value: float = 1, **labels: str) -> None:
+        self._record("add", f"telemetry.{name.removeprefix('identity_hub_')}", value, labels)
+
+    def gauge(self, name: str, value: float, **labels: str) -> None:
+        self._record("set", f"telemetry.{name.removeprefix('identity_hub_')}", value, labels)
+
+    def histogram(self, name: str, value: float, **labels: str) -> None:
+        base = f"telemetry.{name.removeprefix('identity_hub_')}"
+        self._record("add", f"{base}.sum", value, labels)
+        self._record("add", f"{base}.count", 1, labels)
+
+    def _record(self, mode: str, metric: str, value: float, labels: dict[str, str]) -> None:
+        space = labels.get("space")
+        if space is None:
+            return
+        dimensions = tuple(sorted((key, item) for key, item in labels.items() if key not in {"space"}))
+        minute = bucket_start(self.hub.clock.now(), BucketSize.MINUTE, "UTC")
+        key = (mode, metric, minute, space, dimensions)
+        if mode == "set":
+            self._pending[key] = float(value)
+        else:
+            self._pending[key] += float(value)
+
+    async def flush(self) -> int:
+        if self._pending:
+            self._retries.append((uuid4(), dict(self._pending)))
+            self._pending.clear()
+        if not self._retries:
+            return 0
+        spaces = {space.slug: space for space in await self.hub.store.list_spaces()}
+        batch_id, batch = self._retries[0]
+        deltas: list[RollupDelta] = []
+        for (mode, metric, minute, slug, labels), value in batch.items():
+            space = spaces.get(slug)
+            if space is None:
+                continue
+            label_map = dict(labels)
+            service = label_map.pop("service", "")
+            key = RollupKey(
+                space.id,
+                service,
+                metric,
+                tuple(sorted(label_map.items())),
+                minute,
+                BucketSize.MINUTE,
+            )
+            deltas.append(RollupDelta(RollupRow(key, value), additive=mode == "add"))
+        await self.hub.store.apply_metric_rollup_batch(batch_id, deltas)
+        self._retries.pop(0)
+        return len(deltas)
+
+
 def record_metric(hook: MetricsHook, kind: str, name: str, value: float = 1, **labels: str) -> None:
     """Сбой пользовательского backend'а метрик не должен ломать доменную операцию."""
     with contextlib.suppress(Exception):
+        _validate_labels(name, labels)
         getattr(hook, kind)(name, value, **labels)
+
+
+def _validate_labels(name: str, labels: dict[str, str]) -> None:
+    if _FORBIDDEN_LABELS & labels.keys():
+        raise ValueError("high-cardinality identity labels are forbidden")
+    expected = _BUILTIN_LABELS.get(name)
+    if expected is not None and labels.keys() != expected:
+        raise ValueError(f"metric {name} labels must be {sorted(expected)}")
+    if any(len(key) > 64 or len(value) > 128 for key, value in labels.items()):
+        raise ValueError("metric labels are too long")
 
 
 class MetricsReporter:

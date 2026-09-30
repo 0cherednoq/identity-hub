@@ -7,20 +7,36 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+import pydantic_core
+
+from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
+from identity_hub.crypto import associated_data
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle
 from identity_hub.errors import IdentityHubError
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
+from identity_hub.store.base import ImportItemResult, NewImportItem, NewImportRun
 
-__all__ = ["BatchHook", "ImportRecord", "ImportReport", "ImportingMixin", "OnExisting"]
+if TYPE_CHECKING:
+    from identity_hub.hub import IdentityHub
+
+__all__ = [
+    "BatchHook",
+    "ImportRecord",
+    "ImportReport",
+    "ImportRunner",
+    "ImportingMixin",
+    "OnExisting",
+]
 
 BatchHook = Callable[[Any, list[UUID]], Awaitable[None]]
 """on_batch_committed(session, created_ids): доменные строки после каждой пачки (FR-2.7)."""
@@ -86,6 +102,7 @@ class ImportingMixin(SpaceBase):
         verify_sessions: bool = False,
         on_batch_committed: BatchHook | None = None,
         actor: str = "import",
+        run_id: UUID | None = None,
     ) -> ImportReport:
         """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`."""
         svc = self.hub.service(service)
@@ -95,10 +112,14 @@ class ImportingMixin(SpaceBase):
         async for record in _aiter(records):
             batch.append(record)
             if len(batch) >= batch_size:
-                await self._import_batch(svc, batch, mode, verify_sessions, on_batch_committed, actor, report)
+                await self._import_batch(
+                    svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id
+                )
                 batch = []
         if batch:
-            await self._import_batch(svc, batch, mode, verify_sessions, on_batch_committed, actor, report)
+            await self._import_batch(
+                svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id
+            )
         return report
 
     async def import_files(
@@ -120,6 +141,79 @@ class ImportingMixin(SpaceBase):
 
     # --------------------------------------------------------- пачка
 
+    async def stage_import(
+        self,
+        *,
+        service: Service | str,
+        records: Iterable[ImportRecord],
+        source: str,
+        on_existing: OnExisting | str = OnExisting.SKIP,
+        verify_sessions: bool = False,
+        labels: Mapping[str, str | int | float | bool] | None = None,
+        actor: str = "import",
+        run_id: UUID | None = None,
+    ) -> UUID:
+        """Persist a resumable import without retaining the source file."""
+        svc = self.hub.service(service)
+        mode = OnExisting(on_existing)
+        batch_labels = dict(labels or {})
+        staged = [
+            replace(
+                record,
+                id=record.id or new_id(),
+                labels={**dict(record.labels), **batch_labels},
+            )
+            for record in records
+        ]
+        if not staged:
+            from identity_hub.errors import ValidationFailed
+
+            raise ValidationFailed("import must contain at least one record")
+        if len(staged) > 10_000:
+            from identity_hub.errors import ValidationFailed
+
+            raise ValidationFailed("import exceeds the 10000 record limit")
+        refs = [record.external_ref for record in staged]
+        if len(refs) != len(set(refs)):
+            from identity_hub.errors import ValidationFailed
+
+            raise ValidationFailed("import contains duplicate external_ref values")
+        import_id = run_id or new_id()
+        items = [
+            NewImportItem(
+                position=position,
+                payload=self.hub.envelope.seal(
+                    pydantic_core.to_json(_record_payload(record)),
+                    _import_aad(import_id, position),
+                ),
+            )
+            for position, record in enumerate(staged, start=1)
+        ]
+        async with self._tx() as tx:
+            created = await tx.create_import_run(
+                NewImportRun(
+                    id=import_id,
+                    service=svc.name,
+                    actor=actor,
+                    source=source[:256],
+                    on_existing=mode.value,
+                    verify_sessions=verify_sessions,
+                    labels=batch_labels,
+                    total=len(items),
+                ),
+                items,
+            )
+        if not created:
+            from identity_hub.errors import AlreadyExists
+
+            raise AlreadyExists("import_run", import_id)
+        return import_id
+
+    async def cancel_import(self, run_id: UUID) -> bool:
+        """Request cancellation; an in-flight batch is allowed to finish."""
+        async with self._tx() as tx:
+            return await tx.request_import_cancel(run_id) is not None
+
     async def _import_batch(
         self,
         svc: Service,
@@ -129,6 +223,7 @@ class ImportingMixin(SpaceBase):
         hook: BatchHook | None,
         actor: str,
         report: ImportReport,
+        run_id: UUID | None,
     ) -> None:
         from identity_hub.identities import prepare_identity
 
@@ -210,7 +305,12 @@ class ImportingMixin(SpaceBase):
                             "identity.imported",
                             actor=actor,
                             service=svc.name,
-                            data={"count": len(created), "updated": len(updated), "skipped": len(skipped)},
+                            data={
+                                "count": len(created),
+                                "updated": len(updated),
+                                "skipped": len(skipped),
+                                **({"run_id": str(run_id)} if run_id is not None else {}),
+                            },
                         ),
                     )
         except Exception as exc:
@@ -327,6 +427,170 @@ class ImportingMixin(SpaceBase):
         except Exception:
             logger.exception("on_batch_committed упал; пачка сохранена, повторите хук для этих id")
             report.hook_failed.append(list(created))
+
+
+class ImportRunner:
+    """Dispatcher pump for committed, resumable admin import batches."""
+
+    def __init__(
+        self,
+        hub: IdentityHub,
+        *,
+        batch_size: int = 100,
+        claim_for: timedelta = timedelta(minutes=5),
+    ) -> None:
+        self.hub = hub
+        self.batch_size = batch_size
+        self.claim_for = claim_for
+        self.worker = f"import:{id(self):x}"
+
+    async def run_once(self) -> int:
+        processed = 0
+        for ref in await self.hub.store.maintenance_spaces():
+            handle = self.hub.space(ref.slug, ref.title, space_id=ref.id)
+            async with handle._tx(own=True) as tx:
+                runs = await tx.active_import_runs(limit=1)
+                if not runs:
+                    continue
+                run = runs[0]
+                if run.state == "cancelling":
+                    await tx.request_import_cancel(run.id)
+                    continue
+                claimed = await tx.claim_import_items(
+                    run.id,
+                    worker=self.worker,
+                    limit=self.batch_size,
+                    claim_for=self.claim_for,
+                )
+            if not claimed:
+                continue
+            results = await self._process(handle, run, claimed)
+            async with handle._tx(own=True) as tx:
+                await tx.finish_import_items(run.id, results)
+            processed += len(results)
+        return processed
+
+    async def _process(self, handle: ImportingMixin, run: Any, claimed: list[Any]) -> list[ImportItemResult]:
+        records: list[tuple[Any, ImportRecord]] = []
+        results: list[ImportItemResult] = []
+        for item in claimed:
+            try:
+                raw = self.hub.envelope.open_json(item.payload, _import_aad(run.id, item.position))
+                records.append((item, _payload_record(raw)))
+            except Exception as exc:
+                results.append(
+                    ImportItemResult(
+                        item.position,
+                        item.claim_token,
+                        "failed",
+                        error_code="staged_payload_invalid",
+                        error=f"staged payload cannot be read ({type(exc).__name__})",
+                    )
+                )
+        pending: list[tuple[Any, ImportRecord]] = []
+        async with handle._tx(own=True) as tx:
+            for item, record in records:
+                existing = await tx.get_identity(record.id) if record.id is not None else None
+                if (
+                    existing is not None
+                    and existing.service == run.service
+                    and existing.external_ref == record.external_ref
+                ):
+                    results.append(
+                        ImportItemResult(
+                            item.position,
+                            item.claim_token,
+                            "created",
+                            identity_id=existing.id,
+                            external_ref=record.external_ref,
+                        )
+                    )
+                else:
+                    pending.append((item, record))
+        if not pending:
+            return results
+        report = await handle.import_many(
+            service=run.service,
+            records=[record for _, record in pending],
+            batch_size=len(pending),
+            on_existing=run.on_existing,
+            verify_sessions=run.verify_sessions,
+            actor=run.actor,
+            run_id=run.id,
+        )
+        created = set(report.created)
+        updated = set(report.updated)
+        skipped = {external_ref: reason for external_ref, reason in report.skipped}
+        failed = {external_ref: reason for external_ref, reason in report.failed}
+        for item, record in pending:
+            identity_id = record.id
+            if identity_id in created:
+                outcome = "created"
+                reason = None
+                code = None
+            elif identity_id in updated:
+                outcome = "updated"
+                reason = None
+                code = None
+            elif record.external_ref in skipped:
+                outcome = "skipped"
+                reason = skipped[record.external_ref]
+                code = "already_exists"
+            else:
+                outcome = "failed"
+                reason = failed.get(record.external_ref, "record did not produce an import outcome")
+                code = "record_rejected"
+            results.append(
+                ImportItemResult(
+                    item.position,
+                    item.claim_token,
+                    outcome,
+                    identity_id=identity_id if outcome in {"created", "updated"} else None,
+                    external_ref=record.external_ref,
+                    error_code=code,
+                    error=reason,
+                )
+            )
+        return results
+
+
+def _record_payload(record: ImportRecord) -> dict[str, Any]:
+    return {
+        "external_ref": record.external_ref,
+        "id": str(record.id) if record.id is not None else None,
+        "attributes": dict(record.attributes),
+        "profile": dict(record.profile),
+        "labels": dict(record.labels),
+        "tags": sorted(record.tags),
+        "note": record.note,
+        "credentials": dict(record.credentials) if record.credentials is not None else None,
+        "sessions": {key: dict(value) for key, value in record.sessions.items()},
+        "links": dict(record.links),
+        "proxy": record.proxy,
+        "verifications": dict(record.verifications),
+    }
+
+
+def _payload_record(value: Mapping[str, Any]) -> ImportRecord:
+    raw_id = value.get("id")
+    return ImportRecord(
+        external_ref=str(value["external_ref"]),
+        id=UUID(str(raw_id)) if raw_id else None,
+        attributes=dict(value.get("attributes") or {}),
+        profile=dict(value.get("profile") or {}),
+        labels=dict(value.get("labels") or {}),
+        tags=frozenset(value.get("tags") or ()),
+        note=value.get("note"),
+        credentials=dict(value["credentials"]) if value.get("credentials") is not None else None,
+        sessions={key: dict(item) for key, item in (value.get("sessions") or {}).items()},
+        links={str(key): str(item) for key, item in (value.get("links") or {}).items()},
+        proxy=value.get("proxy"),
+        verifications={str(key): str(item) for key, item in (value.get("verifications") or {}).items()},
+    )
+
+
+def _import_aad(run_id: UUID, position: int) -> bytes:
+    return associated_data("ih_import_items", run_id, str(position))
 
 
 def _aad(identity_id: UUID, slot: str) -> bytes:

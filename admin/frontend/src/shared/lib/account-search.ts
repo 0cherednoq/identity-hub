@@ -1,0 +1,34 @@
+export interface AccountSearch {
+  attention?: boolean | undefined;
+  auth?: string | undefined;
+  availability?: string | undefined;
+  columns?: string | undefined;
+  createdFrom?: string | undefined;
+  createdTo?: string | undefined;
+  cursor?: string | undefined;
+  eligible?: boolean | undefined;
+  factor?: string | undefined;
+  factorState?: string | undefined;
+  hasOverride?: boolean | undefined;
+  lastLeasedFrom?: string | undefined;
+  lastLeasedTo?: string | undefined;
+  label?: string | undefined;
+  leased?: boolean | undefined;
+  lifecycle?: string | undefined;
+  linked?: boolean | undefined;
+  proxy?: string | undefined;
+  quotaKind?: string | undefined;
+  q?: string | undefined;
+  requirement?: string | undefined;
+  service?: string | undefined;
+  standing?: string | undefined;
+  standingChangedFrom?: string | undefined;
+  standingChangedTo?: string | undefined;
+  sort?: string | undefined;
+  direction?: "asc" | "desc" | undefined;
+  status?: string | undefined;
+  syncedFrom?: string | undefined;
+  syncedTo?: string | undefined;
+  tag?: string | undefined;
+  tier?: string | undefined;
+}

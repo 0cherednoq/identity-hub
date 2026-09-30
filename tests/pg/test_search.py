@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from identity_hub.errors import ValidationFailed
 from identity_hub.hub import SpaceHandle
-from identity_hub.read.search import COUNT_LIMIT, decode_cursor, encode_cursor
+from identity_hub.read.search import COUNT_LIMIT, AccountSearchOptions, decode_cursor, encode_cursor
 
 pytestmark = pytest.mark.pg
 
@@ -76,7 +76,7 @@ async def test_keyset_pagination_and_count(space: SpaceHandle) -> None:
     assert first.total == 7 and first.total_label == "7"
     assert first.next_cursor is not None
     seen = [r.external_ref for r in first.items]
-    cursor = first.next_cursor
+    cursor: str | None = first.next_cursor
     while cursor:
         page = await space.search("service:fake_tg", limit=3, after=cursor, count=False)
         assert page.total is None
@@ -87,6 +87,76 @@ async def test_keyset_pagination_and_count(space: SpaceHandle) -> None:
         await space.search("", after="not-a-cursor")
     created, ident = decode_cursor(encode_cursor(first.items[0].created_at, first.items[0].id))
     assert ident == first.items[0].id and created == first.items[0].created_at
+
+
+async def test_account_search_equal_timestamps_and_structured_filter(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    ids = await _seed(space)
+    await space.add_requirement(ids["+380501"], "captcha")
+    ref = await space.ref()
+    async with sessionmaker() as session, session.begin():
+        await session.execute(
+            text("UPDATE ih_identities SET created_at = '2026-01-01T00:00:00+00:00' WHERE space_id = :space"),
+            {"space": ref.id},
+        )
+
+    filtered = await space.account_search(options=AccountSearchOptions(requirement="captcha"))
+    assert [item.external_ref for item in filtered.items] == ["+380501"]
+    assert filtered.items[0].requirements == ("captcha",)
+
+    seen: list[UUID] = []
+    cursor: str | None = None
+    while True:
+        page = await space.account_search(limit=2, after=cursor, count=cursor is None)
+        seen.extend(item.id for item in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    assert len(seen) == len(set(seen)) == 4
+
+    sorted_refs: list[str] = []
+    cursor = None
+    while True:
+        page = await space.account_search(
+            options=AccountSearchOptions(sort_by="external_ref", sort_desc=False),
+            limit=2,
+            after=cursor,
+        )
+        sorted_refs.extend(item.external_ref for item in page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    assert sorted_refs == ["+380501", "+380502", "+48601", "olena@mail.com"]
+
+    snapshot = await space.account_selection_snapshot(
+        "service:fake_tg", options=AccountSearchOptions(sort_by="external_ref"), limit=2
+    )
+    assert [entry.external_ref for entry in snapshot.entries] == ["+48601", "+380502"]
+    assert all(entry.revision >= 1 for entry in snapshot.entries)
+    assert snapshot.truncated
+
+    for sort_by in (
+        "eligible",
+        "verification_tier",
+        "last_leased_at",
+        "synced_at",
+        "error_score",
+        "profile:country",
+    ):
+        sorted_ids: list[UUID] = []
+        cursor = None
+        while True:
+            page = await space.account_search(
+                options=AccountSearchOptions(sort_by=sort_by),
+                limit=2,
+                after=cursor,
+            )
+            sorted_ids.extend(item.id for item in page.items)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        assert len(sorted_ids) == len(set(sorted_ids)) == 4, sort_by
 
 
 async def test_capped_count(space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]) -> None:

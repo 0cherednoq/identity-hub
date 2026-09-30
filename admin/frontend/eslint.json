@@ -1,0 +1,414 @@
+﻿[
+  {
+    "filePath": "C:\\Users\\user\\Desktop\\AccountLibrarry\\admin\\frontend\\src\\app\\router.tsx",
+    "messages": [
+      {
+        "ruleId": "@typescript-eslint/no-dynamic-delete",
+        "severity": 2,
+        "message": "Do not delete dynamically computed property keys.",
+        "line": 122,
+        "column": 74,
+        "messageId": "dynamicDelete",
+        "endLine": 122,
+        "endColumn": 77
+      },
+      {
+        "ruleId": "@typescript-eslint/no-unnecessary-type-assertion",
+        "severity": 2,
+        "message": "This assertion is unnecessary since the receiver accepts the original type of the expression.",
+        "line": 124,
+        "column": 10,
+        "messageId": "contextuallyUnnecessary",
+        "endLine": 124,
+        "endColumn": 33,
+        "fix": { "range": [2945, 2962], "text": "" }
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 2,
+    "fatalErrorCount": 0,
+    "warningCount": 0,
+    "fixableErrorCount": 1,
+    "fixableWarningCount": 0,
+    "source": "import {\n  Outlet,\n  createRootRouteWithContext,\n  createRoute,\n  createRouter,\n  lazyRouteComponent,\n  redirect,\n} from \"@tanstack/react-router\";\n\nimport type { AuthState } from \"@/app/providers\";\nimport { AdminErrorState } from \"@/shared/components/states/admin-error-state\";\nimport { AdminApiError } from \"@/shared/api/transport\";\n\nexport interface RouterContext {\n  auth: AuthState;\n}\n\nexport interface SpaceSearch {\n  cursor?: string;\n  q?: string;\n  service?: string;\n  status?: string;\n}\n\nexport interface SpacesSearch {\n  service?: string;\n}\n\nexport interface AccountSearch {\n  auth?: string;\n  availability?: string;\n  columns?: string;\n  createdFrom?: string;\n  createdTo?: string;\n  cursor?: string;\n  eligible?: \"false\" | \"true\";\n  factor?: string;\n  factorState?: string;\n  hasOverride?: \"false\" | \"true\";\n  lastLeasedFrom?: string;\n  lastLeasedTo?: string;\n  leased?: \"false\" | \"true\";\n  lifecycle?: string;\n  linked?: \"false\" | \"true\";\n  proxy?: string;\n  q?: string;\n  requirement?: string;\n  service?: string;\n  standing?: string;\n  standingChangedFrom?: string;\n  standingChangedTo?: string;\n  status?: string;\n  syncedFrom?: string;\n  syncedTo?: string;\n  tag?: string;\n  tier?: string;\n}\n\nexport function parseSpaceSearch(search: Record<string, unknown>): SpaceSearch {\n  const stringValue = (key: keyof SpaceSearch) =>\n    typeof search[key] === \"string\" && search[key] !== \"\"\n      ? search[key]\n      : undefined;\n  const cursor = stringValue(\"cursor\");\n  const q = stringValue(\"q\");\n  const service = stringValue(\"service\");\n  const status = stringValue(\"status\");\n  return {\n    ...(cursor === undefined ? {} : { cursor }),\n    ...(q === undefined ? {} : { q }),\n    ...(service === undefined ? {} : { service }),\n    ...(status === undefined ? {} : { status }),\n  };\n}\n\nexport function parseSpacesSearch(\n  search: Record<string, unknown>,\n): SpacesSearch {\n  return typeof search.service === \"string\" && search.service !== \"\"\n    ? { service: search.service }\n    : {};\n}\n\nexport function parseAccountSearch(\n  search: Record<string, unknown>,\n): AccountSearch {\n  const result: Record<string, string> = {};\n  const keys: Array<keyof AccountSearch> = [\n    \"auth\",\n    \"availability\",\n    \"columns\",\n    \"createdFrom\",\n    \"createdTo\",\n    \"cursor\",\n    \"eligible\",\n    \"factor\",\n    \"factorState\",\n    \"hasOverride\",\n    \"lastLeasedFrom\",\n    \"lastLeasedTo\",\n    \"leased\",\n    \"lifecycle\",\n    \"linked\",\n    \"proxy\",\n    \"q\",\n    \"requirement\",\n    \"service\",\n    \"standing\",\n    \"standingChangedFrom\",\n    \"standingChangedTo\",\n    \"status\",\n    \"syncedFrom\",\n    \"syncedTo\",\n    \"tag\",\n    \"tier\",\n  ];\n  for (const key of keys) {\n    const value = search[key];\n    if (typeof value === \"string\" && value !== \"\") result[key] = value;\n  }\n  for (const key of [\"eligible\", \"leased\", \"hasOverride\", \"linked\"] as const) {\n    if (result[key] !== \"true\" && result[key] !== \"false\") delete result[key];\n  }\n  return result as AccountSearch;\n}\n\nfunction safeRedirect(value: unknown): string {\n  return typeof value === \"string\" &&\n    value.startsWith(\"/\") &&\n    !value.startsWith(\"//\")\n    ? value\n    : \"/\";\n}\n\nconst rootRoute = createRootRouteWithContext<RouterContext>()({\n  component: Outlet,\n  errorComponent: ({ error, reset }) => (\n    <AdminErrorState error={error} onRetry={reset} />\n  ),\n  notFoundComponent: () => (\n    <AdminErrorState\n      error={\n        new AdminApiError(404, {\n          error: {\n            code: \"not_found\",\n            message: \"Страница не найдена\",\n            request_id: \"router-not-found\",\n          },\n        })\n      }\n    />\n  ),\n});\n\nconst designRoute = createRoute({\n  getParentRoute: () => rootRoute,\n  path: \"/_design\",\n  component: lazyRouteComponent(() => import(\"@/pages/design\"), \"DesignPage\"),\n});\n\nconst loginRoute = createRoute({\n  getParentRoute: () => rootRoute,\n  path: \"/login\",\n  validateSearch: (search) => ({ redirect: safeRedirect(search.redirect) }),\n  component: lazyRouteComponent(() => import(\"@/pages/login\"), \"LoginPage\"),\n});\n\nconst authenticatedRoute = createRoute({\n  getParentRoute: () => rootRoute,\n  id: \"_authenticated\",\n  beforeLoad: ({ context, location }) => {\n    if (context.auth.principal === null) {\n      throw redirect({ to: \"/login\", search: { redirect: location.href } });\n    }\n  },\n  component: lazyRouteComponent(\n    () => import(\"@/app/shell/app-shell\"),\n    \"AppShell\",\n  ),\n});\n\nconst overviewRoute = createRoute({\n  getParentRoute: () => authenticatedRoute,\n  path: \"/\",\n  component: lazyRouteComponent(() => import(\"@/pages/home\"), \"HomePage\"),\n});\n\nconst spacesRoute = createRoute({\n  getParentRoute: () => authenticatedRoute,\n  path: \"/spaces\",\n  validateSearch: parseSpacesSearch,\n  component: lazyRouteComponent(() => import(\"@/pages/spaces\"), \"SpacesPage\"),\n});\n\nconst spaceRoute = createRoute({\n  getParentRoute: () => authenticatedRoute,\n  path: \"/spaces/$spaceSlug\",\n  validateSearch: parseSpaceSearch,\n  component: lazyRouteComponent(\n    () => import(\"@/pages/space-overview\"),\n    \"SpaceOverviewPage\",\n  ),\n});\n\nconst accountsRoute = createRoute({\n  getParentRoute: () => authenticatedRoute,\n  path: \"/spaces/$spaceSlug/accounts\",\n  validateSearch: parseAccountSearch,\n  component: lazyRouteComponent(\n    () => import(\"@/pages/accounts\"),\n    \"AccountsPage\",\n  ),\n});\n\nconst routeTree = rootRoute.addChildren([\n  designRoute,\n  loginRoute,\n  authenticatedRoute.addChildren([\n    overviewRoute,\n    spacesRoute,\n    accountsRoute,\n    spaceRoute,\n  ]),\n]);\n\nexport const router = createRouter({\n  routeTree,\n  context: { auth: { error: null, isPending: true, principal: null } },\n  defaultPreload: \"intent\",\n  scrollRestoration: true,\n});\n\ndeclare module \"@tanstack/react-router\" {\n  interface Register {\n    router: typeof router;\n  }\n}\n",
+    "usedDeprecatedRules": []
+  },
+  {
+    "filePath": "C:\\Users\\user\\Desktop\\AccountLibrarry\\admin\\frontend\\src\\pages\\accounts.tsx",
+    "messages": [
+      {
+        "ruleId": "boundaries/dependencies",
+        "severity": 2,
+        "message": "There is no policy allowing dependencies from elements of type \"pages\" to elements of type \"app\"",
+        "line": 6,
+        "column": 32,
+        "endLine": 6,
+        "endColumn": 49
+      },
+      {
+        "ruleId": "boundaries/dependencies",
+        "severity": 2,
+        "message": "There is no policy allowing dependencies from elements of type \"pages\" to elements of type \"app\"",
+        "line": 7,
+        "column": 36,
+        "endLine": 7,
+        "endColumn": 50
+      },
+      {
+        "ruleId": "@typescript-eslint/no-unnecessary-condition",
+        "severity": 2,
+        "message": "Unnecessary conditional, the types have no overlap.",
+        "line": 250,
+        "column": 15,
+        "messageId": "noOverlapBooleanExpression",
+        "endLine": 250,
+        "endColumn": 34
+      },
+      {
+        "ruleId": "@typescript-eslint/no-dynamic-delete",
+        "severity": 2,
+        "message": "Do not delete dynamically computed property keys.",
+        "line": 250,
+        "column": 48,
+        "messageId": "dynamicDelete",
+        "endLine": 250,
+        "endColumn": 74
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 268,
+        "column": 13,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 268,
+        "endColumn": 65,
+        "fix": {
+          "range": [8593, 8658],
+          "text": " { patchSearch({ columns: [...next].sort().join(\",\") }); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-unnecessary-type-assertion",
+        "severity": 2,
+        "message": "This assertion is unnecessary since the receiver accepts the original type of the expression.",
+        "line": 274,
+        "column": 16,
+        "messageId": "contextuallyUnnecessary",
+        "endLine": 274,
+        "endColumn": 44,
+        "fix": { "range": [8739, 8761], "text": "" }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 276,
+        "column": 29,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 276,
+        "endColumn": 73,
+        "fix": {
+          "range": [8818, 8863],
+          "text": " { patchSearch(patch as Partial<AccountSearch>); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 312,
+        "column": 32,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 312,
+        "endColumn": 53,
+        "fix": {
+          "range": [10047, 10069],
+          "text": " { window.history.back(); }"
+        }
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 8,
+    "fatalErrorCount": 0,
+    "warningCount": 0,
+    "fixableErrorCount": 4,
+    "fixableWarningCount": 0,
+    "source": "import { useMemo, useState } from \"react\";\nimport { useQuery } from \"@tanstack/react-query\";\nimport { useNavigate, useParams, useSearch } from \"@tanstack/react-router\";\nimport type { ColumnDef } from \"@tanstack/react-table\";\n\nimport { usePreferences } from \"@/app/providers\";\nimport type { AccountSearch } from \"@/app/router\";\nimport {\n  AUTH_STATE_VIEW,\n  AVAILABILITY_VIEW,\n  DomainStatusBadge,\n  LIFECYCLE_VIEW,\n  STANDING_VIEW,\n} from \"@/entities/status/status\";\nimport { fetchAccounts, type AccountQuery } from \"@/shared/api/accounts\";\nimport type {\n  AccountListItemResponse,\n  AccountPageResponse,\n} from \"@/shared/api/generated/types.gen\";\nimport { fetchSpaceOverview } from \"@/shared/api/overview\";\nimport { POLL_INTERVAL } from \"@/shared/api/query-client\";\nimport {\n  AccountColumnPicker,\n  AccountFilters,\n  type AccountFilterValue,\n} from \"@/shared/components/accounts/account-controls\";\nimport {\n  AccountListSummary,\n  DateCell,\n  EligibilityCell,\n  LeaseCell,\n  ProxyCell,\n  TagsCell,\n} from \"@/shared/components/accounts/account-cells\";\nimport { DataTable } from \"@/shared/components/data-table/data-table\";\nimport { QueryState } from \"@/shared/components/states/query-state\";\nimport { ListPage } from \"@/shared/components/templates/templates\";\nimport { Button } from \"@/shared/ui/button\";\nimport { Skeleton } from \"@/shared/ui/skeleton\";\n\nconst DEFAULT_COLUMNS = [\n  \"short_id\",\n  \"service\",\n  \"external_ref\",\n  \"statuses\",\n  \"eligible\",\n  \"lease\",\n  \"tier\",\n  \"proxy\",\n] as const;\n\nconst COLUMN_OPTIONS = [\n  { id: \"short_id\", label: \"Короткий ID\" },\n  { id: \"service\", label: \"Сервис\" },\n  { id: \"external_ref\", label: \"External ref\" },\n  { id: \"statuses\", label: \"Статусы\" },\n  { id: \"eligible\", label: \"Пригодность\" },\n  { id: \"lease\", label: \"Аренда\" },\n  { id: \"tier\", label: \"Уровень\" },\n  { id: \"proxy\", label: \"Прокси\" },\n  { id: \"tags\", label: \"Теги и метки\" },\n  { id: \"requirements\", label: \"Requirements\" },\n  { id: \"last_leased\", label: \"Последняя аренда\" },\n  { id: \"created\", label: \"Добавлен\" },\n  { id: \"profile\", label: \"Профиль\" },\n] as const;\n\nfunction optionalBoolean(value: string | undefined): boolean | undefined {\n  if (value === \"true\") return true;\n  if (value === \"false\") return false;\n  return undefined;\n}\n\nfunction optionalDate(value: string | undefined): string | undefined {\n  if (value === undefined) return undefined;\n  const date = new Date(value);\n  return Number.isNaN(date.valueOf()) ? undefined : date.toISOString();\n}\n\nfunction apiQuery(search: AccountSearch): AccountQuery {\n  const query: AccountQuery = { limit: 50 };\n  const assign = <Key extends keyof AccountQuery>(\n    key: Key,\n    value: AccountQuery[Key] | undefined,\n  ) => {\n    if (value !== undefined) query[key] = value;\n  };\n  assign(\"q\", search.q);\n  assign(\"cursor\", search.cursor);\n  assign(\"service\", search.service);\n  assign(\"lifecycle\", search.lifecycle);\n  assign(\"standing\", search.standing);\n  assign(\"auth\", search.auth);\n  assign(\"availability\", search.availability);\n  assign(\"tag\", search.tag);\n  assign(\"eligible\", optionalBoolean(search.eligible));\n  assign(\"leased\", optionalBoolean(search.leased));\n  assign(\"has_override\", optionalBoolean(search.hasOverride));\n  assign(\"requirement\", search.requirement);\n  assign(\"factor\", search.factor);\n  assign(\"factor_state\", search.factorState);\n  assign(\"tier\", search.tier);\n  assign(\"proxy\", search.proxy);\n  assign(\"linked\", optionalBoolean(search.linked));\n  assign(\"created_from\", optionalDate(search.createdFrom));\n  assign(\"created_to\", optionalDate(search.createdTo));\n  assign(\"last_leased_from\", optionalDate(search.lastLeasedFrom));\n  assign(\"last_leased_to\", optionalDate(search.lastLeasedTo));\n  assign(\"synced_from\", optionalDate(search.syncedFrom));\n  assign(\"synced_to\", optionalDate(search.syncedTo));\n  assign(\"standing_changed_from\", optionalDate(search.standingChangedFrom));\n  assign(\"standing_changed_to\", optionalDate(search.standingChangedTo));\n  if (search.status === \"attention\") assign(\"attention\", true);\n  else if (search.status?.includes(\":\") === true) {\n    const [region, state] = search.status.split(\":\", 2);\n    if (\n      region === \"lifecycle\" ||\n      region === \"standing\" ||\n      region === \"auth\" ||\n      region === \"availability\"\n    ) {\n      assign(region, state);\n    }\n  }\n  return query;\n}\n\nfunction accountColumns(): ColumnDef<AccountListItemResponse>[] {\n  return [\n    { id: \"short_id\", header: \"ID\", accessorKey: \"short_id\" },\n    { id: \"service\", header: \"Сервис\", accessorKey: \"service\" },\n    { id: \"external_ref\", header: \"External ref\", accessorKey: \"external_ref\" },\n    {\n      id: \"statuses\",\n      header: \"Статусы\",\n      cell: ({ row }) => (\n        <>\n          <DomainStatusBadge\n            registry={LIFECYCLE_VIEW}\n            value={row.original.lifecycle}\n          />{\" \"}\n          <DomainStatusBadge\n            registry={STANDING_VIEW}\n            value={row.original.standing}\n          />{\" \"}\n          <DomainStatusBadge\n            registry={AUTH_STATE_VIEW}\n            value={row.original.auth}\n          />{\" \"}\n          <DomainStatusBadge\n            registry={AVAILABILITY_VIEW}\n            value={row.original.availability}\n          />\n        </>\n      ),\n    },\n    {\n      id: \"eligible\",\n      header: \"Пригодность\",\n      cell: ({ row }) => <EligibilityCell row={row.original} />,\n    },\n    {\n      id: \"lease\",\n      header: \"Аренда\",\n      cell: ({ row }) => <LeaseCell row={row.original} />,\n    },\n    {\n      id: \"tier\",\n      header: \"Уровень\",\n      cell: ({ row }) => row.original.verification_tier ?? \"—\",\n    },\n    {\n      id: \"proxy\",\n      header: \"Прокси\",\n      cell: ({ row }) => <ProxyCell row={row.original} />,\n    },\n    {\n      id: \"tags\",\n      header: \"Теги и метки\",\n      cell: ({ row }) => <TagsCell row={row.original} />,\n    },\n    {\n      id: \"requirements\",\n      header: \"Requirements\",\n      cell: ({ row }) => row.original.requirements.join(\" · \") || \"—\",\n    },\n    {\n      id: \"last_leased\",\n      header: \"Последняя аренда\",\n      cell: ({ row }) => <DateCell value={row.original.last_leased_at} />,\n    },\n    {\n      id: \"created\",\n      header: \"Добавлен\",\n      cell: ({ row }) => <DateCell value={row.original.created_at} />,\n    },\n    {\n      id: \"profile\",\n      header: \"Профиль\",\n      cell: ({ row }) =>\n        Object.entries(row.original.profile)\n          .slice(0, 3)\n          .map(([key, value]) => `${key}:${String(value)}`)\n          .join(\" · \") || \"—\",\n    },\n  ];\n}\n\nexport function AccountsPage() {\n  const { spaceSlug } = useParams({\n    from: \"/_authenticated/spaces/$spaceSlug/accounts\",\n  });\n  const search = useSearch({\n    from: \"/_authenticated/spaces/$spaceSlug/accounts\",\n  });\n  const navigate = useNavigate({ from: \"/spaces/$spaceSlug/accounts\" });\n  const preferences = usePreferences();\n  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());\n  const selectedColumns = useMemo(\n    () =>\n      new Set(search.columns?.split(\",\").filter(Boolean) ?? DEFAULT_COLUMNS),\n    [search.columns],\n  );\n  const columns = useMemo(\n    () =>\n      accountColumns().filter((column) => selectedColumns.has(column.id ?? \"\")),\n    [selectedColumns],\n  );\n  const queryValues = apiQuery(search);\n  const query = useQuery({\n    queryKey: [\"space\", spaceSlug, \"accounts\", queryValues],\n    queryFn: ({ signal }) => fetchAccounts(spaceSlug, queryValues, signal),\n    placeholderData: (previous) => previous,\n    refetchInterval: POLL_INTERVAL.operational,\n  });\n  const overview = useQuery({\n    queryKey: [\"space\", spaceSlug, \"overview\", \"all\"],\n    queryFn: ({ signal }) => fetchSpaceOverview(spaceSlug, undefined, signal),\n    staleTime: POLL_INTERVAL.reference,\n  });\n  const services =\n    overview.data?.services.map((service) => service.service) ?? [];\n\n  const patchSearch = (patch: Partial<AccountSearch>) => {\n    void navigate({\n      search: (previous) => {\n        const next: AccountSearch = { ...previous };\n        delete next.cursor;\n        for (const [key, value] of Object.entries(patch)) {\n          if (value === undefined) delete next[key as keyof AccountSearch];\n          else Object.assign(next, { [key]: value });\n        }\n        return next;\n      },\n    });\n  };\n\n  return (\n    <ListPage\n      eyebrow=\"Пространство\"\n      title={`Аккаунты · ${spaceSlug}`}\n      description=\"Безопасная страница с keyset pagination. Секреты и lease token не входят в API.\"\n      actions={\n        <AccountColumnPicker\n          columns={[...COLUMN_OPTIONS]}\n          selected={selectedColumns}\n          onChange={(next) =>\n            patchSearch({ columns: [...next].sort().join(\",\") })\n          }\n        />\n      }\n    >\n      <AccountFilters\n        value={search as AccountFilterValue}\n        services={services}\n        onPatch={(patch) => patchSearch(patch as Partial<AccountSearch>)}\n        onReset={() =>\n          void navigate({\n            search:\n              search.columns === undefined ? {} : { columns: search.columns },\n          })\n        }\n      />\n      <QueryState<AccountPageResponse>\n        query={query}\n        skeleton={<Skeleton className=\"h-96 w-full\" />}\n        empty={{\n          title: \"Аккаунты не найдены\",\n          description: \"Измените фильтры или строку поиска.\",\n        }}\n        isEmpty={(data) => data.items.length === 0}\n      >\n        {(data) => (\n          <div className=\"grid gap-4\">\n            <AccountListSummary\n              selected={selected.size}\n              total={data.total_label}\n            />\n            <DataTable\n              columns={columns}\n              data={data.items}\n              density={preferences.density}\n              getRowId={(row) => row.id}\n              selectedRowIds={selected}\n              onSelectionChange={setSelected}\n            />\n            <div className=\"flex items-center justify-end gap-2\">\n              <Button\n                type=\"button\"\n                variant=\"outline\"\n                disabled={search.cursor === undefined}\n                onClick={() => window.history.back()}\n              >\n                Назад\n              </Button>\n              <Button\n                type=\"button\"\n                disabled={data.next_cursor === null}\n                onClick={() => {\n                  if (data.next_cursor !== null)\n                    patchSearch({ cursor: data.next_cursor });\n                }}\n              >\n                Далее\n              </Button>\n            </div>\n          </div>\n        )}\n      </QueryState>\n    </ListPage>\n  );\n}\n",
+    "usedDeprecatedRules": []
+  },
+  {
+    "filePath": "C:\\Users\\user\\Desktop\\AccountLibrarry\\admin\\frontend\\src\\shared\\components\\accounts\\account-controls.tsx",
+    "messages": [
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 90,
+        "column": 32,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 90,
+        "endColumn": 75,
+        "fix": {
+          "range": [1863, 1907],
+          "text": " { onChange(next === \"all\" ? undefined : next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 124,
+        "column": 30,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 124,
+        "endColumn": 71,
+        "fix": {
+          "range": [2689, 2731],
+          "text": " { onChange(event.target.value || undefined); }"
+        }
+      },
+      {
+        "ruleId": "react-hooks/set-state-in-effect",
+        "severity": 2,
+        "message": "Error: Calling setState synchronously within an effect can trigger cascading renders\n\nEffects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:\n* Update external systems with the latest state from React.\n* Subscribe for updates from some external system, calling setState in a callback function when external state changes.\n\nCalling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).\n\nC:\\Users\\user\\Desktop\\AccountLibrarry\\admin\\frontend\\src\\shared\\components\\accounts\\account-controls.tsx:142:19\n  140 | }) {\n  141 |   const [draft, setDraft] = useState(value.q ?? \"\");\n> 142 |   useEffect(() => setDraft(value.q ?? \"\"), [value.q]);\n      |                   ^^^^^^^^ Avoid calling setState() directly within an effect\n  143 |   const patch = (key: keyof AccountFilterValue, next: string | undefined) =>\n  144 |     onPatch({ [key]: next });\n  145 |",
+        "line": 142,
+        "column": 19,
+        "endLine": 142,
+        "endColumn": 27
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 142,
+        "column": 19,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 142,
+        "endColumn": 42,
+        "fix": {
+          "range": [3050, 3074],
+          "text": " { setDraft(value.q ?? \"\"); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 144,
+        "column": 5,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 144,
+        "endColumn": 29,
+        "fix": {
+          "range": [3164, 3193],
+          "text": " { onPatch({ [key]: next }); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-deprecated",
+        "severity": 2,
+        "message": "`FormEvent` is deprecated. FormEvent doesn't actually exist.\nYou probably meant to use {@link ChangeEvent}, {@link InputEvent}, {@link SubmitEvent}, or just {@link SyntheticEvent} instead\ndepending on the event type.",
+        "line": 146,
+        "column": 26,
+        "messageId": "deprecatedWithReason",
+        "endLine": 146,
+        "endColumn": 35
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 158,
+        "column": 32,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 158,
+        "endColumn": 60,
+        "fix": {
+          "range": [3608, 3637],
+          "text": " { setDraft(event.target.value); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 173,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 173,
+        "endColumn": 53,
+        "fix": {
+          "range": [4105, 4128],
+          "text": " { patch(\"service\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 179,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 179,
+        "endColumn": 55,
+        "fix": {
+          "range": [4284, 4309],
+          "text": " { patch(\"lifecycle\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 185,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 185,
+        "endColumn": 54,
+        "fix": {
+          "range": [4462, 4486],
+          "text": " { patch(\"standing\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 191,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 191,
+        "endColumn": 50,
+        "fix": { "range": [4627, 4647], "text": " { patch(\"auth\", next); }" }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 197,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 197,
+        "endColumn": 58,
+        "fix": {
+          "range": [4812, 4840],
+          "text": " { patch(\"availability\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 203,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 203,
+        "endColumn": 54,
+        "fix": {
+          "range": [4992, 5016],
+          "text": " { patch(\"eligible\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 209,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 209,
+        "endColumn": 52,
+        "fix": {
+          "range": [5166, 5188],
+          "text": " { patch(\"leased\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 215,
+        "column": 31,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 215,
+        "endColumn": 57,
+        "fix": {
+          "range": [5348, 5375],
+          "text": " { patch(\"hasOverride\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 237,
+        "column": 35,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 237,
+        "endColumn": 51,
+        "fix": { "range": [6124, 6141], "text": " { patch(key, next); }" }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 244,
+        "column": 33,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 244,
+        "endColumn": 54,
+        "fix": {
+          "range": [6321, 6343],
+          "text": " { patch(\"linked\", next); }"
+        }
+      },
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 263,
+        "column": 35,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 263,
+        "endColumn": 51,
+        "fix": { "range": [7026, 7043], "text": " { patch(key, next); }" }
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 18,
+    "fatalErrorCount": 0,
+    "warningCount": 0,
+    "fixableErrorCount": 16,
+    "fixableWarningCount": 0,
+    "source": "import { useEffect, useState, type FormEvent } from \"react\";\n\nimport { Button } from \"@/shared/ui/button\";\nimport { Input } from \"@/shared/ui/input\";\nimport {\n  Select,\n  SelectContent,\n  SelectItem,\n  SelectTrigger,\n  SelectValue,\n} from \"@/shared/ui/select\";\n\nexport interface AccountFilterValue {\n  auth?: string;\n  availability?: string;\n  createdFrom?: string;\n  createdTo?: string;\n  eligible?: string;\n  factor?: string;\n  factorState?: string;\n  hasOverride?: string;\n  lastLeasedFrom?: string;\n  lastLeasedTo?: string;\n  leased?: string;\n  lifecycle?: string;\n  linked?: string;\n  proxy?: string;\n  q?: string;\n  requirement?: string;\n  service?: string;\n  standing?: string;\n  standingChangedFrom?: string;\n  standingChangedTo?: string;\n  syncedFrom?: string;\n  syncedTo?: string;\n  tag?: string;\n  tier?: string;\n}\n\ninterface Option {\n  label: string;\n  value: string;\n}\n\nconst LIFECYCLE: Option[] = [\n  { label: \"Подготовка\", value: \"provisioning\" },\n  { label: \"Готов\", value: \"ready\" },\n  { label: \"Выведен\", value: \"retired\" },\n];\nconst STANDING: Option[] = [\n  \"good\",\n  \"limited\",\n  \"frozen\",\n  \"appealing\",\n  \"banned\",\n  \"deleted\",\n].map((value) => ({ label: value, value }));\nconst AUTH: Option[] = [\n  \"no_session\",\n  \"logging_in\",\n  \"challenge\",\n  \"authenticated\",\n  \"session_invalid\",\n].map((value) => ({ label: value, value }));\nconst AVAILABILITY: Option[] = [\n  \"available\",\n  \"paused\",\n  \"cooling\",\n  \"quarantined\",\n].map((value) => ({ label: value, value }));\nconst BOOLEAN: Option[] = [\n  { label: \"Да\", value: \"true\" },\n  { label: \"Нет\", value: \"false\" },\n];\n\nfunction FilterSelect({\n  label,\n  options,\n  value,\n  onChange,\n}: {\n  label: string;\n  options: Option[];\n  value?: string | undefined;\n  onChange: (value: string | undefined) => void;\n}) {\n  return (\n    <Select\n      value={value ?? \"all\"}\n      onValueChange={(next) => onChange(next === \"all\" ? undefined : next)}\n    >\n      <SelectTrigger aria-label={label}>\n        <SelectValue placeholder={label} />\n      </SelectTrigger>\n      <SelectContent>\n        <SelectItem value=\"all\">{label}: все</SelectItem>\n        {options.map((option) => (\n          <SelectItem key={option.value} value={option.value}>\n            {option.label}\n          </SelectItem>\n        ))}\n      </SelectContent>\n    </Select>\n  );\n}\n\nfunction TextFilter({\n  label,\n  value,\n  onChange,\n  type = \"text\",\n}: {\n  label: string;\n  value?: string | undefined;\n  onChange: (value: string | undefined) => void;\n  type?: \"datetime-local\" | \"text\";\n}) {\n  return (\n    <label className=\"grid gap-1 text-sm font-medium\">\n      {label}\n      <Input\n        type={type}\n        value={value ?? \"\"}\n        onChange={(event) => onChange(event.target.value || undefined)}\n      />\n    </label>\n  );\n}\n\nexport function AccountFilters({\n  value,\n  services,\n  onPatch,\n  onReset,\n}: {\n  value: AccountFilterValue;\n  services: string[];\n  onPatch: (patch: Partial<AccountFilterValue>) => void;\n  onReset: () => void;\n}) {\n  const [draft, setDraft] = useState(value.q ?? \"\");\n  useEffect(() => setDraft(value.q ?? \"\"), [value.q]);\n  const patch = (key: keyof AccountFilterValue, next: string | undefined) =>\n    onPatch({ [key]: next });\n\n  const submit = (event: FormEvent) => {\n    event.preventDefault();\n    patch(\"q\", draft || undefined);\n  };\n\n  return (\n    <div className=\"grid gap-4\">\n      <form className=\"flex flex-col gap-2 sm:flex-row\" onSubmit={submit}>\n        <Input\n          aria-label=\"Поиск аккаунтов\"\n          placeholder=\"service:telegram standing:banned country:UA olena\"\n          value={draft}\n          onChange={(event) => setDraft(event.target.value)}\n        />\n        <Button type=\"submit\">Найти</Button>\n        <Button type=\"button\" variant=\"outline\" onClick={onReset}>\n          Сбросить\n        </Button>\n      </form>\n      <div className=\"grid gap-2 sm:grid-cols-2 lg:grid-cols-4\">\n        <FilterSelect\n          label=\"Сервис\"\n          options={services.map((service) => ({\n            label: service,\n            value: service,\n          }))}\n          value={value.service}\n          onChange={(next) => patch(\"service\", next)}\n        />\n        <FilterSelect\n          label=\"Lifecycle\"\n          options={LIFECYCLE}\n          value={value.lifecycle}\n          onChange={(next) => patch(\"lifecycle\", next)}\n        />\n        <FilterSelect\n          label=\"Standing\"\n          options={STANDING}\n          value={value.standing}\n          onChange={(next) => patch(\"standing\", next)}\n        />\n        <FilterSelect\n          label=\"Auth\"\n          options={AUTH}\n          value={value.auth}\n          onChange={(next) => patch(\"auth\", next)}\n        />\n        <FilterSelect\n          label=\"Availability\"\n          options={AVAILABILITY}\n          value={value.availability}\n          onChange={(next) => patch(\"availability\", next)}\n        />\n        <FilterSelect\n          label=\"Пригоден\"\n          options={BOOLEAN}\n          value={value.eligible}\n          onChange={(next) => patch(\"eligible\", next)}\n        />\n        <FilterSelect\n          label=\"В аренде\"\n          options={BOOLEAN}\n          value={value.leased}\n          onChange={(next) => patch(\"leased\", next)}\n        />\n        <FilterSelect\n          label=\"Есть override\"\n          options={BOOLEAN}\n          value={value.hasOverride}\n          onChange={(next) => patch(\"hasOverride\", next)}\n        />\n      </div>\n      <details className=\"rounded-md border p-3\">\n        <summary className=\"cursor-pointer text-sm font-medium\">\n          Расширенные фильтры\n        </summary>\n        <div className=\"mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4\">\n          {(\n            [\n              [\"tag\", \"Тег\"],\n              [\"requirement\", \"Requirement\"],\n              [\"factor\", \"Фактор\"],\n              [\"factorState\", \"Состояние фактора\"],\n              [\"tier\", \"Уровень верификации\"],\n              [\"proxy\", \"Прокси: id или хост\"],\n            ] as const\n          ).map(([key, label]) => (\n            <TextFilter\n              key={key}\n              label={label}\n              value={value[key]}\n              onChange={(next) => patch(key, next)}\n            />\n          ))}\n          <FilterSelect\n            label=\"Есть связь\"\n            options={BOOLEAN}\n            value={value.linked}\n            onChange={(next) => patch(\"linked\", next)}\n          />\n          {(\n            [\n              [\"createdFrom\", \"Добавлен с\"],\n              [\"createdTo\", \"Добавлен до\"],\n              [\"lastLeasedFrom\", \"Последняя аренда с\"],\n              [\"lastLeasedTo\", \"Последняя аренда до\"],\n              [\"syncedFrom\", \"Сверен с\"],\n              [\"syncedTo\", \"Сверен до\"],\n              [\"standingChangedFrom\", \"Standing изменён с\"],\n              [\"standingChangedTo\", \"Standing изменён до\"],\n            ] as const\n          ).map(([key, label]) => (\n            <TextFilter\n              key={key}\n              label={label}\n              type=\"datetime-local\"\n              value={value[key]}\n              onChange={(next) => patch(key, next)}\n            />\n          ))}\n        </div>\n      </details>\n    </div>\n  );\n}\n\nexport function AccountColumnPicker({\n  columns,\n  selected,\n  onChange,\n}: {\n  columns: Array<{ id: string; label: string }>;\n  selected: ReadonlySet<string>;\n  onChange: (selected: ReadonlySet<string>) => void;\n}) {\n  return (\n    <details className=\"relative\">\n      <summary className=\"cursor-pointer text-sm font-medium\">Колонки</summary>\n      <div className=\"bg-popover absolute right-0 z-10 mt-2 grid min-w-56 gap-2 rounded-md border p-3 shadow-md\">\n        {columns.map((column) => (\n          <label className=\"flex items-center gap-2 text-sm\" key={column.id}>\n            <input\n              checked={selected.has(column.id)}\n              className=\"accent-primary size-4\"\n              type=\"checkbox\"\n              onChange={(event) => {\n                const next = new Set(selected);\n                if (event.target.checked) next.add(column.id);\n                else next.delete(column.id);\n                onChange(next);\n              }}\n            />\n            {column.label}\n          </label>\n        ))}\n      </div>\n    </details>\n  );\n}\n",
+    "usedDeprecatedRules": []
+  },
+  {
+    "filePath": "C:\\Users\\user\\Desktop\\AccountLibrarry\\admin\\frontend\\src\\shared\\components\\data-table\\data-table.tsx",
+    "messages": [
+      {
+        "ruleId": "@typescript-eslint/no-confusing-void-expression",
+        "severity": 2,
+        "message": "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function.",
+        "line": 102,
+        "column": 23,
+        "messageId": "invalidVoidExprArrow",
+        "endLine": 102,
+        "endColumn": 68,
+        "fix": {
+          "range": [3163, 3231],
+          "text": " { updateSelection(row.id, event.target.checked); }"
+        }
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 1,
+    "fatalErrorCount": 0,
+    "warningCount": 0,
+    "fixableErrorCount": 1,
+    "fixableWarningCount": 0,
+    "source": "import {\n  flexRender,\n  getCoreRowModel,\n  useReactTable,\n  type ColumnDef,\n} from \"@tanstack/react-table\";\n\nimport {\n  Table,\n  TableBody,\n  TableCell,\n  TableHead,\n  TableHeader,\n  TableRow,\n} from \"@/shared/ui/table\";\n\nexport interface DataTableProps<TData> {\n  columns: ColumnDef<TData>[];\n  data: TData[];\n  density?: \"compact\" | \"default\";\n  getRowId?: (row: TData) => string;\n  onSelectionChange?: (selected: ReadonlySet<string>) => void;\n  selectedRowIds?: ReadonlySet<string>;\n}\n\nexport function DataTable<TData>({\n  columns,\n  data,\n  density = \"default\",\n  getRowId,\n  onSelectionChange,\n  selectedRowIds = new Set<string>(),\n}: DataTableProps<TData>) {\n  const table = useReactTable({\n    columns,\n    data,\n    getCoreRowModel: getCoreRowModel(),\n    ...(getRowId === undefined ? {} : { getRowId }),\n  });\n  const visibleIds = table.getRowModel().rows.map((row) => row.id);\n  const allVisibleSelected =\n    visibleIds.length > 0 && visibleIds.every((id) => selectedRowIds.has(id));\n\n  const updateSelection = (id: string, selected: boolean) => {\n    const next = new Set(selectedRowIds);\n    if (selected) next.add(id);\n    else next.delete(id);\n    onSelectionChange?.(next);\n  };\n\n  return (\n    <div className=\"overflow-hidden rounded-lg border\">\n      <Table>\n        <TableHeader>\n          {table.getHeaderGroups().map((headerGroup) => (\n            <TableRow key={headerGroup.id}>\n              {onSelectionChange === undefined ? null : (\n                <TableHead className=\"w-10\">\n                  <input\n                    aria-label=\"Выбрать все строки на странице\"\n                    checked={allVisibleSelected}\n                    className=\"accent-primary size-4\"\n                    type=\"checkbox\"\n                    onChange={(event) => {\n                      const next = new Set(selectedRowIds);\n                      for (const id of visibleIds) {\n                        if (event.target.checked) next.add(id);\n                        else next.delete(id);\n                      }\n                      onSelectionChange(next);\n                    }}\n                  />\n                </TableHead>\n              )}\n              {headerGroup.headers.map((header) => (\n                <TableHead key={header.id}>\n                  {header.isPlaceholder\n                    ? null\n                    : flexRender(\n                        header.column.columnDef.header,\n                        header.getContext(),\n                      )}\n                </TableHead>\n              ))}\n            </TableRow>\n          ))}\n        </TableHeader>\n        <TableBody>\n          {table.getRowModel().rows.map((row) => (\n            <TableRow\n              data-state={selectedRowIds.has(row.id) ? \"selected\" : undefined}\n              key={row.id}\n            >\n              {onSelectionChange === undefined ? null : (\n                <TableCell>\n                  <input\n                    aria-label={`Выбрать строку ${row.id}`}\n                    checked={selectedRowIds.has(row.id)}\n                    className=\"accent-primary size-4\"\n                    type=\"checkbox\"\n                    onChange={(event) =>\n                      updateSelection(row.id, event.target.checked)\n                    }\n                  />\n                </TableCell>\n              )}\n              {row.getVisibleCells().map((cell) => (\n                <TableCell\n                  className={density === \"compact\" ? \"py-1\" : \"py-2\"}\n                  key={cell.id}\n                >\n                  {flexRender(cell.column.columnDef.cell, cell.getContext())}\n                </TableCell>\n              ))}\n            </TableRow>\n          ))}\n        </TableBody>\n      </Table>\n    </div>\n  );\n}\n\nexport function NumberCell({ value }: { value: number }) {\n  return (\n    <span className=\"block text-right font-mono tabular-nums\">\n      {new Intl.NumberFormat(\"ru-RU\").format(value)}\n    </span>\n  );\n}\n",
+    "usedDeprecatedRules": []
+  }
+]

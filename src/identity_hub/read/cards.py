@@ -18,7 +18,18 @@ from identity_hub.errors import ValidationFailed
 from identity_hub.links import Links
 from identity_hub.store.base import IdentityRow, LeaseHistoryRow, QuotaWindow
 
-__all__ = ["CardsMixin", "IdentityCard", "LeaseInfo", "LeaseStats", "ProxyInfo", "RegionInfo"]
+__all__ = [
+    "AccessCard",
+    "CardsMixin",
+    "CredentialInfo",
+    "DataNamespaceInfo",
+    "IdentityCard",
+    "LeaseInfo",
+    "LeaseStats",
+    "ProxyInfo",
+    "RegionInfo",
+    "SessionInfo",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +46,8 @@ class RegionInfo:
     synced_at: datetime | None
     raw_status: str | None
     pinned_until: datetime | None
+    pending_observation: str | None
+    version: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +58,7 @@ class LeaseInfo:
     fencing: int
     acquired_at: datetime
     expires_at: datetime
+    heartbeat_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +77,44 @@ class VerificationInfo:
     state: str
     code: str | None
     attempts: int
+    started_at: datetime | None
+    submitted_at: datetime | None
+    verified_at: datetime | None
     expires_at: datetime | None
+    via_identity_id: UUID | None
+    details: dict[str, Any]
+    has_evidence: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialInfo:
+    present: bool
+    version: int | None
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionInfo:
+    slot: str
+    status: str
+    expires_at: datetime | None
+    version: int
+    written_by_fencing: int
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class AccessCard:
+    credential: CredentialInfo
+    sessions: list[SessionInfo]
+
+
+@dataclass(frozen=True, slots=True)
+class DataNamespaceInfo:
+    namespace: str
+    schema_version: int
+    version: int
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +128,12 @@ class IdentityCard:
     lease: LeaseInfo | None
     proxy: ProxyInfo | None
     quotas: list[QuotaWindow]
-    data_namespaces: list[str]
+    data_namespaces: list[DataNamespaceInfo]
     open_challenge: dict[str, Any] | None
     admin_url: str | None
+    revision: int
+    eligible: bool
+    blockers: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +166,8 @@ def _region_info(region: str, key: str, state: RegionState) -> RegionInfo:
         synced_at=state.synced_at,
         raw_status=state.raw_status,
         pinned_until=state.pinned_until,
+        pending_observation=state.pending_observation,
+        version=state.version,
     )
 
 
@@ -125,13 +181,24 @@ class CardsMixin(SpaceBase):
             quotas = await tx.quota_usage(identity_id)
             namespaces = await tx.data_namespaces(identity_id)
             challenge = await tx.open_challenge_of(identity_id)
+            now = await tx.now()
             verifications = []
             for region, key, state in regions:
                 if region == "verification":
                     row = await tx.load_verification(identity_id, key)
                     verifications.append(
                         VerificationInfo(
-                            key, state.state, state.code, row.attempts if row else 0, state.until
+                            key,
+                            state.state,
+                            state.code,
+                            row.attempts if row else 0,
+                            row.started_at if row else None,
+                            row.submitted_at if row else None,
+                            row.verified_at if row else None,
+                            row.expires_at if row else state.until,
+                            row.via_identity_id if row else None,
+                            dict(row.details) if row else {},
+                            row is not None and row.evidence is not None,
                         )
                     )
         links = await self.links_of(identity_id)  # type: ignore[attr-defined]
@@ -149,6 +216,8 @@ class CardsMixin(SpaceBase):
                 None,
                 None,
                 None,
+                None,
+                1,
             ),
             RegionInfo(
                 "availability",
@@ -163,16 +232,25 @@ class CardsMixin(SpaceBase):
                 None,
                 None,
                 None,
+                None,
+                1,
             ),
         ]
         base = self.hub.admin_base_url
+        blockers = _blockers(identity, now)
         return IdentityCard(
             identity=identity,
             regions=column_regions + [_region_info(r, k, s) for r, k, s in regions if r != "verification"],
             verifications=verifications,
             links=links,
             lease=LeaseInfo(
-                lease.lease_id, lease.pool, lease.holder, lease.fencing, lease.acquired_at, lease.expires_at
+                lease.lease_id,
+                lease.pool,
+                lease.holder,
+                lease.fencing,
+                lease.acquired_at,
+                lease.expires_at,
+                lease.heartbeat_at,
             )
             if lease
             else None,
@@ -180,7 +258,7 @@ class CardsMixin(SpaceBase):
             if proxy
             else None,
             quotas=quotas,
-            data_namespaces=[ns for ns, *_ in namespaces],
+            data_namespaces=[DataNamespaceInfo(*namespace) for namespace in namespaces],
             open_challenge={
                 "id": str(challenge.id),
                 "kind": challenge.kind,
@@ -190,6 +268,29 @@ class CardsMixin(SpaceBase):
             if challenge
             else None,
             admin_url=f"{base}/identities/{identity_id}" if base else None,
+            revision=identity.event_seq,
+            eligible=not blockers,
+            blockers=blockers,
+        )
+
+    async def access_card(self, identity_id: UUID) -> AccessCard:
+        """Secret-free credential/session metadata for an account card."""
+        async with self._tx(own=True) as tx:
+            await self._identity(tx, identity_id)
+            credential, sessions = await tx.access_metadata(identity_id)
+        return AccessCard(
+            CredentialInfo(credential.present, credential.version, credential.updated_at),
+            [
+                SessionInfo(
+                    row.slot,
+                    row.status,
+                    row.expires_at,
+                    row.version,
+                    row.written_by_fencing,
+                    row.updated_at,
+                )
+                for row in sessions
+            ],
         )
 
     async def pool_summary(self, service: str | None = None) -> dict[str, dict[str, dict[str, int]]]:
@@ -244,3 +345,21 @@ class CardsMixin(SpaceBase):
             if len(page) < batch_size:
                 return changed
             after = page[-1].id
+
+
+def _blockers(identity: IdentityRow, now: datetime) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if identity.lifecycle != "ready":
+        blockers.append(f"lifecycle:{identity.lifecycle}")
+    if identity.standing not in ("good", "limited"):
+        blockers.append(f"standing:{identity.standing}")
+    if identity.auth_state != "authenticated":
+        blockers.append(f"auth:{identity.auth_state}")
+    available = identity.availability == "available" or (
+        identity.availability in ("paused", "cooling")
+        and identity.availability_until is not None
+        and identity.availability_until <= now
+    )
+    if not available:
+        blockers.append(f"availability:{identity.availability}")
+    return tuple(blockers)

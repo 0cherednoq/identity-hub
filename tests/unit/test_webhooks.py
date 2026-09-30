@@ -54,6 +54,9 @@ def test_default_request_timeout_is_ten_seconds() -> None:
         ("http://hooks.example.test/hook", (), False),
         ("ftp://hooks.example.test/hook", ("hooks.example.test",), False),
         ("https:///missing-host", (), False),
+        ("https://127.0.0.1/hook", (), False),
+        ("https://[::1]/hook", (), False),
+        ("https://localhost/hook", (), False),
     ],
 )
 def test_webhook_url_policy(url: str, dev_hosts: tuple[str, ...], ok: bool) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import random
 import time
@@ -148,11 +149,48 @@ def validate_webhook_url(url: str, *, dev_hosts: Iterable[str] = ()) -> str:
         raise ValidationFailed("URL вебхука должен содержать host")
     if parsed.username is not None or parsed.password is not None:
         raise ValidationFailed("URL вебхука не должен содержать credentials")
+    dev = {item.casefold().rstrip(".") for item in dev_hosts}
+    normalized_host = host.casefold().rstrip(".")
+    if normalized_host not in dev:
+        if normalized_host == "localhost" or normalized_host.endswith((".localhost", ".local", ".internal")):
+            raise ValidationFailed("URL вебхука не может указывать на локальный адрес")
+        try:
+            address = ipaddress.ip_address(normalized_host)
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValidationFailed("URL вебхука не может указывать на приватный или служебный адрес")
     if parsed.scheme == "https":
         return url
-    if parsed.scheme == "http" and host.casefold() in {item.casefold() for item in dev_hosts}:
+    if parsed.scheme == "http" and normalized_host in dev:
         return url
     raise ValidationFailed("URL вебхука должен использовать https (http разрешён только dev-hostам)")
+
+
+def _validated_patterns(event_types: Iterable[str]) -> list[str]:
+    patterns = list(dict.fromkeys(event_types))
+    if not patterns:
+        raise ValidationFailed("endpoint должен содержать хотя бы один тип события")
+    for pattern in patterns:
+        if pattern != "*" and not pattern.endswith(".*"):
+            try:
+                spec_of(pattern)
+            except ValueError as exc:
+                raise ValidationFailed(str(exc)) from exc
+        if pattern.endswith(".*") and len(pattern) <= 2:
+            raise ValidationFailed(f"некорректная маска события: {pattern!r}")
+    return patterns
+
+
+def _validated_filter(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    result = dict(value or {})
+    unknown = set(result) - {"service", "labels"}
+    if unknown:
+        raise ValidationFailed("фильтр webhook содержит неизвестные поля")
+    labels = result.get("labels")
+    if labels is not None and not isinstance(labels, Mapping):
+        raise ValidationFailed("labels в фильтре webhook должен быть объектом")
+    return result
 
 
 def _endpoint(row: WebhookEndpointRow) -> WebhookEndpoint:
@@ -192,17 +230,7 @@ class Webhooks:
         id: UUID | None = None,
     ) -> WebhookEndpoint:
         url = validate_webhook_url(url, dev_hosts=self.space.hub.webhook_dev_hosts)
-        patterns = list(dict.fromkeys(event_types))
-        if not patterns:
-            raise ValidationFailed("endpoint должен содержать хотя бы один тип события")
-        for pattern in patterns:
-            if pattern != "*" and not pattern.endswith(".*"):
-                try:
-                    spec_of(pattern)
-                except ValueError as exc:
-                    raise ValidationFailed(str(exc)) from exc
-            if pattern.endswith(".*") and len(pattern) <= 2:
-                raise ValidationFailed(f"некорректная маска события: {pattern!r}")
+        patterns = _validated_patterns(event_types)
         if not secret.get_secret_value():
             raise ValidationFailed("секрет вебхука не может быть пустым")
         endpoint_id = id or new_id()
@@ -216,12 +244,40 @@ class Webhooks:
                     url,
                     description,
                     patterns,
-                    dict(filter or {}),
+                    _validated_filter(filter),
                     str(min_severity),
                     payload,
                 )
             )
         return _endpoint(row)
+
+    async def update(
+        self,
+        endpoint_id: UUID,
+        *,
+        url: str,
+        event_types: Iterable[str],
+        filter: Mapping[str, Any] | None = None,
+        min_severity: Severity = Severity.INFO,
+        description: str | None = None,
+    ) -> None:
+        url = validate_webhook_url(url, dev_hosts=self.space.hub.webhook_dev_hosts)
+        async with self.space._tx() as tx:
+            changed = await tx.update_webhook_endpoint(
+                endpoint_id,
+                url=url,
+                description=description,
+                event_types=_validated_patterns(event_types),
+                filter=_validated_filter(filter),
+                min_severity=str(min_severity),
+            )
+        if not changed:
+            raise NotFound("webhook endpoint", endpoint_id)
+
+    async def delete(self, endpoint_id: UUID) -> None:
+        async with self.space._tx() as tx:
+            if not await tx.delete_webhook_endpoint(endpoint_id):
+                raise NotFound("webhook endpoint", endpoint_id)
 
     async def rotate_secret(
         self, endpoint_id: UUID, secret: SecretStr, *, overlap: timedelta = timedelta(hours=1)
@@ -257,6 +313,48 @@ class Webhooks:
         async with self.space._tx() as tx:
             if not await tx.retry_webhook_delivery(delivery_id):
                 raise NotFound("webhook delivery", delivery_id)
+
+    async def send_test(self, endpoint_id: UUID) -> int:
+        """Send a signed probe without enqueueing a delivery or advancing any event cursor."""
+        async with self.space._tx() as tx:
+            row = await tx.get_webhook_endpoint(endpoint_id)
+        if row is None:
+            raise NotFound("webhook endpoint", endpoint_id)
+        validate_webhook_url(row.url, dev_hosts=self.space.hub.webhook_dev_hosts)
+        secrets = self.space.hub.envelope.open_model(
+            _WebhookSecrets,
+            row.secret,
+            associated_data("ih_webhook_endpoints", endpoint_id),
+        )
+        body = json.dumps(
+            {
+                "type": "identity_hub.webhook.test",
+                "endpoint_id": str(endpoint_id),
+                "sent_at": self.space.hub.clock.now().isoformat(),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        try:
+            import httpx
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("для вебхуков установите identity-hub[webhooks]") from exc
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.space.hub.webhook_dispatcher.policy.timeout,
+                follow_redirects=False,
+            ) as client:
+                response = await client.post(
+                    row.url,
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        SIGNATURE_HEADER: make_signature(body, secrets.current),
+                    },
+                )
+        except Exception as exc:
+            raise ValidationFailed(f"тестовая доставка не выполнена: {type(exc).__name__}") from exc
+        return response.status_code
 
     async def deliveries(self, endpoint_id: UUID, *, limit: int = 100) -> list[WebhookDelivery]:
         async with self.space._tx() as tx:

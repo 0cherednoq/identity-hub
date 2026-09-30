@@ -162,6 +162,31 @@ async def test_override_requires_reason(space: SpaceHandle) -> None:
         )
 
 
+async def test_unpin_and_restore_keep_domain_guards(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    identity_id = await make_identity(space, standing="banned")
+    await space.override(
+        identity_id,
+        Override(
+            "standing", "", Standing.GOOD, reason="false positive", actor="operator", pin_for=timedelta(1)
+        ),
+    )
+    decision = await space.unpin(
+        identity_id, "standing", "", actor="admin", reason="platform correction deployed"
+    )
+    assert decision.state.state == Standing.GOOD
+    assert decision.state.pinned_until is None
+    assert (await _event_types(sessionmaker))[-1] == "identity.state.unpinned"
+
+    with pytest.raises(TransitionNotAllowed):
+        await space.restore_standing(identity_id, actor="admin", reason="not banned")
+
+    banned_id = await make_identity(space, standing="banned", external_ref="restore-target")
+    restored = await space.restore_standing(banned_id, actor="admin", reason="appeal accepted")
+    assert restored.state.state == Standing.GOOD
+
+
 async def test_confirm_leaving_frozen(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:

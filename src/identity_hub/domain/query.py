@@ -43,6 +43,7 @@ class SearchQuery:
     filters: dict[str, frozenset[str]] = field(default_factory=dict)  # profile или labels
     terms: tuple[str, ...] = ()
     exact_id: UUID | None = None
+    short_id: str | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -54,6 +55,7 @@ class SearchQuery:
             or self.filters
             or self.terms
             or self.exact_id
+            or self.short_id
         )
 
 
@@ -72,6 +74,7 @@ def parse_query(text: str) -> SearchQuery:
     filters: dict[str, set[str]] = {}
     terms: list[str] = []
     exact_id: UUID | None = None
+    short_id: str | None = None
 
     for token in _tokens(text):
         match = _TOKEN.match(token)
@@ -100,8 +103,8 @@ def parse_query(text: str) -> SearchQuery:
             parsed = _as_uuid(value)
             if parsed is not None:
                 exact_id = parsed
-            elif len(value) >= MIN_TERM_LENGTH:
-                terms.append(value.lower())  # короткий id — подстрока в search_text
+            elif len(value) >= MIN_TERM_LENGTH and re.fullmatch(r"[0-9a-fA-F]+", value):
+                short_id = value.lower()
         else:
             filters.setdefault(match.group(1), set()).add(value)
 
@@ -113,6 +116,7 @@ def parse_query(text: str) -> SearchQuery:
         filters={k: frozenset(v) for k, v in filters.items()},
         terms=tuple(dict.fromkeys(terms)),
         exact_id=exact_id,
+        short_id=short_id,
     )
 
 

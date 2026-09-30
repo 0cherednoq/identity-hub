@@ -52,7 +52,13 @@ class Impact:
 
 class LinksMixin(SpaceBase):
     async def link(
-        self, identity_id: UUID, role: str, linked_identity_id: UUID, *, actor: str = "system"
+        self,
+        identity_id: UUID,
+        role: str,
+        linked_identity_id: UUID,
+        *,
+        actor: str = "system",
+        reason: str | None = None,
     ) -> None:
         """Связь `identity_id --role--> linked_identity_id` (FR-4.1, 4.2). Одна связь на (аккаунт, роль)."""
         if not role or len(role) > 64:
@@ -72,11 +78,17 @@ class LinksMixin(SpaceBase):
                     actor=actor,
                     service=row.service,
                     identity_id=identity_id,
-                    data={"role": role, "linked_identity_id": str(linked_identity_id)},
+                    data={
+                        "role": role,
+                        "linked_identity_id": str(linked_identity_id),
+                        **({"reason": reason} if reason else {}),
+                    },
                 ),
             )
 
-    async def unlink(self, identity_id: UUID, role: str, *, actor: str = "system") -> bool:
+    async def unlink(
+        self, identity_id: UUID, role: str, *, actor: str = "system", reason: str | None = None
+    ) -> bool:
         """Удалить связь; False — её не было."""
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
@@ -90,7 +102,11 @@ class LinksMixin(SpaceBase):
                     actor=actor,
                     service=row.service,
                     identity_id=identity_id,
-                    data={"role": role, "linked_identity_id": str(linked)},
+                    data={
+                        "role": role,
+                        "linked_identity_id": str(linked),
+                        **({"reason": reason} if reason else {}),
+                    },
                 ),
             )
             return True

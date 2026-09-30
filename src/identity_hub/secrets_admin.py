@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -41,6 +42,44 @@ class SecretsAdminMixin(SpaceBase):
                     service=row.service,
                     identity_id=identity_id,
                     data={"fields": sorted(type(model).model_fields)},
+                ),
+            )
+
+    async def update_session(
+        self,
+        identity_id: UUID,
+        session: BaseModel | Mapping[str, Any],
+        *,
+        actor: str,
+        slot: str = "default",
+        expires_at: datetime | None = None,
+    ) -> None:
+        """Replace one session slot at the current fencing boundary."""
+        if not slot or len(slot) > 64:
+            raise ValidationFailed("session slot must contain from 1 to 64 characters")
+        async with self._tx(own=True) as tx:
+            service = self.hub.service((await self._identity(tx, identity_id)).service)
+        model = validate_model(service.session, session, "session")
+        payload = self.hub.envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            fencing = await tx.current_fencing(identity_id, lock=True)
+            if fencing is None or not await tx.put_session(
+                identity_id, slot, payload, fencing=fencing, expires_at=expires_at
+            ):
+                raise ValidationFailed("session update lost its fencing boundary")
+            await self._emit(
+                tx,
+                EventDraft(
+                    "identity.session.updated",
+                    actor=actor,
+                    service=row.service,
+                    identity_id=identity_id,
+                    data={
+                        "slot": slot,
+                        "fields": sorted(type(model).model_fields),
+                        "expires_at": expires_at,
+                    },
                 ),
             )
 
