@@ -27,24 +27,25 @@
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | done |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | done |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | done |  |  |
-| I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  |  |
+| I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  | ведёт параллельная сессия в worktree, ветка i8.7-namespaces |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
-| I0.2 | Ошибки, lock order, архитектурные границы | I0.1 | todo |  |  |
-| I0.3 | Payload limits, versioned envelope, SecretValue | I0.2 | todo |  |  |
-| I0.4 | Schema check и migration advisory lock | I0.1, I0.2 | todo |  |  |
+| I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | todo |  |  |
+| I0.2b | Порядок блокировок и архитектурные границы | I0.2a | todo |  |  |
+| I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | todo |  |  |
+| I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | todo |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | todo |  |  |
-| I1.2 | Revision агрегата и expected_revision | I0.2, I0.4 | todo |  |  |
-| I1.3 | Идемпотентность и canonical fingerprint | I0.2, I0.4 | todo |  |  |
+| I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
+| I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | todo |  |  |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
-| I2.3 | Полный lease fence | I0.2, I2.1 | todo |  |  |
+| I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
 | I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2 | todo |  |  |
 | I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
 | I3.3 | Два режима обновления session | I3.2 | todo |  |  |
-| I4.1 | Provider operation state machine и claim | I0.2, I0.4, I1.2, I2.3 | todo |  |  |
+| I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | todo |  |  |
@@ -59,7 +60,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 7 / 38 done
+**Итого:** 7 / 39 done
 
 ## Журнал сессий
 

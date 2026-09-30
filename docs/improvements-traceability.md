@@ -24,13 +24,13 @@ Scope зафиксирован решением `D-142`. Задачи — в
 | IMP-10 | Два режима обновления session | I3.3 | missing | planned: `tests/pg/test_session_modes.py::test_replace_revokes_old` |
 | IMP-11 | Долговечные внешние операции | I4.1, I4.2, I4.3 | partial | planned: `tests/pg/test_provider_operations.py::test_claim_call_apply_recovery`. Сейчас есть таблица `ih_provider_operations` (миграция 0005) для админки, без claim/recovery |
 | IMP-12 | Публичная read-схема Core | I5.1 | missing | planned: `tests/pg/test_read_schema.py::test_join_with_application_table` |
-| IMP-13 | Модель ошибок с кодами | I0.2 | partial | planned: `tests/unit/test_error_codes.py::test_every_error_has_stable_code`. Сейчас есть иерархия `IdentityHubError`, без `code` и маппинга HTTP/CLI |
-| IMP-14 | Порядок блокировок | I0.2 | missing | planned: `tests/pg/test_lock_order.py::test_reverse_order_no_deadlock` |
+| IMP-13 | Модель ошибок с кодами | I0.2a | partial | planned: `tests/unit/test_error_codes.py::test_every_error_has_stable_code`. Сейчас есть иерархия `IdentityHubError`, без `code` и маппинга HTTP/CLI |
+| IMP-14 | Порядок блокировок | I0.2b | missing | planned: `tests/pg/test_lock_order.py::test_reverse_order_no_deadlock` |
 | IMP-15 | Проверка схемы при старте | I0.4 | missing | planned: `tests/pg/test_schema_check.py::test_old_revision_rejected` |
 | IMP-16 | Лимиты payload и версия envelope | I0.3 | missing | planned: `tests/unit/test_payload_limits.py::test_json_depth_limit` |
 | IMP-17 | Load harness с инвариантами | I6.4 | partial | planned: `tests/load/test_performance.py::test_lease_p95_10k_accounts_50_workers` без xfail. Сейчас бюджеты помечаются xfail по `D-127` |
 | IMP-18 | Детерминированные race-тесты | I6.5 | missing | planned: `tests/pg/test_race_matrix.py::test_race_matrix` |
-| IMP-19 | Import-linter и архитектурные тесты | I0.2 | partial | planned: `tests/test_architecture.py::test_import_contracts`. Сейчас есть `tests/test_public_api.py`, import-linter не подключён |
+| IMP-19 | Import-linter и архитектурные тесты | I0.2b | partial | planned: `tests/test_architecture.py::test_import_contracts`. Сейчас есть `tests/test_public_api.py`, import-linter не подключён |
 | IMP-20 | `run_once(limit)` для фоновых работ | I5.2 | partial | planned: `tests/pg/test_workers.py::test_run_once_respects_limit`. Сейчас `Dispatcher.run_once()` без `limit` и без фасада `hub.workers` |
 | IMP-21 | Ordered outbox | I5.3 | missing | planned: `tests/pg/test_ordered_outbox.py::test_next_revision_waits` |
 | IMP-22 | RuntimeProfile | — | deferred | post-v1, отдельный запрос владельца |
