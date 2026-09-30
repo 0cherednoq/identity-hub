@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I8.4 API: space.identities — изменение и состояние
+- **Начата:** 2026-09-30
 - **Шаги:**
-  - [ ] —
+  - [ ] update и replace_* поверх приватных реализаций
+  - [ ] теги, note, delete
+  - [ ] состояние: activate, retire, set_lifecycle, restore_standing, override, unpin
+  - [ ] алиасы и перевод внутренних вызовов
+  - [ ] тесты: события, переходы, parity
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -24,7 +29,7 @@
 | I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | done |  |  |
 | I8.2 | API: space.identities — чтение | I8.1 | done |  |  |
 | I8.3 | API: space.identities — create/ensure/create_many | I8.2 | done |  |  |
-| I8.4 | API: space.identities — изменение и состояние | I8.2 | todo |  |  |
+| I8.4 | API: space.identities — изменение и состояние | I8.2 | in_progress |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | todo |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | todo |  |  |
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  |  |
