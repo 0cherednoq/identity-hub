@@ -263,7 +263,7 @@ def _label_variants(key: str, value: str) -> tuple[dict[str, Any], ...]:
 
 
 class SearchMixin(SpaceBase):
-    async def account_selection_snapshot(
+    async def _account_selection_snapshot(
         self,
         query: str | SearchQuery = "",
         *,
@@ -320,7 +320,7 @@ class SearchMixin(SpaceBase):
 
     search = legacy(_search, "search")
 
-    async def account_search(
+    async def _account_search(
         self,
         query: str | SearchQuery = "",
         *,
@@ -516,6 +516,9 @@ class SearchMixin(SpaceBase):
             sort_by=sort_by,
             sort_desc=options.sort_desc,
         )
+
+    account_search = legacy(_account_search, "account_search")
+    account_selection_snapshot = legacy(_account_selection_snapshot, "account_selection_snapshot")
 
 
 def _account_blockers(row: IdentityRow, now: datetime) -> tuple[str, ...]:

@@ -101,8 +101,9 @@ class Maintenance:
             for identity_id, region in due:
                 decision = await space._expire(identity_id, region)
                 report.add("region_timers", int(decision.changed))
-            report.add("verifications", await space.expire_verifications(limit=self.schedule.batch_size))
-            report.add("challenges", await space.expire_challenges(limit=self.schedule.batch_size))
+            batch = self.schedule.batch_size
+            report.add("verifications", await space.maintenance.expire_verifications(limit=batch))
+            report.add("challenges", await space.maintenance.expire_challenges(limit=batch))
         report.add("lease_loss_aggregates", await self.hub.flush_lease_losses())
         return report
 

@@ -10,6 +10,7 @@ from typing import Literal
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import ValidationFailed
 from identity_hub.store.base import LeaseReadRow
 
@@ -199,7 +200,7 @@ def _live(row: LeaseReadRow, now: datetime) -> LiveLease:
 
 
 class LeasesMixin(SpaceBase):
-    async def lease_dashboard(
+    async def _lease_dashboard(
         self,
         *,
         filters: LeaseFilters | None = None,
@@ -285,7 +286,7 @@ class LeasesMixin(SpaceBase):
             expired_unclosed=tuple(item for item in live if item.expired_unclosed),
         )
 
-    async def lease_history_page(
+    async def _lease_history_page(
         self,
         *,
         limit: int = 50,
@@ -306,3 +307,6 @@ class LeasesMixin(SpaceBase):
         items = tuple(rows[:limit])
         next_before = (items[-1].acquired_at, items[-1].lease_id) if len(rows) > limit and items else None
         return LeaseHistoryPage(items, next_before)
+
+    lease_dashboard = legacy(_lease_dashboard, "lease_dashboard")
+    lease_history_page = legacy(_lease_history_page, "lease_history_page")

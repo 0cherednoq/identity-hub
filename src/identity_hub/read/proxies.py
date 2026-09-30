@@ -8,6 +8,7 @@ from typing import Literal
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.store.base import (
     ProxyBindingHistoryRow,
@@ -144,7 +145,7 @@ def _validate(limit: int, filters: ProxyFilters) -> None:
 
 
 class ProxyReadMixin(SpaceBase):
-    async def proxy_overview(
+    async def _proxy_overview(
         self,
         *,
         filters: ProxyFilters | None = None,
@@ -169,7 +170,7 @@ class ProxyReadMixin(SpaceBase):
             next_before=(visible[-1].created_at, visible[-1].id) if len(rows) > limit and visible else None,
         )
 
-    async def proxy_detail(
+    async def _proxy_detail(
         self,
         proxy_id: UUID,
         *,
@@ -199,3 +200,6 @@ class ProxyReadMixin(SpaceBase):
                 else None,
             ),
         )
+
+    proxy_detail = legacy(_proxy_detail, "proxy_detail")
+    proxy_overview = legacy(_proxy_overview, "proxy_overview")

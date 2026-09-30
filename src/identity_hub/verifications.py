@@ -296,7 +296,7 @@ class VerificationsMixin(SpaceBase):
                 )
             ).status
 
-    async def expire_verifications(self, *, limit: int = 100) -> int:
+    async def _expire_verifications(self, *, limit: int = 100) -> int:
         """Истёкшие сроки: verified → expired, pending → missing (ТЗ §8.9, обслуживание)."""
         async with self._tx(own=True) as tx:
             due = await tx.due_regions("verification", limit)
@@ -319,6 +319,8 @@ class VerificationsMixin(SpaceBase):
 
     verification_status = legacy(_verification_status, "verification_status")
     review_verification = legacy(_review_verification, "review_verification")
+
+    expire_verifications = legacy(_expire_verifications, "expire_verifications")
 
 
 class RequirementsMixin(SpaceBase):

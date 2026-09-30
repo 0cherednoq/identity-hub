@@ -128,7 +128,7 @@ class LinksMixin(SpaceBase):
             ],
         )
 
-    async def link_summary(self, ids: Sequence[UUID]) -> dict[UUID, LinkSummary]:
+    async def _link_summary(self, ids: Sequence[UUID]) -> dict[UUID, LinkSummary]:
         """Сводка по странице списка одним запросом (FR-4.4)."""
         async with self._tx() as tx:
             counts = await tx.link_counts(ids)
@@ -147,3 +147,5 @@ class LinksMixin(SpaceBase):
     unlink = legacy(_unlink, "unlink")
     links_of = legacy(_links_of, "links_of")
     impact_of = legacy(_impact_of, "impact_of")
+
+    link_summary = legacy(_link_summary, "link_summary")

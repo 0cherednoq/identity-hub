@@ -298,7 +298,7 @@ class CardsMixin(SpaceBase):
 
     access_card = legacy(_access_card, "access_card")
 
-    async def pool_summary(self, service: str | None = None) -> dict[str, dict[str, dict[str, int]]]:
+    async def _pool_summary(self, service: str | None = None) -> dict[str, dict[str, dict[str, int]]]:
         """Число аккаунтов по сервису и значениям регионов (FR-11.6): service → регион → значение → n."""
         async with self._tx(own=True) as tx:
             rows = await tx.region_counts(service)
@@ -307,7 +307,7 @@ class CardsMixin(SpaceBase):
             summary[svc]["auth" if column == "auth_state" else column][value] = count
         return {svc: dict(regions) for svc, regions in summary.items()}
 
-    async def lease_history(
+    async def _lease_history(
         self, identity_id: UUID, *, limit: int = 50, before: datetime | None = None
     ) -> list[LeaseHistoryRow]:
         """История аренд аккаунта, новые первыми (FR-11.7). Без token."""
@@ -316,7 +316,7 @@ class CardsMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             return await tx.lease_history(identity_id, limit=limit, before=before)
 
-    async def lease_stats(self, identity_id: UUID, since: datetime) -> LeaseStats:
+    async def _lease_stats(self, identity_id: UUID, since: datetime) -> LeaseStats:
         async with self._tx(own=True) as tx:
             row = await tx.lease_stats(identity_id, since)
             now = await tx.now()
@@ -334,7 +334,7 @@ class CardsMixin(SpaceBase):
             failed=row.failed,
         )
 
-    async def reindex_search(self, service: str, *, batch_size: int = 500) -> int:
+    async def _reindex_search(self, service: str, *, batch_size: int = 500) -> int:
         """Пересчитать search_text после изменения searchable-полей сервиса (FR-11.8)."""
         svc = self.hub.service(service)
         after: UUID | None = None
@@ -350,6 +350,11 @@ class CardsMixin(SpaceBase):
             if len(page) < batch_size:
                 return changed
             after = page[-1].id
+
+    lease_history = legacy(_lease_history, "lease_history")
+    lease_stats = legacy(_lease_stats, "lease_stats")
+    pool_summary = legacy(_pool_summary, "pool_summary")
+    reindex_search = legacy(_reindex_search, "reindex_search")
 
 
 def _blockers(identity: IdentityRow, now: datetime) -> tuple[str, ...]:

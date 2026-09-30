@@ -13,7 +13,21 @@ PERMANENT: frozenset[str] = frozenset({"notifications", "ref", "using", "webhook
 
 # Неймспейсы, уже доступные на `SpaceHandle`; каждая задача I8 добавляет свои.
 NAMESPACES: frozenset[str] = frozenset(
-    {"auth", "data", "identities", "imports", "links", "pools", "proxies", "secrets", "sync", "verifications"}
+    {
+        "admin",
+        "analytics",
+        "auth",
+        "data",
+        "identities",
+        "imports",
+        "links",
+        "maintenance",
+        "pools",
+        "proxies",
+        "secrets",
+        "sync",
+        "verifications",
+    }
 )
 
 # Старое имя → новое (относительно `space.`).

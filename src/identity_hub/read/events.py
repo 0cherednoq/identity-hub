@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import CATALOG, scrub
 from identity_hub.store.base import EventReadFilter, EventReadRow
@@ -128,7 +129,7 @@ def _item(row: EventReadRow) -> EventItem:
 
 
 class EventsReadMixin(SpaceBase):
-    async def event_page(
+    async def _event_page(
         self,
         *,
         filters: EventFilters | None = None,
@@ -161,9 +162,12 @@ class EventsReadMixin(SpaceBase):
             else None,
         )
 
-    async def event_detail(self, event_id: UUID) -> EventItem:
+    async def _event_detail(self, event_id: UUID) -> EventItem:
         async with self._tx(own=True) as tx:
             row = await tx.event_read_one(event_id)
         if row is None:
             raise NotFound("event", event_id)
         return _item(row)
+
+    event_detail = legacy(_event_detail, "event_detail")
+    event_page = legacy(_event_page, "event_page")

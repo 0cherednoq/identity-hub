@@ -591,21 +591,32 @@ I8.1–I8.9 стоят в прогрессе перед I0.2, а I8.10 — пе�
 - **DoD:** `LoginOutcome` сравнивается со старыми строками; parity всех алиасов; сценарий
   onboarding из руководства на новых именах.
 
-### I8.8 Вынос admin, analytics и maintenance; перевод внутренних потребителей
+### I8.8a Неймспейсы admin, analytics и maintenance
+
+Разбиение I8.8 — `D-147`.
 
 - `space.admin`: read-модели UI (`overview`, `pool_summary`, `pool_capacity`, lease dashboard и
   history, events, deliveries, human queue, proxy overview/detail, `identity_page` — бывш.
   `account_search`, `selection_snapshot` — бывш. `account_selection_snapshot`, import runs,
-  provider operations) и аудит `record_*`.
+  provider operations, `link_summary`) и аудит `record_*`.
 - `space.analytics`: `series`, `funnel`, `time_to`, `cohorts`, `ban_rate`, `utilization`,
   `proxy_quality`.
-- `space.maintenance`: `expire_challenges`, `expire_verifications`, `reindex_search`. Задача
-  I5.2 позже оборачивает их в `hub.workers`.
-- Перевести на новый API пакет `admin/`, CLI, dispatcher/maintenance, `identity_hub.testing`,
-  examples и все тесты. Тесты запускаются с `-W error::DeprecationWarning` для модулей
-  `identity_hub`, кроме отдельного модуля тестов алиасов.
+- `space.maintenance` (класс `SpaceMaintenance`): `expire_challenges`, `expire_verifications`,
+  `reindex_search`. Задача I5.2 позже оборачивает их в `hub.workers`.
+- Старые имена — legacy-алиасы; внутренние вызовы библиотеки (диспетчер, обслуживание,
+  read-модели) переведены на новые имена или приватные реализации.
+- **DoD:** все 32 перенесённых метода доступны в неймспейсах с прежними сигнатурами; allowlist
+  содержит только неймспейсы и legacy-алиасы; таблица миграции отмечена.
+
+### I8.8b Перевод потребителей на новый API
+
+Разбиение I8.8 — `D-147`.
+
+- Перевести на новый API пакет `admin/`, CLI, `identity_hub.testing`, examples и все тесты.
+  Тесты запускаются с `-W error::DeprecationWarning` для модулей `identity_hub`, кроме
+  отдельного модуля тестов алиасов.
 - **DoD:** в наборе тестов нет предупреждений об устаревании, кроме тестов алиасов; тесты
-  `admin/` зелёные; allowlist содержит только неймспейсы и legacy-алиасы.
+  `admin/` зелёные.
 
 ### I8.9 Руководство и примеры на новом API
 
@@ -673,7 +684,7 @@ I1.4 + I2.4 + I3.3 + I4.3 + I5.3 → I6.5
 I0.1 → I8.1 → I8.2 → {I8.3, I8.4}
 I8.3 → I8.5
 I8.1 → {I8.6, I8.7}
-I8.3 + I8.4 + I8.5 + I8.6 + I8.7 → I8.8 → I8.9 → I8.10
+I8.3 + I8.4 + I8.5 + I8.6 + I8.7 → I8.8a → I8.8b → I8.9 → I8.10
 
 I5.1 + I5.2 + I5.3 + I6.4 + I6.5 + I8.10 → I7.1 → I7.2
 ```

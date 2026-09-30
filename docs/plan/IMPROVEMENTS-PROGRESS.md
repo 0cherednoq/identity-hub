@@ -33,8 +33,9 @@
 | I8.5 | API: space.imports и space.secrets | I8.3 | done |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | done |  |  |
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | done |  | параллельная ветка i8.7-namespaces |
-| I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
-| I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
+| I8.8a | API: неймспейсы admin, analytics, maintenance | I8.3, I8.4, I8.5, I8.6, I8.7 | done |  |  |
+| I8.8b | API: перевод admin/, тестов и примеров, запрет DeprecationWarning | I8.8a | todo |  |  |
+| I8.9 | API: руководство и примеры на новом API | I8.8b | todo |  |  |
 | I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | in_progress |  |  |
@@ -65,7 +66,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 10 / 39 done
+**Итого:** 11 / 40 done
 
 ## Журнал сессий
 
@@ -81,3 +82,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-09-30 · I0.2a · done · стабильные коды и context ошибок, 8 новых типов, http_status/exit_code, CLI error[code] · дальше слияние I8.7, затем I0.2b
 2026-09-30 · I8.7 · done · space.auth (LoginOutcome), sync.refresh/refresh_many, links, data, verifications + requirements; 15 алиасов; conformance memory+pg и онбординг на новых именах (параллельная ветка) · дальше I8.8
 2026-10-01 · I0.2b · done · исправлен deadlock импорта update_session (lock_identities по UUID), docs/lock-order.md, import-linter (3 контракта) в check.sh · дальше I0.3
+2026-10-01 · I8.8a · done · space.admin (22 read-модели и аудит), space.analytics (7), space.maintenance (SpaceMaintenance, 3); 32 алиаса, внутренние вызовы переведены; разбиение D-147 · дальше I8.8b

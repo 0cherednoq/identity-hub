@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import SpaceMismatch
 
 if TYPE_CHECKING:
@@ -135,7 +136,8 @@ async def spaces_matrix(
     spaces = await list_spaces(hub, allowed_spaces)
     overviews: list[SpaceOverview] = []
     for space in spaces:
-        overview = await hub.space(space.slug, space.title, space_id=space.id).space_overview(service=service)
+        handle = hub.space(space.slug, space.title, space_id=space.id)
+        overview = await handle._space_overview(service=service)
         overviews.append(overview)
     return SpacesMatrix(tuple(overviews), service)
 
@@ -216,7 +218,7 @@ def _service_overview(
 
 
 class OverviewMixin(SpaceBase):
-    async def space_overview(self, *, service: str | None = None) -> SpaceOverview:
+    async def _space_overview(self, *, service: str | None = None) -> SpaceOverview:
         """Current safe counts for one space, optionally narrowed to one service."""
         ref = await self.ref()
         if service is not None:
@@ -247,7 +249,7 @@ class OverviewMixin(SpaceBase):
             services=services,
         )
 
-    async def pool_capacity(self, pool: Pool) -> PoolCapacity:
+    async def _pool_capacity(self, pool: Pool) -> PoolCapacity:
         """Read pool capacity without emitting capacity transition events."""
         if pool.space.slug != self.slug:
             raise SpaceMismatch(f"pool {pool.name!r} belongs to space {pool.space.slug!r}")
@@ -260,3 +262,6 @@ class OverviewMixin(SpaceBase):
         threshold = pool.capacity_low
         state = "empty" if free == 0 else ("low" if threshold is not None and free <= threshold else "ok")
         return PoolCapacity(pool.name, pool.service.name, eligible, leased, free, threshold, state)
+
+    pool_capacity = legacy(_pool_capacity, "pool_capacity")
+    space_overview = legacy(_space_overview, "space_overview")

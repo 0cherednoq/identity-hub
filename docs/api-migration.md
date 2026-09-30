@@ -14,63 +14,63 @@
 | Было | Стало | Готово | Примечание |
 |---|---|---|---|
 | `space.access_card` | `space.secrets.describe` | I8.5 | Метаданные credentials и sessions без секретов |
-| `space.account_search` | `space.admin.identity_page` | — | Read-модель админки |
-| `space.account_selection_snapshot` | `space.admin.selection_snapshot` | — | Замороженный набор id+revision для bulk-действий админки |
+| `space.account_search` | `space.admin.identity_page` | I8.8a | Read-модель админки |
+| `space.account_selection_snapshot` | `space.admin.selection_snapshot` | I8.8a | Замороженный набор id+revision для bulk-действий админки |
 | `space.add_proxies` | `space.proxies.create_many` | I8.6 | `pool=` → `group=` |
 | `space.add_proxy` | `space.proxies.ensure` | I8.6 | Повтор с тем же адресом возвращает существующий прокси, как и раньше; `pool=` → `group=` |
 | `space.add_requirement` | `space.verifications.requirements.add` | I8.7 |  |
 | `space.add_tags` | `space.identities.add_tags` | I8.4 |  |
-| `space.analytics_ban_rate` | `space.analytics.ban_rate` | — |  |
-| `space.analytics_cohorts` | `space.analytics.cohorts` | — |  |
-| `space.analytics_funnel` | `space.analytics.funnel` | — |  |
-| `space.analytics_proxy_quality` | `space.analytics.proxy_quality` | — |  |
-| `space.analytics_series` | `space.analytics.series` | — |  |
-| `space.analytics_time_to` | `space.analytics.time_to` | — |  |
-| `space.analytics_utilization` | `space.analytics.utilization` | — |  |
+| `space.analytics_ban_rate` | `space.analytics.ban_rate` | I8.8a |  |
+| `space.analytics_cohorts` | `space.analytics.cohorts` | I8.8a |  |
+| `space.analytics_funnel` | `space.analytics.funnel` | I8.8a |  |
+| `space.analytics_proxy_quality` | `space.analytics.proxy_quality` | I8.8a |  |
+| `space.analytics_series` | `space.analytics.series` | I8.8a |  |
+| `space.analytics_time_to` | `space.analytics.time_to` | I8.8a |  |
+| `space.analytics_utilization` | `space.analytics.utilization` | I8.8a |  |
 | `space.answer_challenge` | `space.auth.answer_challenge` | I8.7 |  |
 | `space.cancel_import` | `space.imports.cancel` | I8.5 |  |
 | `space.delete` | `space.identities.delete` | I8.4 |  |
-| `space.delivery_center` | `space.admin.delivery_center` | — |  |
-| `space.event_detail` | `space.admin.event_detail` | — |  |
-| `space.event_page` | `space.admin.event_page` | — |  |
-| `space.expire_challenges` | `space.maintenance.expire_challenges` | — |  |
-| `space.expire_verifications` | `space.maintenance.expire_verifications` | — |  |
+| `space.delivery_center` | `space.admin.delivery_center` | I8.8a |  |
+| `space.event_detail` | `space.admin.event_detail` | I8.8a |  |
+| `space.event_page` | `space.admin.event_page` | I8.8a |  |
+| `space.expire_challenges` | `space.maintenance.expire_challenges` | I8.8a |  |
+| `space.expire_verifications` | `space.maintenance.expire_verifications` | I8.8a |  |
 | `space.get_proxy` | `space.proxies.get` | I8.6 |  |
-| `space.human_queue` | `space.admin.human_queue` | — |  |
+| `space.human_queue` | `space.admin.human_queue` | I8.8a |  |
 | `space.identity_card` | `space.identities.card` | I8.2 | Состояние, квоты, аренда, blockers; лёгкий объект — `identities.get` |
 | `space.impact_of` | `space.links.impact` | I8.7 |  |
 | `space.import_files` | `space.imports.run_files` | I8.5 |  |
 | `space.import_many` | `space.imports.run` | I8.5 | Параметры и `ImportReport` без изменений; для простого атомарного создания — `identities.create_many` |
 | `space.import_run` | `space.imports.get` | I8.5 |  |
-| `space.import_runs` | `space.admin.import_runs` | — |  |
-| `space.lease_dashboard` | `space.admin.lease_dashboard` | — |  |
-| `space.lease_history` | `space.admin.lease_history` | — |  |
-| `space.lease_history_page` | `space.admin.lease_history_page` | — |  |
-| `space.lease_stats` | `space.admin.lease_stats` | — |  |
+| `space.import_runs` | `space.admin.import_runs` | I8.8a |  |
+| `space.lease_dashboard` | `space.admin.lease_dashboard` | I8.8a |  |
+| `space.lease_history` | `space.admin.lease_history` | I8.8a |  |
+| `space.lease_history_page` | `space.admin.lease_history_page` | I8.8a |  |
+| `space.lease_stats` | `space.admin.lease_stats` | I8.8a |  |
 | `space.link` | `space.links.add` | I8.7 |  |
-| `space.link_summary` | `space.admin.link_summary` | — |  |
+| `space.link_summary` | `space.admin.link_summary` | I8.8a |  |
 | `space.links_of` | `space.links.of` | I8.7 |  |
 | `space.load_data` | `space.data.load` | I8.7 |  |
 | `space.override` | `space.identities.override` | I8.4 |  |
 | `space.override_proxy` | `space.proxies.override` | I8.6 |  |
 | `space.pool` | `space.pools.define` | I8.6 | Объект правил отбора и аренды; в БД не хранится |
-| `space.pool_capacity` | `space.admin.pool_capacity` | — |  |
-| `space.pool_summary` | `space.admin.pool_summary` | — |  |
-| `space.provider_operations` | `space.admin.provider_operations` | — |  |
-| `space.proxy_detail` | `space.admin.proxy_detail` | — |  |
+| `space.pool_capacity` | `space.admin.pool_capacity` | I8.8a |  |
+| `space.pool_summary` | `space.admin.pool_summary` | I8.8a |  |
+| `space.provider_operations` | `space.admin.provider_operations` | I8.8a |  |
+| `space.proxy_detail` | `space.admin.proxy_detail` | I8.8a |  |
 | `space.proxy_health` | `space.proxies.health` | I8.6 | Политика здоровья прокси хаба |
-| `space.proxy_overview` | `space.admin.proxy_overview` | — |  |
+| `space.proxy_overview` | `space.admin.proxy_overview` | I8.8a |  |
 | `space.proxy_url_of` | `space.proxies.url` | I8.6 | Теперь `await space.proxies.url(proxy_id)`; URL с паролем — не для логов |
 | `space.rebind_proxy` | `space.proxies.rebind` | I8.6 |  |
 | `space.recheck_proxies` | `space.proxies.recheck_due` | I8.6 | Прокси, у которых наступил срок перепроверки |
 | `space.recheck_proxy` | `space.proxies.recheck` | I8.6 |  |
 | `space.reconcile` | `space.sync.refresh_many` | I8.7 | Плановая сверка многих identity |
-| `space.record_admin_bulk` | `space.admin.record_bulk` | — |  |
-| `space.record_admin_export` | `space.admin.record_export` | — |  |
-| `space.record_admin_import` | `space.admin.record_import` | — |  |
-| `space.record_admin_integration` | `space.admin.record_integration` | — |  |
+| `space.record_admin_bulk` | `space.admin.record_bulk` | I8.8a |  |
+| `space.record_admin_export` | `space.admin.record_export` | I8.8a |  |
+| `space.record_admin_import` | `space.admin.record_import` | I8.8a |  |
+| `space.record_admin_integration` | `space.admin.record_integration` | I8.8a |  |
 | `space.register` | `space.identities.ensure` | I8.3 | Семантика get-or-create сохранена; `identities.create` бросает `AlreadyExists` |
-| `space.reindex_search` | `space.maintenance.reindex_search` | — |  |
+| `space.reindex_search` | `space.maintenance.reindex_search` | I8.8a |  |
 | `space.remove_tags` | `space.identities.remove_tags` | I8.4 |  |
 | `space.report_proxy_failure` | `space.proxies.report_failure` | I8.6 |  |
 | `space.report_proxy_success` | `space.proxies.report_success` | I8.6 |  |
@@ -90,7 +90,7 @@
 | `space.set_lifecycle` | `space.identities.set_lifecycle` | I8.4 |  |
 | `space.set_note` | `space.identities.set_note` | I8.4 |  |
 | `space.set_tags` | `space.identities.set_tags` | I8.4 |  |
-| `space.space_overview` | `space.admin.overview` | — |  |
+| `space.space_overview` | `space.admin.overview` | I8.8a |  |
 | `space.stage_import` | `space.imports.stage` | I8.5 |  |
 | `space.unlink` | `space.links.remove` | I8.7 |  |
 | `space.unpin` | `space.identities.unpin` | I8.4 |  |

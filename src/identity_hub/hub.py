@@ -13,11 +13,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from identity_hub._space import SpaceBase
 from identity_hub.admin_audit import AdminAuditMixin
+from identity_hub.api.admin import Admin
+from identity_hub.api.analytics import Analytics
 from identity_hub.api.auth import Auth
 from identity_hub.api.data import IdentityData
 from identity_hub.api.identities import Identities
 from identity_hub.api.imports import Imports
 from identity_hub.api.links import IdentityLinks
+from identity_hub.api.maintenance import SpaceMaintenance
 from identity_hub.api.pools import Pools
 from identity_hub.api.proxies import Proxies
 from identity_hub.api.secrets import Secrets
@@ -346,3 +349,18 @@ class SpaceHandle(
     def verifications(self) -> Verifications:
         """Статус факторов, решение человека и требования платформы (IMP-23)."""
         return Verifications(self)
+
+    @cached_property
+    def admin(self) -> Admin:
+        """Read-модели админки и аудит её действий (IMP-23)."""
+        return Admin(self)
+
+    @cached_property
+    def analytics(self) -> Analytics:
+        """Аналитические отчёты из rollups и снимков состояния (IMP-23)."""
+        return Analytics(self)
+
+    @cached_property
+    def maintenance(self) -> SpaceMaintenance:
+        """Операции обслуживания: истечение challenge и верификаций, переиндексация (IMP-23)."""
+        return SpaceMaintenance(self)

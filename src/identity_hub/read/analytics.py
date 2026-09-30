@@ -14,6 +14,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import Event
 from identity_hub.rollups import BucketSize, RollupRow, bucket_start, next_bucket
@@ -237,7 +238,7 @@ async def _snapshot_coverage(
 
 
 class AnalyticsMixin(SpaceBase):
-    async def analytics_series(
+    async def _analytics_series(
         self,
         metric: str,
         *,
@@ -317,7 +318,7 @@ class AnalyticsMixin(SpaceBase):
         draft = AnalyticsSeries(metric, bucket_size, group_by, groups, "complete", "")
         return AnalyticsSeries(metric, bucket_size, group_by, groups, "complete", _etag(draft))
 
-    async def analytics_funnel(
+    async def _analytics_funnel(
         self, *, start: datetime, end: datetime, service: str | None = None
     ) -> FunnelReport:
         events = await self._analytics_events(start, max(end, self.hub.clock.now()), service=service)
@@ -361,7 +362,7 @@ class AnalyticsMixin(SpaceBase):
         )
         return FunnelReport(stages, _etag([asdict(stage) for stage in stages]))
 
-    async def analytics_time_to(
+    async def _analytics_time_to(
         self, metric: str, *, start: datetime, end: datetime, service: str | None = None
     ) -> TimeToReport:
         events = await self._analytics_events(start, max(end, self.hub.clock.now()), service=service)
@@ -423,7 +424,7 @@ class AnalyticsMixin(SpaceBase):
             _etag(draft),
         )
 
-    async def analytics_cohorts(
+    async def _analytics_cohorts(
         self,
         *,
         start: datetime,
@@ -478,7 +479,7 @@ class AnalyticsMixin(SpaceBase):
         coverage = await _snapshot_coverage(self, start, end)
         return CohortReport(tuple(rows), coverage, _etag([asdict(row) for row in rows]))
 
-    async def analytics_ban_rate(
+    async def _analytics_ban_rate(
         self, *, start: datetime, end: datetime, group_by: str, service: str | None = None
     ) -> BanRateReport:
         if group_by not in {"service", "batch", "tag", "proxy_pool"}:
@@ -517,7 +518,7 @@ class AnalyticsMixin(SpaceBase):
         items = tuple(RateItem(key, added[key], bans[key], bans[key] / added[key]) for key in sorted(added))
         return BanRateReport(group_by, items, _etag([asdict(item) for item in items]))
 
-    async def analytics_utilization(
+    async def _analytics_utilization(
         self, *, start: datetime, end: datetime, service: str | None = None
     ) -> UtilizationReport:
         _validate_range(start, end)
@@ -563,7 +564,7 @@ class AnalyticsMixin(SpaceBase):
             _etag(draft),
         )
 
-    async def analytics_proxy_quality(self, *, start: datetime, end: datetime) -> ProxyQualityReport:
+    async def _analytics_proxy_quality(self, *, start: datetime, end: datetime) -> ProxyQualityReport:
         events = await self._analytics_events(start, end)
         failures = sum(
             event.type == "operation.failed" and event.data.get("blame") == "proxy" for event in events
@@ -592,3 +593,11 @@ class AnalyticsMixin(SpaceBase):
         _validate_range(start, end)
         events = await self.hub.store.rollup_source_events(self.slug, start, end)
         return [event for event in events if service is None or event.service == service]
+
+    analytics_ban_rate = legacy(_analytics_ban_rate, "analytics_ban_rate")
+    analytics_cohorts = legacy(_analytics_cohorts, "analytics_cohorts")
+    analytics_funnel = legacy(_analytics_funnel, "analytics_funnel")
+    analytics_proxy_quality = legacy(_analytics_proxy_quality, "analytics_proxy_quality")
+    analytics_series = legacy(_analytics_series, "analytics_series")
+    analytics_time_to = legacy(_analytics_time_to, "analytics_time_to")
+    analytics_utilization = legacy(_analytics_utilization, "analytics_utilization")

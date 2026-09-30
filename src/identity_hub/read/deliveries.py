@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import CATALOG, matches_any, scrub, severity_at_least
 from identity_hub.store.base import EventReadFilter, EventReadRow, NotificationRuleRow
@@ -174,7 +175,7 @@ def _validate_limit(limit: int) -> None:
 
 
 class DeliveriesReadMixin(SpaceBase):
-    async def delivery_center(
+    async def _delivery_center(
         self,
         *,
         webhook_limit: int = 50,
@@ -314,3 +315,5 @@ class DeliveriesReadMixin(SpaceBase):
             ),
             preview_window_started_at=preview_started_at,
         )
+
+    delivery_center = legacy(_delivery_center, "delivery_center")

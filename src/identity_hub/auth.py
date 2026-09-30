@@ -248,7 +248,7 @@ class LoginMixin(SpaceBase):
         outcome, _ = await self._login(lease, svc, challenge, answer, context or None)
         return outcome
 
-    async def expire_challenges(self, *, limit: int = 100) -> int:
+    async def _expire_challenges(self, *, limit: int = 100) -> int:
         """Закрыть просроченные challenge: auth → no_session, событие `identity.challenge.expired`."""
         async with self._tx(own=True) as tx:
             expired = await tx.expired_challenges(limit)
@@ -396,6 +396,8 @@ class LoginMixin(SpaceBase):
     run_login = legacy(_run_login, "run_login")
     run_logins = legacy(_run_logins, "run_logins")
     answer_challenge = legacy(_answer_challenge, "answer_challenge")
+
+    expire_challenges = legacy(_expire_challenges, "expire_challenges")
 
 
 def _record(report: LoginReport, identity_id: UUID, outcome: LoginOutcome, error: str | None) -> None:

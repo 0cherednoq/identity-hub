@@ -63,7 +63,7 @@ def _limit(value: int) -> int:
 
 
 class AdminStateMixin(SpaceBase):
-    async def import_runs(self, *, limit: int = 100) -> tuple[ImportRunInfo, ...]:
+    async def _import_runs(self, *, limit: int = 100) -> tuple[ImportRunInfo, ...]:
         """Return newest durable import runs without staged input or secrets."""
         async with self._tx() as tx:
             rows = await tx.list_import_runs(limit=_limit(limit))
@@ -122,7 +122,7 @@ class AdminStateMixin(SpaceBase):
 
     import_run = legacy(_import_run, "import_run")
 
-    async def provider_operations(
+    async def _provider_operations(
         self,
         *,
         identity_id: UUID | None = None,
@@ -158,3 +158,6 @@ class AdminStateMixin(SpaceBase):
             )
             for row in rows
         )
+
+    import_runs = legacy(_import_runs, "import_runs")
+    provider_operations = legacy(_provider_operations, "provider_operations")
