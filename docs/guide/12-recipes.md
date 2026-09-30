@@ -1,0 +1,148 @@
+# 12. Рецепты
+
+Типовые сценарии целиком. Каждый показывает, какие механизмы библиотеки сочетать.
+
+## Парсинг каналов пулом аккаунтов
+
+**Задача:** 200 аккаунтов читают публичные каналы, каждый не больше 300 запросов в час.
+
+```python
+TELEGRAM = Service(
+    name="telegram", title="Telegram",
+    credentials=TgCredentials, session=TgSession,
+    operations={"read_channel": OperationRule(quotas=(Quota(300, timedelta(hours=1)),))},
+    error_classifier=TgErrors(),                 # FLOOD_WAIT → cooling, бан → banned
+    proxy_policy=ProxyPolicy(pool="dc-proxies", sticky=False),   # IP не важен
+)
+
+parsers = space.pool("parsers", service=TELEGRAM, tags=["parser"])
+
+async def parse(channel: str):
+    async with parsers.lease(for_operation="read_channel", wait=60) as lease:
+        client = make_client(await lease.session(), proxy=lease.proxy)
+        async with lease.operation("read_channel", key=f"read:{channel}:{hour_bucket()}"):
+            return await client.read_history(channel)
+```
+
+Несколько воркеров на разных машинах запускают `parse` параллельно — аренда гарантирует, что
+один аккаунт не используется дважды, а выбор «самого давно не использовавшегося» распределяет
+нагрузку по парку.
+
+## Рассылка с имитацией живого поведения
+
+**Задача:** аккаунты шлют сообщения, не больше 20 в час и 100 в сутки, с перерывами, всегда с
+одного IP.
+
+```python
+TELEGRAM = Service(
+    ...,
+    operations={"send_message": OperationRule(
+        standing=frozenset({Standing.GOOD}),                   # limited-аккаунты не шлют
+        quotas=(Quota(20, timedelta(hours=1)), Quota(100, timedelta(days=1))),
+    )},
+    proxy_policy=ProxyPolicy(pool="residential", sticky=True, on_proxy_down=ProxyDownPolicy.WAIT),
+    error_classifier=TgErrors(),
+)
+senders = space.pool(
+    "senders", service=TELEGRAM, tags=["sender"],
+    pacing=Pacing(work=Quota(8, timedelta(hours=1)), pause=(15, 40)),
+)
+```
+
+Классификатор переводит `PEER_FLOOD` в `limited` — аккаунт перестаёт получать рассылку, но
+продолжает использоваться в пулах, где `limited` допустим (например, парсинг).
+
+## Онбординг купленных аккаунтов
+
+**Задача:** поставщик прислал 1000 номеров с паролями; их нужно залогинить, при необходимости
+ввести SMS-код и только потом пустить в работу.
+
+```python
+report = await space.import_many(service=TELEGRAM, records=read_supplier_csv(path))
+# все в provisioning, auth = no_session
+
+async def onboarding_tick(space):          # запускать по расписанию, например раз в минуту
+    batch = await space.run_logins(service=TELEGRAM, limit=20)
+    for identity_id in batch.succeeded:
+        await space.set_lifecycle(identity_id, Lifecycle.READY, actor="onboarding")
+    for identity_id, error in batch.failed.items():
+        log.warning("вход не удался: %s %s", identity_id, error)
+```
+
+`run_logins` берёт аккаунты в `no_session` и `session_invalid`, поэтому неудачные попытки
+будут повторяться на каждом тике — ограничьте число попыток своим счётчиком (например, в
+`save_data`) и выводите безнадёжные аккаунты через `retire`.
+
+Оператор получает Telegram-уведомление о `identity.challenge.opened`, вводит код в вашем UI,
+тот вызывает `space.answer_challenge(challenge_id, code)`. Подписчик на
+`identity.login.succeeded` переводит аккаунт в `ready`.
+
+## Фоновая синхронизация статусов
+
+**Задача:** узнавать о банах, даже если аккаунт давно не использовался.
+
+```python
+TELEGRAM = Service(..., probes=TgProbes(), standing_codes={"USER_DEACTIVATED": "banned"})
+
+async def reconcile_loop(space):
+    while True:
+        report = await space.reconcile(regions=("auth", "standing"), not_synced_for=timedelta(hours=6), limit=100)
+        await asyncio.sleep(300)
+```
+
+Плюс правило уведомлений на `identity.standing.changed` с `data.to: ["banned", "frozen"]`.
+
+## Биржа с KYC
+
+**Задача:** торговать могут аккаунты с подтверждёнными email и телефоном, выводить — только с
+полным KYC и не чаще 3 раз в сутки.
+
+Объявление факторов и уровней — в разделе [верификация](06-verification.md). Работа:
+
+```python
+traders = space.pool("traders", service=EXCHANGE)
+async with traders.lease(for_operation="withdraw") as lease:     # выдаст только аккаунт с уровнем full
+    async with lease.operation("withdraw", key=f"withdraw:{request.id}") as op:
+        if not op.duplicate:
+            await exchange(lease).withdraw(request.amount)
+```
+
+Когда KYC истекает (`valid_for`), фактор становится `expired`, уровень `full` теряется
+(событие `identity.tier.lost`), и аккаунт перестаёт выдаваться под `withdraw`.
+
+## Связка аккаунтов: Telegram + почта для восстановления
+
+```python
+mail = await space.register(service=MAIL, external_ref="box@example.com", credentials=..., lifecycle=Lifecycle.READY)
+tg = await space.register(service=TELEGRAM, external_ref="+1...", links={"recovery_email": mail.identity_id})
+
+class TgAuthenticator:
+    async def login(self, ctx):
+        mailbox = await ctx.linked("recovery_email")         # почта взята в аренду на время входа
+        code = await read_code_from_mail(await mailbox.credentials())
+        ...
+```
+
+`await space.impact_of(mail.identity_id)` покажет, какие аккаунты пострадают, если почту
+потеряют.
+
+## Несколько клиентов в одной базе
+
+```python
+acme = hub.space("acme", "ACME Corp")
+globex = hub.space("globex", "Globex")
+```
+
+Аккаунты, прокси, вебхуки и события изолированы по пространствам. Сервисы общие. Один и тот же
+аккаунт платформы (`service + external_ref`) не может быть в двух пространствах.
+
+## Работа в транзакции приложения
+
+Регистрация аккаунта вместе с записью в ваших таблицах — атомарно (только PostgreSQL):
+
+```python
+async with sessions() as db, db.begin():
+    db.add(Order(...))
+    await space.using(db).register(service=TELEGRAM, external_ref=phone, ...)
+# откат транзакции откатит и аккаунт с событием
+```

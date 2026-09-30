@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from examples.account_lifecycle import run_walkthrough
 from examples.telegram_service import run_example
 
 ROOT = Path(__file__).parents[2]
@@ -34,3 +35,24 @@ def test_telegram_example_is_executable() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "messages=1 saved_cursor=1" in completed.stdout
+
+
+@pytest.mark.unit
+async def test_account_lifecycle_walkthrough_matches_guide() -> None:
+    steps = dict((await run_walkthrough()).steps)
+
+    assert steps == {
+        "registered": "provisioning",
+        "login": "challenged",
+        "answer": "succeeded",
+        "proxy": "True",
+        "after_flood": "cooling",
+        "after_ban": "banned",
+        "after_restore": "good",
+        "resync_banned": "sticky",
+        "reconcile": "applied",
+        "after_reconcile": "banned",
+        "kyc_submitted": "under_review",
+        "kyc_reviewed": "verified",
+        "retired": "retired",
+    }

@@ -1,0 +1,140 @@
+# 10. События и уведомления
+
+Каждое значимое изменение пишется в журнал событий в той же транзакции, что и само изменение.
+Журнал — источник для подписчиков в коде, вебхуков, Telegram-уведомлений и аналитики.
+Доставка — **at-least-once**: обработчик может получить событие повторно, дедуплицируйте по
+`event.event_id`.
+
+```mermaid
+flowchart LR
+    CH["изменение<br/>(register, бан, аренда…)"] -->|одна транзакция| J[("журнал ih_events")]
+    J --> D["Dispatcher"]
+    D --> CB["ваши подписчики<br/>hub.events.subscribe"]
+    D --> WH["вебхуки<br/>HTTP POST + HMAC"]
+    D --> TG["Telegram-бот<br/>правила, дайджесты"]
+    D --> AN["аналитика, rollups"]
+```
+
+**Без запущенного диспетчера события копятся, но никуда не доставляются**, а таймеры состояний
+не срабатывают. Запуск: `async with hub.dispatcher.running(): ...` внутри приложения или
+`identity-hub dispatcher` отдельным процессом ([CLI](../cli.md)).
+
+## Событие
+
+`Event`: `event_id`, `type`, `severity` (`info` / `warning` / `critical`), `occurred_at`,
+`space`, `service`, `identity_id`, `proxy_id`, `lease_id`, `actor`, `data`.
+
+Секреты в `data` не попадают: значения ключей, содержащих `token`, `password`, `secret`,
+`auth_key`, `cookie`, `credential`, `evidence`, `totp`, а также `SecretStr` и pydantic-модели
+заменяются на `[redacted]`. С
+`IdentityHub(strict_events=True)` вместо вырезания бросается ошибка — удобно в тестах.
+
+## Основные типы
+
+| Группа | События | Когда полезно |
+|---|---|---|
+| Аккаунт | `identity.registered`, `imported`, `updated`, `deleted`, `lifecycle.changed` | Синхронизация с вашей CRM |
+| Состояния | `identity.standing.changed`, `auth.changed`, `availability.changed`, `verification.changed`, `tier.reached/lost`, `state.overridden`, `state.drift` | Реакция на баны, разлогины, карантин |
+| Вход | `identity.login.succeeded/failed`, `identity.challenge.opened/answered/expired` | Показать оператору, что нужен SMS-код |
+| Секреты | `identity.credentials.updated`, `session.updated`, `secret.revealed` | Аудит |
+| Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.pool.exhausted` | Мониторинг прокси |
+| Пулы | `pool.capacity.low/empty`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка аккаунтов, проблемы воркеров |
+
+События аренд и операций (`lease.*`, `operation.*`) — журнальные: они видны в
+`space.event_page(filters=EventFilters(include_journal=True))`, но подписчикам и вебхукам не
+отправляются. Своих типов событий добавить нельзя.
+
+## Подписка в коде
+
+```python
+from identity_hub import Event
+
+async def on_ban(event: Event) -> None:
+    if event.data.get("to") == "banned":
+        await crm.mark_account_lost(event.identity_id, reason=event.data.get("code"))
+
+hub.events.subscribe("crm-bans", on_ban, types={"identity.standing.changed"})
+hub.events.subscribe("audit", write_audit, types={"identity.*", "proxy.*"})   # маски
+```
+
+- Имя подписчика — ключ курсора в БД. **Новый подписчик начинает с начала хранимого журнала**
+  (по умолчанию 180 дней) — будьте готовы к пачке старых событий.
+- Если обработчик бросил исключение, пачка повторится.
+- Подписчики вызываются только в процессе, где работает диспетчер.
+- События приходят из всех пространств хаба; фильтруйте по `event.space`.
+
+## Вебхуки
+
+```python
+from pydantic import SecretStr
+from identity_hub import Severity
+
+endpoint = await space.webhooks.create(
+    url="https://crm.example.com/hooks/identity",
+    secret=SecretStr("whsec_..."),
+    event_types=["identity.standing.changed", "identity.challenge.*"],
+    filter={"service": "telegram", "labels": {"farm": "eu-1"}},
+    min_severity=Severity.WARNING,
+)
+await space.webhooks.send_test(endpoint.id)           # HTTP-код ответа
+await space.webhooks.rotate_secret(endpoint.id, SecretStr("whsec_new"), overlap=timedelta(hours=1))
+```
+
+- Только `https` (исключения — `IdentityHub(webhook_dev_hosts=["localhost"])` для разработки),
+  без приватных адресов и редиректов.
+- Успех — ответ 2xx. Повторы с экспоненциальной задержкой до 24 часов; после 10 неудач подряд
+  endpoint отключается с событием `webhook.endpoint.disabled`.
+- Нужен extra `webhooks`.
+
+**Проверка подписи на стороне получателя:**
+
+```python
+from identity_hub.dispatch import verify_signature
+
+@app.post("/hooks/identity")
+async def hook(request):
+    body = await request.body()                        # сырое тело, не перекодированный JSON
+    if not verify_signature(body, request.headers["X-Identity-Hub-Signature"], "whsec_..."):
+        return Response(status_code=401)
+    event = json.loads(body)
+    if await seen(event["event_id"]):                  # at-least-once
+        return Response(status_code=200)
+    ...
+```
+
+Формат заголовка: `t=<unix>,v1=<hex>`, подпись — `HMAC-SHA256(secret, f"{t}." + body)`. Во
+время ротации приходят две подписи `v1`.
+
+## Telegram-уведомления
+
+```python
+channel = await space.notifications.create_telegram_channel(
+    "Ops", bot_token=SecretStr("123456:ABC..."), chat_id=-1001234567890, thread_id=None,
+)
+await space.notifications.create_rule(
+    name="Баны",
+    channel_id=channel.id,
+    event_types=["identity.standing.changed"],
+    filter={"service": "telegram", "data.to": ["banned", "frozen"]},
+    min_severity=Severity.WARNING,          # по умолчанию WARNING
+    digest_seconds=300,                     # копить 5 минут и прислать одной сводкой; None — сразу
+    template="{severity} {type}: {link}",   # поля: type, severity, service, actor, link, identity_id, occurred_at
+    created_by="admin:ivan",
+)
+await space.notifications.send_test(channel.id, "проверка")
+```
+
+`link` ведёт на карточку аккаунта в админке, если задан `IdentityHub(admin_base_url=...)`.
+Нужен extra `telegram`. Ответы Bot API 400/401/403/404 (бот заблокирован, чат не найден)
+переводят уведомление в `dead` без повторов.
+
+## Журнал
+
+```python
+from identity_hub.read import EventFilters
+
+page = await space.event_page(filters=EventFilters(identity_id=identity_id), limit=50)
+page = await space.event_page(filters=EventFilters(type="identity.standing.changed", severity="critical"))
+```
+
+Дальше: [тестирование](11-testing.md).

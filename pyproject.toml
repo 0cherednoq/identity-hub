@@ -69,6 +69,7 @@ only-include = [
     "src/identity_hub",
     "tests",
     "examples",
+    "docs/guide",
     "docs/cli.md",
     "docs/integrations.md",
     "docs/perf.md",
