@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I8.6 API: proxies (group), pools, типизированная аренда
-- **Начата:** 2026-09-30
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] space.proxies с group
-  - [ ] ProxyPolicy.group с алиасом pool
-  - [ ] space.pools: define, revoke; Pool.capacity
-  - [ ] явные сигнатуры Pool.lease/acquire
-  - [ ] алиасы и тесты
-  - [ ] check.sh и закрытие
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -31,7 +26,7 @@
 | I8.3 | API: space.identities — create/ensure/create_many | I8.2 | done |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | done |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | done |  |  |
-| I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | in_progress |  |  |
+| I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | done |  |  |
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  |  |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
@@ -64,7 +59,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 6 / 38 done
+**Итого:** 7 / 38 done
 
 ## Журнал сессий
 
@@ -76,3 +71,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-09-30 · I8.3 · done · identities.create/ensure/create_many (атомарно, fail|skip, порядок вставки), register — алиас, D-143 · дальше I8.4
 2026-09-30 · I8.4 · done · identities.update/replace_*/теги/delete и activate/retire/set_lifecycle/restore_standing/override/unpin; 13 алиасов; дефлейк test_digest (окно 300 с) · дальше I8.5
 2026-09-30 · I8.5 · done · space.imports (run/run_files/stage/get/cancel) и space.secrets (describe/reveal SecretRef/replace_*), 9 алиасов, D-144 · дальше I8.6
+2026-09-30 · I8.6 · done · space.proxies (group, create/ensure/create_many/list/url/health/recheck*), space.pools (define/revoke), Pool.lease/acquire с явной сигнатурой, Pool.capacity, ProxyPolicy.group, D-145 · I8.7 ведёт параллельная сессия, дальше I0.2

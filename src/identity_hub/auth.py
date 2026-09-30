@@ -110,7 +110,7 @@ class _LoginContext:
         link = links.linked(role)
         if link is None:
             return None
-        pool: Pool = self._space.pool(LOGIN_POOL, service=link.service)  # type: ignore[attr-defined]
+        pool: Pool = self._space._pool(LOGIN_POOL, service=link.service)  # type: ignore[attr-defined]
         query = CandidateQuery(
             service=link.service,
             standing=frozenset(Standing),
@@ -139,7 +139,7 @@ class LoginMixin(SpaceBase):
             raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
         if identity.auth_state not in LOGIN_AUTH_STATES:
             raise ValidationFailed(f"вход недоступен из состояния auth={identity.auth_state}")
-        pool: Pool = self.pool(LOGIN_POOL, service=service)  # type: ignore[attr-defined]
+        pool: Pool = self._pool(LOGIN_POOL, service=service)  # type: ignore[attr-defined]
         query = replace(
             pool.candidate_query(for_operation="probe"),
             standing=LOGIN_STANDING,
@@ -161,7 +161,7 @@ class LoginMixin(SpaceBase):
                 if service is not None:
                     raise ValidationFailed(f"у сервиса {svc.name} нет Authenticator")
                 continue
-            pool: Pool = self.pool(LOGIN_POOL, service=svc)  # type: ignore[attr-defined]
+            pool: Pool = self._pool(LOGIN_POOL, service=svc)  # type: ignore[attr-defined]
             query = replace(
                 pool.candidate_query(for_operation="probe"),
                 standing=LOGIN_STANDING,
@@ -224,7 +224,7 @@ class LoginMixin(SpaceBase):
         if svc.authenticator is None:
             raise ValidationFailed(f"у сервиса {svc.name} нет Authenticator")
         context = envelope.open_json(challenge.context, aad)
-        pool: Pool = self.pool(LOGIN_POOL, service=svc)  # type: ignore[attr-defined]
+        pool: Pool = self._pool(LOGIN_POOL, service=svc)  # type: ignore[attr-defined]
         query = CandidateQuery(
             service=svc.name,
             standing=LOGIN_STANDING,

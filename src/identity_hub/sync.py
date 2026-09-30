@@ -134,7 +134,7 @@ class SyncMixin(SpaceBase):
     # --------------------------------------------------------- внутреннее
 
     def _probe_pool(self, service: Service) -> Pool:
-        pool: Pool = self.pool(SYNC_POOL, service=service)  # type: ignore[attr-defined]
+        pool: Pool = self._pool(SYNC_POOL, service=service)  # type: ignore[attr-defined]
         return pool
 
     @staticmethod

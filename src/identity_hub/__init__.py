@@ -9,6 +9,7 @@ from identity_hub.api.identities import (
     OnConflict,
     Page,
 )
+from identity_hub.api.proxies import Proxy, ProxyCreateManyResult
 from identity_hub.api.secrets import SecretRef
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
@@ -150,6 +151,8 @@ __all__ = [
     "ProbeContext",
     "ProbeResult",
     "Probes",
+    "Proxy",
+    "ProxyCreateManyResult",
     "ProxyDownPolicy",
     "ProxyHealthPolicy",
     "ProxyPolicy",

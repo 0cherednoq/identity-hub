@@ -264,7 +264,7 @@ class ImportingMixin(SpaceBase):
                     svc.verification(factor)
                 proxy = None
                 if record.proxy:
-                    pool = svc.proxy_policy.pool if svc.proxy_policy else "import"
+                    pool = svc.proxy_policy.group if svc.proxy_policy else "import"
                     proxy = self._prepare_proxy(record.proxy, pool, None, None, None, None, None, 3, None)  # type: ignore[attr-defined]
                 ready.append(_Prepared(record, prepared, proxy))
             except IdentityHubError as exc:

@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from identity_hub.api._base import legacy
 from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.data import validate_labels
 from identity_hub.enums import Standing
@@ -117,19 +118,90 @@ class Pool:
             ),
         )
 
-    def lease(self, *, on_lost: OnLost | None = None, **kwargs: Any) -> AbstractAsyncContextManager[Lease]:
-        """`async with pool.lease(for_operation=..., wait=..., on_lost=...) as lease:` (ТЗ §11)."""
+    def lease(
+        self,
+        *,
+        for_operation: str | None = None,
+        tags: Iterable[str] = (),
+        labels: Mapping[str, Any] | None = None,
+        profile: Mapping[str, Any] | None = None,
+        among: Any = None,
+        exclude: Iterable[UUID] = (),
+        wait: timedelta | float | None = None,
+        idempotency_key: str | None = None,
+        on_lost: OnLost | None = None,
+    ) -> AbstractAsyncContextManager[Lease]:
+        """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
+
+        `for_operation` отбирает только допустимые для операции identity; `tags`/`labels`/`profile`
+        сужают фильтры пула; `exclude` — не выдавать эти id; `wait` — ждать освобождения, иначе
+        `LeaseUnavailable`; `idempotency_key` — повтор вернёт ту же живую аренду; `on_lost` —
+        колбэк при потере аренды.
+        """
         from identity_hub.lease import lease_scope
 
-        return lease_scope(self, on_lost, **kwargs)
+        return lease_scope(
+            self,
+            on_lost,
+            for_operation=for_operation,
+            tags=tags,
+            labels=labels,
+            profile=profile,
+            among=among,
+            exclude=exclude,
+            wait=wait,
+            idempotency_key=idempotency_key,
+        )
 
-    async def acquire(self, **kwargs: Any) -> Lease:
-        """Низкоуровневый захват (без heartbeat); обычный путь — `async with pool.lease(...)`."""
+    async def acquire(
+        self,
+        *,
+        for_operation: str | None = None,
+        tags: Iterable[str] = (),
+        labels: Mapping[str, Any] | None = None,
+        profile: Mapping[str, Any] | None = None,
+        among: Any = None,
+        exclude: Iterable[UUID] = (),
+        wait: timedelta | float | None = None,
+        idempotency_key: str | None = None,
+        query: CandidateQuery | None = None,
+    ) -> Lease:
+        """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
+
+        `query` — готовый отбор кандидатов (служебные пулы входа и проб).
+        """
         from identity_hub.lease import acquire
 
-        return await acquire(self, **kwargs)
+        return await acquire(
+            self,
+            for_operation=for_operation,
+            tags=tags,
+            labels=labels,
+            profile=profile,
+            among=among,
+            exclude=exclude,
+            wait=wait,
+            idempotency_key=idempotency_key,
+            query=query,
+        )
+
+    async def capacity(self) -> int:
+        """Сколько identity пула можно выдать прямо сейчас; события `pool.capacity.low/empty`
+        пишутся при смене состояния (FR-13.3, D-119)."""
+        return await self._check_capacity()
 
     async def check_capacity(self) -> int:
+        """Устарело: используйте `pool.capacity()`."""
+        import warnings
+
+        warnings.warn(
+            "pool.check_capacity устарел и будет удалён в 1.0.0b1, используйте pool.capacity",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return await self._check_capacity()
+
+    async def _check_capacity(self) -> int:
         """Свободная ёмкость пула; `pool.capacity.low/empty` — при смене состояния (FR-13.3, D-119)."""
         threshold = self.capacity_low or 0
         async with self.space._tx(own=True) as tx:
@@ -172,7 +244,7 @@ def _check_profile_filter(service: Service, profile: Mapping[str, Any]) -> None:
 
 
 class PoolsMixin:
-    async def revoke_lease(self: Any, identity_id: UUID, *, reason: str, actor: str) -> bool:
+    async def _revoke_lease(self: Any, identity_id: UUID, *, reason: str, actor: str) -> bool:
         """Отозвать аренду из админки (FR-6.9): воркер теряет её на ближайшем heartbeat,
         а его записи отклоняются по fencing. False — живой аренды не было."""
         if not reason:
@@ -195,7 +267,7 @@ class PoolsMixin:
             )
             return True
 
-    def pool(
+    def _pool(
         self: Any,
         name: str,
         *,
@@ -230,3 +302,6 @@ class PoolsMixin:
             holder=holder or default_holder(),
             capacity_low=capacity_low,
         )
+
+    pool = legacy(_pool, "pool")
+    revoke_lease = legacy(_revoke_lease, "revoke_lease")

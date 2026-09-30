@@ -20,12 +20,19 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
+from identity_hub.api._base import legacy, warn_deprecated
 from identity_hub.crypto import associated_data
 from identity_hub.domain import regions as machine
 from identity_hub.domain.region_specs import PROXY_HEALTH
 from identity_hub.domain.regions import Change, Command, Observation, Outcome, RegionDecision, RegionState
 from identity_hub.enums import ChangeSource, ProxyStatus
-from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, ValidationFailed
+from identity_hub.errors import (
+    AlreadyExists,
+    ConcurrentModification,
+    LeaseUnavailable,
+    NotFound,
+    ValidationFailed,
+)
 from identity_hub.events import EventDraft
 from identity_hub.store.base import NewProxy, ProxyRow, StoreTx
 
@@ -106,7 +113,7 @@ def _region_state(row: ProxyRow) -> RegionState:
 class ProxiesMixin(SpaceBase):
     # --------------------------------------------------------- добавление
 
-    async def add_proxy(
+    async def _add_proxy(
         self,
         url: str | None = None,
         *,
@@ -120,18 +127,18 @@ class ProxiesMixin(SpaceBase):
         id: UUID | None = None,
     ) -> tuple[UUID, bool]:
         """Добавить прокси в пул; повтор с тем же fingerprint возвращает существующий (id, False)."""
-        (result,) = await self._add_proxies(
+        (result,) = await self._insert_proxies(
             [self._prepare_proxy(url, pool, scheme, host, port, username, password, max_identities, id)]
         )
         return result
 
-    async def add_proxies(
+    async def _add_proxies(
         self, urls: Iterable[str], *, pool: str, max_identities: int = 3
     ) -> list[tuple[UUID, bool]]:
         rows = [
             self._prepare_proxy(u, pool, None, None, None, None, None, max_identities, None) for u in urls
         ]
-        return await self._add_proxies(rows)
+        return await self._insert_proxies(rows)
 
     def _prepare_proxy(
         self,
@@ -172,21 +179,32 @@ class ProxiesMixin(SpaceBase):
             secret=payload,
         )
 
-    async def _add_proxies(self, rows: list[NewProxy]) -> list[tuple[UUID, bool]]:
+    async def _insert_proxies(
+        self, rows: list[NewProxy], *, fail_existing: bool = False
+    ) -> list[tuple[UUID, bool]]:
+        """Вставить одной транзакцией; `fail_existing` — любой существующий адрес откатывает всё."""
         async with self._tx() as tx:
-            return [await tx.insert_proxy(row) for row in rows]
+            results = [await tx.insert_proxy(row) for row in rows]
+            existing = [
+                f"{row.scheme}://{row.host}:{row.port}"
+                for row, (_id, created) in zip(rows, results, strict=True)
+                if not created
+            ]
+            if fail_existing and existing:
+                raise AlreadyExists("proxy", ", ".join(existing))
+            return results
 
     # --------------------------------------------------------- чтение
 
-    async def get_proxy(self, proxy_id: UUID) -> ProxyRow:
+    async def _get_proxy(self, proxy_id: UUID) -> ProxyRow:
         async with self._tx(own=True) as tx:
             return await self._proxy(tx, proxy_id)
 
     async def _proxy_url(self, proxy_id: UUID) -> str:
         """URL с расшифрованными логином и паролем — только для аренды и проверок, не для админки."""
-        return self.proxy_url_of(await self.get_proxy(proxy_id))
+        return self._proxy_url_of(await self._get_proxy(proxy_id))
 
-    def proxy_url_of(self, row: ProxyRow) -> str:
+    def _proxy_url_of(self, row: ProxyRow) -> str:
         secret = self.hub.envelope.open_model(ProxySecret, row.secret, associated_data("ih_proxies", row.id))
         auth = ""
         if secret.username:
@@ -206,15 +224,20 @@ class ProxiesMixin(SpaceBase):
     # --------------------------------------------------------- здоровье
 
     @property
-    def proxy_health(self) -> ProxyHealthPolicy:
+    def _proxy_health(self) -> ProxyHealthPolicy:
         policy: ProxyHealthPolicy = self.hub.proxy_health
         return policy
 
-    async def report_proxy_failure(
+    @property
+    def proxy_health(self) -> ProxyHealthPolicy:
+        warn_deprecated("proxy_health")
+        return self._proxy_health
+
+    async def _report_proxy_failure(
         self, proxy_id: UUID, *, weight: float = 1.0, actor: str = "worker", raw_status: str | None = None
     ) -> str:
         """Ошибка по вине прокси (FR-8.4): счёт ошибок; при пороге — карантин с перепроверкой."""
-        policy = self.proxy_health
+        policy = self._proxy_health
         async with self._tx(own=True) as tx:
             row = await self._proxy(tx, proxy_id)
             if row.status != ProxyStatus.ALIVE:
@@ -238,14 +261,14 @@ class ProxiesMixin(SpaceBase):
             )
             return decision.state.state
 
-    async def report_proxy_success(self, proxy_id: UUID) -> None:
+    async def _report_proxy_success(self, proxy_id: UUID) -> None:
         async with self._tx(own=True) as tx:
             row = await self._proxy(tx, proxy_id)
             if row.error_score > 0 and row.status == ProxyStatus.ALIVE:
-                score = row.error_score * self.proxy_health.success_decay
+                score = row.error_score * self._proxy_health.success_decay
                 await tx.update_proxy(proxy_id, {"error_score": score if score >= 0.01 else 0.0})
 
-    async def recheck_proxies(self, checker: ProxyChecker, *, limit: int = 50) -> dict[UUID, str]:
+    async def _recheck_proxies(self, checker: ProxyChecker, *, limit: int = 50) -> dict[UUID, str]:
         """Плановая перепроверка прокси в карантине, у которых наступил срок (обслуживание)."""
         async with self._tx(own=True) as tx:
             due = await tx.due_proxies(limit)
@@ -253,10 +276,10 @@ class ProxiesMixin(SpaceBase):
             proxy_id: await self._recheck_once(proxy_id, checker, actor="maintenance") for proxy_id in due
         }
 
-    async def recheck_proxy(self, proxy_id: UUID, checker: ProxyChecker, *, actor: str) -> str:
+    async def _recheck_proxy(self, proxy_id: UUID, checker: ProxyChecker, *, actor: str) -> str:
         """Ручная перепроверка: до двух проверок подряд — выход из карантина или `dead` подтверждается."""
         status = await self._recheck_once(proxy_id, checker, actor=actor, manual=True)
-        row = await self.get_proxy(proxy_id)
+        row = await self._get_proxy(proxy_id)
         if row.pending_observation == ProxyStatus.ALIVE:
             status = await self._recheck_once(proxy_id, checker, actor=actor, manual=True)
         return status
@@ -264,16 +287,16 @@ class ProxiesMixin(SpaceBase):
     async def _recheck_once(
         self, proxy_id: UUID, checker: ProxyChecker, *, actor: str, manual: bool = False
     ) -> str:
-        row = await self.get_proxy(proxy_id)
+        row = await self._get_proxy(proxy_id)
         if row.status == ProxyStatus.ALIVE or (row.status == ProxyStatus.DEAD and not manual):
             return row.status
-        url = self.proxy_url_of(row)
+        url = self._proxy_url_of(row)
         try:
             ok = bool(await checker(url))
         except Exception:
             logger.warning("проверка прокси %s упала", proxy_id, exc_info=True)
             ok = False
-        policy = self.proxy_health
+        policy = self._proxy_health
         try:
             async with self._tx(own=True) as tx:
                 current = await self._proxy(tx, proxy_id)
@@ -307,9 +330,9 @@ class ProxiesMixin(SpaceBase):
                     )  # сбросить ожидание выхода
                 return (await self._apply(tx, current, change, extra)).state.state
         except ConcurrentModification:
-            return (await self.get_proxy(proxy_id)).status
+            return (await self._get_proxy(proxy_id)).status
 
-    async def override_proxy(
+    async def _override_proxy(
         self,
         proxy_id: UUID,
         status: ProxyStatus | str,
@@ -325,11 +348,11 @@ class ProxiesMixin(SpaceBase):
             if str(status) == ProxyStatus.ALIVE:
                 extra = {"fail_streak": 0, "error_score": 0.0, "next_check_at": None}
             elif str(status) == ProxyStatus.QUARANTINED:
-                extra = {"next_check_at": await tx.now() + self.proxy_health.base_backoff}
+                extra = {"next_check_at": await tx.now() + self._proxy_health.base_backoff}
             change = machine.Override(to=str(status), reason=reason, actor=actor, pin_for=pin_for)
             return (await self._apply(tx, row, change, extra)).state.state
 
-    async def rebind_proxy(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
+    async def _rebind_proxy(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
         """Move an account's sticky binding without exceeding target capacity."""
         if not reason.strip():
             raise ValidationFailed("proxy rebind requires a reason")
@@ -363,6 +386,17 @@ class ProxiesMixin(SpaceBase):
                 ),
             )
             return True
+
+    add_proxy = legacy(_add_proxy, "add_proxy")
+    add_proxies = legacy(_add_proxies, "add_proxies")
+    get_proxy = legacy(_get_proxy, "get_proxy")
+    proxy_url_of = legacy(_proxy_url_of, "proxy_url_of")
+    report_proxy_failure = legacy(_report_proxy_failure, "report_proxy_failure")
+    report_proxy_success = legacy(_report_proxy_success, "report_proxy_success")
+    recheck_proxies = legacy(_recheck_proxies, "recheck_proxies")
+    recheck_proxy = legacy(_recheck_proxy, "recheck_proxy")
+    override_proxy = legacy(_override_proxy, "override_proxy")
+    rebind_proxy = legacy(_rebind_proxy, "rebind_proxy")
 
     async def _apply(
         self, tx: StoreTx, row: ProxyRow, change: Change, extra: dict[str, Any]

@@ -226,7 +226,7 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
         logger.exception("не удалось записать последствия ошибки операции %s", op.kind)
     if fault.blame is Blame.PROXY and lease.proxy_id is not None:
         try:
-            await space.report_proxy_failure(  # type: ignore[attr-defined]
+            await space._report_proxy_failure(  # type: ignore[attr-defined]
                 lease.proxy_id, weight=fault.weight, actor=lease.holder, raw_status=fault.raw_status
             )
         except Exception:

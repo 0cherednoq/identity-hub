@@ -208,7 +208,7 @@ def _descriptor(service: Service, counts: Mapping[str, int]) -> ServiceDescripto
         ),
         proxy_policy=ServiceProxyPolicy(
             supported=proxy is not None,
-            pool=proxy.pool if proxy else None,
+            pool=proxy.group if proxy else None,
             sticky=proxy.sticky if proxy else None,
             max_identities=proxy.max_identities if proxy else None,
             on_proxy_down=proxy.on_proxy_down.value if proxy else None,

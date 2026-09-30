@@ -112,7 +112,7 @@ class Lease:
         """URL прокси аренды с логином и паролем (для клиента платформы; не логировать)."""
         if self.proxy_info is None:
             return None
-        return self.pool.space.proxy_url_of(self.proxy_info)  # type: ignore[attr-defined, no-any-return]
+        return self.pool.space._proxy_url_of(self.proxy_info)  # type: ignore[attr-defined, no-any-return]
 
     @property
     def lost(self) -> bool:
@@ -576,7 +576,7 @@ async def acquire(
                 )
             if explicit_query is None:  # внутренние выборки (вход, сверка) ёмкость пула не оценивают
                 with contextlib.suppress(Exception):
-                    await pool.check_capacity()
+                    await pool._check_capacity()
             raise LeaseUnavailable(f"пул {pool.name}: нет свободного аккаунта")
         await asyncio.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)
@@ -619,7 +619,7 @@ async def _resolve_proxy(
         return current, []
     if current is not None and policy.on_proxy_down is ProxyDownPolicy.WAIT:
         raise _SkipCandidate(candidate.id)  # прокси упал между выборкой и захватом
-    chosen = await tx.choose_proxy(policy.pool, policy.max_identities, claim=policy.sticky)
+    chosen = await tx.choose_proxy(policy.group, policy.max_identities, claim=policy.sticky)
     if chosen is None:
         raise _PoolExhausted
     drafts: list[EventDraft] = []
@@ -636,7 +636,7 @@ async def _resolve_proxy(
                     "from_proxy_id": str(current.id) if current else None,
                     "to_proxy_id": str(chosen.id),
                     "reason": "rebind" if current else "initial",
-                    "pool": policy.pool,
+                    "pool": policy.group,
                 },
             )
         )
@@ -654,7 +654,7 @@ async def _pool_exhausted(pool: Pool) -> None:
                     "proxy.pool.exhausted",
                     actor=pool.holder,
                     service=pool.service.name,
-                    data={"proxy_pool": policy.pool, "pool": pool.name},
+                    data={"proxy_pool": policy.group, "pool": pool.name},
                 ),
             )
     except Exception:

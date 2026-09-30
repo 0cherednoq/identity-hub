@@ -16,8 +16,8 @@
 | `space.access_card` | `space.secrets.describe` | I8.5 | Метаданные credentials и sessions без секретов |
 | `space.account_search` | `space.admin.identity_page` | — | Read-модель админки |
 | `space.account_selection_snapshot` | `space.admin.selection_snapshot` | — | Замороженный набор id+revision для bulk-действий админки |
-| `space.add_proxies` | `space.proxies.create_many` | — | `pool=` → `group=` |
-| `space.add_proxy` | `space.proxies.ensure` | — | Повтор с тем же адресом возвращает существующий прокси, как и раньше; `pool=` → `group=` |
+| `space.add_proxies` | `space.proxies.create_many` | I8.6 | `pool=` → `group=` |
+| `space.add_proxy` | `space.proxies.ensure` | I8.6 | Повтор с тем же адресом возвращает существующий прокси, как и раньше; `pool=` → `group=` |
 | `space.add_requirement` | `space.verifications.requirements.add` | — |  |
 | `space.add_tags` | `space.identities.add_tags` | I8.4 |  |
 | `space.analytics_ban_rate` | `space.analytics.ban_rate` | — |  |
@@ -35,7 +35,7 @@
 | `space.event_page` | `space.admin.event_page` | — |  |
 | `space.expire_challenges` | `space.maintenance.expire_challenges` | — |  |
 | `space.expire_verifications` | `space.maintenance.expire_verifications` | — |  |
-| `space.get_proxy` | `space.proxies.get` | — |  |
+| `space.get_proxy` | `space.proxies.get` | I8.6 |  |
 | `space.human_queue` | `space.admin.human_queue` | — |  |
 | `space.identity_card` | `space.identities.card` | I8.2 | Состояние, квоты, аренда, blockers; лёгкий объект — `identities.get` |
 | `space.impact_of` | `space.links.impact` | — |  |
@@ -52,18 +52,18 @@
 | `space.links_of` | `space.links.of` | — |  |
 | `space.load_data` | `space.data.load` | — |  |
 | `space.override` | `space.identities.override` | I8.4 |  |
-| `space.override_proxy` | `space.proxies.override` | — |  |
-| `space.pool` | `space.pools.define` | — | Объект правил отбора и аренды; в БД не хранится |
+| `space.override_proxy` | `space.proxies.override` | I8.6 |  |
+| `space.pool` | `space.pools.define` | I8.6 | Объект правил отбора и аренды; в БД не хранится |
 | `space.pool_capacity` | `space.admin.pool_capacity` | — |  |
 | `space.pool_summary` | `space.admin.pool_summary` | — |  |
 | `space.provider_operations` | `space.admin.provider_operations` | — |  |
 | `space.proxy_detail` | `space.admin.proxy_detail` | — |  |
-| `space.proxy_health` | `space.proxies.health` | — | Политика здоровья прокси хаба |
+| `space.proxy_health` | `space.proxies.health` | I8.6 | Политика здоровья прокси хаба |
 | `space.proxy_overview` | `space.admin.proxy_overview` | — |  |
-| `space.proxy_url_of` | `space.proxies.url_of` | — | Служебный; в I8.6 может стать приватным |
-| `space.rebind_proxy` | `space.proxies.rebind` | — |  |
-| `space.recheck_proxies` | `space.proxies.recheck_due` | — | Прокси, у которых наступил срок перепроверки |
-| `space.recheck_proxy` | `space.proxies.recheck` | — |  |
+| `space.proxy_url_of` | `space.proxies.url` | I8.6 | Теперь `await space.proxies.url(proxy_id)`; URL с паролем — не для логов |
+| `space.rebind_proxy` | `space.proxies.rebind` | I8.6 |  |
+| `space.recheck_proxies` | `space.proxies.recheck_due` | I8.6 | Прокси, у которых наступил срок перепроверки |
+| `space.recheck_proxy` | `space.proxies.recheck` | I8.6 |  |
 | `space.reconcile` | `space.sync.refresh_many` | — | Плановая сверка многих identity |
 | `space.record_admin_bulk` | `space.admin.record_bulk` | — |  |
 | `space.record_admin_export` | `space.admin.record_export` | — |  |
@@ -72,15 +72,15 @@
 | `space.register` | `space.identities.ensure` | I8.3 | Семантика get-or-create сохранена; `identities.create` бросает `AlreadyExists` |
 | `space.reindex_search` | `space.maintenance.reindex_search` | — |  |
 | `space.remove_tags` | `space.identities.remove_tags` | I8.4 |  |
-| `space.report_proxy_failure` | `space.proxies.report_failure` | — |  |
-| `space.report_proxy_success` | `space.proxies.report_success` | — |  |
+| `space.report_proxy_failure` | `space.proxies.report_failure` | I8.6 |  |
+| `space.report_proxy_success` | `space.proxies.report_success` | I8.6 |  |
 | `space.resolve_requirement` | `space.verifications.requirements.resolve` | — |  |
 | `space.restore_standing` | `space.identities.restore_standing` | I8.4 |  |
 | `space.resync` | `space.sync.refresh` | — | Одна проба одного identity |
 | `space.retire` | `space.identities.retire` | I8.4 |  |
 | `space.reveal_secret` | `space.secrets.reveal` | I8.5 | Поле задаётся `SecretRef`, строки временно принимаются |
 | `space.review_verification` | `space.verifications.review` | — |  |
-| `space.revoke_lease` | `space.pools.revoke` | — |  |
+| `space.revoke_lease` | `space.pools.revoke` | I8.6 |  |
 | `space.run_login` | `space.auth.login` | — | Возвращает `LoginOutcome` (`StrEnum`, значения прежние) |
 | `space.run_logins` | `space.auth.login_many` | — |  |
 | `space.save_data` | `space.data.save` | — |  |
@@ -115,3 +115,7 @@
 | `space.identities.update(id, labels=, note=)` | I8.4 | слияние меток и замена заметки одной транзакцией и одним событием |
 | `space.identities.replace_profile(id, ...)` | I8.4 | полная замена профиля (бывш. `update_profile(replace=True)`) |
 | `SecretRef.CREDENTIALS / SecretRef.session(slot) / SecretRef.PROFILE / SecretRef.evidence(factor)` | I8.5 | типизированная ссылка на секрет для `secrets.reveal` |
+| `space.proxies.create(url, group=)` | I8.6 | добавить; тот же адрес — `AlreadyExists` |
+| `space.proxies.list(group=, status=)` | I8.6 | страница прокси с `bound_count` |
+| `pool.capacity()` | I8.6 | бывш. `pool.check_capacity()` |
+| `ProxyPolicy(group=...)` | I8.6 | бывш. `ProxyPolicy(pool=...)` |

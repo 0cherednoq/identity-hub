@@ -15,6 +15,8 @@ from identity_hub._space import SpaceBase
 from identity_hub.admin_audit import AdminAuditMixin
 from identity_hub.api.identities import Identities
 from identity_hub.api.imports import Imports
+from identity_hub.api.pools import Pools
+from identity_hub.api.proxies import Proxies
 from identity_hub.api.secrets import Secrets
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
@@ -299,6 +301,16 @@ class SpaceHandle(
     def secrets(self) -> Secrets:
         """Секреты identity вне аренды: метаданные, замена, раскрытие с аудитом (IMP-23)."""
         return Secrets(self)
+
+    @cached_property
+    def proxies(self) -> Proxies:
+        """Прокси пространства по группам (IMP-23)."""
+        return Proxies(self)
+
+    @cached_property
+    def pools(self) -> Pools:
+        """Пулы аренды: объявление и отзыв аренды (IMP-23)."""
+        return Pools(self)
 
     @cached_property
     def identities(self) -> Identities:
