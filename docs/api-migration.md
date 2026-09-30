@@ -19,7 +19,7 @@
 | `space.add_proxies` | `space.proxies.create_many` | — | `pool=` → `group=` |
 | `space.add_proxy` | `space.proxies.ensure` | — | Повтор с тем же адресом возвращает существующий прокси, как и раньше; `pool=` → `group=` |
 | `space.add_requirement` | `space.verifications.requirements.add` | — |  |
-| `space.add_tags` | `space.identities.add_tags` | — |  |
+| `space.add_tags` | `space.identities.add_tags` | I8.4 |  |
 | `space.analytics_ban_rate` | `space.analytics.ban_rate` | — |  |
 | `space.analytics_cohorts` | `space.analytics.cohorts` | — |  |
 | `space.analytics_funnel` | `space.analytics.funnel` | — |  |
@@ -29,7 +29,7 @@
 | `space.analytics_utilization` | `space.analytics.utilization` | — |  |
 | `space.answer_challenge` | `space.auth.answer_challenge` | — |  |
 | `space.cancel_import` | `space.imports.cancel` | — |  |
-| `space.delete` | `space.identities.delete` | — |  |
+| `space.delete` | `space.identities.delete` | I8.4 |  |
 | `space.delivery_center` | `space.admin.delivery_center` | — |  |
 | `space.event_detail` | `space.admin.event_detail` | — |  |
 | `space.event_page` | `space.admin.event_page` | — |  |
@@ -51,7 +51,7 @@
 | `space.link_summary` | `space.admin.link_summary` | — |  |
 | `space.links_of` | `space.links.of` | — |  |
 | `space.load_data` | `space.data.load` | — |  |
-| `space.override` | `space.identities.override` | — |  |
+| `space.override` | `space.identities.override` | I8.4 |  |
 | `space.override_proxy` | `space.proxies.override` | — |  |
 | `space.pool` | `space.pools.define` | — | Объект правил отбора и аренды; в БД не хранится |
 | `space.pool_capacity` | `space.admin.pool_capacity` | — |  |
@@ -71,13 +71,13 @@
 | `space.record_admin_integration` | `space.admin.record_integration` | — |  |
 | `space.register` | `space.identities.ensure` | I8.3 | Семантика get-or-create сохранена; `identities.create` бросает `AlreadyExists` |
 | `space.reindex_search` | `space.maintenance.reindex_search` | — |  |
-| `space.remove_tags` | `space.identities.remove_tags` | — |  |
+| `space.remove_tags` | `space.identities.remove_tags` | I8.4 |  |
 | `space.report_proxy_failure` | `space.proxies.report_failure` | — |  |
 | `space.report_proxy_success` | `space.proxies.report_success` | — |  |
 | `space.resolve_requirement` | `space.verifications.requirements.resolve` | — |  |
-| `space.restore_standing` | `space.identities.restore_standing` | — |  |
+| `space.restore_standing` | `space.identities.restore_standing` | I8.4 |  |
 | `space.resync` | `space.sync.refresh` | — | Одна проба одного identity |
-| `space.retire` | `space.identities.retire` | — |  |
+| `space.retire` | `space.identities.retire` | I8.4 |  |
 | `space.reveal_secret` | `space.secrets.reveal` | — | Поле задаётся `SecretRef`, строки временно принимаются |
 | `space.review_verification` | `space.verifications.review` | — |  |
 | `space.revoke_lease` | `space.pools.revoke` | — |  |
@@ -85,17 +85,17 @@
 | `space.run_logins` | `space.auth.login_many` | — |  |
 | `space.save_data` | `space.data.save` | — |  |
 | `space.search` | `space.identities.search` | I8.2 |  |
-| `space.set_attributes` | `space.identities.replace_attributes` | — | Полная замена, как и раньше |
-| `space.set_labels` | `space.identities.replace_labels` | — | Полная замена; для слияния — `identities.update(labels=...)` |
-| `space.set_lifecycle` | `space.identities.set_lifecycle` | — |  |
-| `space.set_note` | `space.identities.set_note` | — |  |
-| `space.set_tags` | `space.identities.set_tags` | — |  |
+| `space.set_attributes` | `space.identities.replace_attributes` | I8.4 | Полная замена, как и раньше |
+| `space.set_labels` | `space.identities.replace_labels` | I8.4 | Полная замена; для слияния — `identities.update(labels=...)` |
+| `space.set_lifecycle` | `space.identities.set_lifecycle` | I8.4 |  |
+| `space.set_note` | `space.identities.set_note` | I8.4 |  |
+| `space.set_tags` | `space.identities.set_tags` | I8.4 |  |
 | `space.space_overview` | `space.admin.overview` | — |  |
 | `space.stage_import` | `space.imports.stage` | — |  |
 | `space.unlink` | `space.links.remove` | — |  |
-| `space.unpin` | `space.identities.unpin` | — |  |
+| `space.unpin` | `space.identities.unpin` | I8.4 |  |
 | `space.update_credentials` | `space.secrets.replace_credentials` | — | Полная замена, как и раньше |
-| `space.update_profile` | `space.identities.update` | — | Слияние; `replace=True` → `identities.replace_profile` |
+| `space.update_profile` | `space.identities.update` | I8.4 | Слияние; `replace=True` → `identities.replace_profile` |
 | `space.update_session` | `space.secrets.replace_session` | — | Вне аренды; под арендой — `lease.save_session` |
 | `space.verification_status` | `space.verifications.status` | — |  |
 
@@ -111,3 +111,6 @@
 | `space.identities.create(IdentityCreate(...))` | I8.3 | создаёт; существующая — `AlreadyExists` |
 | `space.identities.ensure(IdentityCreate(...))` | I8.3 | `(Identity, created)`; существующая не меняется |
 | `space.identities.create_many([...], on_conflict=)` | I8.3 | атомарно до 1000 штук, `fail` или `skip` |
+| `space.identities.activate(id, actor=)` | I8.4 | перевести в работу (`lifecycle → ready`), пара к `retire` |
+| `space.identities.update(id, labels=, note=)` | I8.4 | слияние меток и замена заметки одной транзакцией и одним событием |
+| `space.identities.replace_profile(id, ...)` | I8.4 | полная замена профиля (бывш. `update_profile(replace=True)`) |

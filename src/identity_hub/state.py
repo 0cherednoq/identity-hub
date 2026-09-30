@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase, logger
+from identity_hub.api._base import legacy
 from identity_hub.domain import regions as machine
 from identity_hub.domain.regions import Change, Command, Observation, RegionDecision, RegionState, Timer
 from identity_hub.enums import Lifecycle, Standing
@@ -153,7 +154,7 @@ def _actor(change: Change) -> str:
 class StateMixin(SpaceBase):
     """Регионы состояния аккаунта (ТЗ §3, FR-9)."""
 
-    async def set_lifecycle(
+    async def _set_lifecycle(
         self, identity_id: UUID, state: Lifecycle | str, *, actor: str, reason: str | None = None
     ) -> RegionDecision:
         """Решение владельца (команда lifecycle). Выполняется в транзакции пользователя, если она передана."""
@@ -162,10 +163,10 @@ class StateMixin(SpaceBase):
                 self, tx, identity_id, "lifecycle", "", Command(str(state), actor=actor, reason=reason)
             )
 
-    async def retire(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
-        return await self.set_lifecycle(identity_id, Lifecycle.RETIRED, actor=actor, reason=reason)
+    async def _retire(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
+        return await self._set_lifecycle(identity_id, Lifecycle.RETIRED, actor=actor, reason=reason)
 
-    async def restore_standing(self, identity_id: UUID, *, actor: str, reason: str) -> RegionDecision:
+    async def _restore_standing(self, identity_id: UUID, *, actor: str, reason: str) -> RegionDecision:
         """Restore a sticky banned account through the guarded domain transition."""
         async with self._tx() as tx:
             identity = await self._identity(tx, identity_id)
@@ -182,7 +183,7 @@ class StateMixin(SpaceBase):
                 Command(Standing.GOOD, actor=actor, reason=reason),
             )
 
-    async def override(self, identity_id: UUID, override: Override) -> RegionDecision:
+    async def _override(self, identity_id: UUID, override: Override) -> RegionDecision:
         """Ручная правка из админки (FR-9.1, 9.3). Для lifecycle/availability закрепления нет."""
         if override.pin_for is not None and override.region in COLUMN_REGIONS:
             raise ValidationFailed(f"регион {override.region} не синхронизируется: pin_for бессмыслен")
@@ -197,7 +198,7 @@ class StateMixin(SpaceBase):
         async with self._tx() as tx:
             return await apply_region_change(self, tx, identity_id, override.region, override.key, change)
 
-    async def unpin(
+    async def _unpin(
         self, identity_id: UUID, region: str, key: str, *, actor: str, reason: str
     ) -> RegionDecision:
         """Remove an override pin without changing the region state."""
@@ -212,6 +213,12 @@ class StateMixin(SpaceBase):
                 key,
                 machine.Unpin(reason=reason, actor=actor),
             )
+
+    set_lifecycle = legacy(_set_lifecycle, "set_lifecycle")
+    retire = legacy(_retire, "retire")
+    restore_standing = legacy(_restore_standing, "restore_standing")
+    override = legacy(_override, "override")
+    unpin = legacy(_unpin, "unpin")
 
     # --------------------------------------------------------- внутреннее: факты внешнего мира
 

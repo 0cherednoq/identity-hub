@@ -119,7 +119,8 @@ async def test_digest_accumulates_one_open_notification(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     transport = FakeTelegramTransport()
-    _, rule = await _setup(hub, space, transport, digest_seconds=10)
+    # окно заведомо длиннее подготовки под нагрузкой; срок ниже сдвигается явно
+    _, rule = await _setup(hub, space, transport, digest_seconds=300)
     first = await space.register(service="fake_tg", external_ref="+11")
     second = await space.register(service="fake_tg", external_ref="+12")
     await _standing_event(space, first.identity_id, "banned")

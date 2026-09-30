@@ -31,6 +31,16 @@ from identity_hub.store.base import IdentityRow, NewIdentity
 __all__ = ["IdentitiesMixin", "PreparedIdentity", "RegisterResult"]
 
 
+class _Unset:
+    """Маркер «аргумент не передан» там, где `None` — осмысленное значение."""
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _Unset()
+
+
 @dataclass(frozen=True, slots=True)
 class RegisterResult:
     identity_id: UUID
@@ -262,7 +272,7 @@ class IdentitiesMixin(SpaceBase):
 
     # --------------------------------------------------------- изменение данных (FR-3, общая транзакция)
 
-    async def set_labels(
+    async def _set_labels(
         self, identity_id: UUID, labels: Mapping[str, Any], *, merge: bool = False, actor: str = "system"
     ) -> IdentityRow:
         """Метки для фильтров (FR-3.3). `merge=True` — дополнить; значение None удаляет ключ."""
@@ -278,15 +288,19 @@ class IdentitiesMixin(SpaceBase):
 
         return await self._mutate(identity_id, actor, mutate)
 
-    async def set_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> IdentityRow:
+    async def _set_tags(
+        self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system"
+    ) -> IdentityRow:
         return await self._mutate(identity_id, actor, lambda row, _: {"tags": validate_tags(tags)})
 
-    async def add_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> IdentityRow:
+    async def _add_tags(
+        self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system"
+    ) -> IdentityRow:
         return await self._mutate(
             identity_id, actor, lambda row, _: {"tags": validate_tags([*row.tags, *tags])}
         )
 
-    async def remove_tags(
+    async def _remove_tags(
         self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system"
     ) -> IdentityRow:
         drop = set(tags)
@@ -294,7 +308,7 @@ class IdentitiesMixin(SpaceBase):
             identity_id, actor, lambda row, _: {"tags": validate_tags(t for t in row.tags if t not in drop)}
         )
 
-    async def set_attributes(
+    async def _set_attributes(
         self, identity_id: UUID, attributes: BaseModel | Mapping[str, Any], *, actor: str = "system"
     ) -> IdentityRow:
         """Технические параметры, валидируются схемой сервиса (FR-3.1)."""
@@ -305,7 +319,7 @@ class IdentitiesMixin(SpaceBase):
 
         return await self._mutate(identity_id, actor, mutate)
 
-    async def update_profile(
+    async def _update_profile(
         self,
         identity_id: UUID,
         changes: BaseModel | Mapping[str, Any],
@@ -333,11 +347,55 @@ class IdentitiesMixin(SpaceBase):
 
         return await self._mutate(identity_id, actor, mutate, need_profile=True)
 
-    async def set_note(self, identity_id: UUID, note: str | None, *, actor: str = "system") -> IdentityRow:
+    async def _set_note(self, identity_id: UUID, note: str | None, *, actor: str = "system") -> IdentityRow:
         """Свободная заметка из админки (FR-3.5)."""
         return await self._mutate(identity_id, actor, lambda row, _: {"note": note or None})
 
-    async def delete(self, identity_id: UUID, *, actor: str = "system") -> None:
+    async def _update(
+        self,
+        identity_id: UUID,
+        *,
+        profile: BaseModel | Mapping[str, Any] | None = None,
+        labels: Mapping[str, Any] | None = None,
+        note: str | _Unset | None = UNSET,
+        actor: str = "system",
+    ) -> IdentityRow:
+        """Слияние профиля и меток и замена заметки одной транзакцией и одним событием.
+
+        `None` в `labels` или в полях профиля удаляет ключ; `note=None` очищает заметку.
+        """
+        profile_changes = (
+            profile.model_dump(exclude_unset=True) if isinstance(profile, BaseModel) else profile
+        )
+
+        def mutate(row: IdentityRow, current: dict[str, Any]) -> dict[str, Any]:
+            values: dict[str, Any] = {}
+            if labels is not None:
+                merged_labels = dict(row.labels)
+                for key, value in labels.items():
+                    if value is None:
+                        merged_labels.pop(key, None)
+                    else:
+                        merged_labels[key] = value
+                values["labels"] = dict(validate_labels(merged_labels))
+            if not isinstance(note, _Unset):
+                values["note"] = note or None
+            if profile_changes is not None:
+                service = self.hub.service(row.service)
+                merged = {k: v for k, v in {**current, **profile_changes}.items() if v is not None}
+                model = validate_model(service.profile, merged, "profile")
+                open_part, secret = split_profile(service, model)
+                values["profile"] = open_part
+                values[_PROFILE_SECRET] = (
+                    self.hub.envelope.seal_model(secret, associated_data("ih_identities", row.id, "profile"))
+                    if secret
+                    else None
+                )
+            return values
+
+        return await self._mutate(identity_id, actor, mutate, need_profile=profile_changes is not None)
+
+    async def _delete(self, identity_id: UUID, *, actor: str = "system") -> None:
         """Удалить аккаунт. Нельзя, пока на него ссылаются связи (FR-4.2); журналы переживают удаление."""
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
@@ -356,6 +414,15 @@ class IdentitiesMixin(SpaceBase):
                 ),
             )
             await tx.delete_identity(identity_id)
+
+    set_labels = legacy(_set_labels, "set_labels")
+    set_tags = legacy(_set_tags, "set_tags")
+    add_tags = legacy(_add_tags, "add_tags")
+    remove_tags = legacy(_remove_tags, "remove_tags")
+    set_attributes = legacy(_set_attributes, "set_attributes")
+    update_profile = legacy(_update_profile, "update_profile")
+    set_note = legacy(_set_note, "set_note")
+    delete = legacy(_delete, "delete")
 
     async def _mutate(
         self,

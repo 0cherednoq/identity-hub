@@ -14,11 +14,12 @@ from pydantic import BaseModel
 
 from identity_hub.api._base import Namespace
 from identity_hub.domain.query import SearchQuery, parse_query
+from identity_hub.domain.regions import RegionDecision
 from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
 from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
-from identity_hub.identities import PreparedIdentity, prepare_identity
+from identity_hub.identities import UNSET, PreparedIdentity, _Unset, prepare_identity
 from identity_hub.service import Service
-from identity_hub.state import DEFAULT_SLOT
+from identity_hub.state import DEFAULT_SLOT, Override
 from identity_hub.store.base import IdentityRow, StoreTx
 
 if TYPE_CHECKING:
@@ -372,6 +373,90 @@ class Identities(Namespace):
                 await self._read(tx, item.row.id) for _svc, item in prepared if item.row.id in fresh_ids
             ]
         return CreateManyResult(created, skipped)
+
+    # ------------------------------------------------------------------ изменение
+
+    async def update(
+        self,
+        identity_id: UUID,
+        *,
+        profile: SchemaInput | None = None,
+        labels: Mapping[str, Any] | None = None,
+        note: str | _Unset | None = UNSET,
+        actor: str = "system",
+    ) -> Identity:
+        """Частичное изменение одной транзакцией и одним событием `identity.updated`.
+
+        `profile` и `labels` сливаются с текущими; `None` в значении удаляет ключ. `note`
+        заменяет заметку, `note=None` очищает её. Без реальных изменений событие не пишется.
+        """
+        row = await self._space._update(identity_id, profile=profile, labels=labels, note=note, actor=actor)
+        return Identity.from_row(row)
+
+    async def replace_profile(
+        self, identity_id: UUID, profile: SchemaInput, *, actor: str = "system"
+    ) -> Identity:
+        """Заменить профиль целиком (валидация схемой сервиса)."""
+        return Identity.from_row(
+            await self._space._update_profile(identity_id, profile, replace=True, actor=actor)
+        )
+
+    async def replace_attributes(
+        self, identity_id: UUID, attributes: SchemaInput, *, actor: str = "system"
+    ) -> Identity:
+        """Заменить технические атрибуты целиком (валидация схемой сервиса)."""
+        return Identity.from_row(await self._space._set_attributes(identity_id, attributes, actor=actor))
+
+    async def replace_labels(
+        self, identity_id: UUID, labels: Mapping[str, Any], *, actor: str = "system"
+    ) -> Identity:
+        """Заменить метки целиком; для слияния — `update(labels=...)`."""
+        return Identity.from_row(await self._space._set_labels(identity_id, labels, actor=actor))
+
+    async def add_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> Identity:
+        return Identity.from_row(await self._space._add_tags(identity_id, tags, actor=actor))
+
+    async def remove_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> Identity:
+        return Identity.from_row(await self._space._remove_tags(identity_id, tags, actor=actor))
+
+    async def set_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> Identity:
+        return Identity.from_row(await self._space._set_tags(identity_id, tags, actor=actor))
+
+    async def set_note(self, identity_id: UUID, note: str | None, *, actor: str = "system") -> Identity:
+        return Identity.from_row(await self._space._set_note(identity_id, note, actor=actor))
+
+    async def delete(self, identity_id: UUID, *, actor: str = "system") -> None:
+        """Физически удалить identity. Нельзя, пока на неё ссылаются связи; журнал сохраняется."""
+        await self._space._delete(identity_id, actor=actor)
+
+    # ------------------------------------------------------------------ состояние
+
+    async def activate(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
+        """Перевести в работу (`lifecycle → ready`); из `retired` нужна причина."""
+        return await self._space._set_lifecycle(identity_id, Lifecycle.READY, actor=actor, reason=reason)
+
+    async def retire(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
+        """Обратимо вывести из работы (`lifecycle → retired`), данные сохраняются."""
+        return await self._space._retire(identity_id, actor=actor, reason=reason)
+
+    async def set_lifecycle(
+        self, identity_id: UUID, state: Lifecycle | str, *, actor: str, reason: str | None = None
+    ) -> RegionDecision:
+        return await self._space._set_lifecycle(identity_id, state, actor=actor, reason=reason)
+
+    async def restore_standing(self, identity_id: UUID, *, actor: str, reason: str) -> RegionDecision:
+        """Вернуть `banned → good` командой (sticky-бан наблюдения не снимают)."""
+        return await self._space._restore_standing(identity_id, actor=actor, reason=reason)
+
+    async def override(self, identity_id: UUID, override: Override) -> RegionDecision:
+        """Ручная правка региона админом; может закрепить регион (`pin_for`)."""
+        return await self._space._override(identity_id, override)
+
+    async def unpin(
+        self, identity_id: UUID, region: str, key: str, *, actor: str, reason: str
+    ) -> RegionDecision:
+        """Снять закрепление региона, не меняя состояния."""
+        return await self._space._unpin(identity_id, region, key, actor=actor, reason=reason)
 
     # ------------------------------------------------------------------ служебное
 
