@@ -4,6 +4,24 @@ version = "1.0.0a1"
 description = "Управление парком аккаунтов: жизненный цикл, аренда, лимиты, прокси, секреты, события."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Identity Hub contributors" }]
+keywords = ["accounts", "identity", "lease", "proxy", "secrets", "postgresql", "asyncio"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.7",
     "sqlalchemy[asyncio]>=2.0.30",
@@ -39,7 +57,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -57,6 +75,7 @@ only-include = [
     "docs/traceability.md",
     "README.md",
     "CHANGELOG.md",
+    "LICENSE",
     "pyproject.toml",
 ]
 exclude = ["__pycache__", "*.pyc"]

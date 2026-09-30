@@ -173,3 +173,7 @@ uv run pytest examples/test_memory_hub.py
 Полная спецификация поведения —
 [`identity-hub-requirements.md`](identity-hub-requirements.md), история
 реализации — [`docs/plan/PLAN.md`](docs/plan/PLAN.md).
+
+## Лицензия
+
+[MIT](LICENSE). Код поставляется «как есть», без каких-либо гарантий.
