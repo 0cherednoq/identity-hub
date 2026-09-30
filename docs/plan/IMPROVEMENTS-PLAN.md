@@ -7,8 +7,8 @@
 Протокол автономной работы: [`CLAUDE.md`](../../CLAUDE.md).
 
 План предназначен для автономного исполнителя, который начинает с текущего состояния
-`1.0.0rc1`, а не с исходного состояния до P0.1. Активный scope: `IMP-01`–`IMP-21` и закрытие
-`PERF-1`. `IMP-22 RuntimeProfile` не входит в эту очередь: он удалён из сводки
+`1.0.0rc1`, а не с исходного состояния до P0.1. Активный scope: `IMP-01`–`IMP-21`, `IMP-23` (фаза I8, `D-141`) и
+закрытие `PERF-1`. `IMP-22 RuntimeProfile` не входит в эту очередь: он удалён из сводки
 `IMPROVEMENTS.md` и явно отнесён к post-v1. Для него нужен отдельный запрос владельца и план.
 
 Этот файл — спецификация задач. Статусы ведутся только в `IMPROVEMENTS-PROGRESS.md`.
@@ -70,11 +70,11 @@ bash scripts/check.sh
 
 - Записать новое решение `D-NNN`: приняты `IMP-01`–`IMP-21`; `IMP-22` отложен; старые миграции
   неизменяемы; целевая RC-версия выбирается до финального аудита по SemVer.
-- Создать `docs/improvements-traceability.md` с 21 строкой IMP, задачами этого плана, текущим
+- Создать `docs/improvements-traceability.md` с 22 строками IMP (`IMP-01`–`IMP-21`, `IMP-23`), задачами этого плана, текущим
   состоянием (`missing|partial|implemented`) и будущими pytest node id.
 - Зафиксировать commit, Python/PostgreSQL/CPU/pool и текущие результаты обычного gate и
   load-smoke. Сослаться на существующий `D-127`, не выдавать старые цифры за новый замер.
-- Добавить документационный тест: `IMP-01`–`IMP-21` встречаются в матрице ровно по одному разу,
+- Добавить документационный тест: `IMP-01`–`IMP-21` и `IMP-23` встречаются в матрице ровно по одному разу,
   все ID задач существуют в плане и прогрессе, `IMP-22` помечен `deferred`.
 - **DoD:** `scripts/check.sh` зелёный; baseline и границы scope можно восстановить без устного
   контекста.
@@ -477,6 +477,146 @@ bash scripts/check.sh
 
 ---
 
+## Фаза I8 — Публичное API: неймспейсы и конвенция глаголов
+
+Связанное улучшение: `IMP-23`, решение `D-141`. Фаза выполняется **сразу после I0.1**: строки
+I8.1–I8.9 стоят в прогрессе перед I0.2, а I8.10 — перед I7.1.
+
+Общие правила фазы:
+
+- Фасады — тонкие классы в `identity_hub/api/` (`identities.py`, `imports.py`, …). Они держат
+  ссылку на `SpaceHandle` и вызывают существующую логику миксинов. Бизнес-логика не
+  дублируется, Store/SQL не меняются, кроме явно указанных мест. Миграций БД в фазе нет.
+- `SpaceHandle` получает неймспейсы как `cached_property`. Каждый старый метод становится
+  алиасом через общий хелпер `deprecated(old, new)`: `DeprecationWarning` с `stacklevel=2` и
+  текстом «`space.X` устарел, используйте `space.Y`», затем вызов нового метода.
+- Задачи I1–I7 после I8 добавляют новые параметры (`expected_revision`, idempotency key,
+  нормализованный ref, несколько credentials) **только** в методы неймспейсов. Алиасы новых
+  параметров не получают.
+- Каждая задача дописывает свои строки в `docs/api-migration.md` и обновляет allowlist.
+
+### I8.1 Каркас неймспейсов, allowlist поверхности и таблица миграции
+
+- Создать пакет `identity_hub/api/` с базовым классом фасада и хелпером `deprecated`.
+- Добавить тест-allowlist: публичные атрибуты `SpaceHandle` = неймспейсы + замороженный список
+  текущих 89 имён (помечены `legacy`). Новое публичное имя вне неймспейса валит тест.
+- Создать `docs/api-migration.md` с таблицей «старое → новое» для всех 89 имён (включая
+  «переходит в `space.admin`» и «удаляется из публичного API»). Документационный тест
+  сверяет таблицу с `dir(SpaceHandle)`.
+- Добавить в `docs/guide/01-concepts.md` определение «identity, или аккаунт» и таблицу глаголов
+  из IMP-23.
+- **DoD:** allowlist-тест и тест таблицы зелёные; unit-тест хелпера (одно предупреждение,
+  корректный stacklevel, результат идентичен).
+
+### I8.2 `space.identities`: чтение
+
+- Ввести DTO `Identity` (secret-free, `repr` без секретов) и `IdentityRef`.
+- `get(id)` → `NotFound`; `find(id=None, *, service=None, external_ref=None)` → `None`;
+  `get_by_ref(service, ref)`; `card(id)` (бывш. `identity_card`); `search(query, limit, after)`
+  → `Page[Identity]` (бывш. `search`); `list(IdentityFilter, limit, after)` со
+  структурированными полями (service, регионы, tags, labels, filterable_profile) поверх того же
+  query-движка; `count(filter)`.
+- Опираться на существующие `StoreTx.get_identity` / `find_identity`. Чтение из чужого
+  пространства даёт `NotFound`.
+- **DoD:** conformance MemoryStore/PgStore; get/find на отсутствующем и чужом id; list и search
+  дают одинаковый набор на эквивалентных запросах; сериализация `Identity` без секретных полей.
+
+### I8.3 `space.identities`: создание
+
+- Модель `IdentityCreate` (поля из IMP-23); `create(spec)` → `Identity` или `AlreadyExists`;
+  `ensure(spec)` → `(Identity, created)` без обновления существующего.
+- `create_many(specs, *, on_conflict="fail"|"skip", actor)` → `CreateManyResult(created,
+  skipped)`: валидация всей пачки до транзакции, одна транзакция, лимит 1000, блокировки в
+  порядке сортировки `(service, external_ref)`.
+- `register(...)` — алиас `ensure`, возвращающий прежний `RegisterResult`.
+- **DoD:** атомарность (одна невалидная запись → ничего не создано); `fail`/`skip`; дубль
+  внутри пачки; конфликт с другим пространством; pg-race двух пересекающихся `create_many` без
+  deadlock; одно событие `identity.created` на identity; parity алиаса.
+
+### I8.4 `space.identities`: изменение и состояние
+
+- `update(id, *, profile=, labels=, note=, actor)` — только слияние (`None` в labels удаляет
+  ключ); `replace_profile`, `replace_attributes`; `add_tags` / `remove_tags` / `set_tags`;
+  `delete(id)`.
+- Состояние: `activate` (→ `READY`), `retire`, `set_lifecycle`, `restore_standing`, `override`,
+  `unpin` с прежними правилами переходов и причин.
+- Алиасы: `set_labels`, `update_profile`, `set_attributes`, `set_note`, теги, `delete`,
+  команды состояния.
+- **DoD:** событие только при реальном изменении; `activate` из `provisioning` и `retired`;
+  `TransitionNotAllowed` сохраняется; parity всех алиасов.
+
+### I8.5 `space.imports` и `space.secrets`
+
+- `ImportRecord(IdentityCreate)` с `links_by_ref`, `proxy`, `verifications`. Строковые значения
+  в `links` принимаются с `DeprecationWarning` и переносятся в `links_by_ref`.
+- `imports.run` (бывш. `import_many`, все параметры и `ImportReport` без изменений),
+  `run_files`, `stage`, `get(run_id)`, `cancel(run_id)`.
+- `secrets.describe(id)` (бывш. `access_card`), `secrets.reveal(id, SecretRef, *, actor,
+  reason)`, `replace_credentials`, `replace_session(id, data, *, slot)`. Строковые ref
+  принимаются алиасом.
+- **DoD:** существующие import-тесты проходят через `imports.run` с теми же отчётами;
+  stage/cancel; событие `identity.secret.revealed` не изменилось; секреты не попадают в тексты
+  предупреждений.
+
+### I8.6 `space.proxies`, `space.pools` и типизированная аренда
+
+- `proxies`: `get`, `find(url)`, `list(group=, status=)`, `create(ProxySpec)`, `ensure`,
+  `create_many(urls, *, group)`, `report_failure`, `report_success`,
+  `recheck(id, checker, *, actor)`, `recheck_due(checker, *, limit)`, `override`, `rebind`.
+- `group` вместо `pool` в публичных именах: `ProxySpec.group`, `ProxyPolicy.group`
+  (`pool=` — с предупреждением). Колонка `ih_proxies.pool` не меняется.
+- `pools.define(name, ...)` (бывш. `space.pool`), `pools.revoke(identity_id, ...)`,
+  `Pool.capacity()` (бывш. `check_capacity`).
+- `Pool.lease` / `Pool.acquire`: явная сигнатура вместо `**kwargs: Any`.
+- **DoD:** неизвестный параметр аренды → `TypeError`; mypy по examples; прокси-тесты через
+  `group`; parity `ProxyPolicy(pool=)` и `ProxyPolicy(group=)`.
+
+### I8.7 `space.auth`, `space.sync`, `space.links`, `space.data`, `space.verifications`
+
+- `auth.login(id)` → `LoginOutcome` (`StrEnum`, значения равны старым строкам), `login_many`,
+  `answer_challenge`.
+- `sync.refresh` (бывш. `resync`), `sync.refresh_many` (бывш. `reconcile`).
+- `links.add`, `links.remove`, `links.of`, `links.impact`; `data.load`, `data.save`;
+  `verifications.status`, `review`, `requirements.add`, `requirements.resolve`.
+- **DoD:** `LoginOutcome` сравнивается со старыми строками; parity всех алиасов; сценарий
+  onboarding из руководства на новых именах.
+
+### I8.8 Вынос admin, analytics и maintenance; перевод внутренних потребителей
+
+- `space.admin`: read-модели UI (`overview`, `pool_summary`, `pool_capacity`, lease dashboard и
+  history, events, deliveries, human queue, proxy overview/detail, `identity_page` — бывш.
+  `account_search`, `selection_snapshot` — бывш. `account_selection_snapshot`, import runs,
+  provider operations) и аудит `record_*`.
+- `space.analytics`: `series`, `funnel`, `time_to`, `cohorts`, `ban_rate`, `utilization`,
+  `proxy_quality`.
+- `space.maintenance`: `expire_challenges`, `expire_verifications`, `reindex_search`. Задача
+  I5.2 позже оборачивает их в `hub.workers`.
+- Перевести на новый API пакет `admin/`, CLI, dispatcher/maintenance, `identity_hub.testing`,
+  examples и все тесты. Тесты запускаются с `-W error::DeprecationWarning` для модулей
+  `identity_hub`, кроме отдельного модуля тестов алиасов.
+- **DoD:** в наборе тестов нет предупреждений об устаревании, кроме тестов алиасов; тесты
+  `admin/` зелёные; allowlist содержит только неймспейсы и legacy-алиасы.
+
+### I8.9 Руководство и примеры на новом API
+
+- Переписать `docs/guide`: в `03-accounts` разделы идут «получить → создать → создать массово →
+  импорт → изменить → состояние → удалить», под каждым — один метод; в `09-proxies` — `group`.
+  Обновить README, `docs/cli.md`, `docs/integrations.md`, examples и CHANGELOG
+  (`[Unreleased]`, раздел Deprecated).
+- Финализировать `docs/api-migration.md`.
+- **DoD:** примеры исполняются; ссылки проверены; в документации нет устаревших имён вне
+  migration guide.
+
+### I8.10 Удаление алиасов перед релизом
+
+- Удалить legacy-алиасы и `pool=` у `ProxyPolicy`. Allowlist `SpaceHandle` сводится к
+  неймспейсам и `using`/`ref`. CHANGELOG — раздел Removed.
+- Выполняется после всех задач I1–I6; `I7.1` зависит от этой задачи.
+- **DoD:** `dir(SpaceHandle)` совпадает с allowlist; полный gate зелёный; migration guide
+  отражает удаление.
+
+---
+
 ## Граф зависимостей
 
 ```text
@@ -505,7 +645,12 @@ I1.4 + I3.2 → I6.3
 I5.3 + I6.1 + I6.2 + I6.3 → I6.4
 I1.4 + I2.4 + I3.3 + I4.3 + I5.3 → I6.5
 
-I5.1 + I5.2 + I5.3 + I6.4 + I6.5 → I7.1 → I7.2
+I0.1 → I8.1 → I8.2 → {I8.3, I8.4}
+I8.3 → I8.5
+I8.1 → {I8.6, I8.7}
+I8.3 + I8.4 + I8.5 + I8.6 + I8.7 → I8.8 → I8.9 → I8.10
+
+I5.1 + I5.2 + I5.3 + I6.4 + I6.5 + I8.10 → I7.1 → I7.2
 ```
 
 Порядок строк в `IMPROVEMENTS-PROGRESS.md` топологический. Следующая задача — первая `todo`,

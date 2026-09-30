@@ -35,6 +35,7 @@ Identity Hub на PostgreSQL 16 (2026-09-26)
 | IMP-19 | Import-linter и архитектурные тесты | P2 | нет | P0.1 |
 | IMP-20 | `run_once(limit)` как ядро фоновых работ | P1 | нет | P8.1, P9.1 |
 | IMP-21 | Опциональный порядок outbox внутри потока аккаунта | P2 | нет | P8.1, P8.3 |
+| IMP-23 | Публичное API: ресурсные неймспейсы и единая конвенция глаголов | **до I1.1** | нет | фаза I8 |
 
 Приоритеты: **жирным** — нужно до указанной задачи, иначе её придётся переделывать; P1 — в v1;
 P2 — в v1, если хватит времени; v1.1 — после релиза.
@@ -450,6 +451,120 @@ lifecycle `created → ready ↔ disabled`, `broken`. Сессии могут с
 прокси к профилю важнее привязки к аккаунту. Пригодится для ARMGS и cloakbrowser; в v1 хватает
 `attributes`.
 
+### IMP-23. Публичное API: ресурсные неймспейсы и единая конвенция глаголов
+
+Источник: ревью `docs/guide` и публичной поверхности `1.0.0a1` (2026-09-30), перепроверенное
+вторым независимым ревью. Решение о принятии — `D-141`.
+
+**Проблема.**
+
+1. `SpaceHandle` — 89 публичных атрибутов в одном плоском пространстве имён. Доменные команды
+   (`register`, `retire`) лежат рядом с read-моделями админки (`account_search`,
+   `delivery_center`, `human_queue`, `analytics_*`), аудитом админки (`record_admin_*`) и
+   операциями обслуживания (`expire_challenges`, `expire_verifications`, `recheck_proxies`).
+2. Нет лёгкого «получить identity»: руководство отсылает к тяжёлой `identity_card`.
+   Две поисковые read-модели `search` и `account_search` конкурируют; техническая
+   `account_selection_snapshot` (замороженный набор id+revision для bulk) выглядит как третий
+   поиск. `identity_card` (состояние, квоты, аренда, blockers) и `access_card` (метаданные
+   credentials/sessions без секретов) — разные срезы, но по именам разницу не понять.
+3. `register` читается как «зарегистрировать аккаунт на платформе» и по-разному с
+   `hub.register_service` (добавление декларации в конфигурацию хаба); по поведению это
+   get-or-create без обновления.
+4. Одиночное (`register`, kwargs) и массовое (`import_many`, `ImportRecord`) создание имеют
+   разные входные контракты; `lifecycle=READY` есть только у одиночного.
+5. Форма пакетных методов и результатов разная: `import_many` / `add_proxies` / `run_logins`;
+   `RegisterResult` / `tuple[UUID, bool]` / строка `"succeeded"`.
+6. `update_*` означает то слияние (`update_profile`), то замену (`update_credentials`);
+   `set_labels(merge=True)` противоречит имени.
+7. «pool» означает два понятия: неперсистентный объект правил отбора и аренды (`space.pool()`)
+   и сохранённую группу прокси (`add_proxy(pool=...)`, `ProxyPolicy.pool`).
+8. Разницу `resync` / `reconcile` по именам не угадать; `space.delete(id)` читается как удаление
+   пространства; `pool.lease(**kwargs: Any)` не даёт автодополнения; `reveal_secret(id,
+   "session:<slot>")` строково-типизирован; у `retire` нет пары «вернуть в работу».
+9. Терминология смешана: `identity_*` в коде, `account_*` в админских методах.
+
+**Конвенция глаголов** (для самостоятельных ресурсов; `add`/`remove` — только для членства:
+теги, связи, прокси-привязка):
+
+| Метод | Семантика |
+|---|---|
+| `get(id)` | объект или `NotFound` |
+| `find(...)` | объект или `None` |
+| `list(filter)` | структурированный фильтр → `Page[T]` |
+| `search(query)` | строковый запрос → `Page[T]` |
+| `create(spec)` | создать; конфликт → `AlreadyExists` |
+| `ensure(spec)` | вернуть существующий без изменений или создать → `(obj, created)` |
+| `create_many(specs, on_conflict=)` | массовый `create`: атомарно, `fail` \| `skip` |
+| `update(id, ...)` | частичное изменение (слияние) |
+| `replace_<part>(id, ...)` | полная замена части |
+| `delete(id)` | физическое удаление |
+| `imports.run(...)` | импорт внешних данных: частичный успех, пачки, `on_existing`, отчёт |
+
+**Термин.** Публичные имена используют только `identity` (`Identity`, `IdentityCreate`,
+`space.identities`). В русской документации один раз: «identity, или аккаунт, — учётная запись
+во внешнем сервисе». Имена `account_*` из публичной поверхности уходят.
+
+**Целевая поверхность.**
+
+```python
+space.identities   # get, find, get_by_ref, card, search, list, count,
+                   # create, ensure, create_many, update, replace_profile, replace_attributes,
+                   # add_tags, remove_tags, set_tags, set_note, delete,
+                   # activate, retire, restore_standing, override, unpin
+space.imports      # run, run_files, stage, get, cancel
+space.secrets      # describe (бывш. access_card), reveal(id, SecretRef), replace_credentials,
+                   # replace_session
+space.proxies      # get, find, list, create, ensure, create_many, report_failure,
+                   # report_success, recheck(id, checker), recheck_due(checker), override, rebind
+space.pools        # define(...) -> Pool; revoke(identity_id)
+space.auth         # login -> LoginOutcome, login_many, answer_challenge
+space.sync         # refresh (бывш. resync), refresh_many (бывш. reconcile)
+space.links        # add, remove, of, impact
+space.data         # load, save
+space.verifications  # status, review, requirements.add / resolve
+space.webhooks, space.notifications   # без изменений
+space.analytics    # series, funnel, time_to, cohorts, ban_rate, utilization, proxy_quality
+space.admin        # read-модели UI, selection_snapshot, record_* (аудит)
+space.maintenance  # expire_challenges, expire_verifications, reindex_search
+```
+
+**Контракты.**
+
+- `IdentityCreate` — pydantic-модель: `service`, `external_ref`, `id`, `credentials`, `sessions`,
+  `profile`, `attributes`, `tags`, `labels`, `note`, `links: Mapping[str, UUID]`, `lifecycle`,
+  `auth_state`. Общая для `create`, `ensure`, `create_many`.
+- `ImportRecord(IdentityCreate)` добавляет только то, что нужно импорту: ссылки по строковому
+  ref (в том числе внутри пачки), `proxy`, начальные `verifications`. Импорт сохраняет
+  `on_existing`, `verify_sessions`, `on_batch_committed`, `run_id` и `ImportReport`
+  (`created`/`updated`/`skipped`/`failed`).
+- `create_many` — одна транзакция, до 1000 записей. Вся пачка валидируется до транзакции,
+  ошибки собираются в один `ValidationFailed`. `on_conflict="fail"` → `AlreadyExists` со
+  списком ref, ничего не создано; `"skip"` → существующие в `skipped`. Результат
+  `CreateManyResult(created: list[Identity], skipped: list[IdentityRef])` — без
+  `updated`/`failed`.
+- `Identity` — лёгкий secret-free DTO: id, service, external_ref, регионы, tags, labels, note,
+  profile (кроме шифрованных полей), revision, created_at/updated_at.
+- Прокси: `group` вместо `pool` в публичном API (`ProxySpec.group`, `ProxyPolicy.group`,
+  `space.proxies.list(group=)`). Колонка БД `pool` не переименовывается (миграция не нужна).
+  `ProxyPolicy(pool=...)` принимается с `DeprecationWarning`.
+- `pool.lease()` / `pool.acquire()` принимают явные параметры (`for_operation`, `wait`, `holder`,
+  `on_lost` и т.д.) вместо `**kwargs: Any`.
+- `LoginOutcome` — `StrEnum` (значения совпадают со старыми строками).
+- `SecretRef.CREDENTIALS`, `SecretRef.session(slot)`, `SecretRef.PROFILE`,
+  `SecretRef.evidence(factor)` — строки в `reveal` принимаются, пока действуют алиасы.
+- `hub.register_service` сохраняет имя: после ухода `register` конфликт имён исчезает.
+
+**Совместимость.** Старые методы `SpaceHandle` остаются тонкими алиасами поверх новых фасадов
+с `DeprecationWarning` и указанием замены до выпуска `1.0.0b1`. В задаче I8.9 алиасы удаляются
+до финального аудита. Таблица «старое → новое» ведётся в `docs/api-migration.md` с первой
+задачи фазы. Поверхность `SpaceHandle` защищена тестом-allowlist, чтобы новые методы
+появлялись только в неймспейсах.
+
+**Тесты.** Allowlist публичных атрибутов `SpaceHandle` и каждого фасада; conformance
+MemoryStore/PgStore для `get`/`find`/`create_many` (атомарность, `fail`/`skip`);
+алиас → новый метод даёт тот же результат и одно предупреждение; `pool.lease` отвергает
+неизвестный параметр `TypeError`; примеры руководства исполняются.
+
 ---
 
 ## Что сознательно не берём из AccountPlane
@@ -476,3 +591,5 @@ lifecycle `created → ready ↔ disabled`, `broken`. Сессии могут с
 4. **Фаза 5:** IMP-10, IMP-11 — вход, challenge, пробы поверх очереди операций.
 5. **Фазы 6, 8–10:** IMP-12, IMP-15, IMP-17, IMP-19, IMP-20, IMP-21.
 6. **После v1:** IMP-22.
+7. **Сразу после I0.1:** IMP-23 (фаза I8) — чтобы I1–I7 расширяли уже новые неймспейсы,
+   а не 89-методный `SpaceHandle`.

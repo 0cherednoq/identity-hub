@@ -1,6 +1,6 @@
 # Прогресс имплементации улучшений Identity Hub
 
-> Единственный источник правды о статусе очереди `IMP-01`–`IMP-21` и `PERF-1`.
+> Единственный источник правды о статусе очереди `IMP-01`–`IMP-21`, `IMP-23` и `PERF-1`.
 > Обновляется в том же коммите, что и код задачи.
 > Статусы: `todo` · `in_progress` · `done` · `blocked` · `cancelled`.
 > Спецификация: [`IMPROVEMENTS-PLAN.md`](IMPROVEMENTS-PLAN.md).
@@ -21,6 +21,15 @@
 | ID | Задача | Зависит от | Статус | Коммит | Примечание |
 |---|---|---|---|---|---|
 | I0.1 | Scope и воспроизводимый baseline | — | todo |  |  |
+| I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | todo |  |  |
+| I8.2 | API: space.identities — чтение | I8.1 | todo |  |  |
+| I8.3 | API: space.identities — create/ensure/create_many | I8.2 | todo |  |  |
+| I8.4 | API: space.identities — изменение и состояние | I8.2 | todo |  |  |
+| I8.5 | API: space.imports и space.secrets | I8.3 | todo |  |  |
+| I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | todo |  |  |
+| I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  |  |
+| I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
+| I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
 | I0.2 | Ошибки, lock order, архитектурные границы | I0.1 | todo |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2 | todo |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2 | todo |  |  |
@@ -46,10 +55,11 @@
 | I6.3 | Set-based import fast path | I1.4, I3.2 | todo |  |  |
 | I6.4 | Полный load harness и бюджеты | I5.3, I6.1, I6.2, I6.3 | todo |  |  |
 | I6.5 | Полная deterministic race matrix | I1.4, I2.4, I3.3, I4.3, I5.3 | todo |  |  |
-| I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5 | todo |  |  |
+| I8.10 | API: удаление legacy-алиасов | I8.9 | todo |  |  |
+| I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 0 / 28 done
+**Итого:** 0 / 38 done
 
 ## Журнал сессий
 
