@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I8.3 API: space.identities — create/ensure/create_many
-- **Начата:** 2026-09-30
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] модель IdentityCreate
-  - [ ] create и ensure поверх регистрации
-  - [ ] create_many: валидация, одна транзакция, on_conflict
-  - [ ] алиас register
-  - [ ] тесты: атомарность, конфликты, гонка pg
-  - [ ] check.sh и закрытие
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -28,7 +23,7 @@
 | I0.1 | Scope и воспроизводимый baseline | — | done |  |  |
 | I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | done |  |  |
 | I8.2 | API: space.identities — чтение | I8.1 | done |  |  |
-| I8.3 | API: space.identities — create/ensure/create_many | I8.2 | in_progress |  |  |
+| I8.3 | API: space.identities — create/ensure/create_many | I8.2 | done |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | todo |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | todo |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | todo |  |  |
@@ -64,7 +59,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 3 / 38 done
+**Итого:** 4 / 38 done
 
 ## Журнал сессий
 
@@ -73,3 +68,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-09-30 · I0.1 · done · scope D-142, матрица IMP и baseline (lease p95 4801 мс, operation 24.9, search 163.5, import 103.7 с) · дальше I8.1
 2026-09-30 · I8.1 · done · каркас identity_hub/api, allowlist SpaceHandle, карта LEGACY (85 имён) и docs/api-migration.md · дальше I8.2
 2026-09-30 · I8.2 · done · space.identities: get/find/get_by_ref/card/search/list/count, DTO Identity/IdentityFilter/Page, алиасы через legacy() · дальше I8.3
+2026-09-30 · I8.3 · done · identities.create/ensure/create_many (атомарно, fail|skip, порядок вставки), register — алиас, D-143 · дальше I8.4

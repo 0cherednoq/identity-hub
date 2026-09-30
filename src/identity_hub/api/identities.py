@@ -2,26 +2,52 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+import builtins
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+from pydantic import BaseModel
 
 from identity_hub.api._base import Namespace
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
-from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
+from identity_hub.identities import PreparedIdentity, prepare_identity
 from identity_hub.service import Service
-from identity_hub.store.base import IdentityRow
+from identity_hub.state import DEFAULT_SLOT
+from identity_hub.store.base import IdentityRow, StoreTx
 
 if TYPE_CHECKING:
     from identity_hub.read.cards import IdentityCard
 
-__all__ = ["Identities", "Identity", "IdentityFilter", "IdentityRef", "Page"]
+__all__ = [
+    "CreateManyResult",
+    "Identities",
+    "Identity",
+    "IdentityCreate",
+    "IdentityFilter",
+    "IdentityRef",
+    "OnConflict",
+    "Page",
+]
 
 # Счётчик `count()` точный до этого значения; дальше возвращается `COUNT_CAP + 1`.
 COUNT_CAP = 1_000_000
+# Предел `create_many`: одна транзакция; большие объёмы — `space.imports`.
+CREATE_MANY_LIMIT = 1000
+
+type SchemaInput = BaseModel | Mapping[str, Any]
+
+
+class OnConflict(StrEnum):
+    """Что делает `create_many`, если identity с таким id или ref уже есть в пространстве."""
+
+    FAIL = "fail"
+    SKIP = "skip"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +127,46 @@ class Page[T]:
     total: int | None = None  # только при count=True; значение > 1000 означает «1000+»
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class IdentityCreate:
+    """Данные новой identity для `create`, `ensure` и `create_many`.
+
+    Секреты и профиль проверяются схемами сервиса и шифруются до транзакции. `session` —
+    сокращение для слота `"default"`; вместе с `sessions["default"]` передавать нельзя.
+    `links` — роль → id существующей identity (в `create_many` — и создаваемой в той же пачке).
+    """
+
+    service: str | Service
+    external_ref: str
+    id: UUID | None = None
+    credentials: SchemaInput | None = None
+    session: SchemaInput | None = None
+    sessions: Mapping[str, SchemaInput] = field(default_factory=dict)
+    attributes: SchemaInput | None = None
+    profile: SchemaInput | None = None
+    labels: Mapping[str, Any] = field(default_factory=dict)
+    tags: Collection[str] = ()
+    note: str | None = None
+    links: Mapping[str, UUID] = field(default_factory=dict)
+    lifecycle: Lifecycle | str = Lifecycle.PROVISIONING
+    auth_state: AuthState | str | None = None
+
+    def __repr__(self) -> str:  # секреты не попадают в repr
+        return f"IdentityCreate(service={self.service_name!r}, external_ref={self.external_ref!r})"
+
+    @property
+    def service_name(self) -> str:
+        return self.service.name if isinstance(self.service, Service) else self.service
+
+
+@dataclass(frozen=True, slots=True)
+class CreateManyResult:
+    """Итог `create_many`: созданные (в порядке входа) и пропущенные существующие."""
+
+    created: list[Identity]
+    skipped: list[IdentityRef]
+
+
 def _values(value: str | Collection[str] | None) -> frozenset[str]:
     if value is None:
         return frozenset()
@@ -159,6 +225,9 @@ class IdentityFilter:
             tags=frozenset(self.tags),
             filters=filters,
         )
+
+
+type _Prepared = list[tuple[Service, PreparedIdentity]]
 
 
 class Identities(Namespace):
@@ -239,7 +308,127 @@ class Identities(Namespace):
         assert total is not None
         return total
 
+    # ------------------------------------------------------------------ создание
+
+    async def create(self, spec: IdentityCreate, *, actor: str = "system") -> Identity:
+        """Создать identity; если такой id или `(service, external_ref)` уже есть — `AlreadyExists`."""
+        svc, prepared = self._prepare(spec)
+        async with self._space._tx() as tx:
+            await self._space._create_one(tx, svc, prepared, actor=actor, fail_existing=True)
+            return await self._read(tx, prepared.row.id)
+
+    async def ensure(self, spec: IdentityCreate, *, actor: str = "system") -> tuple[Identity, bool]:
+        """Вернуть существующую identity без изменений (`False`) или создать её (`True`).
+
+        Identity с тем же ref в другом пространстве — `AlreadyExists`.
+        """
+        svc, prepared = self._prepare(spec)
+        async with self._space._tx() as tx:
+            result = await self._space._create_one(tx, svc, prepared, actor=actor)
+            return await self._read(tx, result.identity_id), result.created
+
+    async def create_many(
+        self,
+        specs: Iterable[IdentityCreate],
+        *,
+        on_conflict: OnConflict | str = OnConflict.FAIL,
+        actor: str = "system",
+    ) -> CreateManyResult:
+        """Атомарно создать до 1000 identity одной транзакцией.
+
+        Вся пачка валидируется до транзакции, ошибки собираются в один `ValidationFailed`.
+        `on_conflict="fail"` — при любой существующей identity `AlreadyExists` со списком ref,
+        ничего не создаётся; `"skip"` — существующие попадают в `skipped`. Identity с тем же ref
+        в другом пространстве — всегда `AlreadyExists`. Частичный успех и большие объёмы —
+        `space.imports`.
+        """
+        mode = OnConflict(on_conflict)
+        items = list(specs)
+        if len(items) > CREATE_MANY_LIMIT:
+            raise ValidationFailed(f"create_many: не больше {CREATE_MANY_LIMIT} записей; больше — imports")
+        prepared = self._prepare_many(items)
+        # единый порядок вставки: параллельные пересекающиеся пачки не дают deadlock
+        ordered = sorted(prepared, key=lambda pair: (pair[1].row.service, pair[1].row.external_ref))
+        skipped: builtins.list[IdentityRef] = []
+        async with self._space._tx() as tx:
+            fresh: _Prepared = []
+            for svc, item in ordered:
+                existing = await self._space._existing(tx, item.row)
+                if existing is None and await tx.insert_identity(item.row):
+                    fresh.append((svc, item))
+                    continue
+                existing = existing or await self._space._existing(tx, item.row)
+                found_id = existing.identity_id if existing else item.row.id
+                skipped.append(IdentityRef(found_id, svc.name, item.row.external_ref))
+            if skipped and mode is OnConflict.FAIL:
+                refs = ", ".join(f"{ref.service}:{ref.external_ref}" for ref in skipped)
+                raise AlreadyExists("identity", refs)
+            # секреты и связи — после вставки всех строк: связь может вести на соседа по пачке
+            for svc, item in fresh:
+                await self._space._write_children_command(tx, item)
+                await self._space._emit_registered(tx, svc, item, actor=actor)
+            fresh_ids = {item.row.id for _svc, item in fresh}
+            created = [
+                await self._read(tx, item.row.id) for _svc, item in prepared if item.row.id in fresh_ids
+            ]
+        return CreateManyResult(created, skipped)
+
     # ------------------------------------------------------------------ служебное
+
+    def _prepare(self, spec: IdentityCreate) -> tuple[Service, PreparedIdentity]:
+        svc = self._space.hub.service(spec.service)
+        sessions = dict(spec.sessions)
+        if spec.session is not None:
+            if DEFAULT_SLOT in sessions:
+                raise ValidationFailed("session и sessions['default'] заданы одновременно")
+            sessions[DEFAULT_SLOT] = spec.session
+        prepared = prepare_identity(
+            self._space,
+            svc,
+            external_ref=spec.external_ref,
+            identity_id=spec.id,
+            credentials=spec.credentials,
+            sessions=sessions,
+            attributes=spec.attributes,
+            profile=spec.profile,
+            labels=spec.labels,
+            tags=spec.tags,
+            note=spec.note,
+            links=spec.links,
+            lifecycle=spec.lifecycle,
+            auth_state=spec.auth_state,
+        )
+        return svc, prepared
+
+    def _prepare_many(self, items: builtins.list[IdentityCreate]) -> _Prepared:
+        prepared: _Prepared = []
+        errors: builtins.list[str] = []
+        seen_refs: set[tuple[str, str]] = set()
+        seen_ids: set[UUID] = set()
+        for index, spec in enumerate(items):
+            label = f"[{index}] {spec.service_name}:{spec.external_ref}"
+            try:
+                svc, item = self._prepare(spec)
+            except (ValidationFailed, NotFound) as exc:
+                errors.append(f"{label}: {exc}")
+                continue
+            key = (item.row.service, item.row.external_ref)
+            if key in seen_refs or item.row.id in seen_ids:
+                errors.append(f"{label}: повтор в пачке")
+                continue
+            seen_refs.add(key)
+            seen_ids.add(item.row.id)
+            prepared.append((svc, item))
+        if errors:
+            raise ValidationFailed("; ".join(errors))
+        return prepared
+
+    @staticmethod
+    async def _read(tx: StoreTx, identity_id: UUID) -> Identity:
+        row = await tx.get_identity(identity_id)
+        if row is None:  # pragma: no cover - вставлена в этой же транзакции
+            raise NotFound("identity", identity_id)
+        return Identity.from_row(row)
 
     def _query(self, where: IdentityFilter | None) -> SearchQuery:
         if where is None:

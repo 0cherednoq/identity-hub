@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from identity_hub.api.identities import IdentityCreate
 from identity_hub.enums import AuthState, Lifecycle
 from identity_hub.hub import SpaceHandle
 from identity_hub.service import OperationRule, Service
@@ -78,20 +79,22 @@ async def make_identity(
         effective_session = {} if session is None else session
     elif session is None:
         auth_state = AuthState.NO_SESSION
-    result = await space.register(
-        service=service,
-        external_ref=external_ref,
-        id=identity_id,
-        credentials=credentials,
-        session=effective_session,
-        attributes=attributes,
-        profile=profile,
-        labels=labels,
-        tags=tags,
-        note=note,
-        links=links,
-        lifecycle=lifecycle,
-        auth_state=auth_state,
+    identity, _created = await space.identities.ensure(
+        IdentityCreate(
+            service=service,
+            external_ref=external_ref,
+            id=identity_id,
+            credentials=credentials,
+            session=effective_session,
+            attributes=attributes,
+            profile=profile,
+            labels=labels or {},
+            tags=tuple(tags),
+            note=note,
+            links=links or {},
+            lifecycle=lifecycle,
+            auth_state=auth_state,
+        ),
         actor=actor,
     )
-    return result.identity_id
+    return identity.id

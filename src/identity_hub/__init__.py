@@ -1,6 +1,14 @@
 """Публичный API Identity Hub."""
 
-from identity_hub.api.identities import Identity, IdentityFilter, IdentityRef, Page
+from identity_hub.api.identities import (
+    CreateManyResult,
+    Identity,
+    IdentityCreate,
+    IdentityFilter,
+    IdentityRef,
+    OnConflict,
+    Page,
+)
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
 from identity_hub.crypto import EnvSecretsProvider, FileSecretsProvider, StaticSecretsProvider, generate_key
@@ -94,6 +102,7 @@ __all__ = [
     "ChangeSource",
     "Clock",
     "ConcurrentModification",
+    "CreateManyResult",
     "DeliveryStatus",
     "EnvSecretsProvider",
     "ErrorClassifier",
@@ -103,6 +112,7 @@ __all__ = [
     "FileImporter",
     "FileSecretsProvider",
     "Identity",
+    "IdentityCreate",
     "IdentityFilter",
     "IdentityHub",
     "IdentityHubError",
@@ -127,6 +137,7 @@ __all__ = [
     "MetricsHook",
     "NotFound",
     "NullMetrics",
+    "OnConflict",
     "OnExisting",
     "Operation",
     "OperationNotAllowed",

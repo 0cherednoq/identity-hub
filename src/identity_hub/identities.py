@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.crypto import EncryptedPayload, associated_data
 from identity_hub.domain.data import (
     build_search_text,
@@ -118,7 +119,7 @@ def prepare_identity(
 class IdentitiesMixin(SpaceBase):
     """Регистрация и данные аккаунта."""
 
-    async def register(
+    async def _register(
         self,
         *,
         service: Service | str,
@@ -163,43 +164,59 @@ class IdentitiesMixin(SpaceBase):
             auth_state=auth_state,
         )
         async with self._tx() as tx:
+            return await self._create_one(tx, svc, prepared, actor=actor)
+
+    register = legacy(_register, "register")
+
+    async def _create_one(
+        self, tx: Any, svc: Service, prepared: PreparedIdentity, *, actor: str, fail_existing: bool = False
+    ) -> RegisterResult:
+        """Вставить подготовленный аккаунт; существующий вернуть (`created=False`) или бросить."""
+        existing = await self._existing(tx, prepared.row)
+        if existing is None and not await tx.insert_identity(prepared.row):
             existing = await self._existing(tx, prepared.row)
-            if existing is not None:
-                return existing
-            if not await tx.insert_identity(prepared.row):
-                existing = await self._existing(tx, prepared.row)
-                if existing is not None:
-                    return existing
-                raise AlreadyExists("identity", prepared.row.external_ref)  # pragma: no cover
-            await self._write_children(tx, prepared, source=ChangeSource.COMMAND)
-            await self._emit(
-                tx,
+            if existing is None:  # pragma: no cover - конфликт без найденной строки
+                raise AlreadyExists("identity", prepared.row.external_ref)
+        if existing is not None:
+            if fail_existing:
+                raise AlreadyExists(
+                    "identity", f"{prepared.row.service}:{prepared.row.external_ref}", existing.identity_id
+                )
+            return existing
+        await self._write_children(tx, prepared, source=ChangeSource.COMMAND)
+        await self._emit_registered(tx, svc, prepared, actor=actor)
+        return RegisterResult(prepared.row.id, created=True)
+
+    async def _emit_registered(
+        self, tx: Any, svc: Service, prepared: PreparedIdentity, *, actor: str
+    ) -> None:
+        await self._emit(
+            tx,
+            EventDraft(
+                "identity.registered",
+                actor=actor,
+                service=svc.name,
+                identity_id=prepared.row.id,
+                data={
+                    "external_ref": prepared.row.external_ref,
+                    "lifecycle": prepared.row.lifecycle,
+                    "auth": prepared.row.auth_state,
+                    "tags": prepared.row.tags,
+                    "labels": prepared.row.labels,
+                    "links": {role: str(target) for role, target in prepared.links.items()},
+                },
+            ),
+            *(
                 EventDraft(
-                    "identity.registered",
+                    "identity.linked",
                     actor=actor,
                     service=svc.name,
                     identity_id=prepared.row.id,
-                    data={
-                        "external_ref": prepared.row.external_ref,
-                        "lifecycle": prepared.row.lifecycle,
-                        "auth": prepared.row.auth_state,
-                        "tags": prepared.row.tags,
-                        "labels": prepared.row.labels,
-                        "links": {role: str(target) for role, target in prepared.links.items()},
-                    },
-                ),
-                *(
-                    EventDraft(
-                        "identity.linked",
-                        actor=actor,
-                        service=svc.name,
-                        identity_id=prepared.row.id,
-                        data={"role": role, "linked_identity_id": str(target)},
-                    )
-                    for role, target in prepared.links.items()
-                ),
-            )
-        return RegisterResult(prepared.row.id, created=True)
+                    data={"role": role, "linked_identity_id": str(target)},
+                )
+                for role, target in prepared.links.items()
+            ),
+        )
 
     async def _existing(self, tx: Any, row: NewIdentity) -> RegisterResult | None:
         found = await tx.find_identity(row.id, row.service, row.external_ref)
@@ -209,6 +226,9 @@ class IdentitiesMixin(SpaceBase):
         if found_space != tx.space.id:
             raise AlreadyExists("identity", f"{row.service}:{row.external_ref}", found_id)
         return RegisterResult(found_id, created=False)
+
+    async def _write_children_command(self, tx: Any, prepared: PreparedIdentity) -> None:
+        await self._write_children(tx, prepared, source=ChangeSource.COMMAND)
 
     async def _write_children(self, tx: Any, prepared: PreparedIdentity, *, source: ChangeSource) -> None:
         """Секреты, сессии, начальные регионы и связи только что вставленного аккаунта."""

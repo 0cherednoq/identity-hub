@@ -3,57 +3,31 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import AsyncIterator
 from dataclasses import asdict
-from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from tests.conftest import TEST_KEYS
-from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG
+from tests.fixtures.services import FAKE_TG
 
 from identity_hub import (
     AuthState,
     Identity,
+    IdentityCreate,
     IdentityFilter,
     IdentityHub,
     Lifecycle,
     NotFound,
     SpaceHandle,
-    StaticSecretsProvider,
     ValidationFailed,
 )
-from identity_hub.clock import FakeClock
-from identity_hub.testing import MemoryStore
 
 pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
 
 
-@pytest.fixture(params=["memory", "postgres"], ids=["memory", "postgres"])
-async def hub_under_test(
-    request: pytest.FixtureRequest, sessionmaker: async_sessionmaker[AsyncSession]
-) -> AsyncIterator[IdentityHub]:
-    secrets = StaticSecretsProvider(TEST_KEYS, "k1")
-    if request.param == "memory":
-        clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
-        hub = IdentityHub(
-            secrets=secrets, services=[FAKE_TG, FAKE_EXCHANGE], store=MemoryStore(clock), clock=clock
-        )
-    else:
-        hub = IdentityHub(sessionmaker, secrets, [FAKE_TG, FAKE_EXCHANGE])
-    await hub.start()
-    yield hub
-
-
-@pytest.fixture
-def space(hub_under_test: IdentityHub) -> SpaceHandle:
-    return hub_under_test.space(f"s-{uuid4().hex[:8]}")
-
-
-async def _add(space: SpaceHandle, ref: str, **kwargs: object) -> UUID:
-    result = await space.register(service="fake_tg", external_ref=ref, **kwargs)  # type: ignore[arg-type]
-    return result.identity_id
+async def _add(space: SpaceHandle, ref: str, **kwargs: Any) -> UUID:
+    identity = await space.identities.create(IdentityCreate(service="fake_tg", external_ref=ref, **kwargs))
+    return identity.id
 
 
 async def test_get_returns_secret_free_identity(space: SpaceHandle) -> None:

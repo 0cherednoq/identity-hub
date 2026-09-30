@@ -69,7 +69,7 @@
 | `space.record_admin_export` | `space.admin.record_export` | — |  |
 | `space.record_admin_import` | `space.admin.record_import` | — |  |
 | `space.record_admin_integration` | `space.admin.record_integration` | — |  |
-| `space.register` | `space.identities.ensure` | — | Семантика get-or-create сохранена; `identities.create` бросает `AlreadyExists` |
+| `space.register` | `space.identities.ensure` | I8.3 | Семантика get-or-create сохранена; `identities.create` бросает `AlreadyExists` |
 | `space.reindex_search` | `space.maintenance.reindex_search` | — |  |
 | `space.remove_tags` | `space.identities.remove_tags` | — |  |
 | `space.report_proxy_failure` | `space.proxies.report_failure` | — |  |
@@ -108,3 +108,6 @@
 | `space.identities.get_by_ref(service, ref)` | I8.2 | `Identity` или `NotFound` |
 | `space.identities.list(IdentityFilter(...))` | I8.2 | страница по структурированному фильтру |
 | `space.identities.count(IdentityFilter(...))` | I8.2 | число identity по фильтру |
+| `space.identities.create(IdentityCreate(...))` | I8.3 | создаёт; существующая — `AlreadyExists` |
+| `space.identities.ensure(IdentityCreate(...))` | I8.3 | `(Identity, created)`; существующая не меняется |
+| `space.identities.create_many([...], on_conflict=)` | I8.3 | атомарно до 1000 штук, `fail` или `skip` |
