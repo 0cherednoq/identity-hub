@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I0.3 Payload limits, versioned envelope, SecretValue
+- **Начата:** 2026-10-01
 - **Шаги:**
-  - [ ] —
+  - [ ] валидаторы размера и глубины JSON, лимиты секрета и envelope
+  - [ ] применение лимитов на входах до транзакции
+  - [ ] AAD identity-hub:v1 с чтением legacy и переводом при rotate-key
+  - [ ] SecretValue и отказ scrubber
+  - [ ] тесты границ, roundtrip legacy/new, rotate-key
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -32,7 +37,7 @@
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
 | I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
-| I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | todo |  |  |
+| I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | in_progress |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | todo |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | todo |  |  |
 | I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
