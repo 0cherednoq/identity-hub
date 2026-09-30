@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I8.6 API: proxies (group), pools, типизированная аренда
+- **Начата:** 2026-09-30
 - **Шаги:**
-  - [ ] —
+  - [ ] space.proxies с group
+  - [ ] ProxyPolicy.group с алиасом pool
+  - [ ] space.pools: define, revoke; Pool.capacity
+  - [ ] явные сигнатуры Pool.lease/acquire
+  - [ ] алиасы и тесты
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -26,7 +31,7 @@
 | I8.3 | API: space.identities — create/ensure/create_many | I8.2 | done |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | done |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | done |  |  |
-| I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | todo |  |  |
+| I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | in_progress |  |  |
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  |  |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
