@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from identity_hub._space import SpaceBase
 from identity_hub.admin_audit import AdminAuditMixin
 from identity_hub.api.identities import Identities
+from identity_hub.api.imports import Imports
+from identity_hub.api.secrets import Secrets
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
@@ -287,6 +289,16 @@ class SpaceHandle(
 
     Операции разложены по миксинам: регионы — `state.StateMixin`, далее по задачам плана.
     """
+
+    @cached_property
+    def imports(self) -> Imports:
+        """Импорт identity пачками с отчётом (IMP-23)."""
+        return Imports(self)
+
+    @cached_property
+    def secrets(self) -> Secrets:
+        """Секреты identity вне аренды: метаданные, замена, раскрытие с аудитом (IMP-23)."""
+        return Secrets(self)
 
     @cached_property
     def identities(self) -> Identities:

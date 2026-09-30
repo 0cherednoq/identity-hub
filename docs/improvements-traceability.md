@@ -34,7 +34,7 @@ Scope зафиксирован решением `D-142`. Задачи — в
 | IMP-20 | `run_once(limit)` для фоновых работ | I5.2 | partial | planned: `tests/pg/test_workers.py::test_run_once_respects_limit`. Сейчас `Dispatcher.run_once()` без `limit` и без фасада `hub.workers` |
 | IMP-21 | Ordered outbox | I5.3 | missing | planned: `tests/pg/test_ordered_outbox.py::test_next_revision_waits` |
 | IMP-22 | RuntimeProfile | — | deferred | post-v1, отдельный запрос владельца |
-| IMP-23 | Публичное API: неймспейсы и глаголы | I8.1–I8.10 | partial | `tests/test_space_surface.py::test_space_surface_allowlist`, `tests/test_space_surface.py::test_migration_doc_matches_legacy_map`. Готовы каркас (I8.1), чтение (I8.2), создание (I8.3), изменение и состояние (I8.4) в `space.identities`; `tests/conformance/test_identities_create.py::test_create_many_is_atomic_on_invalid_record` |
+| IMP-23 | Публичное API: неймспейсы и глаголы | I8.1–I8.10 | partial | `tests/test_space_surface.py::test_space_surface_allowlist`, `tests/test_space_surface.py::test_migration_doc_matches_legacy_map`. Готовы каркас (I8.1), чтение (I8.2), создание (I8.3), изменение и состояние (I8.4) в `space.identities`, `space.imports` и `space.secrets` (I8.5); `tests/conformance/test_identities_create.py::test_create_many_is_atomic_on_invalid_record` |
 
 ## Baseline перед очередью (2026-09-30)
 

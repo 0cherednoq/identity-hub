@@ -276,7 +276,7 @@ class CardsMixin(SpaceBase):
 
     identity_card = legacy(_identity_card, "identity_card")
 
-    async def access_card(self, identity_id: UUID) -> AccessCard:
+    async def _access_card(self, identity_id: UUID) -> AccessCard:
         """Secret-free credential/session metadata for an account card."""
         async with self._tx(own=True) as tx:
             await self._identity(tx, identity_id)
@@ -295,6 +295,8 @@ class CardsMixin(SpaceBase):
                 for row in sessions
             ],
         )
+
+    access_card = legacy(_access_card, "access_card")
 
     async def pool_summary(self, service: str | None = None) -> dict[str, dict[str, dict[str, int]]]:
         """Число аккаунтов по сервису и значениям регионов (FR-11.6): service → регион → значение → n."""

@@ -13,7 +13,7 @@
 
 | Было | Стало | Готово | Примечание |
 |---|---|---|---|
-| `space.access_card` | `space.secrets.describe` | — | Метаданные credentials и sessions без секретов |
+| `space.access_card` | `space.secrets.describe` | I8.5 | Метаданные credentials и sessions без секретов |
 | `space.account_search` | `space.admin.identity_page` | — | Read-модель админки |
 | `space.account_selection_snapshot` | `space.admin.selection_snapshot` | — | Замороженный набор id+revision для bulk-действий админки |
 | `space.add_proxies` | `space.proxies.create_many` | — | `pool=` → `group=` |
@@ -28,7 +28,7 @@
 | `space.analytics_time_to` | `space.analytics.time_to` | — |  |
 | `space.analytics_utilization` | `space.analytics.utilization` | — |  |
 | `space.answer_challenge` | `space.auth.answer_challenge` | — |  |
-| `space.cancel_import` | `space.imports.cancel` | — |  |
+| `space.cancel_import` | `space.imports.cancel` | I8.5 |  |
 | `space.delete` | `space.identities.delete` | I8.4 |  |
 | `space.delivery_center` | `space.admin.delivery_center` | — |  |
 | `space.event_detail` | `space.admin.event_detail` | — |  |
@@ -39,9 +39,9 @@
 | `space.human_queue` | `space.admin.human_queue` | — |  |
 | `space.identity_card` | `space.identities.card` | I8.2 | Состояние, квоты, аренда, blockers; лёгкий объект — `identities.get` |
 | `space.impact_of` | `space.links.impact` | — |  |
-| `space.import_files` | `space.imports.run_files` | — |  |
-| `space.import_many` | `space.imports.run` | — | Параметры и `ImportReport` без изменений; для простого атомарного создания — `identities.create_many` |
-| `space.import_run` | `space.imports.get` | — |  |
+| `space.import_files` | `space.imports.run_files` | I8.5 |  |
+| `space.import_many` | `space.imports.run` | I8.5 | Параметры и `ImportReport` без изменений; для простого атомарного создания — `identities.create_many` |
+| `space.import_run` | `space.imports.get` | I8.5 |  |
 | `space.import_runs` | `space.admin.import_runs` | — |  |
 | `space.lease_dashboard` | `space.admin.lease_dashboard` | — |  |
 | `space.lease_history` | `space.admin.lease_history` | — |  |
@@ -78,7 +78,7 @@
 | `space.restore_standing` | `space.identities.restore_standing` | I8.4 |  |
 | `space.resync` | `space.sync.refresh` | — | Одна проба одного identity |
 | `space.retire` | `space.identities.retire` | I8.4 |  |
-| `space.reveal_secret` | `space.secrets.reveal` | — | Поле задаётся `SecretRef`, строки временно принимаются |
+| `space.reveal_secret` | `space.secrets.reveal` | I8.5 | Поле задаётся `SecretRef`, строки временно принимаются |
 | `space.review_verification` | `space.verifications.review` | — |  |
 | `space.revoke_lease` | `space.pools.revoke` | — |  |
 | `space.run_login` | `space.auth.login` | — | Возвращает `LoginOutcome` (`StrEnum`, значения прежние) |
@@ -91,12 +91,12 @@
 | `space.set_note` | `space.identities.set_note` | I8.4 |  |
 | `space.set_tags` | `space.identities.set_tags` | I8.4 |  |
 | `space.space_overview` | `space.admin.overview` | — |  |
-| `space.stage_import` | `space.imports.stage` | — |  |
+| `space.stage_import` | `space.imports.stage` | I8.5 |  |
 | `space.unlink` | `space.links.remove` | — |  |
 | `space.unpin` | `space.identities.unpin` | I8.4 |  |
-| `space.update_credentials` | `space.secrets.replace_credentials` | — | Полная замена, как и раньше |
+| `space.update_credentials` | `space.secrets.replace_credentials` | I8.5 | Полная замена, как и раньше |
 | `space.update_profile` | `space.identities.update` | I8.4 | Слияние; `replace=True` → `identities.replace_profile` |
-| `space.update_session` | `space.secrets.replace_session` | — | Вне аренды; под арендой — `lease.save_session` |
+| `space.update_session` | `space.secrets.replace_session` | I8.5 | Вне аренды; под арендой — `lease.save_session` |
 | `space.verification_status` | `space.verifications.status` | — |  |
 
 ## Новое без старого аналога
@@ -114,3 +114,4 @@
 | `space.identities.activate(id, actor=)` | I8.4 | перевести в работу (`lifecycle → ready`), пара к `retire` |
 | `space.identities.update(id, labels=, note=)` | I8.4 | слияние меток и замена заметки одной транзакцией и одним событием |
 | `space.identities.replace_profile(id, ...)` | I8.4 | полная замена профиля (бывш. `update_profile(replace=True)`) |
+| `SecretRef.CREDENTIALS / SecretRef.session(slot) / SecretRef.PROFILE / SecretRef.evidence(factor)` | I8.5 | типизированная ссылка на секрет для `secrets.reveal` |

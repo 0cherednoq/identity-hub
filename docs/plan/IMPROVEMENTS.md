@@ -530,10 +530,10 @@ space.maintenance  # expire_challenges, expire_verifications, reindex_search
 
 **Контракты.**
 
-- `IdentityCreate` — pydantic-модель: `service`, `external_ref`, `id`, `credentials`, `sessions`,
+- `IdentityCreate` — frozen dataclass (секреты не попадают в `repr`): `service`, `external_ref`, `id`, `credentials`, `sessions`,
   `profile`, `attributes`, `tags`, `labels`, `note`, `links: Mapping[str, UUID]`, `lifecycle`,
   `auth_state`. Общая для `create`, `ensure`, `create_many`.
-- `ImportRecord(IdentityCreate)` добавляет только то, что нужно импорту: ссылки по строковому
+- `ImportRecord` — отдельный тип (`D-144`), общие поля совпадают с `IdentityCreate`; добавляет ссылки по строковому
   ref (в том числе внутри пачки), `proxy`, начальные `verifications`. Импорт сохраняет
   `on_existing`, `verify_sessions`, `on_batch_committed`, `run_id` и `ImportReport`
   (`created`/`updated`/`skipped`/`failed`).

@@ -18,6 +18,7 @@ import pydantic_core
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
+from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle
@@ -92,7 +93,7 @@ class _Prepared:
 
 
 class ImportingMixin(SpaceBase):
-    async def import_many(
+    async def _import_many(
         self,
         *,
         service: Service | str,
@@ -122,7 +123,7 @@ class ImportingMixin(SpaceBase):
             )
         return report
 
-    async def import_files(
+    async def _import_files(
         self, *, service: Service | str, paths: Iterable[str | Path], **kwargs: Any
     ) -> ImportReport:
         """Импорт файлов импортёрами сервиса (`.session`, tdata, JSON с cookies — FR-2.6)."""
@@ -137,11 +138,11 @@ class ImportingMixin(SpaceBase):
                 async for record in importer.read(path):
                     yield record
 
-        return await self.import_many(service=svc, records=records(), **kwargs)
+        return await self._import_many(service=svc, records=records(), **kwargs)
 
     # --------------------------------------------------------- пачка
 
-    async def stage_import(
+    async def _stage_import(
         self,
         *,
         service: Service | str,
@@ -209,10 +210,15 @@ class ImportingMixin(SpaceBase):
             raise AlreadyExists("import_run", import_id)
         return import_id
 
-    async def cancel_import(self, run_id: UUID) -> bool:
+    async def _cancel_import(self, run_id: UUID) -> bool:
         """Request cancellation; an in-flight batch is allowed to finish."""
         async with self._tx() as tx:
             return await tx.request_import_cancel(run_id) is not None
+
+    import_many = legacy(_import_many, "import_many")
+    import_files = legacy(_import_files, "import_files")
+    stage_import = legacy(_stage_import, "stage_import")
+    cancel_import = legacy(_cancel_import, "cancel_import")
 
     async def _import_batch(
         self,
@@ -509,7 +515,7 @@ class ImportRunner:
                     pending.append((item, record))
         if not pending:
             return results
-        report = await handle.import_many(
+        report = await handle._import_many(
             service=run.service,
             records=[record for _, record in pending],
             batch_size=len(pending),

@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase
+from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data, reveal
 from identity_hub.domain.data import validate_model
 from identity_hub.errors import NotFound, ValidationFailed
@@ -23,7 +24,7 @@ __all__ = ["SecretsAdminMixin"]
 
 
 class SecretsAdminMixin(SpaceBase):
-    async def update_credentials(
+    async def _update_credentials(
         self, identity_id: UUID, credentials: BaseModel | Mapping[str, Any], *, actor: str
     ) -> None:
         """Заменить credentials (валидация схемой сервиса, шифрование до транзакции)."""
@@ -45,7 +46,7 @@ class SecretsAdminMixin(SpaceBase):
                 ),
             )
 
-    async def update_session(
+    async def _update_session(
         self,
         identity_id: UUID,
         session: BaseModel | Mapping[str, Any],
@@ -83,7 +84,7 @@ class SecretsAdminMixin(SpaceBase):
                 ),
             )
 
-    async def reveal_secret(
+    async def _reveal_secret(
         self, identity_id: UUID, field: str, *, actor: str, reason: str | None = None
     ) -> dict[str, Any]:
         """Раскрыть секрет для админки: `credentials`, `session[:slot]`, `profile`, `evidence:<factor>`.
@@ -149,3 +150,7 @@ class SecretsAdminMixin(SpaceBase):
             )
         revealed: dict[str, Any] = reveal(value)
         return revealed
+
+    update_credentials = legacy(_update_credentials, "update_credentials")
+    update_session = legacy(_update_session, "update_session")
+    reveal_secret = legacy(_reveal_secret, "reveal_secret")

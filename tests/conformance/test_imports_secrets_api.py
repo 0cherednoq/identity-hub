@@ -1,0 +1,128 @@
+"""IMP-23 (I8.5): `space.imports` и `space.secrets` на MemoryStore и PostgreSQL."""
+
+from __future__ import annotations
+
+import warnings
+from uuid import uuid4
+
+import pytest
+
+from identity_hub import (
+    IdentityCreate,
+    ImportRecord,
+    Lifecycle,
+    NotFound,
+    SecretRef,
+    SpaceHandle,
+    ValidationFailed,
+)
+
+pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+
+
+async def test_run_reports_and_resolves_links_by_ref(space: SpaceHandle) -> None:
+    records = [
+        ImportRecord(external_ref="+10", links={"recovery": "+11"}, tags=frozenset({"batch"})),
+        ImportRecord(external_ref="+11", sessions={"default": {"auth_key": "k"}}),
+    ]
+
+    report = await space.imports.run(service="fake_tg", records=records)
+    again = await space.imports.run(service="fake_tg", records=records)
+
+    assert len(report.created) == 2 and report.failed == []
+    assert [ref for ref, _ in again.skipped] == ["+10", "+11"]
+    first = await space.identities.get_by_ref("fake_tg", "+10")
+    second = await space.identities.get_by_ref("fake_tg", "+11")
+    assert first.lifecycle is Lifecycle.PROVISIONING  # FR-2.5: импорт не переводит в ready
+    card = await space.identities.card(first.id)
+    assert [(link.role, link.identity_id) for link in card.links.outgoing] == [("recovery", second.id)]
+
+
+async def test_run_partial_failure_keeps_valid_records(space: SpaceHandle) -> None:
+    report = await space.imports.run(
+        service="fake_tg",
+        records=[
+            ImportRecord(external_ref="+20"),
+            ImportRecord(external_ref="+21", profile={"birthday": "x"}),
+        ],
+    )
+    assert len(report.created) == 1
+    assert [ref for ref, _ in report.failed] == ["+21"]
+
+
+async def test_stage_get_and_cancel(space: SpaceHandle) -> None:
+    run_id = await space.imports.stage(
+        service="fake_tg", records=[ImportRecord(external_ref="+30")], source="upload.csv"
+    )
+
+    info = await space.imports.get(run_id)
+    assert info.id == run_id and info.total == 1
+    assert await space.imports.cancel(run_id) is True
+    with pytest.raises(NotFound):
+        await space.imports.get(uuid4())
+
+
+async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
+    identity = await space.identities.create(
+        IdentityCreate(
+            service="fake_tg",
+            external_ref="+40",
+            credentials={"phone": "+40", "password": "old-pass"},
+            sessions={"default": {"auth_key": "k1"}, "web": {"auth_key": "k2"}},
+        )
+    )
+
+    card = await space.secrets.describe(identity.id)
+    assert card.credential.present
+    assert sorted(s.slot for s in card.sessions) == ["default", "web"]
+    assert "old-pass" not in repr(card) and "k1" not in repr(card)
+
+    creds = await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin", reason="проверка")
+    web = await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin")
+    legacy_string = await space.secrets.reveal(identity.id, "session:web", actor="admin")
+    assert creds["password"] == "old-pass"
+    assert web == legacy_string and web["auth_key"] == "k2"
+
+    await space.secrets.replace_credentials(
+        identity.id, {"phone": "+40", "password": "new-pass"}, actor="admin"
+    )
+    await space.secrets.replace_session(identity.id, {"auth_key": "k3"}, actor="admin", slot="web")
+    assert (await space.secrets.reveal(identity.id, "credentials", actor="admin"))["password"] == "new-pass"
+    assert (await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin"))[
+        "auth_key"
+    ] == "k3"
+    # каждое раскрытие и замена — событие identity: аудит не теряется
+    assert (await space.identities.get(identity.id)).revision >= identity.revision + 6
+
+
+async def test_reveal_missing_and_unknown(space: SpaceHandle) -> None:
+    identity = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+50"))
+    with pytest.raises(NotFound):
+        await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin")
+    with pytest.raises(ValidationFailed):
+        await space.secrets.reveal(identity.id, "password", actor="admin")
+    with pytest.raises(ValidationFailed):
+        SecretRef.evidence("")
+
+
+def test_secret_ref_string_forms() -> None:
+    assert str(SecretRef.CREDENTIALS) == "credentials"
+    assert str(SecretRef.session()) == "session:default"
+    assert str(SecretRef.evidence("kyc")) == "evidence:kyc"
+    assert SecretRef.parse("session:web") == SecretRef.session("web")
+
+
+async def test_legacy_import_and_secret_names_warn(space: SpaceHandle) -> None:
+    with pytest.warns(DeprecationWarning, match=r"space\.imports\.run"):
+        report = await space.import_many(service="fake_tg", records=[ImportRecord(external_ref="+60")])
+    identity_id = report.created[0]
+    with pytest.warns(DeprecationWarning, match=r"space\.secrets\.describe"):
+        await space.access_card(identity_id)
+    with pytest.warns(DeprecationWarning, match=r"space\.secrets\.replace_credentials"):
+        await space.update_credentials(
+            identity_id, {"phone": "+60", "password": "zz-secret-99"}, actor="admin"
+        )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await space.reveal_secret(identity_id, "credentials", actor="admin")
+    assert len(caught) == 1 and "zz-secret-99" not in str(caught[0].message)

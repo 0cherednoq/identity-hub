@@ -12,7 +12,7 @@ __all__ = ["LEGACY", "NAMESPACES", "PERMANENT"]
 PERMANENT: frozenset[str] = frozenset({"notifications", "ref", "using", "webhooks"})
 
 # Неймспейсы, уже доступные на `SpaceHandle`; каждая задача I8 добавляет свои.
-NAMESPACES: frozenset[str] = frozenset({"identities"})
+NAMESPACES: frozenset[str] = frozenset({"identities", "imports", "secrets"})
 
 # Старое имя → новое (относительно `space.`).
 LEGACY: dict[str, str] = {

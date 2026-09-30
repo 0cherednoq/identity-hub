@@ -550,8 +550,8 @@ I8.1–I8.9 стоят в прогрессе перед I0.2, а I8.10 — пе�
 
 ### I8.5 `space.imports` и `space.secrets`
 
-- `ImportRecord(IdentityCreate)` с `links_by_ref`, `proxy`, `verifications`. Строковые значения
-  в `links` принимаются с `DeprecationWarning` и переносятся в `links_by_ref`.
+- `ImportRecord` остаётся отдельным типом (`D-144`): общие поля совпадают с `IdentityCreate`,
+  `links` — строковые ref, импорт всегда создаёт `provisioning`.
 - `imports.run` (бывш. `import_many`, все параметры и `ImportReport` без изменений),
   `run_files`, `stage`, `get(run_id)`, `cancel(run_id)`.
 - `secrets.describe(id)` (бывш. `access_card`), `secrets.reveal(id, SecretRef, *, actor,

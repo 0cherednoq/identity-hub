@@ -9,6 +9,7 @@ from identity_hub.api.identities import (
     OnConflict,
     Page,
 )
+from identity_hub.api.secrets import SecretRef
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
 from identity_hub.crypto import EnvSecretsProvider, FileSecretsProvider, StaticSecretsProvider, generate_key
@@ -157,6 +158,7 @@ __all__ = [
     "QuotaExhausted",
     "RecordingMetrics",
     "Retention",
+    "SecretRef",
     "SecretsProvider",
     "Service",
     "SessionStatus",
