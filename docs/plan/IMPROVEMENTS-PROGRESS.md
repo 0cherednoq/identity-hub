@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I8.3 API: space.identities — create/ensure/create_many
+- **Начата:** 2026-09-30
 - **Шаги:**
-  - [ ] —
+  - [ ] модель IdentityCreate
+  - [ ] create и ensure поверх регистрации
+  - [ ] create_many: валидация, одна транзакция, on_conflict
+  - [ ] алиас register
+  - [ ] тесты: атомарность, конфликты, гонка pg
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -23,7 +28,7 @@
 | I0.1 | Scope и воспроизводимый baseline | — | done |  |  |
 | I8.1 | API: каркас неймспейсов, allowlist, таблица миграции | I0.1 | done |  |  |
 | I8.2 | API: space.identities — чтение | I8.1 | done |  |  |
-| I8.3 | API: space.identities — create/ensure/create_many | I8.2 | todo |  |  |
+| I8.3 | API: space.identities — create/ensure/create_many | I8.2 | in_progress |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | todo |  |  |
 | I8.5 | API: space.imports и space.secrets | I8.3 | todo |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | todo |  |  |
