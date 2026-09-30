@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I8.5 API: space.imports и space.secrets
+- **Начата:** 2026-09-30
 - **Шаги:**
-  - [ ] —
+  - [ ] ImportRecord наследует IdentityCreate, links_by_ref
+  - [ ] space.imports: run, run_files, stage, get, cancel
+  - [ ] space.secrets: describe, reveal(SecretRef), replace_credentials, replace_session
+  - [ ] алиасы и внутренние вызовы
+  - [ ] тесты импорта и секретов
+  - [ ] check.sh и закрытие
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -25,7 +30,7 @@
 | I8.2 | API: space.identities — чтение | I8.1 | done |  |  |
 | I8.3 | API: space.identities — create/ensure/create_many | I8.2 | done |  |  |
 | I8.4 | API: space.identities — изменение и состояние | I8.2 | done |  |  |
-| I8.5 | API: space.imports и space.secrets | I8.3 | todo |  |  |
+| I8.5 | API: space.imports и space.secrets | I8.3 | in_progress |  |  |
 | I8.6 | API: proxies (group), pools, типизированная аренда | I8.1 | todo |  |  |
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  |  |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
