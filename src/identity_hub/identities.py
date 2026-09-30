@@ -16,6 +16,7 @@ from identity_hub.crypto import EncryptedPayload, associated_data
 from identity_hub.domain.data import (
     build_search_text,
     split_profile,
+    validate_json_payload,
     validate_labels,
     validate_model,
     validate_tags,
@@ -87,6 +88,9 @@ def prepare_identity(
     open_profile, secret_profile = split_profile(service, profile_model)
     clean_labels = validate_labels(labels or {})
     clean_tags = validate_tags(tags)
+    validate_json_payload(attrs, "attributes")
+    validate_json_payload(profile_model.model_dump(mode="json"), "profile")
+    validate_json_payload(clean_labels, "labels")
 
     creds_payload = None
     if credentials is not None:
@@ -276,6 +280,7 @@ class IdentitiesMixin(SpaceBase):
         self, identity_id: UUID, labels: Mapping[str, Any], *, merge: bool = False, actor: str = "system"
     ) -> IdentityRow:
         """Метки для фильтров (FR-3.3). `merge=True` — дополнить; значение None удаляет ключ."""
+        validate_json_payload(dict(labels), "labels")
 
         def mutate(row: IdentityRow, _: dict[str, Any]) -> dict[str, Any]:
             base = dict(row.labels) if merge else {}
@@ -312,6 +317,10 @@ class IdentitiesMixin(SpaceBase):
         self, identity_id: UUID, attributes: BaseModel | Mapping[str, Any], *, actor: str = "system"
     ) -> IdentityRow:
         """Технические параметры, валидируются схемой сервиса (FR-3.1)."""
+        validate_json_payload(
+            attributes.model_dump(mode="json") if isinstance(attributes, BaseModel) else dict(attributes),
+            "attributes",
+        )
 
         def mutate(row: IdentityRow, _: dict[str, Any]) -> dict[str, Any]:
             schema = self.hub.service(row.service).attributes
@@ -328,6 +337,9 @@ class IdentitiesMixin(SpaceBase):
         actor: str = "system",
     ) -> IdentityRow:
         """Профиль персоны (FR-3.2): слияние с текущим (или замена), валидация схемой сервиса."""
+        validate_json_payload(
+            changes.model_dump(mode="json") if isinstance(changes, BaseModel) else dict(changes), "profile"
+        )
 
         def mutate(row: IdentityRow, current: dict[str, Any]) -> dict[str, Any]:
             service = self.hub.service(row.service)
@@ -367,6 +379,10 @@ class IdentitiesMixin(SpaceBase):
         profile_changes = (
             profile.model_dump(exclude_unset=True) if isinstance(profile, BaseModel) else profile
         )
+        if profile_changes is not None:
+            validate_json_payload(profile_changes, "profile")
+        if labels is not None:
+            validate_json_payload(dict(labels), "labels")
 
         def mutate(row: IdentityRow, current: dict[str, Any]) -> dict[str, Any]:
             values: dict[str, Any] = {}
@@ -441,6 +457,9 @@ class IdentitiesMixin(SpaceBase):
                     aad = associated_data("ih_identities", identity_id, "profile")
                     profile |= self.hub.envelope.open_json(secret, aad)
             values = mutate(row, profile)
+            for field in ("profile", "labels", "attributes"):
+                if field in values:
+                    validate_json_payload(values[field], field)
             has_secret = _PROFILE_SECRET in values
             secret_payload = values.pop(_PROFILE_SECRET, None)
             changed = sorted(k for k, v in values.items() if getattr(row, k) != v)

@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I0.3 Payload limits, versioned envelope, SecretValue
-- **Начата:** 2026-10-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] валидаторы размера и глубины JSON, лимиты секрета и envelope
-  - [ ] применение лимитов на входах до транзакции
-  - [ ] AAD identity-hub:v1 с чтением legacy и переводом при rotate-key
-  - [ ] SecretValue и отказ scrubber
-  - [ ] тесты границ, roundtrip legacy/new, rotate-key
-  - [ ] check.sh и закрытие
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -38,7 +33,7 @@
 | I8.9 | API: руководство и примеры на новом API | I8.8b | todo |  |  |
 | I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
-| I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | in_progress |  |  |
+| I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | done |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | todo |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | todo |  |  |
 | I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
@@ -66,7 +61,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 11 / 40 done
+**Итого:** 12 / 40 done
 
 ## Журнал сессий
 
@@ -83,3 +78,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-09-30 · I8.7 · done · space.auth (LoginOutcome), sync.refresh/refresh_many, links, data, verifications + requirements; 15 алиасов; conformance memory+pg и онбординг на новых именах (параллельная ветка) · дальше I8.8
 2026-10-01 · I0.2b · done · исправлен deadlock импорта update_session (lock_identities по UUID), docs/lock-order.md, import-linter (3 контракта) в check.sh · дальше I0.3
 2026-10-01 · I8.8a · done · space.admin (22 read-модели и аудит), space.analytics (7), space.maintenance (SpaceMaintenance, 3); 32 алиаса, внутренние вызовы переведены; разбиение D-147 · дальше I8.8b
+2026-10-01 · I0.3 · done · AAD identity-hub:v1 с чтением legacy и переводом в rotate-key, лимиты JSON/секрета до транзакции, SecretValue, D-148 · дальше I0.4

@@ -8,6 +8,7 @@ from identity_hub.crypto.providers import (
     generate_key,
     parse_keys,
 )
+from identity_hub.crypto.secret_value import SecretValue
 
 __all__ = [
     "DecryptionFailed",
@@ -15,6 +16,7 @@ __all__ = [
     "EnvSecretsProvider",
     "Envelope",
     "FileSecretsProvider",
+    "SecretValue",
     "StaticSecretsProvider",
     "associated_data",
     "generate_key",

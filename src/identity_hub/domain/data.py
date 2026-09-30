@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 from uuid import UUID
 
+import pydantic_core
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
@@ -14,10 +15,14 @@ from identity_hub.errors import ValidationFailed
 from identity_hub.service import Service
 
 __all__ = [
+    "MAX_JSON_BYTES",
+    "MAX_JSON_DEPTH",
     "LabelValue",
     "build_search_text",
+    "json_depth",
     "short_id",
     "split_profile",
+    "validate_json_payload",
     "validate_labels",
     "validate_model",
     "validate_tags",
@@ -28,6 +33,8 @@ LabelValue = str | int | float | bool
 _KEY = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 _TAG = re.compile(r"^[A-Za-z0-9_.:\-]{1,64}$")
 MAX_LABEL_VALUE = 256
+MAX_JSON_BYTES = 64 * 1024
+MAX_JSON_DEPTH = 16
 
 
 def validate_labels(labels: Mapping[str, Any]) -> dict[str, LabelValue]:
@@ -48,6 +55,28 @@ def validate_labels(labels: Mapping[str, Any]) -> dict[str, LabelValue]:
     if errors:
         raise ValidationFailed("некорректные метки", errors)
     return result
+
+
+def json_depth(value: Any) -> int:
+    """Глубина вложенности JSON: скаляр — 0, `{}`/`[]` — 1."""
+    if isinstance(value, Mapping):
+        return 1 + max((json_depth(v) for v in value.values()), default=0)
+    if isinstance(value, list | tuple):
+        return 1 + max((json_depth(v) for v in value), default=0)
+    return 0
+
+
+def validate_json_payload(value: Any, what: str) -> None:
+    """Лимиты открытого JSON (IMP-16): до 64 KiB в закодированном виде и до 16 уровней.
+
+    Проверка идёт до открытия транзакции; в сообщение попадают только размер и глубина.
+    """
+    depth = json_depth(value)
+    if depth > MAX_JSON_DEPTH:
+        raise ValidationFailed(f"{what}: вложенность {depth} больше {MAX_JSON_DEPTH}")
+    size = len(pydantic_core.to_json(value))
+    if size > MAX_JSON_BYTES:
+        raise ValidationFailed(f"{what}: {size} байт больше {MAX_JSON_BYTES // 1024} KiB")
 
 
 def validate_tags(tags: Iterable[str]) -> list[str]:

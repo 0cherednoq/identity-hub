@@ -27,7 +27,7 @@ Scope зафиксирован решением `D-142`. Задачи — в
 | IMP-13 | Модель ошибок с кодами | I0.2a | partial | `tests/unit/test_error_codes.py::test_every_error_has_stable_code`, `tests/unit/test_error_codes.py::test_http_and_exit_mapping`. Коды, context, HTTP/CLI готовы (I0.2a); `pinned_by_override`/`stale_observation` появятся, когда наблюдения начнут отклоняться явно (I4.3) |
 | IMP-14 | Порядок блокировок | I0.2b | implemented | `tests/pg/test_lock_order.py::test_reverse_order_no_deadlock`, `tests/pg/test_lock_order.py::test_lock_identities_orders_by_uuid`. Порядок описан в `docs/lock-order.md` |
 | IMP-15 | Проверка схемы при старте | I0.4 | missing | planned: `tests/pg/test_schema_check.py::test_old_revision_rejected` |
-| IMP-16 | Лимиты payload и версия envelope | I0.3 | missing | planned: `tests/unit/test_payload_limits.py::test_json_depth_limit` |
+| IMP-16 | Лимиты payload и версия envelope | I0.3 | implemented | `tests/unit/test_payload_limits.py::test_json_depth_limit`, `tests/unit/test_payload_limits.py::test_legacy_payload_is_readable_and_new_writes_use_v1`, `tests/pg/test_envelope_upgrade.py::test_rotate_key_upgrades_legacy_credentials` |
 | IMP-17 | Load harness с инвариантами | I6.4 | partial | planned: `tests/load/test_performance.py::test_lease_p95_10k_accounts_50_workers` без xfail. Сейчас бюджеты помечаются xfail по `D-127` |
 | IMP-18 | Детерминированные race-тесты | I6.5 | missing | planned: `tests/pg/test_race_matrix.py::test_race_matrix` |
 | IMP-19 | Import-linter и архитектурные тесты | I0.2b | implemented | `tests/test_architecture.py::test_import_contracts`, `tests/test_public_api.py::test_all_exports_exist_are_unique_and_public`. Контракты в `pyproject.toml`, `lint-imports` в `scripts/check.sh` |

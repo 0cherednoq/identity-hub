@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 from uuid import UUID
 
+from identity_hub.domain.data import validate_json_payload
 from identity_hub.errors import NotFound
 from identity_hub.events import EventDraft, scrub
 from identity_hub.store.base import IdentityRow, SpaceRef, StoreTx
@@ -74,6 +75,8 @@ class SpaceBase:
         """Записать события в транзакции операции; данные очищаются от секретов (S-8)."""
         strict = self.hub.strict_events
         clean = [replace(d, data=scrub(d.data, strict=strict)) for d in drafts]
+        for draft in clean:
+            validate_json_payload(draft.data, f"событие {draft.type}")
         return await tx.emit(clean)
 
     @staticmethod

@@ -12,6 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, SecretBytes, SecretStr
 
+from identity_hub.crypto.secret_value import SecretValue
 from identity_hub.enums import Severity
 
 __all__ = [
@@ -158,7 +159,7 @@ def scrub(data: Mapping[str, Any], *, strict: bool = False) -> dict[str, Any]:
 def _scrub_value(key: str, value: Any, strict: bool) -> Any:
     if _SECRET_KEY.search(key) and value is not None:
         return _leak(f"ключ {key!r}", strict)
-    if isinstance(value, SecretStr | SecretBytes | bytes | bytearray | memoryview):
+    if isinstance(value, SecretStr | SecretBytes | SecretValue | bytes | bytearray | memoryview):
         return _leak(f"значение {key!r} типа {type(value).__name__}", strict)
     if isinstance(value, BaseModel):
         return _leak(f"модель {type(value).__name__} в {key!r}", strict)

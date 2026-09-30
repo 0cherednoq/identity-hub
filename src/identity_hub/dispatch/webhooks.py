@@ -19,6 +19,7 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
 from identity_hub.crypto import associated_data
+from identity_hub.domain.data import validate_json_payload
 from identity_hub.enums import Severity
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import Event, matches_any, severity_at_least, spec_of
@@ -231,6 +232,7 @@ class Webhooks:
     ) -> WebhookEndpoint:
         url = validate_webhook_url(url, dev_hosts=self.space.hub.webhook_dev_hosts)
         patterns = _validated_patterns(event_types)
+        validate_json_payload(dict(filter or {}), "filter")
         if not secret.get_secret_value():
             raise ValidationFailed("секрет вебхука не может быть пустым")
         endpoint_id = id or new_id()
@@ -262,6 +264,7 @@ class Webhooks:
         description: str | None = None,
     ) -> None:
         url = validate_webhook_url(url, dev_hosts=self.space.hub.webhook_dev_hosts)
+        validate_json_payload(dict(filter or {}), "filter")
         async with self.space._tx() as tx:
             changed = await tx.update_webhook_endpoint(
                 endpoint_id,

@@ -4611,15 +4611,14 @@ class PgStore(Store):
                         row[f"{prefix}nonce"],
                         row[f"{prefix}ciphertext"],
                     )
-                    rotated = envelope.rewrap(payload, aad_of(row))
+                    # у challenge тем же DEK зашифрован ответ — формат AAD не меняем
+                    rotated = envelope.rewrap(payload, aad_of(row), upgrade=name != "challenges")
                     await session.execute(
                         update(table)
                         .where(*[column == row[column.name] for column in table.primary_key.columns])
                         .values(
-                            **{
-                                f"{prefix}key_id": rotated.key_id,
-                                f"{prefix}wrapped_dek": rotated.wrapped_dek,
-                            }
+                            # nonce и шифротекст меняются, когда строка переходит на AAD v1 (IMP-16)
+                            **rotated.columns(prefix)
                         ),
                         execution_options=self.options,
                     )

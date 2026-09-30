@@ -14,7 +14,13 @@ from identity_hub.api.secrets import SecretRef
 from identity_hub.auth import LoginOutcome, LoginReport
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
-from identity_hub.crypto import EnvSecretsProvider, FileSecretsProvider, StaticSecretsProvider, generate_key
+from identity_hub.crypto import (
+    EnvSecretsProvider,
+    FileSecretsProvider,
+    SecretValue,
+    StaticSecretsProvider,
+    generate_key,
+)
 from identity_hub.dispatch.notifications import (
     TelegramRateLimited,
     TelegramRejected,
@@ -185,6 +191,7 @@ __all__ = [
     "SchemaIncompatible",
     "SecretConfigurationError",
     "SecretRef",
+    "SecretValue",
     "SecretsProvider",
     "Service",
     "SessionStatus",

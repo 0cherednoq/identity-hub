@@ -8,6 +8,7 @@
 
 ### Added
 
+- `SecretValue`: секрет со скрытым `repr`/`str`, без JSON и pickle; scrubber событий его отвергает.
 - Ресурсные неймспейсы пространства (`space.identities`, `space.imports`, `space.secrets`,
   `space.proxies`, `space.pools`) с единой конвенцией глаголов; соответствие старых имён —
   [`docs/api-migration.md`](docs/api-migration.md).
@@ -19,6 +20,8 @@
 
 ### Changed
 
+- Associated data шифрования в формате `identity-hub:v1:…`; записи `1.0.0a1` читаются, `rotate-key`
+  переводит их в новый формат. Лимиты: JSON до 64 KiB и 16 уровней, секрет до 512 KiB.
 - Единый порядок блокировок ([`docs/lock-order.md`](docs/lock-order.md)) и
   `StoreTx.lock_identities()`; проверка границ импортов `lint-imports` в `scripts/check.sh`.
 - `Pool.lease()` и `Pool.acquire()` принимают явные параметры: опечатка в имени — `TypeError`.

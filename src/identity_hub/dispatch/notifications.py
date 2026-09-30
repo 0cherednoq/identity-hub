@@ -13,6 +13,7 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
 from identity_hub.crypto import associated_data
+from identity_hub.domain.data import validate_json_payload
 from identity_hub.enums import Severity
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import Event, matches_any, severity_at_least, spec_of
@@ -258,6 +259,7 @@ class Notifications:
     ) -> NotificationRule:
         if digest_seconds is not None and not 10 <= digest_seconds <= 86400:
             raise ValidationFailed("digest_seconds должен быть от 10 до 86400")
+        validate_json_payload(dict(filter or {}), "filter")
         async with self.space._tx() as tx:
             row = await tx.insert_notification_rule(
                 NewNotificationRule(
@@ -290,6 +292,8 @@ class Notifications:
         }
         if not values.keys() <= allowed:
             raise ValidationFailed("неизвестные поля правила уведомлений")
+        if values.get("filter") is not None:
+            validate_json_payload(dict(values["filter"]), "filter")
         if "event_types" in values:
             values["event_types"] = _validate_patterns(values["event_types"])
         if "filter" in values:

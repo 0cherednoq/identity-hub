@@ -2,8 +2,12 @@
 
 - DEK генерируется на каждую запись; данные шифруются DEK с associated data;
 - DEK шифруется (оборачивается) активным KEK, в строке хранится `key_id`;
-- associated data = (таблица, владелец, слот/фактор): blob нельзя перенести в чужую строку (S-2);
-- ротация KEK — `rewrap()`: DEK переоборачивается новым ключом, шифротекст данных не меняется (S-3).
+- associated data = `identity-hub:v1:<таблица>:<владелец>:<слот>:<версия схемы>`: blob нельзя
+  перенести в чужую строку (S-2); записи `1.0.0a1` с AAD `ih|<таблица>|<владелец>|<слот>`
+  читаются, пока не будут перезаписаны (IMP-16);
+- ротация KEK — `rewrap()`: DEK переоборачивается новым ключом (S-3); запись со старым форматом
+  AAD при этом перешифровывается в новый;
+- лимиты: plaintext секрета до 512 KiB, envelope до 1 MiB (IMP-16).
 """
 
 from __future__ import annotations
@@ -19,12 +23,26 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, SecretBytes, SecretStr
 
-from identity_hub.errors import SecretConfigurationError
+from identity_hub.crypto.secret_value import SecretValue
+from identity_hub.errors import SecretConfigurationError, ValidationFailed
 from identity_hub.protocols import SecretsProvider
 
-__all__ = ["DecryptionFailed", "EncryptedPayload", "Envelope", "associated_data", "reveal"]
+__all__ = [
+    "AAD_VERSION",
+    "MAX_ENVELOPE_BYTES",
+    "MAX_SECRET_BYTES",
+    "AssociatedData",
+    "DecryptionFailed",
+    "EncryptedPayload",
+    "Envelope",
+    "associated_data",
+    "reveal",
+]
 
 NONCE_BYTES = 12
+AAD_VERSION = "v1"
+MAX_SECRET_BYTES = 512 * 1024
+MAX_ENVELOPE_BYTES = 1024 * 1024
 
 
 class DecryptionFailed(SecretConfigurationError):
@@ -54,15 +72,37 @@ class EncryptedPayload:
         }
 
 
-def associated_data(table: str, owner_id: UUID | str, slot: str = "") -> bytes:
-    """AAD = (таблица, identity_id/владелец, slot/factor) — ТЗ S-2."""
-    return f"ih|{table}|{owner_id}|{slot}".encode()
+class AssociatedData(bytes):
+    """AAD текущего формата; `legacy` — формат `1.0.0a1` для чтения ещё не перезаписанных строк."""
+
+    legacy: bytes
+
+    def __new__(cls, value: bytes, legacy: bytes) -> AssociatedData:
+        instance = super().__new__(cls, value)
+        instance.legacy = legacy
+        return instance
+
+
+def associated_data(
+    table: str, owner_id: UUID | str, slot: str = "", *, schema_version: int = 1
+) -> AssociatedData:
+    """AAD = (таблица, владелец, slot/factor, версия схемы полезной нагрузки) — ТЗ S-2, IMP-16."""
+    current = f"identity-hub:{AAD_VERSION}:{table}:{owner_id}:{slot}:{schema_version}".encode()
+    return AssociatedData(current, f"ih|{table}|{owner_id}|{slot}".encode())
+
+
+def _candidates(aad: bytes) -> list[bytes]:
+    """Какие AAD пробовать при чтении: текущий формат, затем legacy."""
+    return [bytes(aad), aad.legacy] if isinstance(aad, AssociatedData) else [aad]
 
 
 def reveal(value: Any) -> Any:
     """Рекурсивно раскрыть SecretStr/SecretBytes (только для шифрования, никогда для логов)."""
     if isinstance(value, SecretStr | SecretBytes):
         return value.get_secret_value()
+    if isinstance(value, SecretValue):
+        revealed = value.reveal()
+        return revealed.decode() if isinstance(revealed, bytes) else revealed
     if isinstance(value, BaseModel):
         return reveal(dict(value))
     if isinstance(value, Mapping):
@@ -95,29 +135,65 @@ class Envelope:
     # --------------------------------------------------------- байты
 
     def seal(self, plaintext: bytes, aad: bytes) -> EncryptedPayload:
+        if len(plaintext) > MAX_SECRET_BYTES:
+            raise ValidationFailed(f"секрет больше {MAX_SECRET_BYTES // 1024} KiB")
         key_id = self.active_key_id
         dek = AESGCM.generate_key(bit_length=256)
         nonce = os.urandom(NONCE_BYTES)
         ciphertext = AESGCM(dek).encrypt(nonce, plaintext, aad)
         wrapped = self._wrap(key_id, dek, aad)
+        if (
+            len(wrapped) + len(nonce) + len(ciphertext) > MAX_ENVELOPE_BYTES
+        ):  # pragma: no cover - при лимите секрета недостижимо
+            raise ValidationFailed(f"envelope больше {MAX_ENVELOPE_BYTES // 1024} KiB")
         return EncryptedPayload(key_id=key_id, wrapped_dek=wrapped, nonce=nonce, ciphertext=ciphertext)
 
     def open(self, payload: EncryptedPayload, aad: bytes) -> bytes:
-        dek = self._unwrap(payload, aad)
-        try:
-            return AESGCM(dek).decrypt(payload.nonce, payload.ciphertext, aad)
-        except InvalidTag:
-            raise DecryptionFailed("данные повреждены или принадлежат другой строке") from None
+        plaintext, _used = self._open_any(payload, aad)
+        return plaintext
 
-    def rewrap(self, payload: EncryptedPayload, aad: bytes) -> EncryptedPayload:
-        """Переобернуть DEK активным мастер-ключом (ротация, S-3). Данные не расшифровываются."""
+    def _open_any(self, payload: EncryptedPayload, aad: bytes) -> tuple[bytes, bytes]:
+        """Расшифровать текущим AAD или legacy → (plaintext, сработавший AAD)."""
+        error: DecryptionFailed | None = None
+        for candidate in _candidates(aad):
+            try:
+                dek = self._unwrap(payload, candidate)
+                return AESGCM(dek).decrypt(payload.nonce, payload.ciphertext, candidate), candidate
+            except DecryptionFailed as exc:
+                error = exc
+            except InvalidTag:
+                error = DecryptionFailed("данные повреждены или принадлежат другой строке")
+        assert error is not None
+        raise error from None
+
+    def _dek_any(self, payload: EncryptedPayload, aad: bytes) -> tuple[bytes, bytes]:
+        error: DecryptionFailed | None = None
+        for candidate in _candidates(aad):
+            try:
+                return self._unwrap(payload, candidate), candidate
+            except DecryptionFailed as exc:
+                error = exc
+        assert error is not None
+        raise error
+
+    def rewrap(self, payload: EncryptedPayload, aad: bytes, *, upgrade: bool = True) -> EncryptedPayload:
+        """Переобернуть DEK активным мастер-ключом (ротация, S-3).
+
+        Шифротекст не меняется, если строка уже в текущем формате AAD; запись `1.0.0a1`
+        перешифровывается под текущий AAD (новые DEK и nonce). `upgrade=False` — только
+        переобернуть DEK: для записей, рядом с которыми тем же DEK зашифровано ещё поле
+        (ответ на challenge, `seal_sibling`).
+        """
+        dek, used = self._dek_any(payload, aad)
+        if used != bytes(aad) and upgrade:
+            plaintext, _ = self._open_any(payload, aad)
+            return self.seal(plaintext, aad)
         if payload.key_id == self.active_key_id:
             return payload
-        dek = self._unwrap(payload, aad)
         key_id = self.active_key_id
         return EncryptedPayload(
             key_id=key_id,
-            wrapped_dek=self._wrap(key_id, dek, aad),
+            wrapped_dek=self._wrap(key_id, dek, used),
             nonce=payload.nonce,
             ciphertext=payload.ciphertext,
         )
@@ -126,16 +202,16 @@ class Envelope:
         self, payload: EncryptedPayload, aad: bytes, plaintext: bytes, sibling: str
     ) -> tuple[bytes, bytes]:
         """Зашифровать доп. поле тем же DEK (ответ на challenge рядом с контекстом) → (nonce, ciphertext)."""
-        dek = self._unwrap(payload, aad)
+        dek, used = self._dek_any(payload, aad)
         nonce = os.urandom(NONCE_BYTES)
-        return nonce, AESGCM(dek).encrypt(nonce, plaintext, aad + b"|" + sibling.encode())
+        return nonce, AESGCM(dek).encrypt(nonce, plaintext, used + b"|" + sibling.encode())
 
     def open_sibling(
         self, payload: EncryptedPayload, aad: bytes, nonce: bytes, ciphertext: bytes, sibling: str
     ) -> bytes:
-        dek = self._unwrap(payload, aad)
+        dek, used = self._dek_any(payload, aad)
         try:
-            return AESGCM(dek).decrypt(nonce, ciphertext, aad + b"|" + sibling.encode())
+            return AESGCM(dek).decrypt(nonce, ciphertext, used + b"|" + sibling.encode())
         except InvalidTag:
             raise DecryptionFailed("данные повреждены или принадлежат другой строке") from None
 

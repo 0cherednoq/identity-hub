@@ -16,6 +16,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from identity_hub._space import SpaceBase
 from identity_hub.api._base import legacy
+from identity_hub.domain.data import validate_json_payload
 from identity_hub.errors import ConcurrentModification, ValidationFailed
 
 __all__ = ["DataRecord", "IdentityDataMixin"]
@@ -70,6 +71,7 @@ class IdentityDataMixin(SpaceBase):
         """
         _check_namespace(namespace)
         data = value.model_dump(mode="json")
+        validate_json_payload(data, f"identity_data.{namespace}")
         async with self._tx() as tx:
             await self._identity(tx, identity_id)
             version = await tx.save_data(identity_id, namespace, data, schema_version, expected_version)

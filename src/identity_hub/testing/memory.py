@@ -2799,7 +2799,7 @@ class MemoryStore(Store):
                     break
                 if payload.key_id == active:
                     continue
-                mapping[key] = envelope.rewrap(payload, aad(key, payload))
+                mapping[key] = envelope.rewrap(payload, aad(key, payload), upgrade=name != "challenges")
                 count += 1
                 remaining -= 1
             if count:
