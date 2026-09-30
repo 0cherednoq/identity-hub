@@ -26,7 +26,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_release_candidate_version_is_consistent() -> None:
-    assert identity_hub.__version__ == "1.0.0rc1"
+    assert identity_hub.__version__ == "1.0.0a1"
     assert version("identity-hub") == identity_hub.__version__
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert metadata["project"]["version"] == identity_hub.__version__

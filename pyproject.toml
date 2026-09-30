@@ -1,6 +1,6 @@
 [project]
 name = "identity-hub"
-version = "1.0.0rc1"
+version = "1.0.0a1"
 description = "Управление парком аккаунтов: жизненный цикл, аренда, лимиты, прокси, секреты, события."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -44,6 +44,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/identity_hub"]
+
+# sdist — только библиотека: без админки (не готова к релизу), планов агента и кэшей.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/identity_hub",
+    "tests",
+    "examples",
+    "docs/cli.md",
+    "docs/integrations.md",
+    "docs/perf.md",
+    "docs/traceability.md",
+    "README.md",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+exclude = ["__pycache__", "*.pyc"]
 
 [tool.ruff]
 line-length = 110

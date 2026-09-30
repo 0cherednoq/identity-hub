@@ -1,4 +1,4 @@
-# Трассировка требований Identity Hub 1.0.0rc1
+# Трассировка требований Identity Hub 1.0.0a1
 
 Матрица предназначена для аудитора release candidate. Источник требований —
 [`identity-hub-requirements.md`](../identity-hub-requirements.md); доказательство

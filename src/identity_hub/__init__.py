@@ -79,7 +79,7 @@ from identity_hub.service import (
 from identity_hub.state import Override
 from identity_hub.verifications import Verification
 
-__version__ = "1.0.0rc1"
+__version__ = "1.0.0a1"
 
 __all__ = [
     "AlreadyExists",
