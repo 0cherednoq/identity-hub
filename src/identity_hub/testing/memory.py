@@ -626,6 +626,9 @@ class MemoryTx(StoreTx):
         )
         return True
 
+    async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
+        """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""
+
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
         row = self._own(identity_id)
         return row.fencing_seq if row else None

@@ -948,6 +948,17 @@ class PgTx(StoreTx):
         )
         return bool(closed.rowcount)  # type: ignore[attr-defined]
 
+    async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
+        ordered = sorted(set(identity_ids))
+        if not ordered:
+            return
+        await self.execute(
+            select(IDENTITIES.c.id)
+            .where(IDENTITIES.c.id.in_(ordered), IDENTITIES.c.space_id == self.space.id)
+            .order_by(IDENTITIES.c.id)
+            .with_for_update(key_share=True)
+        )
+
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
         stmt = select(IDENTITIES.c.fencing_seq).where(
             IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id

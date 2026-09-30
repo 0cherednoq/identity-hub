@@ -54,6 +54,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pytest-timeout>=2.4.0",
+    "import-linter>=2.1",
 ]
 
 [build-system]
@@ -117,3 +118,48 @@ markers = [
 ]
 addopts = "-ra --strict-markers"
 timeout = 120  # зависший тест не блокирует автономный цикл
+
+[tool.importlinter]
+root_package = "identity_hub"
+include_external_packages = true
+# только рантайм-импорты: аннотации под TYPE_CHECKING слоя не нарушают
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Доменный слой без инфраструктуры (IMP-19)"
+type = "forbidden"
+# прямые импорты: hub — корень композиции и транзитивно видит всё
+allow_indirect_imports = true
+source_modules = ["identity_hub.domain"]
+forbidden_modules = [
+    "sqlalchemy",
+    "alembic",
+    "httpx",
+    "aiogram",
+    "identity_hub.postgres",
+    "identity_hub.dispatch",
+    "identity_hub.hub",
+]
+
+[[tool.importlinter.contracts]]
+name = "Неймспейсы, read-модели, интеграции и контракт Store не знают PostgreSQL (IMP-19)"
+type = "forbidden"
+# прямые импорты: hub — корень композиции и транзитивно видит всё
+allow_indirect_imports = true
+source_modules = [
+    "identity_hub.api",
+    "identity_hub.read",
+    "identity_hub.dispatch",
+    "identity_hub.telegram_notify",
+    "identity_hub.store",
+    "identity_hub.testing",
+]
+forbidden_modules = ["identity_hub.postgres"]
+
+[[tool.importlinter.contracts]]
+name = "Неймспейсы API и read-модели не ходят в SQL напрямую (IMP-19)"
+type = "forbidden"
+# прямые импорты: hub — корень композиции и транзитивно видит всё
+allow_indirect_imports = true
+source_modules = ["identity_hub.api", "identity_hub.read", "identity_hub.domain"]
+forbidden_modules = ["sqlalchemy", "alembic"]

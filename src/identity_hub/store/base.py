@@ -1023,6 +1023,14 @@ class StoreTx(ABC):
         """Освободить аренду по token (повтор и чужой token — no-op) и закрыть историю (G-4.2)."""
 
     @abstractmethod
+    async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
+        """Эксклюзивно (FOR NO KEY UPDATE) заблокировать identity этого пространства по возрастанию id.
+
+        Единый порядок блокировок (IMP-14): транзакция, меняющая несколько identity, сначала
+        вызывает этот метод, и параллельные транзакции ждут друг друга вместо deadlock.
+        """
+
+    @abstractmethod
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
         """Текущий fencing_seq аккаунта; `lock=True` — FOR SHARE до конца транзакции."""
 

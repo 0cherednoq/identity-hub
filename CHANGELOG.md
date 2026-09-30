@@ -19,8 +19,14 @@
 
 ### Changed
 
+- Единый порядок блокировок ([`docs/lock-order.md`](docs/lock-order.md)) и
+  `StoreTx.lock_identities()`; проверка границ импортов `lint-imports` в `scripts/check.sh`.
 - `Pool.lease()` и `Pool.acquire()` принимают явные параметры: опечатка в имени — `TypeError`.
 - `DecryptionFailed` наследует `SecretConfigurationError` (код `decryption_failed`).
+
+### Fixed
+
+- Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
 ### Deprecated
 

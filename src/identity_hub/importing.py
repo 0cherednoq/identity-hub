@@ -281,6 +281,12 @@ class ImportingMixin(SpaceBase):
                 refs = [(svc.name, p.record.external_ref) for p in ready]
                 existing = await tx.find_by_refs(refs)
                 by_id = await tx.existing_identities([p.prepared.row.id for p in ready if p.record.id])
+                if mode is OnExisting.UPDATE_SESSION:
+                    # обновляемые identity — одной блокировкой по возрастанию id (IMP-14): иначе
+                    # две пачки с общими ref держат FOR SHARE и взаимно ждут повышения до UPDATE
+                    await tx.lock_identities(
+                        [found[0] for found in existing.values() if found[1] == tx.space.id]
+                    )
                 inserted: dict[str, UUID] = {}
                 to_link: list[_Prepared] = []
                 for item in ready:
