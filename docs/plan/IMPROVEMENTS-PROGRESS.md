@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I0.2a Модель ошибок и маппинг HTTP/CLI
-- **Начата:** 2026-09-30
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] code и context у IdentityHubError и наследников
-  - [ ] новые типы ошибок
-  - [ ] чистые функции http_status и exit_code
-  - [ ] CLI возвращает exit code по коду ошибки
-  - [ ] unit-тесты кодов, context, маппинга
-  - [ ] check.sh и закрытие
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -35,7 +30,7 @@
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | todo |  | ведёт параллельная сессия в worktree, ветка i8.7-namespaces |
 | I8.8 | API: вынос admin/analytics/maintenance, перевод потребителей | I8.3, I8.4, I8.5, I8.6, I8.7 | todo |  |  |
 | I8.9 | API: руководство и примеры на новом API | I8.8 | todo |  |  |
-| I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | in_progress |  |  |
+| I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | todo |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | todo |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | todo |  |  |
@@ -65,7 +60,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 7 / 39 done
+**Итого:** 8 / 39 done
 
 ## Журнал сессий
 
@@ -78,3 +73,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-09-30 · I8.4 · done · identities.update/replace_*/теги/delete и activate/retire/set_lifecycle/restore_standing/override/unpin; 13 алиасов; дефлейк test_digest (окно 300 с) · дальше I8.5
 2026-09-30 · I8.5 · done · space.imports (run/run_files/stage/get/cancel) и space.secrets (describe/reveal SecretRef/replace_*), 9 алиасов, D-144 · дальше I8.6
 2026-09-30 · I8.6 · done · space.proxies (group, create/ensure/create_many/list/url/health/recheck*), space.pools (define/revoke), Pool.lease/acquire с явной сигнатурой, Pool.capacity, ProxyPolicy.group, D-145 · I8.7 ведёт параллельная сессия, дальше I0.2
+2026-09-30 · I0.2a · done · стабильные коды и context ошибок, 8 новых типов, http_status/exit_code, CLI error[code] · дальше слияние I8.7, затем I0.2b

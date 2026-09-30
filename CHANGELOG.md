@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- Ресурсные неймспейсы пространства (`space.identities`, `space.imports`, `space.secrets`,
+  `space.proxies`, `space.pools`) с единой конвенцией глаголов; соответствие старых имён —
+  [`docs/api-migration.md`](docs/api-migration.md).
+- `Identity`, `IdentityCreate`, `IdentityFilter`, `Page`, `CreateManyResult`, `SecretRef`, `Proxy`.
+- Стабильные коды ошибок `IdentityHubError.code` и безопасный `context`; функции `http_status()`
+  и `exit_code()`; новые типы `RevisionConflict`, `IdempotencyConflict`, `LeaseOwnershipLost`,
+  `LeaseRevoked`, `LeaseExpired`, `DatabaseBusy`, `SchemaIncompatible`,
+  `SecretConfigurationError`. CLI печатает `error[<code>]` и возвращает код выхода по таблице.
+
+### Changed
+
+- `Pool.lease()` и `Pool.acquire()` принимают явные параметры: опечатка в имени — `TypeError`.
+- `DecryptionFailed` наследует `SecretConfigurationError` (код `decryption_failed`).
+
+### Deprecated
+
+- Плоские методы `SpaceHandle` (`register`, `search`, `identity_card`, `import_many`,
+  `reveal_secret`, `add_proxy`, `pool` и другие) — алиасы с `DeprecationWarning` до `1.0.0b1`.
+- `ProxyPolicy(pool=...)` → `ProxyPolicy(group=...)`; `Pool.check_capacity()` → `Pool.capacity()`.
+
 ## [1.0.0a1] - 2026-09-30
 
 Первый публичный альфа-релиз. API может меняться между альфа-версиями.

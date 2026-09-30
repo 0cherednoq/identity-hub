@@ -7,10 +7,12 @@ import asyncio
 import importlib
 import inspect
 import os
+import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import cast
 
+from identity_hub.errors import IdentityHubError, exit_code
 from identity_hub.hub import IdentityHub
 
 Factory = Callable[[], IdentityHub | Awaitable[IdentityHub]]
@@ -176,6 +178,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("укажите команду")
     try:
         return asyncio.run(async_main(args))
+    except IdentityHubError as exc:
+        # код и сообщение без трассировки: сообщения ошибок не содержат секретов (S-8, IMP-13)
+        print(f"error[{exc.code}]: {exc}", file=sys.stderr)
+        return exit_code(exc)
     except (TypeError, ValueError) as exc:
         parser.error(str(exc))
     return 2

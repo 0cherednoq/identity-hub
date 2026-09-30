@@ -24,7 +24,7 @@ Scope зафиксирован решением `D-142`. Задачи — в
 | IMP-10 | Два режима обновления session | I3.3 | missing | planned: `tests/pg/test_session_modes.py::test_replace_revokes_old` |
 | IMP-11 | Долговечные внешние операции | I4.1, I4.2, I4.3 | partial | planned: `tests/pg/test_provider_operations.py::test_claim_call_apply_recovery`. Сейчас есть таблица `ih_provider_operations` (миграция 0005) для админки, без claim/recovery |
 | IMP-12 | Публичная read-схема Core | I5.1 | missing | planned: `tests/pg/test_read_schema.py::test_join_with_application_table` |
-| IMP-13 | Модель ошибок с кодами | I0.2a | partial | planned: `tests/unit/test_error_codes.py::test_every_error_has_stable_code`. Сейчас есть иерархия `IdentityHubError`, без `code` и маппинга HTTP/CLI |
+| IMP-13 | Модель ошибок с кодами | I0.2a | partial | `tests/unit/test_error_codes.py::test_every_error_has_stable_code`, `tests/unit/test_error_codes.py::test_http_and_exit_mapping`. Коды, context, HTTP/CLI готовы (I0.2a); `pinned_by_override`/`stale_observation` появятся, когда наблюдения начнут отклоняться явно (I4.3) |
 | IMP-14 | Порядок блокировок | I0.2b | missing | planned: `tests/pg/test_lock_order.py::test_reverse_order_no_deadlock` |
 | IMP-15 | Проверка схемы при старте | I0.4 | missing | planned: `tests/pg/test_schema_check.py::test_old_revision_rejected` |
 | IMP-16 | Лимиты payload и версия envelope | I0.3 | missing | planned: `tests/unit/test_payload_limits.py::test_json_depth_limit` |

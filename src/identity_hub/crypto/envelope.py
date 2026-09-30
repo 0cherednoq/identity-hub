@@ -19,7 +19,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import BaseModel, SecretBytes, SecretStr
 
-from identity_hub.errors import IdentityHubError
+from identity_hub.errors import SecretConfigurationError
 from identity_hub.protocols import SecretsProvider
 
 __all__ = ["DecryptionFailed", "EncryptedPayload", "Envelope", "associated_data", "reveal"]
@@ -27,8 +27,10 @@ __all__ = ["DecryptionFailed", "EncryptedPayload", "Envelope", "associated_data"
 NONCE_BYTES = 12
 
 
-class DecryptionFailed(IdentityHubError):
+class DecryptionFailed(SecretConfigurationError):
     """Неверный ключ, подмена данных или associated data."""
+
+    code = "decryption_failed"
 
 
 @dataclass(frozen=True, slots=True)
