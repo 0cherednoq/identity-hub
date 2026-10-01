@@ -10,16 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F1.2 Идемпотентность аренды
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие conformance-тесты: два пула разных сервисов, два пространства, тот же holder
-  - [ ] claim в namespace lease + блокировка строки на replay (PgStore, MemoryStore)
-  - [ ] lease.acquire: сверка pool/holder/service, IdempotencyConflict без выдачи token
-  - [ ] миграция 0010: uq_ih_leases_idempotency → индекс по пространству; обнуление ключей убрать
-  - [ ] pg-тест без сырого IntegrityError, гонка повторов
-  - [ ] документация, CHANGELOG, I1.3 → done
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -29,7 +23,7 @@
 | F0.1 | Трассировка находок | — | done |  |  |
 | F0.2 | CI библиотеки | F0.1 | done |  |  |
 | F1.1 | Протокол идемпотентности операций | F0.1 | done |  |  |
-| F1.2 | Идемпотентность аренды | F1.1 | in_progress |  |  |
+| F1.2 | Идемпотентность аренды | F1.1 | done |  |  |
 | F1.3 | Ошибки БД без параметров и `token` | F0.1 | todo |  |  |
 | F1.4 | Свободный текст в истории, событиях и логах аренды | F0.1 | todo |  |  |
 | F1.5 | Исходящие HTTP-запросы | F0.1 | todo |  |  |
@@ -67,7 +61,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 3 / 40 done
+**Итого:** 4 / 40 done
 
 ## Журнал сессий
 
@@ -76,3 +70,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-01 · F0.1 · done · тест трассировки (4 проверки: находки↔матрица, задачи↔планы, план↔прогресс, «Находки:» разделов↔матрица); repro без БД (api, functional, secrets кроме b3) воспроизводят поведение ревью, расхождений нет; скрипты с PostgreSQL (b3, schema, parity) не перезапускались — их контейнеры удалены, код src с момента ревью не менялся · дальше F0.2
 2026-10-02 · F0.2 · done · library-ci.yml (check: 3.12/3.13/3.14 + PostgreSQL 16 + check.sh; package: uv build + scripts/check_package.sh), сторожевой тест tests/test_library_ci.py; actionlint 1.7.12 чисто; локально mypy и pytest зелёные на 3.12, 3.13, 3.14 (767 passed), пакет проверен в чистом окружении · дальше F1.1
 2026-10-02 · F1.1 · done · ih_operation_keys с PK (namespace, key) — миграция 0009, FK на аккаунт снят; канонический fingerprint; примитив claim/complete в PgStore и MemoryStore; Operation.previous_outcome, повтор после failed — новая попытка; сбой учёта после успеха не выходит наружу; D-153 (аккаунт вне fingerprint, legacy-записи в namespace пространства); 807 passed, гонки ×3 · дальше F1.2: claim в namespace <space>:lease + FOR UPDATE на replay, сверка pool/holder/service найденной аренды, uq_ih_leases_idempotency → неуникальный индекс по пространству (миграция 0010)
+2026-10-02 · F1.2 · done · ключ аренды в namespace <space>:lease с fingerprint пул+сервис+holder, FOR UPDATE на повторе, прямая сверка живой аренды; uq_ih_leases_idempotency → ix_ih_leases_idempotency (миграция 0010); I1.3 помечена done; гонки ×3 · дальше F1.3: перевод DBAPIError в PgTx.execute/PgStore._execute и на границе транзакции (DatabaseBusy для 55P03/57014/40P01/40001, новый StorageError), черновик теста — scratchpad/f13wip/test_storage_errors.py

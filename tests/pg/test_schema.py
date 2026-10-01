@@ -42,7 +42,7 @@ EXPECTED_INDEXES = {
     "ix_ih_webhook_deliveries_due",
     "ix_ih_notifications_due",
     "uq_ih_challenges_open",
-    "uq_ih_leases_idempotency",
+    "ix_ih_leases_idempotency",
     "ix_ih_import_runs_active",
     "ix_ih_import_items_claim",
     "ix_ih_provider_operations_claim",

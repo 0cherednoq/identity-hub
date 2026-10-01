@@ -35,6 +35,8 @@
   (`duplicate=False`, `previous_outcome="failed"`); после успешной — `duplicate=True`. Тот же
   ключ с другим видом операции — `IdempotencyConflict`. Запись ключа переживает удаление
   аккаунта и хранится `Retention.operation_keys` с момента последней попытки.
+- `idempotency_key` аренды действует в пределах пространства и принадлежит одной команде: пулу,
+  сервису и `holder`. Повтор от другого пула или `holder` — `IdempotencyConflict` (миграция `0010`).
 - Сбой записи результата после успешно выполненной операции не выходит к вызывающему:
   предупреждение в лог и метрика `identity_hub_failures_total{scope="operation_bookkeeping"}`.
 - Контракт `Store`: `charge_quotas(..., idempotency=IdempotencyRequest)`,
@@ -54,6 +56,8 @@
 
 - Повтор операции с тем же `key` после сетевой ошибки больше не выглядит как «уже выполнено»:
   раньше `op.duplicate` был `True` и действие не повторялось никогда.
+- `pool.lease(idempotency_key=...)` из пула другого сервиса больше не возвращает чужую аренду
+  вместе с её credentials; тот же ключ в другом пространстве не даёт `IntegrityError`.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
 ### Deprecated

@@ -23,6 +23,7 @@ from pydantic import SecretBytes, SecretStr
 
 __all__ = [
     "FINGERPRINT_VERSION",
+    "LEASE_FAMILY",
     "LEGACY_FINGERPRINT_VERSION",
     "OMITTED",
     "OPERATION_FAMILY",
@@ -38,6 +39,9 @@ LEGACY_FINGERPRINT_VERSION: Final = 0
 
 OPERATION_FAMILY: Final = "operation"
 """Семейство команд `lease.operation(kind, key=...)`."""
+
+LEASE_FAMILY: Final = "lease"
+"""Семейство команд `pool.lease(idempotency_key=...)` / `pool.acquire(idempotency_key=...)`."""
 
 
 def namespace(space_id: UUID, family: str) -> str:

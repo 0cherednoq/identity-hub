@@ -652,10 +652,11 @@ class LeaseRecord(IdentityHubBase):
     __table_args__ = (
         _identity_fk(),
         Index("ix_ih_leases_expires_at", "expires_at"),
+        # поиск живой аренды по ключу в пределах пространства; единственность даёт ih_operation_keys
         Index(
-            "uq_ih_leases_idempotency",
+            "ix_ih_leases_idempotency",
+            "space_id",
             "idempotency_key",
-            unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
     )

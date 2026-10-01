@@ -7,13 +7,13 @@ from datetime import timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import func, insert, select, text
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from identity_hub.domain.idempotency import OPERATION_FAMILY, fingerprint, namespace
 from identity_hub.errors import IdempotencyConflict
 from identity_hub.hub import SpaceHandle
-from identity_hub.postgres.models import OperationKeyRecord, QuotaUsageRecord
+from identity_hub.postgres.models import LeaseRecord, OperationKeyRecord, QuotaUsageRecord
 from identity_hub.store.base import IdempotencyClaim, IdempotencyRequest
 from tests.pg.helpers import make_identity
 
@@ -144,3 +144,30 @@ async def test_legacy_failed_key_is_retried_and_upgraded(
     async with sessionmaker() as session:
         row = (await session.execute(select(OperationKeyRecord))).scalar_one()
     assert (row.fingerprint_version, row.fingerprint, row.outcome) == (1, request.fingerprint, None)
+
+
+@pytest.mark.parametrize("expired_first", [False, True], ids=["fresh", "after-expiry"])
+async def test_parallel_acquires_with_one_key_share_one_lease(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession], expired_first: bool
+) -> None:
+    """F1.2: уникального индекса больше нет — единственность аренды по ключу даёт блокировка ключа."""
+    for _ in range(4):
+        await make_identity(space)
+    pool = space.pools.define("p", service="fake_tg", holder="w")
+    if expired_first:
+        old = await pool.acquire(idempotency_key="job:1")
+        async with sessionmaker.begin() as session:
+            await session.execute(update(LeaseRecord).values(expires_at=text("now() - interval '5 seconds'")))
+
+    leases = await asyncio.gather(*(pool.acquire(idempotency_key="job:1") for _ in range(4)))
+
+    assert len({lease.lease_id for lease in leases}) == 1
+    if expired_first:
+        assert leases[0].lease_id != old.lease_id
+    async with sessionmaker() as session:
+        live = (
+            await session.execute(
+                select(func.count()).select_from(LeaseRecord).where(LeaseRecord.expires_at > func.now())
+            )
+        ).scalar_one()
+    assert live == 1

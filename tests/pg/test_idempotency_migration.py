@@ -142,3 +142,34 @@ async def test_downgrade_restores_global_key(db: AsyncEngine, schema: str) -> No
         ).all()
     assert version == "0008"
     assert [(row.key, row.space_id, row.kind) for row in rows] == [("order-123", second_space, "send")]
+
+
+async def test_lease_key_index_is_scoped_to_space_and_downgrade_keeps_newest(
+    db: AsyncEngine, schema: str
+) -> None:
+    """F1.2: миграция 0010 — тот же ключ аренды допустим в двух пространствах."""
+    await migrate(db, db_schema=schema)
+    leases = []
+    insert = text(
+        f'INSERT INTO "{schema}".ih_leases (identity_id, space_id, lease_id, token, fencing, pool, holder, '
+        "idempotency_key, acquired_at, heartbeat_at, expires_at) VALUES (:identity, :space, "
+        "gen_random_uuid(), gen_random_uuid(), 1, 'p', 'h', 'job-42', "
+        "now() - make_interval(secs => :age), now(), now() + interval '1 minute')"
+    )
+    for age in (60, 0):
+        space_id, identity_id = await _identity(db, schema)
+        leases.append(identity_id)
+        async with db.begin() as conn:
+            await conn.execute(insert, {"identity": identity_id, "space": space_id, "age": age})
+
+    async with db.begin() as conn:
+        await conn.run_sync(lambda sync_conn: command.downgrade(alembic_config(schema, sync_conn), "0009"))
+
+    async with db.connect() as conn:
+        rows = dict(
+            (row.identity_id, row.idempotency_key)
+            for row in await conn.execute(
+                text(f'SELECT identity_id, idempotency_key FROM "{schema}".ih_leases')
+            )
+        )
+    assert rows == {leases[0]: None, leases[1]: "job-42"}

@@ -37,6 +37,7 @@
 | Операция | Что блокируется | Порядок |
 |---|---|---|
 | `lease.operation(kind, key=...)` | строка ключа в `ih_operation_keys`, затем окна квот | п. 0, до identity |
+| `pool.lease(idempotency_key=...)` | строка ключа в `ih_operation_keys` (и на повторе) | п. 0, до выбора кандидата |
 | Выбор кандидата аренды | строка `ih_identities`, `SKIP LOCKED` | одна строка |
 | Захват аренды | `ih_leases` выбранного аккаунта | после identity |
 | Импорт `update_session` | обновляемые identity пачки | `lock_identities`, по `id` |

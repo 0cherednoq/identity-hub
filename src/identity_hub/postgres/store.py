@@ -831,13 +831,6 @@ class PgTx(StoreTx):
         lease_id, token = new_id(), uuid4()
         reclaimed: LeaseRow | None = None
         if not shared:
-            if idempotency_key is not None:
-                # ключ истёкшей аренды освобождается, иначе уникальный индекс не даст его переиспользовать
-                await self.execute(
-                    update(LEASES)
-                    .where(LEASES.c.idempotency_key == idempotency_key, LEASES.c.expires_at <= func.now())
-                    .values(idempotency_key=None)
-                )
             old = (
                 (
                     await self.execute(
@@ -1253,7 +1246,10 @@ class PgTx(StoreTx):
                         keys.result_type,
                         keys.result_version,
                         keys.result,
-                    ).where(keys.namespace == request.namespace, keys.key == request.key)
+                    )
+                    .where(keys.namespace == request.namespace, keys.key == request.key)
+                    # повтор держит строку ключа до конца транзакции: команды с одним ключом идут по очереди
+                    .with_for_update()
                 )
             ).one_or_none()
             if row is None:  # запись удалена чисткой между двумя запросами — занять заново

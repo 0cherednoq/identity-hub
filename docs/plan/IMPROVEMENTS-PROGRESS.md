@@ -37,7 +37,7 @@
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | done |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | done |  |  |
 | I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
-| I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | todo |  |  |
+| I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
@@ -61,7 +61,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 17 / 40 done
+**Итого:** 18 / 40 done
 
 ## Журнал сессий
 

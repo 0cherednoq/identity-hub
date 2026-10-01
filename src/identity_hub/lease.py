@@ -23,14 +23,29 @@ from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
 from identity_hub.crypto import associated_data
 from identity_hub.domain.data import validate_model
+from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
-from identity_hub.errors import LeaseLost, LeaseUnavailable, StaleFencing, ValidationFailed
+from identity_hub.errors import (
+    IdempotencyConflict,
+    LeaseLost,
+    LeaseUnavailable,
+    StaleFencing,
+    ValidationFailed,
+)
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
-from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseCounters, LeaseRow, ProxyRow, StoreTx
+from identity_hub.store.base import (
+    CandidateQuery,
+    IdempotencyRequest,
+    IdentityRow,
+    LeaseCounters,
+    LeaseRow,
+    ProxyRow,
+    StoreTx,
+)
 
 if TYPE_CHECKING:
     from identity_hub.operation import Operation
@@ -473,7 +488,8 @@ async def acquire(
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
     `wait` — ждать освобождения подходящего аккаунта; по истечении — `LeaseUnavailable`.
-    Повтор с тем же `idempotency_key`, пока аренда жива, возвращает ту же аренду (FR-6.5).
+    Повтор с тем же `idempotency_key`, пока аренда жива, возвращает ту же аренду (FR-6.5) — только
+    тому же пулу, сервису и holder; иначе `IdempotencyConflict`. Ключ действует в пределах пространства.
     В shared-режиме ключ не поддерживается: живые shared-аренды не хранятся (D-140).
     """
     if idempotency_key is not None and pool.shared:
@@ -498,9 +514,31 @@ async def acquire(
         try:
             async with space._tx(own=True) as tx:
                 if idempotency_key is not None:
+                    # Ключ принадлежит одной команде (пул + сервис + holder) и блокируется первым:
+                    # параллельный повтор ждёт здесь и затем получает уже выданную аренду.
+                    key_namespace = namespace(tx.space.id, LEASE_FAMILY)
+                    await tx.claim_idempotency_key(
+                        IdempotencyRequest(
+                            namespace=key_namespace,
+                            key=idempotency_key,
+                            operation=LEASE_FAMILY,
+                            fingerprint=fingerprint(
+                                LEASE_FAMILY,
+                                {"pool": pool.name, "service": pool.service.name, "holder": pool.holder},
+                            ),
+                            ttl=space.hub.retention.operation_keys,
+                        )
+                    )
                     existing = await tx.find_live_lease(idempotency_key)
                     if existing is not None:
                         identity = await space._identity(tx, existing.identity_id)
+                        # запись ключа могла истечь раньше аренды: живую аренду сверяем напрямую
+                        if (
+                            existing.pool != pool.name
+                            or existing.holder != pool.holder
+                            or identity.service != pool.service.name
+                        ):
+                            raise IdempotencyConflict(LEASE_FAMILY)
                         policy = pool.proxy_policy
                         proxy = (
                             await tx.get_binding(existing.identity_id) if policy and policy.sticky else None
@@ -535,6 +573,15 @@ async def acquire(
                         )
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
                     await space._emit(tx, *drafts)
+                    if idempotency_key is not None:
+                        await tx.complete_idempotency_key(
+                            namespace(tx.space.id, LEASE_FAMILY),
+                            idempotency_key,
+                            "succeeded",
+                            result_type=LEASE_FAMILY,
+                            result_version=1,
+                            result={"lease_id": str(row.lease_id), "identity_id": str(row.identity_id)},
+                        )
                     _observe_acquisition(pool, started, wait_seconds, "acquired")
                     return Lease(pool, row, candidate, proxy)
         except _SkipCandidate as skip:
