@@ -75,6 +75,7 @@ from identity_hub.verifications import RequirementsMixin, VerificationsMixin
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from identity_hub.postgres.read_schema import ReadSchema
     from identity_hub.read.overview import SpaceInfo, SpacesMatrix
 
 __all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle"]
@@ -171,6 +172,7 @@ class IdentityHub:
         self.dispatcher.add_pump(self.state_snapshots.run_due)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
+        self.db_schema = db_schema
         self._services: dict[str, Service] = {}
         for service in services:
             self.register_service(service)
@@ -190,6 +192,16 @@ class IdentityHub:
             return self._services[key]
         except KeyError:
             raise NotFound("service", key) from None
+
+    @cached_property
+    def read(self) -> ReadSchema:
+        """Публичная read-схема Core (IMP-12): selectable без секретов для join и `among=`.
+
+        Таблицы получают схему `db_schema` хаба явно; запросы приложения выполняйте как обычно.
+        """
+        from identity_hub.postgres.read_schema import ReadSchema
+
+        return ReadSchema(self.db_schema)
 
     @property
     def services(self) -> tuple[Service, ...]:

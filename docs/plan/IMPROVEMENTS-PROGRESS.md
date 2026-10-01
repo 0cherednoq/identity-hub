@@ -55,7 +55,7 @@
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
-| I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | todo |  |  |
+| I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
 | I5.3 | Опциональный ordered outbox | I1.2, I5.2 | todo |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2, I2.4 | todo |  |  |
@@ -67,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 15 / 40 done
+**Итого:** 16 / 40 done
 
 ## Журнал сессий
 
@@ -88,3 +88,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-01 · I0.4 · done · hub.start сверяет ревизию схемы (SchemaIncompatible), migrate под pg_advisory_xact_lock на схему, документация CLI/интеграции · дальше I1.1 после слияния I8.8b
 2026-10-01 · I8.8b · done · admin/, examples, identity_hub.testing и все тесты на новых неймспейсах; фильтр pytest «устарел и будет удалён» как ошибка (библиотека и admin/); помощники tests/fixtures/api.py и admin/tests/factories/api.py; 680 + 89 тестов без предупреждений · дальше I8.9
 2026-10-01 · I8.9 · done · карта API (точка входа, неймспейсы, типовые операции по сущностям, состояния, лимиты), docs/guide/README/integrations/api-migration на новых именах, тест test_documentation_uses_current_api; фрагменты карты API выполнены на MemoryStore · дальше I8.10 после I1–I6
+2026-10-01 · I5.1 · done · hub.read: ReadSchema (6 таблиц, белый список колонок, версия 1, явная db_schema), join с таблицей приложения и among= в default/custom схеме, SQL без секретных полей, D-150 (параллельная ветка) · дальше I5.2 после I4.3

@@ -36,6 +36,42 @@ identity-hub migrate --db-schema identity_hub
 должна иметь соответствующие права; runtime-роли достаточно прав на объекты
 `ih_*` в выбранной схеме.
 
+## Read-схема: join с таблицами приложения
+
+`hub.read` — публичная read-схема на SQLAlchemy Core (версия `hub.read.version`). Она даёт
+стабильные selectable без секретов и служебных полей: `identities`, `leases`,
+`lease_history`, `region_states`, `events`, `proxies`. Физические таблицы библиотеки приватны и
+могут меняться между версиями; read-схема меняется только с повышением версии.
+
+```python
+from sqlalchemy import select
+
+identities = hub.read.identities
+ref = await space.ref()
+stmt = (
+    select(FarmAccount.identity_id)
+    .join(identities, identities.c.id == FarmAccount.identity_id)
+    .where(identities.c.space_id == ref.id, identities.c.standing == "good", FarmAccount.energy >= 500)
+)
+rows = (await db_session.execute(stmt)).scalars().all()        # обычный запрос приложения
+
+farmers = space.pools.define("farmers", service=GAME)
+async with farmers.lease(among=stmt) as lease:                # тот же select как отбор кандидатов
+    ...
+```
+
+- Каждая таблица содержит `space_id` — фильтруйте по `(await space.ref()).id`.
+- Имена колонок совпадают со словарём API: `identities.c.auth`, `identities.c.revision`,
+  `proxies.c.group`. Секретов (`credentials`, сессии, логины прокси), `token` аренды, fencing и
+  fingerprint в схеме нет.
+- Только чтение: изменения — через `space.*`.
+- **Отдельная схема.** При `IdentityHub(db_schema="identity_hub")` read-таблицы получают эту
+  схему явно, поэтому запросы приложения не требуют `schema_translate_map`. Если такой select
+  передаётся в `among=`, библиотека выполняет его со своей картой `{None: db_schema}`: таблицы
+  приложения в нём должны иметь явную схему (`Table(..., schema="public")` или
+  `__table_args__ = {"schema": "public"}`), иначе они будут искаться в схеме библиотеки.
+- `among=Select` работает только с PostgreSQL; `MemoryStore` принимает список id.
+
 ## Alembic приложения
 
 Identity Hub владеет своей веткой миграций. Запускайте её отдельной командой или

@@ -46,6 +46,7 @@ space = hub.space("production")         # пространство: изоляц
 | `space.webhooks`, `space.notifications` | доставки | `create`, `create_rule`, `send_test`… | [События](10-events.md) |
 | `space.admin` | read-модели UI | `overview`, `identity_page`, `lease_dashboard`, `event_page`, `human_queue`… | для админок |
 | `space.analytics` | отчёты | `series`, `funnel`, `cohorts`, `ban_rate`, `utilization`… | для админок |
+| `hub.read` | read-схема Core | `identities`, `leases`, `lease_history`, `region_states`, `events`, `proxies` — для join и `among=` | [Интеграция](../integrations.md#read-схема-join-с-таблицами-приложения) |
 | `space.maintenance` | обслуживание | `expire_challenges`, `expire_verifications`, `reindex_search` | обычно вызывает диспетчер |
 
 ## Конвенция глаголов

@@ -14,6 +14,9 @@
   `space.verifications`, `space.admin`, `space.analytics`, `space.maintenance`) с единой
   конвенцией глаголов; соответствие старых имён — [`docs/api-migration.md`](docs/api-migration.md).
 - `LoginOutcome` (`StrEnum`, значения прежних строк), `LoginReport`, `ReconcileReport` в корне пакета.
+- `hub.read`: публичная read-схема на SQLAlchemy Core (`identities`, `leases`, `lease_history`,
+  `region_states`, `events`, `proxies`) без секретов для join с таблицами приложения и `among=`;
+  версия `READ_SCHEMA_VERSION`.
 - Руководство на новом API и страница [«Карта API»](docs/guide/api.md): точка входа, неймспейсы,
   типовые операции по сущностям, изменение состояний и лимиты.
 - `Identity`, `IdentityCreate`, `IdentityFilter`, `Page`, `CreateManyResult`, `SecretRef`, `Proxy`.
