@@ -24,6 +24,7 @@ from identity_hub.context import LeaseContext, _current
 from identity_hub.crypto import associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
+from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
 from identity_hub.errors import (
@@ -402,7 +403,7 @@ class Lease:
         await self._flush_logs(final=True)
         counters, self._counters = self._counters, LeaseCounters.empty()
         if error is not None:
-            counters.last_error = error[:2000]
+            counters.last_error = sanitize_text(error)
         event_type = {
             LeaseEndReason.RELEASED: "lease.released",
             LeaseEndReason.FAILED: "lease.failed",
@@ -453,7 +454,8 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost or 'heartbeat'}")
         raise
     except BaseException as exc:
-        await lease.release(LeaseEndReason.FAILED, f"{type(exc).__name__}: {exc}")
+        # только имя типа: текст исключения пользователя бывает с URL, ключами и паролем прокси (S-8)
+        await lease.release(LeaseEndReason.FAILED, type(exc).__name__)
         raise
     else:
         if lease._lost is not None:

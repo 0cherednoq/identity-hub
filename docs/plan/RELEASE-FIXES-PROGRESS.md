@@ -10,16 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F1.4 Свободный текст в истории, событиях и логах аренды
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты каналов: история аренды, lease.failed, identity.auth.changed, ih_lease_logs, таблица обходов scrub
-  - [ ] санитайзер текста и last_error/data.error = имя типа
-  - [ ] raw_status/code/reason/hint через санитайзер
-  - [ ] scrub: имена ключей по сегментам, строки в списках, неизвестный объект
-  - [ ] LeaseLogSink: scrub полей, лимиты, очистка буфера
-  - [ ] redact_refs_in_events и документация
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -31,7 +25,7 @@
 | F1.1 | Протокол идемпотентности операций | F0.1 | done |  |  |
 | F1.2 | Идемпотентность аренды | F1.1 | done |  |  |
 | F1.3 | Ошибки БД без параметров и `token` | F0.1 | done |  |  |
-| F1.4 | Свободный текст в истории, событиях и логах аренды | F0.1 | in_progress |  |  |
+| F1.4 | Свободный текст в истории, событиях и логах аренды | F0.1 | done |  |  |
 | F1.5 | Исходящие HTTP-запросы | F0.1 | todo |  |  |
 | F1.6 | Секреты вне аренды, аудит и repr | F0.1 | todo |  |  |
 | F1.7 | Провайдеры ключей | F0.1 | todo |  |  |
@@ -67,7 +61,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 5 / 40 done
+**Итого:** 6 / 40 done
 
 ## Журнал сессий
 
@@ -78,3 +72,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F1.1 · done · ih_operation_keys с PK (namespace, key) — миграция 0009, FK на аккаунт снят; канонический fingerprint; примитив claim/complete в PgStore и MemoryStore; Operation.previous_outcome, повтор после failed — новая попытка; сбой учёта после успеха не выходит наружу; D-153 (аккаунт вне fingerprint, legacy-записи в namespace пространства); 807 passed, гонки ×3 · дальше F1.2: claim в namespace <space>:lease + FOR UPDATE на replay, сверка pool/holder/service найденной аренды, uq_ih_leases_idempotency → неуникальный индекс по пространству (миграция 0010)
 2026-10-02 · F1.2 · done · ключ аренды в namespace <space>:lease с fingerprint пул+сервис+holder, FOR UPDATE на повторе, прямая сверка живой аренды; uq_ih_leases_idempotency → ix_ih_leases_idempotency (миграция 0010); I1.3 помечена done; гонки ×3 · дальше F1.3: перевод DBAPIError в PgTx.execute/PgStore._execute и на границе транзакции (DatabaseBusy для 55P03/57014/40P01/40001, новый StorageError), черновик теста — scratchpad/f13wip/test_storage_errors.py
 2026-10-02 · F1.3 · done · DBAPIError → DatabaseBusy/StorageError без SQL, параметров и цепочки исключений; heartbeat/release/импорт пишут describe_error(); D-154; 836 passed · дальше F1.4
+2026-10-02 · F1.4 · done · domain/redaction.py (sanitize_text, is_secret_key); last_error и data.error — имя типа; raw_status/code/reason/hint обрезаются и очищаются в машине регионов; scrub по главному слову имени + строки в списках + имя типа для неизвестных объектов; LeaseLogSink с лимитами и buffer_ttl; IdentityHub(redact_refs_in_events); 900 passed · дальше F1.5: черновики в scratchpad/f15wip (outbound.py с PinnedBackend, test_outbound.py)

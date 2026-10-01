@@ -25,6 +25,8 @@
   `LeaseRevoked`, `LeaseExpired`, `DatabaseBusy`, `SchemaIncompatible`,
   `SecretConfigurationError`. CLI печатает `error[<code>]` и возвращает код выхода по таблице.
 
+- `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
+  вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
 - `StorageError` (код `storage_error`): ошибка хранилища без SQL и параметров запроса;
   `DatabaseBusy.sqlstate`.
 - `Operation.previous_outcome` — исход прошлой попытки с тем же `key`
@@ -37,6 +39,13 @@
   (`duplicate=False`, `previous_outcome="failed"`); после успешной — `duplicate=True`. Тот же
   ключ с другим видом операции — `IdempotencyConflict`. Запись ключа переживает удаление
   аккаунта и хранится `Retention.operation_keys` с момента последней попытки.
+- В `last_error` истории аренды и в `data.error` событий `lease.*` сохраняется только имя типа
+  исключения, а не его текст. `raw_status`, `code`, `hint` и причины команд обрезаются и очищаются
+  от URL с учётными данными, query-строк и `Bearer …`.
+- `scrub` событий сравнивает главное слово имени поля (`tokens_used`, `password_changed_at` больше
+  не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
+  проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
+  размера действуют для полей `extra` в `ih_lease_logs`.
 - `idempotency_key` аренды действует в пределах пространства и принадлежит одной команде: пулу,
   сервису и `holder`. Повтор от другого пула или `holder` — `IdempotencyConflict` (миграция `0010`).
 - Сбой записи результата после успешно выполненной операции не выходит к вызывающему:

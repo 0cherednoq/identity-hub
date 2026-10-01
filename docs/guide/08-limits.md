@@ -202,6 +202,9 @@ TELEGRAM = Service(..., error_classifier=TgErrors())
 | `REQUEST` или `None` | Ошибка запроса, данных, сети | состояние не меняется |
 
 `Fault(blame, retry_after=None, standing=None, code=None, raw_status=None, weight=1.0)`.
+`code` и `raw_status` уходят в события: не кладите в них `str(exc)` — текст исключения часто
+содержит URL с ключом. Библиотека обрезает и очищает эти поля, но короткий код платформы
+(`FLOOD_WAIT`, `AUTH_KEY_UNREGISTERED`) полезнее.
 
 **Карантин.** `error_score` растёт на ошибках `IDENTITY` и уменьшается вдвое при каждой успешной
 операции. Если он достиг `Service.quarantine_threshold` (по умолчанию 5), аккаунт уходит в

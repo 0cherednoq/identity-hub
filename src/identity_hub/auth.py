@@ -20,6 +20,7 @@ from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
 from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
+from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, Lifecycle, Standing
 from identity_hub.errors import LeaseUnavailable, NotFound, ValidationFailed
@@ -353,12 +354,13 @@ class LoginMixin(SpaceBase):
         aad = associated_data("ih_challenges", lease.identity_id, str(challenge_id))
         context = asked.context if asked.context is not None else {}
         payload = self.hub.envelope.seal_model(context, aad)
+        hint = sanitize_text(asked.hint) or ""  # уходит во внешнее событие и очередь человека
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)
             now = await tx.now()
             expires_at = now + asked.expires_in if asked.expires_in else now + timedelta(hours=1)
             opened = await tx.open_challenge(
-                challenge_id, lease.identity_id, asked.kind, asked.hint, payload, expires_at
+                challenge_id, lease.identity_id, asked.kind, hint, payload, expires_at
             )
             if not opened:
                 # у аккаунта уже открыт вопрос (FR-5.5): вход считается неудачным, состояние не трогаем
@@ -383,7 +385,7 @@ class LoginMixin(SpaceBase):
                     data={
                         "challenge_id": str(challenge_id),
                         "kind": asked.kind,
-                        "hint": asked.hint,
+                        "hint": hint,
                         "expires_at": expires_at,
                     },
                 ),

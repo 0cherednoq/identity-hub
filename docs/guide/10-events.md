@@ -24,10 +24,30 @@ flowchart LR
 `Event`: `event_id`, `type`, `severity` (`info` / `warning` / `critical`), `occurred_at`,
 `space`, `service`, `identity_id`, `proxy_id`, `lease_id`, `actor`, `data`.
 
-Секреты в `data` не попадают: значения ключей, содержащих `token`, `password`, `secret`,
-`auth_key`, `cookie`, `credential`, `evidence`, `totp`, а также `SecretStr` и pydantic-модели
-заменяются на `[redacted]`. С
-`IdentityHub(strict_events=True)` вместо вырезания бросается ошибка — удобно в тестах.
+Секреты в `data` не попадают. На `[redacted]` заменяются:
+
+- значения полей, чьё имя называет секрет: `password`, `bot_token`, `api_key`, `auth_key`,
+  `authorization`, `cookie`, `credentials`, `evidence`, `jwt`, `otp`, `passphrase`, `proxy`,
+  `secret`, `totp` и подобные. Сравнивается главное слово имени, поэтому `tokens_used`,
+  `password_changed_at` и `proxy_id` остаются как есть;
+- `SecretStr`, `SecretValue`, `bytes` и pydantic-модели;
+- учётные данные внутри строк, в том числе в списках: `scheme://user:pass@host`, query-строка
+  URL, `Bearer …`, `password=…`.
+
+Объект неизвестного типа заменяется именем типа (`<MyContext>`). С
+`IdentityHub(strict_events=True)` вместо вырезания бросается `SecretLeak` — удобно в тестах.
+
+Текст, который приходит из вашего кода и от платформы, перед записью укорачивается и проходит
+ту же очистку: `raw_status` (до 128 символов) и `code` (до 64) из `Fault` и `ProbeResult`,
+`hint` из `LoginChallenge` (до 256), причины команд и override (до 1000). Текст исключения,
+упавшего в теле аренды или операции, не сохраняется вовсе: в `last_error` истории аренды и в
+`data.error` событий `lease.*` и `operation.failed` остаётся только имя типа исключения.
+
+**Персональные данные.** `identity.registered` и `identity.deleted` несут `external_ref`
+(телефон, email) и `labels` — это часть контракта событий: по ним ваша система сопоставляет
+аккаунт. Если события уходят во внешние вебхуки и такие данные там недопустимы, создайте хаб с
+`IdentityHub(redact_refs_in_events=True)`: `external_ref`, `normalized_ref` и `labels` во всех
+событиях заменяются на `[redacted]`, аккаунт остаётся опознаваемым по `identity_id`.
 
 ## Основные типы
 

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 from uuid import UUID
 
 from identity_hub.domain.data import validate_json_payload
+from identity_hub.domain.redaction import REDACTED
 from identity_hub.errors import NotFound
 from identity_hub.events import EventDraft, scrub
 from identity_hub.store.base import IdentityRow, SpaceRef, StoreTx
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
 __all__ = ["SpaceBase", "logger"]
 
 logger = logging.getLogger("identity_hub")
+
+# поля событий с идентификаторами людей: телефон, email, произвольные метки (R2-S17)
+_REF_FIELDS = ("external_ref", "normalized_ref", "labels")
+
+
+def _without_refs(data: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: (REDACTED if key in _REF_FIELDS and value is not None else value) for key, value in data.items()
+    }
 
 
 class SpaceBase:
@@ -75,6 +85,8 @@ class SpaceBase:
         """Записать события в транзакции операции; данные очищаются от секретов (S-8)."""
         strict = self.hub.strict_events
         clean = [replace(d, data=scrub(d.data, strict=strict)) for d in drafts]
+        if self.hub.redact_refs_in_events:
+            clean = [replace(d, data=_without_refs(d.data)) for d in clean]
         for draft in clean:
             validate_json_payload(draft.data, f"событие {draft.type}")
         return await tx.emit(clean)

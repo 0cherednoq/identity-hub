@@ -110,6 +110,7 @@ class IdentityHub:
         db_schema: str | None = None,
         clock: Clock | None = None,
         strict_events: bool = False,
+        redact_refs_in_events: bool = False,
         store: Store | None = None,
         proxy_health: ProxyHealthPolicy | None = None,
         lease_logs: LeaseLogPolicy | None = None,
@@ -172,6 +173,8 @@ class IdentityHub:
         self.dispatcher.add_pump(self.state_snapshots.run_due)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
+        # external_ref и labels (телефон, email) не уходят в события и вебхуки (D-152)
+        self.redact_refs_in_events = redact_refs_in_events
         self.db_schema = db_schema
         self._services: dict[str, Service] = {}
         for service in services:

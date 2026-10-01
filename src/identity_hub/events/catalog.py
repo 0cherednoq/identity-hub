@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Any
 from uuid import UUID
@@ -13,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, SecretBytes, SecretStr
 
 from identity_hub.crypto.secret_value import SecretValue
+from identity_hub.domain.redaction import REDACTED, has_inline_secrets, is_secret_key, redact_inline_secrets
 from identity_hub.enums import Severity
 
 __all__ = [
@@ -143,22 +143,28 @@ def matches_any(patterns: Iterable[str], event_type: str) -> bool:
 
 # ---------------------------------------------------------------- очистка секретов
 
-_SECRET_KEY = re.compile(r"(token|password|passwd|secret|auth_key|cookie|credential|evidence|totp)", re.I)
-REDACTED = "[redacted]"
-
 
 class SecretLeak(ValueError):
     """В данные события попал секрет (строгий режим — тесты и разработка)."""
 
 
 def scrub(data: Mapping[str, Any], *, strict: bool = False) -> dict[str, Any]:
-    """Привести `data` к JSON без секретов (S-8): SecretStr, bytes и «секретные» ключи вырезаются."""
+    """Привести `data` к JSON без секретов (S-8).
+
+    Вырезаются: значения под «секретными» именами (`is_secret_key`), `SecretStr`/`bytes`/модели,
+    учётные данные внутри строк (URL с паролем, `Bearer …`, `password=…`) — в том числе в списках.
+    Неизвестный объект заменяется именем типа: его `str()` может содержать что угодно.
+    """
     return {str(k): _scrub_value(str(k), v, strict) for k, v in data.items()}
 
 
 def _scrub_value(key: str, value: Any, strict: bool) -> Any:
-    if _SECRET_KEY.search(key) and value is not None:
+    if is_secret_key(key) and value is not None:
         return _leak(f"ключ {key!r}", strict)
+    return _scrub_item(key, value, strict)
+
+
+def _scrub_item(key: str, value: Any, strict: bool) -> Any:
     if isinstance(value, SecretStr | SecretBytes | SecretValue | bytes | bytearray | memoryview):
         return _leak(f"значение {key!r} типа {type(value).__name__}", strict)
     if isinstance(value, BaseModel):
@@ -167,16 +173,26 @@ def _scrub_value(key: str, value: Any, strict: bool) -> Any:
         return {str(k): _scrub_value(str(k), v, strict) for k, v in value.items()}
     if isinstance(value, list | tuple | set | frozenset):
         items = sorted(value, key=str) if isinstance(value, set | frozenset) else value
-        return [_scrub_value(key, v, strict) for v in items]
+        return [_scrub_item(key, v, strict) for v in items]
     if isinstance(value, Enum):
-        return value.value
+        return _scrub_item(key, value.value, strict)
     if isinstance(value, datetime | date):
         return value.isoformat()
+    if isinstance(value, timedelta):
+        return str(value)
     if isinstance(value, UUID):
         return str(value)
-    if value is None or isinstance(value, str | int | float | bool):
+    if isinstance(value, str):
+        if has_inline_secrets(value):
+            if strict:
+                raise SecretLeak(f"секрет в данных события: строка в {key!r} содержит учётные данные")
+            return redact_inline_secrets(value)
         return value
-    return str(value)
+    if value is None or isinstance(value, int | float | bool):
+        return value
+    if strict:
+        raise SecretLeak(f"секрет в данных события: объект {type(value).__name__} в {key!r}")
+    return f"<{type(value).__name__}>"
 
 
 def _leak(what: str, strict: bool) -> str:

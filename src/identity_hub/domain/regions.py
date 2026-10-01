@@ -20,10 +20,14 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+from identity_hub.domain.redaction import sanitize_text
 from identity_hub.enums import ChangeSource, Severity
 from identity_hub.errors import TransitionNotAllowed, ValidationFailed
 
 __all__ = [
+    "CODE_LIMIT",
+    "RAW_STATUS_LIMIT",
+    "REASON_LIMIT",
     "Change",
     "Command",
     "Observation",
@@ -37,6 +41,11 @@ __all__ = [
     "Unpin",
     "apply",
 ]
+
+# размеры колонок ih_region_states: текст длиннее не помещается и не нужен
+CODE_LIMIT = 64
+RAW_STATUS_LIMIT = 128
+REASON_LIMIT = 1000
 
 OBSERVATION_SOURCES = frozenset(
     {ChangeSource.PROBE, ChangeSource.ERROR, ChangeSource.WEBHOOK, ChangeSource.IMPORT}
@@ -212,10 +221,40 @@ class RegionSpec:
 # ---------------------------------------------------------------- применение
 
 
+def _sanitized(change: Change) -> Change:
+    """Свободный текст изменения — без встроенных секретов и в размер колонок (S-8, R2-S06).
+
+    `raw_status`, `code` и `reason` попадают во внешние события, вебхуки, карточку и read-схему.
+    """
+    match change:
+        case Observation():
+            return replace(
+                change,
+                raw_status=sanitize_text(change.raw_status, limit=RAW_STATUS_LIMIT),
+                code=sanitize_text(change.code, limit=CODE_LIMIT),
+            )
+        case Command():
+            return replace(
+                change,
+                code=sanitize_text(change.code, limit=CODE_LIMIT),
+                reason=sanitize_text(change.reason, limit=REASON_LIMIT),
+            )
+        case Override():
+            return replace(
+                change,
+                code=sanitize_text(change.code, limit=CODE_LIMIT),
+                reason=sanitize_text(change.reason, limit=REASON_LIMIT) or "",
+            )
+        case Unpin():
+            return replace(change, reason=sanitize_text(change.reason, limit=REASON_LIMIT) or "")
+    return change
+
+
 def apply(
     spec: RegionSpec, current: RegionState, change: Change, now: datetime, key: str = ""
 ) -> RegionDecision:
     """Применить изменение к региону. Не бросает для наблюдений; бросает для некорректных команд/override."""
+    change = _sanitized(change)
     match change:
         case Command():
             return _apply_command(spec, current, change, now, key)

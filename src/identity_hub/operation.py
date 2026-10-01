@@ -14,13 +14,15 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 from identity_hub._space import logger
 from identity_hub.domain.admissibility import IdentitySnapshot, evaluate
 from identity_hub.domain.idempotency import OPERATION_FAMILY, namespace
-from identity_hub.domain.regions import Command, Observation, Timer
+from identity_hub.domain.redaction import sanitize_text
+from identity_hub.domain.regions import CODE_LIMIT, RAW_STATUS_LIMIT, Command, Observation, Timer
 from identity_hub.enums import AuthState, Availability, ChangeSource, SessionStatus, Standing
 from identity_hub.errors import OperationNotAllowed, StaleFencing, TransitionNotAllowed
 from identity_hub.events import EventDraft
@@ -134,7 +136,7 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
         _observe_operation(lease, kind, started, "cancelled")
         raise  # потеря аренды или отмена — не вина аккаунта
     except Exception as exc:
-        lease._count(kind, ok=False, error=f"{type(exc).__name__}: {exc}"[:2000])
+        lease._count(kind, ok=False, error=type(exc).__name__)
         await _on_failure(lease, op, exc)
         record_metric(
             space.hub.metrics,
@@ -209,6 +211,12 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
         except Exception:
             logger.exception("ErrorClassifier сервиса %s упал", service.name)
     fault = fault or Fault(Blame.REQUEST)
+    # текст классификатора уходит во внешние события и карточку — без секретов и в размер колонок
+    fault = replace(
+        fault,
+        code=sanitize_text(fault.code, limit=CODE_LIMIT),
+        raw_status=sanitize_text(fault.raw_status, limit=RAW_STATUS_LIMIT),
+    )
     space = lease.pool.space
     try:
         async with space._tx(own=True) as tx:

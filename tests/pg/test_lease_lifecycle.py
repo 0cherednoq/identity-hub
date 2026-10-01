@@ -77,7 +77,7 @@ async def test_exception_marks_failed(
             raise ValueError("bad")
     (history,) = await _history(sessionmaker)
     assert history.end_reason == "failed"
-    assert history.last_error == "ValueError: bad"
+    assert history.last_error == "ValueError"
 
 
 async def test_lost_before_ttl_when_heartbeat_fails(

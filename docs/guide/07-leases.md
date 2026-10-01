@@ -160,6 +160,11 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 В логах поля аренды подставляются автоматически: `LeaseContextFilter` для `logging` и
 `structlog_processor` для structlog.
 
+Если подключён `hub.lease_log_sink`, записи уровня `WARNING` и выше сохраняются в
+`ih_lease_logs`. Сообщение и поля `extra` очищаются так же, как данные событий, а размер
+ограничен (`LeaseLogPolicy.max_field_chars`, `max_entry_bytes`). Всё равно не логируйте
+`lease.proxy` и секреты: обычные обработчики логов их не вырезают.
+
 ## Разделяемый режим (SHARED)
 
 `Service(lease_mode=LeaseMode.SHARED)` — аренда не блокирует аккаунт: несколько воркеров
