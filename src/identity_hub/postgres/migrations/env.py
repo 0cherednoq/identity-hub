@@ -14,8 +14,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from identity_hub.postgres import metadata, schema_options
-
-VERSION_TABLE = "ih_alembic_version"
+from identity_hub.postgres.migrate import VERSION_TABLE
 
 config = context.config
 

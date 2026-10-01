@@ -146,6 +146,12 @@ hub = await container.get(IdentityHub)
 воркеров и хотя бы одного dispatcher. Отдельный maintenance-процесс полезен,
 если dispatcher не работает постоянно.
 
+`hub.start()` сверяет ревизию схемы (`ih_alembic_version`) с той, что ожидает код, и при
+несовпадении — более старой, более новой, отсутствующей или разветвлённой — бросает
+`SchemaIncompatible` с ожидаемой и фактической ревизией, без URL и SQL. Миграции
+`start()` не применяет: сначала `identity-hub migrate`, затем выкатка кода. `MemoryStore`
+всегда совместим.
+
 ```text
 migration job -> PostgreSQL schema
 web/worker     -> hub.start() -> register/acquire/operation

@@ -88,6 +88,9 @@ from identity_hub.store.base import (
 __all__ = ["MemoryStore", "MemoryTx"]
 
 
+MEMORY_SCHEMA_REVISION = "memory"
+
+
 @dataclass
 class _MemoryState:
     spaces: dict[str, SpaceRef] = field(default_factory=dict)
@@ -2233,6 +2236,10 @@ class MemoryStore(Store):
                 if tx._notify:
                     for event in self._listeners.get("ih_events", ()):
                         event.set()
+
+    async def schema_revisions(self) -> tuple[str, list[str]]:
+        """MemoryStore всегда совместим: схема живёт в коде."""
+        return MEMORY_SCHEMA_REVISION, [MEMORY_SCHEMA_REVISION]
 
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         async with self._lock:

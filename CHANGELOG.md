@@ -20,6 +20,8 @@
 
 ### Changed
 
+- `hub.start()` проверяет ревизию схемы и бросает `SchemaIncompatible`, если она не та, что
+  ожидает код; `identity-hub migrate` берёт advisory lock на схему.
 - Associated data шифрования в формате `identity-hub:v1:…`; записи `1.0.0a1` читаются, `rotate-key`
   переводит их в новый формат. Лимиты: JSON до 64 KiB и 16 уровней, секрет до 512 KiB.
 - Единый порядок блокировок ([`docs/lock-order.md`](docs/lock-order.md)) и

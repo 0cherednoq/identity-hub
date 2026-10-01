@@ -1449,6 +1449,13 @@ class Store(ABC):
         """Своя транзакция библиотеки, либо savepoint в сессии пользователя (ТЗ T-1, T-3)."""
 
     @abstractmethod
+    async def schema_revisions(self) -> tuple[str, list[str]]:
+        """(ревизия схемы, которую ожидает библиотека, фактические ревизии хранилища) — IMP-15.
+
+        Фактических несколько — разветвлённая история; пусто — схема не создана.
+        """
+
+    @abstractmethod
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         """Зеркало реестра сервисов для админки (FR-1.3)."""
 

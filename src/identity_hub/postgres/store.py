@@ -20,7 +20,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Column,
     DateTime,
+    MetaData,
+    String,
     Table,
     Text,
     and_,
@@ -39,6 +42,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.engine import Result
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable, Select
 
@@ -58,6 +62,7 @@ from identity_hub.enums import (
 from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, SpaceMismatch
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
+from identity_hub.postgres.migrate import SCHEMA_HEAD, VERSION_TABLE
 from identity_hub.postgres.models import (
     XID8,
     BindingRecord,
@@ -3575,6 +3580,19 @@ class PgStore(Store):
         await session.execute(text("SELECT set_config('ih.space', :slug, true)"), {"slug": space.slug})
 
     # --------------------------------------------------------- реестр и пространства
+
+    async def schema_revisions(self) -> tuple[str, list[str]]:
+        version = Table(VERSION_TABLE, MetaData(), Column("version_num", String(32)))
+        async with self.sessionmaker() as session:
+            try:
+                rows = await session.execute(
+                    select(version.c.version_num).order_by(version.c.version_num),
+                    execution_options=self.options,
+                )
+            except ProgrammingError:  # таблицы версий нет — схема не создана
+                return SCHEMA_HEAD, []
+            revisions = [str(row[0]) for row in rows]
+            return SCHEMA_HEAD, revisions
 
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         if not services:

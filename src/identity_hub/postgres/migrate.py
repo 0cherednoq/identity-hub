@@ -11,9 +11,13 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
     from sqlalchemy.ext.asyncio import AsyncEngine
 
-__all__ = ["alembic_config", "migrate"]
+__all__ = ["MIGRATION_LOCK_NAMESPACE", "SCHEMA_HEAD", "VERSION_TABLE", "alembic_config", "migrate"]
 
 SCRIPT_LOCATION = "identity_hub.postgres:migrations"
+VERSION_TABLE = "ih_alembic_version"
+# Ревизия, которую ожидает этот код; новая миграция обязана обновить значение (тест сверяет с alembic head).
+SCHEMA_HEAD = "0007"
+MIGRATION_LOCK_NAMESPACE = "identity_hub:migrate"
 
 
 def alembic_config(db_schema: str | None = None, connection: Connection | None = None) -> Config:
@@ -32,6 +36,11 @@ async def migrate(engine: AsyncEngine, *, db_schema: str | None = None, revision
     from alembic import command
 
     async with engine.begin() as conn:
+        # одна миграция на схему за раз; xact-блокировка снимается при commit/rollback (IMP-15)
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:name, 0))"),
+            {"name": f"{MIGRATION_LOCK_NAMESPACE}:{db_schema or 'public'}"},
+        )
         if db_schema is not None:
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{db_schema}"'))
 

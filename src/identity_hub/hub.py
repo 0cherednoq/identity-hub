@@ -33,7 +33,7 @@ from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
 from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
 from identity_hub.doctor import Doctor
-from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.errors import NotFound, SchemaIncompatible, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
@@ -196,7 +196,14 @@ class IdentityHub:
         return tuple(self._services.values())
 
     async def start(self) -> None:
-        """Синхронизировать реестр сервисов в ih_services (FR-1.3). Вызывать при старте приложения."""
+        """Проверить ревизию схемы и синхронизировать реестр сервисов (FR-1.3, IMP-15).
+
+        Схема БД должна быть ровно той ревизии, что ожидает код: иначе `SchemaIncompatible`
+        (без URL и SQL). Миграции `start()` не применяет — это `identity-hub migrate`.
+        """
+        expected, actual = await self.store.schema_revisions()
+        if actual != [expected]:
+            raise SchemaIncompatible(expected, ", ".join(actual) or None)
         await self.store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
 
     # --------------------------------------------------------- пространства
