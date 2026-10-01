@@ -16,6 +16,7 @@ from pydantic import BaseModel, SecretStr
 from identity_hub import (
     AuthState,
     Event,
+    IdentityCreate,
     IdentityHub,
     Lifecycle,
     OperationRule,
@@ -91,19 +92,21 @@ async def run_example() -> ExampleResult:
     await hub.start()
 
     space = hub.space("tennet", "Tennet")
-    registered = await space.register(
-        service=TELEGRAM,
-        external_ref="+12025550123",
-        credentials=TelegramCredentials(phone="+12025550123"),
-        session=TelegramSession(auth_key=SecretStr("test-session")),
-        tags=["parser"],
-        lifecycle=Lifecycle.READY,
-        auth_state=AuthState.AUTHENTICATED,
+    registered = await space.identities.create(
+        IdentityCreate(
+            service=TELEGRAM,
+            external_ref="+12025550123",
+            credentials=TelegramCredentials(phone="+12025550123"),
+            session=TelegramSession(auth_key=SecretStr("test-session")),
+            tags=["parser"],
+            lifecycle=Lifecycle.READY,
+            auth_state=AuthState.AUTHENTICATED,
+        ),
         actor="telegram-example",
     )
 
     client = FakeTelegramClient()
-    pool = space.pool(
+    pool = space.pools.define(
         "parsers",
         service=TELEGRAM,
         tags=["parser"],
@@ -120,7 +123,7 @@ async def run_example() -> ExampleResult:
 
     # Пользовательские события доставляются после коммита. События lease.*,
     # operation.* и session.saved остаются во внутреннем журнале.
-    await space.set_note(registered.identity_id, "history read", actor="telegram-example")
+    await space.identities.set_note(registered.id, "history read", actor="telegram-example")
     await hub.dispatcher.drain()
     return ExampleResult(
         messages=tuple(messages),

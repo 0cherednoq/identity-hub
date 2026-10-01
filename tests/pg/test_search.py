@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from identity_hub.errors import ValidationFailed
 from identity_hub.hub import SpaceHandle
 from identity_hub.read.search import COUNT_LIMIT, AccountSearchOptions, decode_cursor, encode_cursor
+from tests.fixtures.api import register
 
 pytestmark = pytest.mark.pg
 
@@ -22,7 +23,8 @@ async def _seed(space: SpaceHandle) -> dict[str, UUID]:
         ("+380502", {"first_name": "Petro", "country": "UA"}, {"farm": "4", "vip": True}, [], "ready"),
         ("+48601", {"first_name": "Olga", "country": "PL"}, {"farm": 3}, ["parser"], "provisioning"),
     ):
-        r = await space.register(
+        r = await register(
+            space,
             service="fake_tg",
             external_ref=ref,
             profile=profile,
@@ -31,12 +33,12 @@ async def _seed(space: SpaceHandle) -> dict[str, UUID]:
             lifecycle=lifecycle,
         )
         ids[ref] = r.identity_id
-    ids["mail"] = (await space.register(service="fake_exchange", external_ref="olena@mail.com")).identity_id
+    ids["mail"] = (await register(space, service="fake_exchange", external_ref="olena@mail.com")).identity_id
     return ids
 
 
 async def _refs(space: SpaceHandle, query: str) -> set[str]:
-    page = await space.search(query)
+    page = await space.identities.search(query)
     return {row.external_ref for row in page.items}
 
 
@@ -71,20 +73,20 @@ async def test_exact_uuid_and_short_id(space: SpaceHandle) -> None:
 
 async def test_keyset_pagination_and_count(space: SpaceHandle) -> None:
     for i in range(7):
-        await space.register(service="fake_tg", external_ref=f"+1{i:03d}")
-    first = await space.search("service:fake_tg", limit=3)
-    assert first.total == 7 and first.total_label == "7"
+        await register(space, service="fake_tg", external_ref=f"+1{i:03d}")
+    first = await space.identities.search("service:fake_tg", limit=3, count=True)
+    assert first.total == 7
     assert first.next_cursor is not None
     seen = [r.external_ref for r in first.items]
     cursor: str | None = first.next_cursor
     while cursor:
-        page = await space.search("service:fake_tg", limit=3, after=cursor, count=False)
+        page = await space.identities.search("service:fake_tg", limit=3, after=cursor, count=False)
         assert page.total is None
         seen += [r.external_ref for r in page.items]
         cursor = page.next_cursor
     assert seen == [f"+1{i:03d}" for i in reversed(range(7))]  # новые первыми, без повторов
     with pytest.raises(ValidationFailed):
-        await space.search("", after="not-a-cursor")
+        await space.identities.search("", after="not-a-cursor")
     created, ident = decode_cursor(encode_cursor(first.items[0].created_at, first.items[0].id))
     assert ident == first.items[0].id and created == first.items[0].created_at
 
@@ -93,7 +95,7 @@ async def test_account_search_equal_timestamps_and_structured_filter(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     ids = await _seed(space)
-    await space.add_requirement(ids["+380501"], "captcha")
+    await space.verifications.requirements.add(ids["+380501"], "captcha")
     ref = await space.ref()
     async with sessionmaker() as session, session.begin():
         await session.execute(
@@ -101,14 +103,14 @@ async def test_account_search_equal_timestamps_and_structured_filter(
             {"space": ref.id},
         )
 
-    filtered = await space.account_search(options=AccountSearchOptions(requirement="captcha"))
+    filtered = await space.admin.identity_page(options=AccountSearchOptions(requirement="captcha"))
     assert [item.external_ref for item in filtered.items] == ["+380501"]
     assert filtered.items[0].requirements == ("captcha",)
 
     seen: list[UUID] = []
     cursor: str | None = None
     while True:
-        page = await space.account_search(limit=2, after=cursor, count=cursor is None)
+        page = await space.admin.identity_page(limit=2, after=cursor, count=cursor is None)
         seen.extend(item.id for item in page.items)
         if page.next_cursor is None:
             break
@@ -118,7 +120,7 @@ async def test_account_search_equal_timestamps_and_structured_filter(
     sorted_refs: list[str] = []
     cursor = None
     while True:
-        page = await space.account_search(
+        page = await space.admin.identity_page(
             options=AccountSearchOptions(sort_by="external_ref", sort_desc=False),
             limit=2,
             after=cursor,
@@ -129,7 +131,7 @@ async def test_account_search_equal_timestamps_and_structured_filter(
         cursor = page.next_cursor
     assert sorted_refs == ["+380501", "+380502", "+48601", "olena@mail.com"]
 
-    snapshot = await space.account_selection_snapshot(
+    snapshot = await space.admin.selection_snapshot(
         "service:fake_tg", options=AccountSearchOptions(sort_by="external_ref"), limit=2
     )
     assert [entry.external_ref for entry in snapshot.entries] == ["+48601", "+380502"]
@@ -147,7 +149,7 @@ async def test_account_search_equal_timestamps_and_structured_filter(
         sorted_ids: list[UUID] = []
         cursor = None
         while True:
-            page = await space.account_search(
+            page = await space.admin.identity_page(
                 options=AccountSearchOptions(sort_by=sort_by),
                 limit=2,
                 after=cursor,
@@ -171,8 +173,8 @@ async def test_capped_count(space: SpaceHandle, sessionmaker: async_sessionmaker
             ),
             {"space": ref.id, "n": COUNT_LIMIT + 5},
         )
-    page = await space.search("", limit=10)
-    assert page.total_label == "1000+"
+    page = await space.identities.search("", limit=10, count=True)
+    assert page.total is not None and page.total > 1000  # «1000+»
 
 
 async def test_search_uses_gin_indexes(

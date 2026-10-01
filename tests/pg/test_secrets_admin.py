@@ -12,6 +12,7 @@ from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.hub import SpaceHandle
 from identity_hub.postgres.models import EventRecord
 from identity_hub.store.base import IdentityRow
+from tests.fixtures.api import register
 
 pytestmark = pytest.mark.pg
 
@@ -19,21 +20,22 @@ pytestmark = pytest.mark.pg
 async def test_update_and_reveal_with_audit(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    r = await space.register(
+    r = await register(
+        space,
         service="fake_tg",
         external_ref="+1",
         credentials={"phone": "+1", "password": "old"},
         session={"auth_key": "K"},
     )
-    await space.update_credentials(r.identity_id, {"phone": "+1", "password": "new"}, actor="admin")
-    await space.update_session(r.identity_id, {"auth_key": "K2"}, actor="admin", slot="default")
-    creds = await space.reveal_secret(r.identity_id, "credentials", actor="evgeny", reason="поддержка")
+    await space.secrets.replace_credentials(r.identity_id, {"phone": "+1", "password": "new"}, actor="admin")
+    await space.secrets.replace_session(r.identity_id, {"auth_key": "K2"}, actor="admin", slot="default")
+    creds = await space.secrets.reveal(r.identity_id, "credentials", actor="evgeny", reason="поддержка")
     assert creds == {"phone": "+1", "password": "new"}
-    assert (await space.reveal_secret(r.identity_id, "session", actor="evgeny"))["auth_key"] == "K2"
+    assert (await space.secrets.reveal(r.identity_id, "session", actor="evgeny"))["auth_key"] == "K2"
     with pytest.raises(NotFound):
-        await space.reveal_secret(r.identity_id, "session:backup", actor="evgeny")
+        await space.secrets.reveal(r.identity_id, "session:backup", actor="evgeny")
     with pytest.raises(ValidationFailed):
-        await space.reveal_secret(r.identity_id, "token", actor="evgeny")
+        await space.secrets.reveal(r.identity_id, "token", actor="evgeny")
 
     async with sessionmaker() as s:
         events = list((await s.execute(select(EventRecord).order_by(EventRecord.id))).scalars())

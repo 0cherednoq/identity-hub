@@ -22,6 +22,7 @@ from identity_hub.postgres.models import (
 )
 from identity_hub.protocols import Blame, Fault
 from identity_hub.service import OperationRule, Quota
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_TG
 
 pytestmark = pytest.mark.pg
@@ -72,10 +73,10 @@ CLASSIFIED = replace(
 async def pool(hub: IdentityHub, space: SpaceHandle) -> Pool:
     hub.register_service(CLASSIFIED)
     await hub.start()
-    await space.register(
-        service="classified", external_ref="+1", lifecycle="ready", session={"auth_key": "k"}
+    await register(
+        space, service="classified", external_ref="+1", lifecycle="ready", session={"auth_key": "k"}
     )
-    return space.pool("p", service="classified")
+    return space.pools.define("p", service="classified")
 
 
 async def _identity(sm: async_sessionmaker[AsyncSession]) -> Any:

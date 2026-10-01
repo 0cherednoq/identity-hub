@@ -30,17 +30,17 @@ async def test_capacity_transitions(
 ) -> None:
     for _ in range(3):
         await make_identity(space)
-    pool = space.pool("parsers", service="fake_tg", capacity_low=1)
-    assert await pool.check_capacity() == 2  # до threshold + 1
+    pool = space.pools.define("parsers", service="fake_tg", capacity_low=1)
+    assert await pool.capacity() == 2  # до threshold + 1
     leases = [await pool.acquire(), await pool.acquire()]
-    assert await pool.check_capacity() == 1
-    assert await pool.check_capacity() == 1  # то же состояние — без повторного события
+    assert await pool.capacity() == 1
+    assert await pool.capacity() == 1  # то же состояние — без повторного события
     leases.append(await pool.acquire())
     with pytest.raises(LeaseUnavailable):
         await pool.acquire()  # сам проверяет ёмкость → empty
     for lease in leases:
         await lease.release()
-    await pool.check_capacity()
+    await pool.capacity()
     events = await _events(sessionmaker, "pool.capacity.")
     assert [(e.type, e.severity, e.data["available"]) for e in events] == [
         ("pool.capacity.low", "warning", 1),
@@ -57,7 +57,7 @@ async def test_worker_leases_lost_aggregate(
 ) -> None:
     for _ in range(2):
         await make_identity(space)
-    pool = space.pool(
+    pool = space.pools.define(
         "p",
         service="fake_tg",
         holder="host:42",

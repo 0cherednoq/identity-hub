@@ -9,6 +9,7 @@ import pytest
 from identity_hub._ids import new_id
 from identity_hub.crypto import associated_data
 from identity_hub.hub import IdentityHub, SpaceHandle
+from tests.fixtures.api import register
 
 pytestmark = pytest.mark.pg
 
@@ -17,7 +18,8 @@ async def test_postgres_human_queue_is_scoped_and_never_reads_challenge_context(
     hub: IdentityHub,
     space: SpaceHandle,
 ) -> None:
-    registered = await space.register(
+    registered = await register(
+        space,
         service="fake_exchange",
         external_ref="attention@x",
         credentials={"email": "attention@x", "password": "secret-password"},
@@ -41,15 +43,16 @@ async def test_postgres_human_queue_is_scoped_and_never_reads_challenge_context(
         )
 
     foreign = hub.space("foreign", "Foreign")
-    foreign_identity = await foreign.register(
+    foreign_identity = await register(
+        foreign,
         service="fake_exchange",
         external_ref="foreign@x",
         credentials={"email": "foreign@x", "password": "foreign-password"},
         lifecycle="ready",
     )
-    await foreign.add_requirement(foreign_identity.identity_id, "must-not-leak")
+    await foreign.verifications.requirements.add(foreign_identity.identity_id, "must-not-leak")
 
-    queue = await space.human_queue()
+    queue = await space.admin.human_queue()
 
     assert len(queue.items) == 1
     item = queue.items[0]

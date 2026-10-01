@@ -16,8 +16,8 @@ async def test_metrics_hook_called_at_required_points(hub: IdentityHub, space: S
     metrics = RecordingMetrics()
     hub.metrics = metrics
     await make_identity(space)
-    pool = space.pool("metrics", service="fake_tg", capacity_low=1)
-    assert await pool.check_capacity() == 1
+    pool = space.pools.define("metrics", service="fake_tg", capacity_low=1)
+    assert await pool.capacity() == 1
 
     async with pool.lease(wait=0.1) as lease:
         async with lease.operation("read_channel"):

@@ -12,6 +12,7 @@ from identity_hub.service import Service
 from identity_hub.testing.memory import MemoryStore
 from litestar.testing import TestClient
 from pydantic import BaseModel, SecretStr
+from tests.factories.api import register
 
 from identity_hub_admin.app import create_admin_app
 from identity_hub_admin.settings import AdminSettings, Environment
@@ -77,7 +78,8 @@ def _hub() -> IdentityHub:
 
 
 async def _seed(hub: IdentityHub) -> None:
-    await hub.space("secret-space", "Secrets").register(
+    await register(
+        hub.space("secret-space", "Secrets"),
         service=SECRET_SERVICE,
         external_ref="secret-target",
         id=SECRET_ID,

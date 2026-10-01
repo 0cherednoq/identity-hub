@@ -81,17 +81,17 @@ async def test_durable_admin_reads_are_space_scoped(
             ],
         )
 
-    runs = await space.import_runs()
-    operation = await space.provider_operations(states=frozenset({"retryable"}))
+    runs = await space.admin.import_runs()
+    operation = await space.admin.provider_operations(states=frozenset({"retryable"}))
 
     assert [run.id for run in runs] == [own_run]
-    assert (await space.import_run(own_run)) == runs[0]
+    assert (await space.imports.get(own_run)) == runs[0]
     assert len(operation) == 1
     assert operation[0].identity_id == identity_id
     assert operation[0].result == {"outcome": "temporary_error"}
     assert "other.jsonl" not in repr(runs)
     assert str(other_identity_id) not in repr(operation)
     with pytest.raises(ValidationFailed, match="unknown provider operation states"):
-        await space.provider_operations(states=frozenset({"mystery"}))
+        await space.admin.provider_operations(states=frozenset({"mystery"}))
     with pytest.raises(ValidationFailed, match="limit"):
-        await space.import_runs(limit=0)
+        await space.admin.import_runs(limit=0)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import StateSnapshotCoverageRecord, StateSnapshotRecord
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE
 
 pytestmark = pytest.mark.pg
@@ -20,7 +21,8 @@ async def test_postgres_snapshot_matches_current_slice_and_two_workers_do_not_du
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     for index in range(2):
-        await space.register(
+        await register(
+            space,
             service=FAKE_EXCHANGE,
             external_ref=f"snapshot-{index}@example.test",
             credentials={"email": f"snapshot-{index}@example.test", "password": "test"},

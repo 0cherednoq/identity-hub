@@ -128,8 +128,8 @@ async def test_delivery_center_redacts_scopes_paginates_and_does_not_mutate(
             await session.execute(select(func.count()).select_from(NotificationRecord))
         ).scalar_one()
 
-    first = await space.delivery_center(webhook_limit=1, notification_limit=1)
-    second_webhook = await space.delivery_center(
+    first = await space.admin.delivery_center(webhook_limit=1, notification_limit=1)
+    second_webhook = await space.admin.delivery_center(
         webhook_limit=1,
         webhook_before=first.webhook_deliveries.next_before,
         notification_limit=1,

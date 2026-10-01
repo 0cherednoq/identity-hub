@@ -12,6 +12,7 @@ from litestar.exceptions import NotFoundException
 from litestar.params import FromPath
 from litestar.testing import TestClient
 from pydantic import SecretStr
+from tests.factories.api import register
 
 from identity_hub_admin.api.routes import route_meta
 from identity_hub_admin.app import create_admin_app
@@ -104,7 +105,8 @@ async def test_get_space_does_not_create_and_object_lookup_stays_scoped() -> Non
     alpha = hub.space("alpha", "Alpha")
     beta = hub.space("beta", "Beta")
     await beta.ref()
-    registered = await alpha.register(
+    registered = await register(
+        alpha,
         service=DEMO_SERVICE,
         external_ref="alpha-only",
         profile={"display_name": "Alpha only", "country": "UA"},
@@ -115,7 +117,7 @@ async def test_get_space_does_not_create_and_object_lookup_stays_scoped() -> Non
     with pytest.raises(NotFoundException):
         await ensure_identity_in_space(beta, registered.identity_id)
     with pytest.raises(NotFound):
-        await beta.identity_card(registered.identity_id)
+        await beta.identities.card(registered.identity_id)
 
 
 @pytest.mark.asyncio

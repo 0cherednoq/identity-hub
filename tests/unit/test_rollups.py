@@ -7,6 +7,7 @@ from identity_hub.crypto import StaticSecretsProvider
 from identity_hub.hub import IdentityHub
 from identity_hub.rollups import BucketSize, RollupDelta, bucket_start
 from identity_hub.testing import MemoryStore
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE
 
 
@@ -24,7 +25,8 @@ def _hub(start: datetime | None = None) -> tuple[IdentityHub, FakeClock, MemoryS
 
 
 async def _register(hub: IdentityHub, ref: str) -> None:
-    await hub.space("analytics").register(
+    await register(
+        hub.space("analytics"),
         service=FAKE_EXCHANGE,
         external_ref=ref,
         credentials={"email": ref, "password": "test"},
@@ -62,7 +64,11 @@ async def test_dispatcher_rolls_up_internal_lease_events_and_rebuilds_from_oracl
     await _register(hub, "lease@example.test")
     registered_id = store._state.events[0][0].identity_id
     assert registered_id is not None
-    lease = await hub.space("analytics").pool("rollups", service=FAKE_EXCHANGE).acquire(among=[registered_id])
+    lease = (
+        await hub.space("analytics")
+        .pools.define("rollups", service=FAKE_EXCHANGE)
+        .acquire(among=[registered_id])
+    )
     await lease.release()
     await hub.dispatcher.drain()
 

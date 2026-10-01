@@ -11,6 +11,7 @@ from pathlib import PurePath
 from typing import Any, Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from identity_hub.errors import NotFound
 from identity_hub.importing import ImportRecord
 from identity_hub.read.admin_state import ImportRunInfo
 from litestar import Request, get, post
@@ -305,7 +306,7 @@ async def imports_list(
     space_slug: FromPath[str],
 ) -> ResourceEnvelope[ImportRunsResponse]:
     resolved = await resolve_space_context(request, state, space_slug, require_idempotency=False)
-    runs = await resolved.handle.import_runs(limit=100)
+    runs = await resolved.handle.admin.import_runs(limit=100)
     return ResourceEnvelope(
         data=ImportRunsResponse(
             items=[_response(run) for run in runs],
@@ -332,9 +333,10 @@ async def import_detail(
     run_id: FromPath[UUID],
 ) -> ResourceEnvelope[ImportRunResponse]:
     resolved = await resolve_space_context(request, state, space_slug, require_idempotency=False)
-    run = await resolved.handle.import_run(run_id)
-    if run is None:
-        raise HTTPException("import run not found", status_code=404)
+    try:
+        run = await resolved.handle.imports.get(run_id)
+    except NotFound:
+        raise HTTPException("import run not found", status_code=404) from None
     return ResourceEnvelope(data=_response(run))
 
 
@@ -356,7 +358,7 @@ async def import_start(
     run_id = uuid5(NAMESPACE_URL, f"identity-hub:admin-import:{space_slug}:{key}")
 
     async def apply(scope: CommandScope) -> ResourceEnvelope[ImportRunResponse]:
-        await scope.handle.stage_import(
+        await scope.handle.imports.stage(
             service=data.service,
             records=records,
             source=data.source,
@@ -366,7 +368,7 @@ async def import_start(
             actor=scope.actor,
             run_id=run_id,
         )
-        await scope.handle.record_admin_import(
+        await scope.handle.admin.record_import(
             "started",
             run_id,
             actor=scope.actor,
@@ -374,9 +376,7 @@ async def import_start(
             service=data.service,
             count=len(records),
         )
-        run = await scope.handle.import_run(run_id)
-        if run is None:  # pragma: no cover - same transaction created it
-            raise RuntimeError("created import run is unavailable")
+        run = await scope.handle.imports.get(run_id)
         return ResourceEnvelope(data=_response(run))
 
     return await _gateway(state).execute(
@@ -411,20 +411,19 @@ async def import_cancel(
     data: ImportCancelCommand,
 ) -> ResourceEnvelope[ImportRunResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[ImportRunResponse]:
-        before = await scope.handle.import_run(run_id)
-        if before is None:
-            raise HTTPException("import run not found", status_code=404)
-        await scope.handle.cancel_import(run_id)
-        await scope.handle.record_admin_import(
+        try:
+            before = await scope.handle.imports.get(run_id)
+        except NotFound:
+            raise HTTPException("import run not found", status_code=404) from None
+        await scope.handle.imports.cancel(run_id)
+        await scope.handle.admin.record_import(
             "cancel_requested",
             run_id,
             actor=scope.actor,
             reason=scope.reason,
             service=before.service,
         )
-        after = await scope.handle.import_run(run_id)
-        if after is None:  # pragma: no cover - cancellation does not delete the run
-            raise RuntimeError("cancelled import run is unavailable")
+        after = await scope.handle.imports.get(run_id)
         return ResourceEnvelope(data=_response(after))
 
     return await _gateway(state).execute(

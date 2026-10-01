@@ -15,6 +15,7 @@ from identity_hub.enums import Severity
 from identity_hub.events import EventDraft
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import NotificationChannelRecord, NotificationRecord
+from tests.fixtures.api import register
 
 pytestmark = pytest.mark.pg
 
@@ -89,7 +90,7 @@ async def test_immediate_notification_filters_data_and_encrypts_token(
 ) -> None:
     transport = FakeTelegramTransport()
     channel, _ = await _setup(hub, space, transport)
-    identity = await space.register(service="fake_tg", external_ref="+10", labels={"farm": "3"})
+    identity = await register(space, service="fake_tg", external_ref="+10", labels={"farm": "3"})
     await _standing_event(space, identity.identity_id, "good")
     await _standing_event(space, identity.identity_id, "banned")
 
@@ -121,8 +122,8 @@ async def test_digest_accumulates_one_open_notification(
     transport = FakeTelegramTransport()
     # окно заведомо длиннее подготовки под нагрузкой; срок ниже сдвигается явно
     _, rule = await _setup(hub, space, transport, digest_seconds=300)
-    first = await space.register(service="fake_tg", external_ref="+11")
-    second = await space.register(service="fake_tg", external_ref="+12")
+    first = await register(space, service="fake_tg", external_ref="+11")
+    second = await register(space, service="fake_tg", external_ref="+12")
     await _standing_event(space, first.identity_id, "banned")
     await _standing_event(space, second.identity_id, "frozen")
 
@@ -147,7 +148,7 @@ async def test_telegram_rejection_is_dead_without_retries(
     transport = FakeTelegramTransport()
     transport.failures.append(TelegramRejected(403, "HTTP 403: Forbidden: bot was blocked by the user"))
     await _setup(hub, space, transport)
-    identity = await space.register(service="fake_tg", external_ref="+14")
+    identity = await register(space, service="fake_tg", external_ref="+14")
     await _standing_event(space, identity.identity_id, "banned")
 
     await hub.dispatcher.run_once()
@@ -167,7 +168,7 @@ async def test_telegram_429_uses_retry_after(
     transport = FakeTelegramTransport()
     transport.failures.append(TelegramRateLimited(7))
     await _setup(hub, space, transport)
-    identity = await space.register(service="fake_tg", external_ref="+13")
+    identity = await register(space, service="fake_tg", external_ref="+13")
     await _standing_event(space, identity.identity_id, "banned")
 
     await hub.dispatcher.run_once()

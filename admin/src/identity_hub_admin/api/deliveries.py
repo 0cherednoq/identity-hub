@@ -161,7 +161,7 @@ async def delivery_center(
 ) -> ResourceEnvelope[DeliveryCenterResponse]:
     try:
         handle = _handle(request, space_slug)
-        center = await handle.delivery_center(
+        center = await handle.admin.delivery_center(
             webhook_limit=webhook_limit,
             webhook_before=_cursor(webhook_cursor, "created_at"),
             notification_limit=notification_limit,

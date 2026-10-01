@@ -38,7 +38,7 @@ async def _logs(sm: async_sessionmaker[AsyncSession]) -> list[Any]:
 
 
 def fast(space: SpaceHandle) -> Any:
-    return space.pool(
+    return space.pools.define(
         "p",
         service="fake_tg",
         ttl=timedelta(seconds=1.5),

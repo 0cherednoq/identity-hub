@@ -36,7 +36,7 @@ async def test_acquire_writes_lease_history_and_event(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity_id = await make_identity(space)
-    lease = await space.pool("parsers", service="fake_tg", holder="host:1").acquire()
+    lease = await space.pools.define("parsers", service="fake_tg", holder="host:1").acquire()
     assert lease.identity_id == identity_id
     assert lease.fencing == 1
     assert "token" not in repr(lease) and str(lease._token) not in repr(lease)
@@ -56,7 +56,7 @@ async def test_acquire_writes_lease_history_and_event(
 
 async def test_race_many_acquirers_are_exclusive(space: SpaceHandle) -> None:
     ids = {await make_identity(space) for _ in range(5)}
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     results = await asyncio.gather(*(pool.acquire() for _ in range(12)), return_exceptions=True)
     leases = [r for r in results if not isinstance(r, BaseException)]
     errors = [r for r in results if isinstance(r, BaseException)]
@@ -67,7 +67,7 @@ async def test_race_many_acquirers_are_exclusive(space: SpaceHandle) -> None:
 
 async def test_race_50_acquirers_do_not_lose_available_candidates(space: SpaceHandle) -> None:
     ids = {await make_identity(space) for _ in range(50)}
-    pool = space.pool("p50", service="fake_tg")
+    pool = space.pools.define("p50", service="fake_tg")
 
     results = await asyncio.gather(*(pool.acquire() for _ in range(50)), return_exceptions=True)
 
@@ -79,7 +79,7 @@ async def test_race_50_acquirers_do_not_lose_available_candidates(space: SpaceHa
 async def test_idempotency_key_returns_same_lease(space: SpaceHandle) -> None:
     await make_identity(space)
     await make_identity(space)
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     first = await pool.acquire(idempotency_key="job-42")
     again = await pool.acquire(idempotency_key="job-42")
     assert again.lease_id == first.lease_id
@@ -91,7 +91,7 @@ async def test_expired_lease_reclaimed_with_history_closed_at_expiry(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     await make_identity(space)
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     old = await pool.acquire(idempotency_key="k")
     async with sessionmaker() as s, s.begin():
         await s.execute(update(LeaseRecord).values(expires_at=text("now() - interval '5 seconds'")))
@@ -112,7 +112,7 @@ async def test_wait_for_free_identity(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     await make_identity(space)
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     await pool.acquire()
     with pytest.raises(LeaseUnavailable):
         await pool.acquire()
@@ -137,7 +137,7 @@ async def test_shared_mode_does_not_block(
     await hub.start()
     space = hub.space("s")
     await make_identity(space, service="imap")
-    pool = space.pool("mail", service="imap")
+    pool = space.pools.define("mail", service="imap")
     a, b = await pool.acquire(), await pool.acquire()
     assert a.identity_id == b.identity_id
     assert a.lease_id != b.lease_id

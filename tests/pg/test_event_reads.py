@@ -76,14 +76,14 @@ async def test_event_journal_catalog_filters_keyset_redaction_and_scope(
             ]
         )
 
-    first = await space.event_page(limit=1)
-    second = await space.event_page(limit=1, before=first.next_before)
+    first = await space.admin.event_page(limit=1)
+    second = await space.admin.event_page(limit=1, before=first.next_before)
     assert first.next_before is not None
     assert {first.items[0].event_id, second.items[0].event_id} == set(external_ids)
     assert first.items[0].event_id != second.items[0].event_id
     assert journal_id not in {first.items[0].event_id, second.items[0].event_id}
 
-    journal = await space.event_page(
+    journal = await space.admin.event_page(
         filters=EventFilters(
             group="journal",
             include_journal=True,
@@ -98,15 +98,15 @@ async def test_event_journal_catalog_filters_keyset_redaction_and_scope(
     assert [item.event_id for item in journal.items] == [journal_id]
     assert journal.items[0].group == "journal"
 
-    warning = await space.event_page(
+    warning = await space.admin.event_page(
         filters=EventFilters(type="identity.login.failed", severity="warning", service="fake_tg")
     )
     assert [item.event_id for item in warning.items] == [external_ids[1]]
-    redacted = await space.event_detail(external_ids[0])
+    redacted = await space.admin.event_detail(external_ids[0])
     assert redacted.data["password"] == "[redacted]"
     assert "must-not-leak" not in repr(redacted)
 
     other = hub.space("event-read-other", "Event read other")
     await other.ref()
     with pytest.raises(NotFound):
-        await other.event_detail(external_ids[0])
+        await other.admin.event_detail(external_ids[0])

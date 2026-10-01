@@ -14,7 +14,9 @@ async def test_worker_gets_ready_identity(
 ) -> None:
     identity_id = await identity_hub_make_identity(tags=["worker"])
 
-    async with identity_hub_space.pool("workers", service="test_service", holder="test").lease() as lease:
+    async with identity_hub_space.pools.define(
+        "workers", service="test_service", holder="test"
+    ).lease() as lease:
         assert lease.identity_id == identity_id
         async with lease.operation("work"):
             pass

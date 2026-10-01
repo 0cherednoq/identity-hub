@@ -16,6 +16,7 @@ from identity_hub.dispatch.webhooks import verify_signature
 from identity_hub.enums import Severity
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import EventRecord, WebhookDeliveryRecord, WebhookEndpointRecord
+from tests.fixtures.api import register
 
 pytestmark = pytest.mark.pg
 
@@ -37,8 +38,8 @@ async def test_filtered_delivery_is_signed_and_secret_is_encrypted(
         description="farm 3",
     )
     await space.webhooks.rotate_secret(endpoint.id, SecretStr("rotated-secret"), overlap=timedelta(hours=1))
-    await space.register(service="fake_tg", external_ref="+1", labels={"farm": "3"})
-    await space.register(service="fake_tg", external_ref="+2", labels={"farm": "4"})
+    await register(space, service="fake_tg", external_ref="+1", labels={"farm": "3"})
+    await register(space, service="fake_tg", external_ref="+2", labels={"farm": "4"})
     route = respx.post(url).mock(return_value=httpx.Response(204))
 
     await hub.dispatcher.drain()
@@ -84,7 +85,7 @@ async def test_5xx_retries_disable_endpoint_and_manual_retry_recovers(
         event_types=["identity.registered"],
     )
     route = respx.post(url).mock(side_effect=[httpx.Response(503), httpx.Response(500), httpx.Response(200)])
-    await space.register(service="fake_tg", external_ref="+3")
+    await register(space, service="fake_tg", external_ref="+3")
 
     await hub.dispatcher.drain()
 
@@ -135,7 +136,7 @@ async def test_redirect_is_recorded_without_following(
     )
     source_route = respx.post(source).mock(return_value=httpx.Response(302, headers={"Location": target}))
     target_route = respx.post(target).mock(return_value=httpx.Response(204))
-    await space.register(service="fake_tg", external_ref="+redirect")
+    await register(space, service="fake_tg", external_ref="+redirect")
 
     await hub.dispatcher.drain()
 

@@ -56,21 +56,21 @@ async def test_lifecycle_command_and_event(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity_id = await make_identity(space, lifecycle="provisioning")
-    decision = await space.set_lifecycle(identity_id, Lifecycle.READY, actor="admin")
+    decision = await space.identities.set_lifecycle(identity_id, Lifecycle.READY, actor="admin")
     assert decision.transitioned
     assert (await _identity_row(sessionmaker, identity_id)).lifecycle == "ready"
     with pytest.raises(TransitionNotAllowed):
-        await space.set_lifecycle(identity_id, Lifecycle.PROVISIONING, actor="admin")
-    await space.retire(identity_id, actor="admin", reason="продан")
+        await space.identities.set_lifecycle(identity_id, Lifecycle.PROVISIONING, actor="admin")
+    await space.identities.retire(identity_id, actor="admin", reason="продан")
     with pytest.raises(TransitionNotAllowed, match="причина"):
-        await space.set_lifecycle(identity_id, Lifecycle.READY, actor="admin")
+        await space.identities.set_lifecycle(identity_id, Lifecycle.READY, actor="admin")
     assert await _event_types(sessionmaker) == ["identity.lifecycle.changed", "identity.lifecycle.changed"]
 
 
 async def test_unknown_identity_and_foreign_space(hub: IdentityHub, space: SpaceHandle) -> None:
     identity_id = await make_identity(space)
     with pytest.raises(NotFound):
-        await hub.space("other").set_lifecycle(identity_id, Lifecycle.RETIRED, actor="a")
+        await hub.space("other").identities.set_lifecycle(identity_id, Lifecycle.RETIRED, actor="a")
 
 
 async def test_observation_writes_region_denormalizes_and_emits(
@@ -122,7 +122,7 @@ async def test_override_pin_and_drift(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity_id = await make_identity(space, standing="banned")
-    await space.override(
+    await space.identities.override(
         identity_id,
         Override(
             "standing", "", Standing.GOOD, reason="бан ложный", actor="evgeny", pin_for=timedelta(hours=6)
@@ -155,9 +155,11 @@ async def test_override_pin_and_drift(
 async def test_override_requires_reason(space: SpaceHandle) -> None:
     identity_id = await make_identity(space)
     with pytest.raises(ValidationFailed):
-        await space.override(identity_id, Override("standing", "", Standing.BANNED, reason="", actor="a"))
+        await space.identities.override(
+            identity_id, Override("standing", "", Standing.BANNED, reason="", actor="a")
+        )
     with pytest.raises(ValidationFailed):
-        await space.override(
+        await space.identities.override(
             identity_id, Override("lifecycle", "", "ready", reason="r", actor="a", pin_for=timedelta(1))
         )
 
@@ -166,13 +168,13 @@ async def test_unpin_and_restore_keep_domain_guards(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity_id = await make_identity(space, standing="banned")
-    await space.override(
+    await space.identities.override(
         identity_id,
         Override(
             "standing", "", Standing.GOOD, reason="false positive", actor="operator", pin_for=timedelta(1)
         ),
     )
-    decision = await space.unpin(
+    decision = await space.identities.unpin(
         identity_id, "standing", "", actor="admin", reason="platform correction deployed"
     )
     assert decision.state.state == Standing.GOOD
@@ -180,10 +182,10 @@ async def test_unpin_and_restore_keep_domain_guards(
     assert (await _event_types(sessionmaker))[-1] == "identity.state.unpinned"
 
     with pytest.raises(TransitionNotAllowed):
-        await space.restore_standing(identity_id, actor="admin", reason="not banned")
+        await space.identities.restore_standing(identity_id, actor="admin", reason="not banned")
 
     banned_id = await make_identity(space, standing="banned", external_ref="restore-target")
-    restored = await space.restore_standing(banned_id, actor="admin", reason="appeal accepted")
+    restored = await space.identities.restore_standing(banned_id, actor="admin", reason="appeal accepted")
     assert restored.state.state == Standing.GOOD
 
 
@@ -244,7 +246,9 @@ async def test_override_inside_user_transaction(
     identity_id = await make_identity(space, standing="banned")
     async with sessionmaker() as user:
         await user.begin()
-        await space.using(user).override(identity_id, Override("standing", "", "good", reason="r", actor="a"))
+        await space.using(user).identities.override(
+            identity_id, Override("standing", "", "good", reason="r", actor="a")
+        )
         await user.rollback()
     assert (await _identity_row(sessionmaker, identity_id)).standing == "banned"
     assert await _event_types(sessionmaker) == []

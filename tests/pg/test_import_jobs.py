@@ -19,7 +19,7 @@ async def test_postgres_staging_is_encrypted_and_removed_after_success(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     secret = "+380990001111"
-    run_id = await space.stage_import(
+    run_id = await space.imports.stage(
         service="fake_tg",
         source="encrypted.jsonl",
         actor="admin:operator",
@@ -39,9 +39,8 @@ async def test_postgres_staging_is_encrypted_and_removed_after_success(
         assert b"sensitive staging note" not in item.ciphertext
 
     assert await hub.import_runner.run_once() == 1
-    completed = await space.import_run(run_id)
+    completed = await space.imports.get(run_id)
 
-    assert completed is not None
     assert completed.state == "succeeded"
     assert (completed.total, completed.processed, completed.created) == (1, 1, 1)
     assert secret not in repr(completed)
@@ -56,7 +55,7 @@ async def test_postgres_expired_claim_resumes_without_duplicate_identity(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     external_ref = "+380990002222"
-    run_id = await space.stage_import(
+    run_id = await space.imports.stage(
         service="fake_tg",
         source="resume.jsonl",
         records=[ImportRecord(external_ref=external_ref, credentials={"phone": external_ref})],
@@ -81,8 +80,7 @@ async def test_postgres_expired_claim_resumes_without_duplicate_identity(
         )
 
     assert await ImportRunner(hub, batch_size=1).run_once() == 1
-    completed = await space.import_run(run_id)
-    assert completed is not None
+    completed = await space.imports.get(run_id)
     assert completed.state == "succeeded"
     assert (completed.processed, completed.created) == (1, 1)
     async with sessionmaker() as session:

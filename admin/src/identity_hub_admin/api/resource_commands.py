@@ -76,7 +76,7 @@ async def revoke_lease_command(
     data: LeaseRevokeCommand,
 ) -> ResourceEnvelope[ResourceCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
-        changed = await scope.handle.revoke_lease(identity_id, reason=scope.reason, actor=scope.actor)
+        changed = await scope.handle.pools.revoke(identity_id, reason=scope.reason, actor=scope.actor)
         return ResourceEnvelope(
             data=ResourceCommandResponse(
                 action="lease_revoke", changed=changed, outcome="revoked" if changed else "no_live_lease"
@@ -110,7 +110,7 @@ async def rebind_proxy_command(
     data: ProxyRebindCommand,
 ) -> ResourceEnvelope[ResourceCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
-        changed = await scope.handle.rebind_proxy(
+        changed = await scope.handle.proxies.rebind(
             identity_id, data.proxy_id, reason=scope.reason, actor=scope.actor
         )
         return ResourceEnvelope(
@@ -146,7 +146,7 @@ async def link_account_command(
     data: LinkAccountCommand,
 ) -> ResourceEnvelope[ResourceCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
-        await scope.handle.link(
+        await scope.handle.links.add(
             identity_id, data.role, data.linked_identity_id, actor=scope.actor, reason=scope.reason
         )
         return ResourceEnvelope(data=ResourceCommandResponse(action="link", changed=True, outcome="linked"))
@@ -178,12 +178,14 @@ async def unlink_account_command(
     data: UnlinkAccountCommand,
 ) -> ResourceEnvelope[ResourceCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
-        impact = await scope.handle.impact_of(identity_id)
+        impact = await scope.handle.links.impact(identity_id)
         if impact and (
             data.confirmation is None or "affects_dependents" not in data.confirmation.consequence_codes
         ):
             raise ValidationFailed("unlink affects dependent accounts and requires explicit confirmation")
-        changed = await scope.handle.unlink(identity_id, data.role, actor=scope.actor, reason=scope.reason)
+        changed = await scope.handle.links.remove(
+            identity_id, data.role, actor=scope.actor, reason=scope.reason
+        )
         return ResourceEnvelope(
             data=ResourceCommandResponse(
                 action="unlink",
@@ -224,7 +226,7 @@ async def recheck_proxy_command(
         raise HTTPException("proxy checker is not configured", status_code=503)
 
     async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
-        status = await scope.handle.recheck_proxy(proxy_id, checker, actor=scope.actor)
+        status = await scope.handle.proxies.recheck(proxy_id, checker, actor=scope.actor)
         return ResourceEnvelope(
             data=ResourceCommandResponse(action="proxy_recheck", changed=True, outcome=status)
         )
@@ -256,7 +258,7 @@ async def override_proxy_command(
     data: ProxyOverrideCommand,
 ) -> ResourceEnvelope[ResourceCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
-        status = await scope.handle.override_proxy(
+        status = await scope.handle.proxies.override(
             proxy_id,
             ProxyStatus(data.status),
             reason=scope.reason,

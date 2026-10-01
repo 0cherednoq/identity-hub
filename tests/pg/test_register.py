@@ -23,6 +23,7 @@ from identity_hub.postgres.models import (
     RegionStateRecord,
     SessionRecord,
 )
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_TG, TgCredentials, TgSession
 
 pytestmark = pytest.mark.pg
@@ -41,7 +42,8 @@ async def _count(sm: async_sessionmaker[AsyncSession], model: Any) -> int:
 async def test_register_full(
     space: SpaceHandle, hub: IdentityHub, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    result = await space.register(
+    result = await register(
+        space,
         service="fake_tg",
         external_ref="+380501112233",
         credentials=TgCredentials(phone="+380501112233", password=SecretStr("hunter2")),
@@ -94,7 +96,7 @@ async def test_register_full(
 
 
 async def test_register_without_session_is_no_session(space: SpaceHandle) -> None:
-    result = await space.register(service="fake_tg", external_ref="a")
+    result = await register(space, service="fake_tg", external_ref="a")
     async with space._tx() as tx:
         row = await tx.get_identity(result.identity_id)
     assert row is not None and row.auth_state == "no_session"
@@ -104,10 +106,10 @@ async def test_register_is_idempotent(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     custom = new_id()
-    first = await space.register(id=custom, service="fake_tg", external_ref="ref-1", labels={"a": "1"})
+    first = await register(space, id=custom, service="fake_tg", external_ref="ref-1", labels={"a": "1"})
     assert first.identity_id == custom
-    by_id = await space.register(id=custom, service="fake_tg", external_ref="other", labels={"a": "2"})
-    by_ref = await space.register(service="fake_tg", external_ref="ref-1", labels={"a": "3"})
+    by_id = await register(space, id=custom, service="fake_tg", external_ref="other", labels={"a": "2"})
+    by_ref = await register(space, service="fake_tg", external_ref="ref-1", labels={"a": "3"})
     assert (by_id.created, by_ref.created) == (False, False)
     assert by_id.identity_id == by_ref.identity_id == custom
     assert await _count(sessionmaker, IdentityRecord) == 1
@@ -118,10 +120,10 @@ async def test_register_is_idempotent(
 
 
 async def test_external_ref_unique_across_spaces(hub: IdentityHub, space: SpaceHandle) -> None:
-    await space.register(service="fake_tg", external_ref="+1")
+    await register(space, service="fake_tg", external_ref="+1")
     with pytest.raises(AlreadyExists):
-        await hub.space("other").register(service="fake_tg", external_ref="+1")
-    other = await hub.space("other").register(service="fake_exchange", external_ref="+1")
+        await register(hub.space("other"), service="fake_tg", external_ref="+1")
+    other = await register(hub.space("other"), service="fake_exchange", external_ref="+1")
     assert other.created
 
 
@@ -129,33 +131,33 @@ async def test_validation_before_db(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     with pytest.raises(ValidationFailed):
-        await space.register(service="fake_tg", external_ref="x", credentials={"password": "no phone"})
+        await register(space, service="fake_tg", external_ref="x", credentials={"password": "no phone"})
     with pytest.raises(ValidationFailed):
-        await space.register(service="fake_tg", external_ref="x", labels={"nested": {"a": 1}})
+        await register(space, service="fake_tg", external_ref="x", labels={"nested": {"a": 1}})
     with pytest.raises(ValidationFailed):
-        await space.register(service="fake_tg", external_ref="x", profile={"country": {"bad": 1}})
+        await register(space, service="fake_tg", external_ref="x", profile={"country": {"bad": 1}})
     assert await _count(sessionmaker, IdentityRecord) == 0
 
 
 async def test_links_same_space_only(
     hub: IdentityHub, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    email = await space.register(service="fake_exchange", external_ref="mail@x")
-    tg = await space.register(
-        service="fake_tg", external_ref="+2", links={"recovery_email": email.identity_id}
+    email = await register(space, service="fake_exchange", external_ref="mail@x")
+    tg = await register(
+        space, service="fake_tg", external_ref="+2", links={"recovery_email": email.identity_id}
     )
     links = await _one(sessionmaker, IdentityLinkRecord, tg.identity_id)
     assert [(link.role, link.linked_identity_id) for link in links] == [("recovery_email", email.identity_id)]
 
-    foreign = await hub.space("other").register(service="fake_exchange", external_ref="mail@y")
+    foreign = await register(hub.space("other"), service="fake_exchange", external_ref="mail@y")
     with pytest.raises(NotFound):
-        await space.register(
-            service="fake_tg", external_ref="+3", links={"recovery_email": foreign.identity_id}
+        await register(
+            space, service="fake_tg", external_ref="+3", links={"recovery_email": foreign.identity_id}
         )
     assert await _count(sessionmaker, IdentityRecord) == 3  # +3 откатился целиком
     self_id = new_id()
     with pytest.raises(ValidationFailed):
-        await space.register(id=self_id, service="fake_tg", external_ref="+4", links={"x": self_id})
+        await register(space, id=self_id, service="fake_tg", external_ref="+4", links={"x": self_id})
 
 
 async def test_register_in_user_transaction(
@@ -164,8 +166,8 @@ async def test_register_in_user_transaction(
     await space.ref()
     async with sessionmaker() as user:
         await user.begin()
-        await space.using(user).register(
-            service="fake_tg", external_ref="shared", credentials={"phone": "+1"}
+        await register(
+            space.using(user), service="fake_tg", external_ref="shared", credentials={"phone": "+1"}
         )
         await user.rollback()
     assert await _count(sessionmaker, IdentityRecord) == 0
@@ -173,7 +175,7 @@ async def test_register_in_user_transaction(
     assert await _count(sessionmaker, EventRecord) == 0
 
     async with sessionmaker() as user, user.begin():
-        result = await space.using(user).register(service="fake_tg", external_ref="shared")
+        result = await register(space.using(user), service="fake_tg", external_ref="shared")
     assert result.created
     assert await _count(sessionmaker, IdentityRecord) == 1
 
@@ -182,8 +184,11 @@ async def test_encrypted_profile(hub: IdentityHub, sessionmaker: async_sessionma
     secret_tg = replace(FAKE_TG, name="secret_tg", profile_encrypted=True)
     hub.register_service(secret_tg)
     await hub.start()
-    result = await hub.space("s").register(
-        service="secret_tg", external_ref="+9", profile={"first_name": "Olena", "country": "UA"}
+    result = await register(
+        hub.space("s"),
+        service="secret_tg",
+        external_ref="+9",
+        profile={"first_name": "Olena", "country": "UA"},
     )
     async with sessionmaker() as s:
         row = (

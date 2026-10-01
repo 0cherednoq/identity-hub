@@ -23,7 +23,7 @@ pytestmark = pytest.mark.pg
 
 
 def fast_pool(space: SpaceHandle) -> Pool:
-    return space.pool(
+    return space.pools.define(
         "fast",
         service="fake_tg",
         ttl=timedelta(seconds=1.5),

@@ -82,6 +82,6 @@ async def resolve_space_context(
 async def ensure_identity_in_space(space: SpaceHandle, identity_id: UUID) -> Any:
     """Resolve an identity through the scoped public read model with a non-enumerating 404."""
     try:
-        return await space.identity_card(identity_id)
+        return await space.identities.card(identity_id)
     except NotFound:
         raise NotFoundException("object not found") from None

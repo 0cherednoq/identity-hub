@@ -228,7 +228,7 @@ async def accounts(
         sort_desc=direction == "desc",
     )
     try:
-        page = await handle.account_search(
+        page = await handle.admin.identity_page(
             _query(q, service, lifecycle, standing, auth, availability, tag, label),
             options=options,
             limit=limit,

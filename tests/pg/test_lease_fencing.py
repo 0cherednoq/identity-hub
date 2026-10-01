@@ -14,13 +14,14 @@ from identity_hub.errors import LeaseLost, StaleFencing, ValidationFailed
 from identity_hub.hub import SpaceHandle
 from identity_hub.pool import Pool
 from identity_hub.postgres.models import EventRecord, IdentityRecord, LeaseHistoryRecord, LeaseRecord
+from tests.fixtures.api import register
 from tests.fixtures.services import TgCredentials, TgSession
 
 pytestmark = pytest.mark.pg
 
 
 def fast_pool(space: SpaceHandle) -> Pool:
-    return space.pool(
+    return space.pools.define(
         "p",
         service="fake_tg",
         ttl=timedelta(seconds=1.5),
@@ -30,7 +31,8 @@ def fast_pool(space: SpaceHandle) -> Pool:
 
 
 async def _ready(space: SpaceHandle, **kwargs: object) -> None:
-    await space.register(
+    await register(
+        space,
         service="fake_tg",
         external_ref="+1",
         lifecycle="ready",
@@ -76,7 +78,7 @@ async def test_zombie_after_expiry_cannot_write(
 
 
 async def test_mark_authenticated(space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    await space.register(service="fake_tg", external_ref="+1", lifecycle="ready")
+    await register(space, service="fake_tg", external_ref="+1", lifecycle="ready")
     pool = fast_pool(space)
     lease = await pool.acquire(for_operation="probe")  # без сессии аренда только для проб/входа
     await lease.save_session({"auth_key": "k"})
@@ -92,12 +94,12 @@ async def test_revoke_from_admin(space: SpaceHandle, sessionmaker: async_session
     async with sessionmaker() as s:
         identity_id = (await s.execute(select(IdentityRecord.id))).scalar_one()
     with pytest.raises(ValidationFailed):
-        await space.revoke_lease(identity_id, reason="", actor="admin")
-    assert not await space.revoke_lease(identity_id, reason="нет аренды", actor="admin")
+        await space.pools.revoke(identity_id, reason="", actor="admin")
+    assert not await space.pools.revoke(identity_id, reason="нет аренды", actor="admin")
 
     with pytest.raises(LeaseLost, match="revoked"):
         async with fast_pool(space).lease() as lease:
-            assert await space.revoke_lease(identity_id, reason="подозрительная активность", actor="admin")
+            assert await space.pools.revoke(identity_id, reason="подозрительная активность", actor="admin")
             with pytest.raises(StaleFencing):
                 await lease.save_session({"auth_key": "after-revoke"})
             await asyncio.sleep(5)

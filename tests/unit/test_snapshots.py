@@ -7,6 +7,7 @@ from identity_hub.clock import FakeClock
 from identity_hub.crypto import StaticSecretsProvider
 from identity_hub.hub import IdentityHub, Retention
 from identity_hub.testing import MemoryStore
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE
 
 
@@ -25,7 +26,8 @@ def _hub(start: datetime, *, retention: timedelta = timedelta(days=365)) -> tupl
 
 
 async def _register(hub: IdentityHub, ref: str) -> None:
-    await hub.space("snapshots").register(
+    await register(
+        hub.space("snapshots"),
         service=FAKE_EXCHANGE,
         external_ref=ref,
         credentials={"email": ref, "password": "test"},

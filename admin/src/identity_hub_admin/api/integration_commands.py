@@ -159,7 +159,7 @@ async def _audit(
     *,
     outcome: str = "changed",
 ) -> None:
-    await scope.handle.record_admin_integration(
+    await scope.handle.admin.record_integration(
         action,
         kind,
         str(resource_id),

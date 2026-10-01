@@ -13,6 +13,7 @@ from identity_hub.testing.memory import MemoryStore
 from litestar import Litestar
 from litestar.testing import TestClient
 from pydantic import SecretStr
+from tests.factories.api import register
 
 from identity_hub_admin.api.bulk import _safe_cell
 from identity_hub_admin.app import create_admin_app
@@ -64,7 +65,8 @@ def _hub() -> IdentityHub:
 async def _seed(hub: IdentityHub) -> None:
     space = hub.space("bulk-space", "Bulk")
     for identity_id, external_ref in ((FIRST, "=2+2"), (SECOND, "second")):
-        await space.register(
+        await register(
+            space,
             service=DEMO_SERVICE,
             external_ref=external_ref,
             id=identity_id,
@@ -99,7 +101,8 @@ def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
         preview = _preview(client)
         assert preview["selected_count"] == 2
         asyncio.run(
-            space.register(
+            register(
+                space,
                 service=DEMO_SERVICE,
                 external_ref="late",
                 id=LATE,
@@ -109,7 +112,7 @@ def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
                 actor="test:late",
             )
         )
-        asyncio.run(space.add_tags(SECOND, ["changed-after-preview"], actor="test:race"))
+        asyncio.run(space.identities.add_tags(SECOND, ["changed-after-preview"], actor="test:race"))
         payload = {
             "reason": "apply frozen selection",
             "snapshot_id": preview["snapshot_id"],
@@ -140,9 +143,9 @@ def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
     )
     assert retried.json()["data"]["skipped_already_succeeded"] == 1
     assert retried.json()["data"]["succeeded"] == 1
-    assert "processed" in asyncio.run(space.identity_card(FIRST)).identity.tags
-    assert "processed" not in asyncio.run(space.identity_card(SECOND)).identity.tags
-    assert "processed" not in asyncio.run(space.identity_card(LATE)).identity.tags
+    assert "processed" in asyncio.run(space.identities.card(FIRST)).identity.tags
+    assert "processed" not in asyncio.run(space.identities.card(SECOND)).identity.tags
+    assert "processed" not in asyncio.run(space.identities.card(LATE)).identity.tags
 
 
 def test_exports_escape_csv_formulas_are_audited_and_viewer_is_denied() -> None:

@@ -105,7 +105,7 @@ def _handle(request: Request[Any, Any, Any], space_slug: str) -> SpaceHandle:
 
 async def _card(request: Request[Any, Any, Any], space_slug: str, identity_id: UUID) -> IdentityCard:
     try:
-        return await _handle(request, space_slug).identity_card(identity_id)
+        return await _handle(request, space_slug).identities.card(identity_id)
     except NotFound:
         raise NotFoundException("account not found") from None
 
@@ -208,7 +208,7 @@ async def _section_data(
             ),
         )
     if section == "access":
-        access = await handle.access_card(identity_id)
+        access = await handle.secrets.describe(identity_id)
         access_secrets: list[SecretDescriptorResponse] = []
         if role == AdminRole.ADMIN:
             if access.credential.present:
@@ -413,10 +413,10 @@ async def _section_data(
             ),
         )
     if section == "leases":
-        history = await handle.lease_history(identity_id, limit=50)
+        history = await handle.admin.lease_history(identity_id, limit=50)
         now = datetime.now(UTC)
         stats = {
-            label: _stats_payload(await handle.lease_stats(identity_id, now - delta))
+            label: _stats_payload(await handle.admin.lease_stats(identity_id, now - delta))
             for label, delta in (
                 ("24h", timedelta(days=1)),
                 ("7d", timedelta(days=7)),
@@ -460,7 +460,7 @@ async def _section_data(
             actions=lease_actions,
         )
     if section == "network":
-        impact = await handle.impact_of(identity_id)
+        impact = await handle.links.impact(identity_id)
         network_actions: list[AccountActionResponse] = []
         if role != AdminRole.VIEWER:
             network_actions.append(
@@ -486,7 +486,7 @@ async def _section_data(
                 )
                 for item in card.links.outgoing
             )
-            proxies = await handle.proxy_overview(limit=200)
+            proxies = await handle.admin.proxy_overview(limit=200)
             targets = [
                 str(item.id)
                 for item in proxies.items

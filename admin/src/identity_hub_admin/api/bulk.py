@@ -234,7 +234,7 @@ async def bulk_preview(
     data: BulkPreviewCommand,
 ) -> ResourceEnvelope[BulkPreviewResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[BulkPreviewResponse]:
-        selected = await scope.handle.account_selection_snapshot(
+        selected = await scope.handle.admin.selection_snapshot(
             data.filter.query(), options=data.filter.options(), limit=data.limit
         )
         snapshot = await _coordinator(state).create(
@@ -261,23 +261,27 @@ async def bulk_preview(
 
 
 async def _run_one(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUID, revision: int) -> None:
-    card = await scope.handle.identity_card(identity_id)
+    card = await scope.handle.identities.card(identity_id)
     if card.revision != revision:
         raise ValueError("account revision changed after preview")
     parameters = snapshot.parameters
     if snapshot.operation == "lifecycle":
-        await scope.handle.set_lifecycle(
+        await scope.handle.identities.set_lifecycle(
             identity_id,
             cast(str, parameters["target"]),
             actor=scope.actor,
             reason=scope.reason,
         )
     elif snapshot.operation == "resync":
-        await scope.handle.resync(identity_id, cast(list[str], parameters["regions"]))
+        await scope.handle.sync.refresh(identity_id, cast(list[str], parameters["regions"]))
     elif snapshot.operation == "tag_add":
-        await scope.handle.add_tags(identity_id, cast(list[str], parameters["tags"]), actor=scope.actor)
+        await scope.handle.identities.add_tags(
+            identity_id, cast(list[str], parameters["tags"]), actor=scope.actor
+        )
     else:
-        await scope.handle.remove_tags(identity_id, cast(list[str], parameters["tags"]), actor=scope.actor)
+        await scope.handle.identities.remove_tags(
+            identity_id, cast(list[str], parameters["tags"]), actor=scope.actor
+        )
 
 
 def _failure(exc: Exception) -> tuple[str, str]:
@@ -317,7 +321,7 @@ async def bulk_execute(
                 else:
                     succeeded.add(entry.id)
             await _coordinator(state).update(snapshot, succeeded=succeeded, failures=failures)
-            await scope.handle.record_admin_bulk(
+            await scope.handle.admin.record_bulk(
                 snapshot.operation,
                 actor=scope.actor,
                 reason=scope.reason,
@@ -386,12 +390,12 @@ def _render_export(rows: list[dict[str, object]], format: Literal["csv", "json"]
 
 async def _account_export(scope: CommandScope, data: ExportCommand) -> tuple[list[dict[str, object]], bool]:
     filters = data.account_filter or AccountBulkFilter()
-    selected = await scope.handle.account_selection_snapshot(
+    selected = await scope.handle.admin.selection_snapshot(
         filters.query(), options=filters.options(), limit=data.limit
     )
     rows: list[dict[str, object]] = []
     for entry in selected.entries:
-        card = await scope.handle.identity_card(entry.id)
+        card = await scope.handle.identities.card(entry.id)
         identity = card.identity
         rows.append(
             {
@@ -419,7 +423,7 @@ async def _event_export(scope: CommandScope, data: ExportCommand) -> tuple[list[
     rows: list[dict[str, object]] = []
     before: tuple[datetime, UUID] | None = None
     while len(rows) < data.limit:
-        page = await scope.handle.event_page(
+        page = await scope.handle.admin.event_page(
             filters=filters,
             limit=min(200, data.limit - len(rows)),
             before=before,
@@ -473,7 +477,7 @@ async def export_data(
             if data.source == "accounts"
             else data.event_filter or EventExportFilter()
         )
-        await scope.handle.record_admin_export(
+        await scope.handle.admin.record_export(
             data.source,
             actor=scope.actor,
             reason=scope.reason,

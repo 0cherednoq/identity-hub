@@ -212,7 +212,7 @@ async def analytics_series(
     service: str | None = Parameter(default=None, max_length=64),
 ) -> Response[ResourceEnvelope[AnalyticsSeriesResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_series(
+        value = await _handle(request, space_slug).analytics.series(
             metric,
             start=start,
             end=end,
@@ -241,7 +241,7 @@ async def analytics_funnel(
     service: str | None = Parameter(default=None, max_length=64),
 ) -> Response[ResourceEnvelope[FunnelResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_funnel(start=start, end=end, service=service)
+        value = await _handle(request, space_slug).analytics.funnel(start=start, end=end, service=service)
     except ValidationFailed as exc:
         raise HTTPException(str(exc), status_code=400) from None
     item = _model(FunnelResponse, value)
@@ -264,7 +264,7 @@ async def analytics_time_to(
     service: str | None = Parameter(default=None, max_length=64),
 ) -> Response[ResourceEnvelope[TimeToResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_time_to(
+        value = await _handle(request, space_slug).analytics.time_to(
             metric, start=start, end=end, service=service
         )
     except ValidationFailed as exc:
@@ -288,7 +288,7 @@ async def analytics_cohorts(
     service: str | None = Parameter(default=None, max_length=64),
 ) -> Response[ResourceEnvelope[CohortResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_cohorts(start=start, end=end, service=service)
+        value = await _handle(request, space_slug).analytics.cohorts(start=start, end=end, service=service)
     except ValidationFailed as exc:
         raise HTTPException(str(exc), status_code=400) from None
     item = _model(CohortResponse, value)
@@ -311,7 +311,7 @@ async def analytics_ban_rate(
     service: str | None = Parameter(default=None, max_length=64),
 ) -> Response[ResourceEnvelope[BanRateResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_ban_rate(
+        value = await _handle(request, space_slug).analytics.ban_rate(
             start=start, end=end, group_by=group_by, service=service
         )
     except ValidationFailed as exc:
@@ -335,7 +335,7 @@ async def analytics_utilization(
     service: str | None = Parameter(default=None, max_length=64),
 ) -> Response[ResourceEnvelope[UtilizationResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_utilization(
+        value = await _handle(request, space_slug).analytics.utilization(
             start=start, end=end, service=service
         )
     except ValidationFailed as exc:
@@ -358,7 +358,7 @@ async def analytics_proxy_quality(
     end: FromQuery[datetime],
 ) -> Response[ResourceEnvelope[ProxyQualityResponse] | None]:
     try:
-        value = await _handle(request, space_slug).analytics_proxy_quality(start=start, end=end)
+        value = await _handle(request, space_slug).analytics.proxy_quality(start=start, end=end)
     except ValidationFailed as exc:
         raise HTTPException(str(exc), status_code=400) from None
     item = _model(ProxyQualityResponse, value)

@@ -17,6 +17,7 @@ from identity_hub.postgres.models import EventRecord, IdentityRecord, QuotaUsage
 from identity_hub.protocols import ProbeContext, ProbeResult
 from identity_hub.service import OperationRule, Quota
 from identity_hub.state import Override
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_TG
 
 pytestmark = pytest.mark.pg
@@ -64,8 +65,8 @@ async def probes(hub: IdentityHub) -> FakeProbes:
 
 
 async def _reg(space: SpaceHandle, ref: str) -> UUID:
-    r = await space.register(
-        service="tg_probe", external_ref=ref, session={"auth_key": "k"}, lifecycle="ready"
+    r = await register(
+        space, service="tg_probe", external_ref=ref, session={"auth_key": "k"}, lifecycle="ready"
     )
     return r.identity_id
 
@@ -80,7 +81,7 @@ async def test_resync_applies_observations(
 ) -> None:
     identity_id = await _reg(space, "+1")
     probes.standing_result = ProbeResult(state=None, code="spam_restricted", raw_status="SPAM")
-    result = await space.resync(identity_id)
+    result = await space.sync.refresh(identity_id)
     assert result == {"auth": "unchanged", "standing": "applied"}
     row = await _row(sessionmaker, identity_id)
     assert (row.standing, row.standing_code) == ("limited", "spam_restricted")
@@ -98,15 +99,15 @@ async def test_unknown_status_and_pinned_drift(
 ) -> None:
     identity_id = await _reg(space, "+1")
     probes.standing_result = ProbeResult(state=None, raw_status="WEIRD")
-    assert (await space.resync(identity_id, ["standing"]))["standing"] == "unknown_status"
+    assert (await space.sync.refresh(identity_id, ["standing"]))["standing"] == "unknown_status"
     assert (await _row(sessionmaker, identity_id)).standing == "good"
 
-    await space.override(
+    await space.identities.override(
         identity_id,
         Override("standing", "", "good", reason="проверено", actor="admin", pin_for=timedelta(hours=1)),
     )
     probes.standing_result = ProbeResult(state="banned", raw_status="BANNED")
-    assert (await space.resync(identity_id, ["standing"]))["standing"] == "pinned"
+    assert (await space.sync.refresh(identity_id, ["standing"]))["standing"] == "pinned"
     assert (await _row(sessionmaker, identity_id)).standing == "good"
     async with sessionmaker() as s:
         types = list((await s.execute(select(EventRecord.type))).scalars())
@@ -118,16 +119,16 @@ async def test_reconcile_skips_busy_and_respects_age(
 ) -> None:
     a = await _reg(space, "+1")
     b = await _reg(space, "+2")
-    busy = await space.pool("w", service="tg_probe").acquire(among=[b])
-    report = await space.reconcile(["standing"], service="tg_probe")
+    busy = await space.pools.define("w", service="tg_probe").acquire(among=[b])
+    report = await space.sync.refresh_many(["standing"], service="tg_probe")
     assert list(report.probed) == [a]
     assert report.skipped_busy == [b]
     await busy.release()
-    again = await space.reconcile(["standing"], service="tg_probe", not_synced_for=timedelta(hours=1))
+    again = await space.sync.refresh_many(["standing"], service="tg_probe", not_synced_for=timedelta(hours=1))
     assert list(again.probed) == [b]  # a сверен только что
 
 
 async def test_resync_validation(probes: FakeProbes, space: SpaceHandle) -> None:
     identity_id = await _reg(space, "+1")
     with pytest.raises(ValidationFailed):
-        await space.resync(identity_id, ["lifecycle"])
+        await space.sync.refresh(identity_id, ["lifecycle"])

@@ -33,7 +33,7 @@ async def test_make_identity_creates_pool_candidate() -> None:
     space = hub.space("factory")
     identity_id = await make_identity(space, tags=["worker"])
 
-    lease = await space.pool("p", service=service, tags=["worker"]).acquire()
+    lease = await space.pools.define("p", service=service, tags=["worker"]).acquire()
     assert lease.identity_id == identity_id
 
 
@@ -44,4 +44,4 @@ async def test_plugin_fixtures_are_ready(
 ) -> None:
     identity_id = await identity_hub_make_identity()
     assert isinstance(identity_hub.store, MemoryStore)
-    assert (await identity_hub_space.identity_card(identity_id)).identity.id == identity_id
+    assert (await identity_hub_space.identities.card(identity_id)).identity.id == identity_id

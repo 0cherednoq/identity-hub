@@ -164,7 +164,7 @@ async def leases_dashboard(
     holder: str | None = Parameter(default=None, max_length=255),
 ) -> ResourceEnvelope[LeaseDashboardResponse]:
     try:
-        dashboard = await _handle(request, space_slug).lease_dashboard(
+        dashboard = await _handle(request, space_slug).admin.lease_dashboard(
             filters=_filters(pool, service, holder),
             group_by=group_by,
         )
@@ -222,7 +222,7 @@ async def leases_history(
         except ValueError as exc:
             raise HTTPException(str(exc), status_code=400) from None
     try:
-        page = await _handle(request, space_slug).lease_history_page(
+        page = await _handle(request, space_slug).admin.lease_history_page(
             limit=limit,
             before=before,
             filters=_filters(pool, service, holder),

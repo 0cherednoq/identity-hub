@@ -101,7 +101,7 @@ async def reveal_secret(
     _reauthenticate(request, state, data.reauthentication)
 
     async def apply(scope: CommandScope) -> Response[ResourceEnvelope[SecretRevealResponse]]:
-        value = await scope.handle.reveal_secret(
+        value = await scope.handle.secrets.reveal(
             identity_id, data.field, actor=scope.actor, reason=scope.reason
         )
         return Response(
@@ -142,10 +142,10 @@ async def update_secret(
 
     async def apply(scope: CommandScope) -> Response[ResourceEnvelope[SecretUpdateResponse]]:
         if data.kind == "credentials":
-            await scope.handle.update_credentials(identity_id, data.value, actor=scope.actor)
+            await scope.handle.secrets.replace_credentials(identity_id, data.value, actor=scope.actor)
             slot = None
         else:
-            await scope.handle.update_session(
+            await scope.handle.secrets.replace_session(
                 identity_id,
                 data.value,
                 actor=scope.actor,

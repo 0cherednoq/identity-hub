@@ -10,6 +10,7 @@ from identity_hub.hub import IdentityHub
 from identity_hub.testing.memory import MemoryStore
 from litestar.testing import TestClient
 from pydantic import SecretStr
+from tests.factories.api import register
 
 from identity_hub_admin.app import create_admin_app
 from identity_hub_admin.demo import DEMO_SERVICE
@@ -49,7 +50,8 @@ def _hub() -> IdentityHub:
 
 
 async def _seed(hub: IdentityHub) -> None:
-    await hub.space("import-space", "Imports").register(
+    await register(
+        hub.space("import-space", "Imports"),
         service=DEMO_SERVICE,
         external_ref="existing",
         profile={"display_name": "Existing", "country": "UA"},

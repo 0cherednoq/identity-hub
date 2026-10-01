@@ -16,6 +16,7 @@ from identity_hub.state import Override
 from identity_hub.testing.memory import MemoryStore
 from litestar.testing import TestClient
 from pydantic import BaseModel, SecretStr
+from tests.factories.api import add_proxy, register
 
 from identity_hub_admin.app import create_admin_app
 from identity_hub_admin.demo import DEMO_SERVICE, create_demo_hub
@@ -95,7 +96,8 @@ def _interaction_hub() -> IdentityHub:
 
 async def _seed_interaction_target(hub: IdentityHub) -> None:
     space = hub.space("demo-large", "Interactive commands")
-    await space.register(
+    await register(
+        space,
         service=INTERACTION_SERVICE,
         external_ref="interactive-target",
         id=INTERACTION_ID,
@@ -103,7 +105,7 @@ async def _seed_interaction_target(hub: IdentityHub) -> None:
         lifecycle="ready",
         actor="test:seed",
     )
-    lease = await space.pool("seed", service=INTERACTION_SERVICE).acquire(
+    lease = await space.pools.define("seed", service=INTERACTION_SERVICE).acquire(
         among=[INTERACTION_ID], for_operation="probe"
     )
     verification = lease.verification("kyc")
@@ -114,7 +116,8 @@ async def _seed_interaction_target(hub: IdentityHub) -> None:
 
 async def _seed_command_target(hub: Any) -> None:
     space = hub.space("demo-large", "Large dataset")
-    await space.register(
+    await register(
+        space,
         service=DEMO_SERVICE,
         external_ref="command-target",
         id=COMMAND_ID,
@@ -122,11 +125,11 @@ async def _seed_command_target(hub: Any) -> None:
         lifecycle="ready",
         actor="test:seed",
     )
-    await space.override(
+    await space.identities.override(
         COMMAND_ID,
         Override("standing", "", "banned", reason="seed blocked account", actor="test:seed"),
     )
-    await space.add_requirement(
+    await space.verifications.requirements.add(
         COMMAND_ID,
         "identity_review",
         actor="test:seed",
@@ -382,7 +385,8 @@ async def _seed_resource_commands(hub: IdentityHub) -> tuple[UUID, UUID]:
         (RESOURCE_LINKED_ID, "resource-linked"),
         (RESOURCE_DEPENDENT_ID, "resource-dependent"),
     ):
-        await space.register(
+        await register(
+            space,
             service=DEMO_SERVICE,
             external_ref=external_ref,
             id=identity_id,
@@ -390,17 +394,17 @@ async def _seed_resource_commands(hub: IdentityHub) -> tuple[UUID, UUID]:
             lifecycle="ready",
             actor="test:seed",
         )
-    await space.link(RESOURCE_TARGET_ID, "recovery", RESOURCE_LINKED_ID, actor="test:seed")
-    await space.link(RESOURCE_DEPENDENT_ID, "parent", RESOURCE_TARGET_ID, actor="test:seed")
-    await space.override(
+    await space.links.add(RESOURCE_TARGET_ID, "recovery", RESOURCE_LINKED_ID, actor="test:seed")
+    await space.links.add(RESOURCE_DEPENDENT_ID, "parent", RESOURCE_TARGET_ID, actor="test:seed")
+    await space.identities.override(
         RESOURCE_TARGET_ID,
         Override("auth", "", "authenticated", reason="seed leaseable target", actor="test:seed"),
     )
-    proxy_id, _ = await space.add_proxy("http://10.10.0.1:8080", pool="manual", max_identities=1)
-    await space.override_proxy(proxy_id, "alive", reason="seed available proxy", actor="test:seed")
+    proxy_id, _ = await add_proxy(space, "http://10.10.0.1:8080", pool="manual", max_identities=1)
+    await space.proxies.override(proxy_id, "alive", reason="seed available proxy", actor="test:seed")
     other = hub.space("other-resource-space", "Other")
-    foreign_proxy_id, _ = await other.add_proxy("http://10.10.0.2:8080", pool="manual")
-    await other.override_proxy(foreign_proxy_id, "alive", reason="seed foreign proxy", actor="test:seed")
+    foreign_proxy_id, _ = await add_proxy(other, "http://10.10.0.2:8080", pool="manual")
+    await other.proxies.override(foreign_proxy_id, "alive", reason="seed foreign proxy", actor="test:seed")
     async with space._tx() as tx:
         identity = await space._identity(tx, RESOURCE_TARGET_ID)
         await tx.acquire_lease(

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from identity_hub.hub import SpaceHandle
 
+from tests.factories.api import register
 from tests.factories.services import ADMIN_TEST_SERVICE
 
 AdminRole = Literal["viewer", "operator", "admin"]
@@ -28,7 +29,8 @@ class AccountFactory:
 
     async def create(self, *, external_ref: str | None = None, country: str = "UA") -> UUID:
         self.sequence += 1
-        result = await self.space.register(
+        result = await register(
+            self.space,
             service=ADMIN_TEST_SERVICE,
             external_ref=external_ref or f"{self.prefix}-{self.sequence:03d}",
             profile={"country": country, "display_name": f"Account {self.sequence}"},

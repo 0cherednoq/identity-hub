@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from identity_hub.events import EventDraft
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.rollups import BucketSize
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE
 
 pytestmark = pytest.mark.pg
@@ -21,14 +22,17 @@ async def test_postgres_rollups_are_idempotent_rebuildable_and_include_internal_
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     before = datetime.now(UTC) - timedelta(minutes=1)
-    registered = await space.register(
+    registered = await register(
+        space,
         service=FAKE_EXCHANGE,
         external_ref="rollup@example.test",
         credentials={"email": "rollup@example.test", "password": "test"},
         session={"cookies": {"sid": "test"}},
         lifecycle="ready",
     )
-    lease = await space.pool("analytics", service=FAKE_EXCHANGE).acquire(among=[registered.identity_id])
+    lease = await space.pools.define("analytics", service=FAKE_EXCHANGE).acquire(
+        among=[registered.identity_id]
+    )
     await lease.release()
     await hub.dispatcher.drain()
     after = datetime.now(UTC) + timedelta(minutes=1)

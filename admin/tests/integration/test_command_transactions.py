@@ -36,11 +36,11 @@ async def test_pg_gateway_rolls_back_dry_run_and_serializes_revision_guard(
     space = seeded_spaces.alpha
     identity_id = seeded_spaces.alpha_ids[0]
     gateway = CommandGateway(IdempotencyCoordinator())
-    initial = await space.identity_card(identity_id)
+    initial = await space.identities.card(identity_id)
 
     async def update_note(scope: CommandScope, note: str) -> int:
-        updated = await scope.handle.set_note(identity_id, note, actor=scope.actor)
-        return updated.event_seq
+        updated = await scope.handle.identities.set_note(identity_id, note, actor=scope.actor)
+        return updated.revision
 
     dry_revision = await gateway._invoke(
         space,
@@ -53,7 +53,7 @@ async def test_pg_gateway_rolls_back_dry_run_and_serializes_revision_guard(
         lambda scope: update_note(scope, "dry-run-note"),
         identity_id,
     )
-    after_dry_run = await space.identity_card(identity_id)
+    after_dry_run = await space.identities.card(identity_id)
     assert dry_revision == initial.revision + 1
     assert after_dry_run.revision == initial.revision
     assert after_dry_run.identity.note != "dry-run-note"
@@ -84,7 +84,7 @@ async def test_pg_gateway_rolls_back_dry_run_and_serializes_revision_guard(
     assert len(failures) == 1
     assert failures[0].expected_version == initial.revision
     assert failures[0].actual_version == initial.revision + 1
-    final = await space.identity_card(identity_id)
+    final = await space.identities.card(identity_id)
     assert final.revision == initial.revision + 1
     assert final.identity.note in {"winner-a", "winner-b"}
 
@@ -94,12 +94,12 @@ async def test_pg_gateway_joins_requirement_resolution_to_locked_transaction(
 ) -> None:
     space = seeded_spaces.alpha
     identity_id = seeded_spaces.alpha_ids[0]
-    await space.add_requirement(identity_id, "support_review", actor="test:platform")
-    revision = (await space.identity_card(identity_id)).revision
+    await space.verifications.requirements.add(identity_id, "support_review", actor="test:platform")
+    revision = (await space.identities.card(identity_id)).revision
     gateway = CommandGateway(IdempotencyCoordinator())
 
     async def resolve(scope: CommandScope) -> bool:
-        return await scope.handle.resolve_requirement(
+        return await scope.handle.verifications.requirements.resolve(
             identity_id,
             "support_review",
             actor=scope.actor,
@@ -120,5 +120,5 @@ async def test_pg_gateway_joins_requirement_resolution_to_locked_transaction(
     assert changed is True
     assert all(
         item.get("code") != "support_review"
-        for item in (await space.identity_card(identity_id)).identity.requirements
+        for item in (await space.identities.card(identity_id)).identity.requirements
     )

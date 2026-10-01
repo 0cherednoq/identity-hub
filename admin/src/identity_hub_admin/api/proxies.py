@@ -189,7 +189,7 @@ async def proxies_overview(
     limit: int = Parameter(default=50, ge=1, le=200),
 ) -> ResourceEnvelope[ProxyPageResponse]:
     try:
-        page = await _handle(request, space_slug).proxy_overview(
+        page = await _handle(request, space_slug).admin.proxy_overview(
             filters=ProxyFilters(pool=pool, status=status, capacity=capacity),
             limit=limit,
             before=_cursor(cursor, "created_at"),
@@ -222,7 +222,7 @@ async def proxy_detail(
     history_limit: int = Parameter(default=50, ge=1, le=200),
 ) -> ResourceEnvelope[ProxyDetailResponse]:
     try:
-        detail = await _handle(request, space_slug).proxy_detail(
+        detail = await _handle(request, space_slug).admin.proxy_detail(
             proxy_id,
             history_limit=history_limit,
             history_before=_cursor(history_cursor, "occurred_at"),

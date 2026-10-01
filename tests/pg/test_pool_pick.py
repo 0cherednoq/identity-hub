@@ -27,13 +27,13 @@ async def _set(sm: async_sessionmaker[AsyncSession], identity_id: UUID, **values
 
 def test_timing_validation(space: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed, match="TTL/3"):
-        space.pool("p", service="fake_tg", ttl=timedelta(seconds=30), heartbeat=timedelta(seconds=20))
+        space.pools.define("p", service="fake_tg", ttl=timedelta(seconds=30), heartbeat=timedelta(seconds=20))
     with pytest.raises(ValidationFailed, match="safety_margin"):
-        space.pool(
+        space.pools.define(
             "p", service="fake_tg", heartbeat=timedelta(seconds=10), safety_margin=timedelta(seconds=5)
         )
     with pytest.raises(ValidationFailed, match="filterable"):
-        space.pool("p", service="fake_tg", profile={"first_name": "x"})
+        space.pools.define("p", service="fake_tg", profile={"first_name": "x"})
 
 
 @pytest.mark.parametrize(
@@ -55,7 +55,7 @@ async def test_region_filters(
     identity_id = await make_identity(space)
     if values:
         await _set(sessionmaker, identity_id, **values)
-    row = await space.pool("p", service="fake_tg")._pick()
+    row = await space.pools.define("p", service="fake_tg")._pick()
     assert (row is not None and row.id == identity_id) is picked
 
 
@@ -63,14 +63,14 @@ async def test_for_operation_rules(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     limited = await make_identity(space, standing="limited")
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     assert (await pool._pick(for_operation="read_channel")) is not None
     assert await pool._pick(for_operation="send_message") is None  # только good
     unauth = await make_identity(space, service="fake_tg", auth_state="no_session", standing="banned")
     probe = await pool._pick(for_operation="probe", exclude=[limited])
     assert probe is not None and probe.id == unauth
 
-    ex = space.pool("ex", service="fake_exchange")
+    ex = space.pools.define("ex", service="fake_exchange")
     partial = await make_identity(space, service="fake_exchange", verified_factors=["email", "phone"])
     assert await ex._pick(for_operation="withdraw") is None
     await _set(sessionmaker, partial, verified_factors=["email", "phone", "kyc_id"])
@@ -80,7 +80,7 @@ async def test_for_operation_rules(
 async def test_tags_labels_profile_among(space: SpaceHandle) -> None:
     a = await make_identity(space, tags=["parser", "ua"], labels={"farm": "3"}, profile={"country": "UA"})
     b = await make_identity(space, tags=["parser"], labels={"farm": "4"}, profile={"country": "PL"})
-    pool = space.pool("parsers", service="fake_tg", tags={"parser"})
+    pool = space.pools.define("parsers", service="fake_tg", tags={"parser"})
     assert (await pool._pick(tags=["ua"])).id == a  # type: ignore[union-attr]
     assert (await pool._pick(labels={"farm": "4"})).id == b  # type: ignore[union-attr]
     assert (await pool._pick(profile={"country": "UA"})).id == a  # type: ignore[union-attr]
@@ -88,7 +88,7 @@ async def test_tags_labels_profile_among(space: SpaceHandle) -> None:
     domain = select(IdentityRecord.id).where(IdentityRecord.external_ref == str(a))
     assert (await pool._pick(among=domain)).id == a  # type: ignore[union-attr]
     assert await pool._pick(among=[new_id()]) is None
-    assert await space.pool("x", service="fake_tg", tags={"nope"})._pick() is None
+    assert await space.pools.define("x", service="fake_tg", tags={"nope"})._pick() is None
 
 
 async def test_live_lease_excluded_and_least_recently_leased_first(
@@ -115,7 +115,7 @@ async def test_live_lease_excluded_and_least_recently_leased_first(
                     expires_at=text(expires),
                 )
             )
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     order = []
     exclude: list[UUID] = []
     while (row := await pool._pick(exclude=exclude)) is not None:
@@ -128,7 +128,7 @@ async def test_live_lease_excluded_and_least_recently_leased_first(
 async def test_skip_locked(space: SpaceHandle) -> None:
     a = await make_identity(space)
     b = await make_identity(space)
-    pool = space.pool("p", service="fake_tg")
+    pool = space.pools.define("p", service="fake_tg")
     query = pool.candidate_query()
     first_picked = asyncio.Event()
     release = asyncio.Event()

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import IdentityRecord, LeaseRecord
+from tests.fixtures.api import register
 
 pytestmark = pytest.mark.pg
 
@@ -20,8 +21,9 @@ async def test_overview_matches_sql_oracle_and_keeps_authorization_before_aggreg
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     await hub.space("empty", "Empty").ref()
-    await hub.space("hidden", "Hidden").register(service="fake_tg", external_ref="hidden")
-    registered = await space.register(
+    await register(hub.space("hidden", "Hidden"), service="fake_tg", external_ref="hidden")
+    registered = await register(
+        space,
         service="fake_exchange",
         external_ref="one@example.test",
         session={"cookies": {"sid": "safe-demo"}},
@@ -29,13 +31,13 @@ async def test_overview_matches_sql_oracle_and_keeps_authorization_before_aggreg
     )
     async with space._tx(own=True) as tx:
         deadline = await tx.now() + timedelta(hours=6)
-    await space.add_requirement(registered.identity_id, "identity_document", deadline=deadline)
-    lease = await space.pool("workers", service="fake_exchange", capacity_low=1).acquire()
+    await space.verifications.requirements.add(registered.identity_id, "identity_document", deadline=deadline)
+    lease = await space.pools.define("workers", service="fake_exchange", capacity_low=1).acquire()
     email = lease.verification("email")
     await email.start()
     await email.submit()
 
-    overview = await space.space_overview()
+    overview = await space.admin.overview()
     service = overview.services[0]
     async with sessionmaker() as session:
         oracle_total = int(
@@ -92,6 +94,8 @@ async def test_overview_matches_sql_oracle_and_keeps_authorization_before_aggreg
     assert sum(item.total for item in visible.spaces) == 1
     assert "hidden" not in {item.space.slug for item in visible.spaces}
 
-    capacity = await space.pool_capacity(space.pool("workers", service="fake_exchange", capacity_low=1))
+    capacity = await space.admin.pool_capacity(
+        space.pools.define("workers", service="fake_exchange", capacity_low=1)
+    )
     assert (capacity.eligible, capacity.leased, capacity.free, capacity.state) == (1, 1, 0, "empty")
     await lease.release()

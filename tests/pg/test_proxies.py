@@ -13,6 +13,7 @@ from identity_hub.errors import ValidationFailed
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import EventRecord, ProxyRecord
 from identity_hub.proxies import ProxyHealthPolicy, fingerprint, parse_proxy_url
+from tests.fixtures.api import add_proxy
 
 pytestmark = pytest.mark.pg
 
@@ -58,16 +59,20 @@ def test_parse_and_fingerprint() -> None:
 async def test_add_dedup_and_secret(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    proxy_id, created = await space.add_proxy("socks5://user:secret@1.2.3.4:1080", pool="residential-ua")
-    same_id, again = await space.add_proxy("socks5://user:other-password@1.2.3.4:1080", pool="residential-ua")
+    proxy_id, created = await add_proxy(space, "socks5://user:secret@1.2.3.4:1080", pool="residential-ua")
+    same_id, again = await add_proxy(
+        space, "socks5://user:other-password@1.2.3.4:1080", pool="residential-ua"
+    )
     assert created and not again and same_id == proxy_id
-    many = await space.add_proxies(["http://5.6.7.8:3128", "http://5.6.7.8:3128"], pool="dc")
-    assert many[0][1] and not many[1][1]
+    many = await space.proxies.create_many(
+        ["http://5.6.7.8:3128", "http://5.6.7.8:3128"], group="dc", on_conflict="skip"
+    )
+    assert len(many.created) == 1 and len(many.skipped) == 1
     row = await _proxy_row(sessionmaker, proxy_id)
     assert (row.host, row.port, row.scheme, row.status) == ("1.2.3.4", 1080, "socks5", "alive")
     assert b"secret" not in row.ciphertext
-    assert await space._proxy_url(proxy_id) == "socks5://user:secret@1.2.3.4:1080"
-    assert await space._proxy_url(many[0][0]) == "http://5.6.7.8:3128"
+    assert await space.proxies.url(proxy_id) == "socks5://user:secret@1.2.3.4:1080"
+    assert await space.proxies.url(many.created[0].id) == "http://5.6.7.8:3128"
 
 
 async def _proxy_row(sm: async_sessionmaker[AsyncSession], proxy_id: Any) -> Any:
@@ -79,34 +84,34 @@ async def test_health_cycle(
     hub: IdentityHub, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     hub.proxy_health = ProxyHealthPolicy(error_threshold=2, base_backoff=timedelta(seconds=10), dead_after=2)
-    proxy_id, _ = await space.add_proxy("http://u:p@9.9.9.9:8080", pool="dc")
+    proxy_id, _ = await add_proxy(space, "http://u:p@9.9.9.9:8080", pool="dc")
 
-    assert await space.report_proxy_failure(proxy_id) == "alive"
-    assert await space.report_proxy_failure(proxy_id, raw_status="CONNECT_TIMEOUT") == "quarantined"
+    assert await space.proxies.report_failure(proxy_id) == "alive"
+    assert await space.proxies.report_failure(proxy_id, raw_status="CONNECT_TIMEOUT") == "quarantined"
     row = await _proxy(sessionmaker)
     assert row.next_check_at is not None and row.fail_streak == 0
 
-    assert await space.recheck_proxies(Checker(True)) == {}  # срок ещё не наступил
+    assert await space.proxies.recheck_due(Checker(True)) == {}  # срок ещё не наступил
     await _make_due(sessionmaker)
     checker = Checker(True)
-    assert await space.recheck_proxies(checker) == {
+    assert await space.proxies.recheck_due(checker) == {
         proxy_id: "quarantined"
     }  # первая успешная — ждём подтверждения
     assert checker.urls == ["http://u:p@9.9.9.9:8080"]
     assert (await _proxy(sessionmaker)).pending_observation == "alive"
 
     await _make_due(sessionmaker)
-    assert await space.recheck_proxies(Checker(False)) == {
+    assert await space.proxies.recheck_due(Checker(False)) == {
         proxy_id: "quarantined"
     }  # неудача сбрасывает ожидание
     row = await _proxy(sessionmaker)
     assert (row.pending_observation, row.fail_streak) == (None, 1)
     await _make_due(sessionmaker)
-    assert await space.recheck_proxies(Checker(False)) == {proxy_id: "dead"}
+    assert await space.proxies.recheck_due(Checker(False)) == {proxy_id: "dead"}
     await _make_due(sessionmaker)
-    assert await space.recheck_proxies(Checker(True)) == {}  # dead не перепроверяется по расписанию
+    assert await space.proxies.recheck_due(Checker(True)) == {}  # dead не перепроверяется по расписанию
 
-    assert await space.recheck_proxy(proxy_id, Checker(True, True), actor="admin") == "alive"
+    assert await space.proxies.recheck(proxy_id, Checker(True, True), actor="admin") == "alive"
     row = await _proxy(sessionmaker)
     assert (row.status, row.fail_streak, row.error_score, row.next_check_at) == ("alive", 0, 0.0, None)
 
@@ -126,11 +131,11 @@ async def test_health_cycle(
 async def test_override_and_success_decay(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    proxy_id, _ = await space.add_proxy("http://1.1.1.1:80", pool="dc")
-    await space.report_proxy_failure(proxy_id)
-    await space.report_proxy_success(proxy_id)
+    proxy_id, _ = await add_proxy(space, "http://1.1.1.1:80", pool="dc")
+    await space.proxies.report_failure(proxy_id)
+    await space.proxies.report_success(proxy_id)
     assert (await _proxy(sessionmaker)).error_score == 0.5
-    assert await space.override_proxy(proxy_id, "dead", reason="провайдер закрыт", actor="admin") == "dead"
-    assert await space.override_proxy(proxy_id, "alive", reason="продлили", actor="admin") == "alive"
+    assert await space.proxies.override(proxy_id, "dead", reason="провайдер закрыт", actor="admin") == "dead"
+    assert await space.proxies.override(proxy_id, "alive", reason="продлили", actor="admin") == "alive"
     with pytest.raises(ValidationFailed):
-        await space.override_proxy(proxy_id, "dead", reason="", actor="admin")
+        await space.proxies.override(proxy_id, "dead", reason="", actor="admin")

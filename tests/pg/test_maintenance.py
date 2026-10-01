@@ -38,7 +38,7 @@ async def test_normalizes_timers_and_closes_expired_lease_at_expires_at(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     identity_id = await make_identity(space)
-    lease = await space.pool("maintenance", service="fake_tg").acquire()
+    lease = await space.pools.define("maintenance", service="fake_tg").acquire()
     async with space._tx() as tx:
         now = await tx.now()
     await space._command(
@@ -77,7 +77,7 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     identity_id = await make_identity(space)
-    lease = await space.pool("cleanup", service="fake_tg").acquire()
+    lease = await space.pools.define("cleanup", service="fake_tg").acquire()
     await lease.release()
     endpoint = await space.webhooks.create(
         url="https://hooks.example.test/maintenance",

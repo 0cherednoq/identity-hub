@@ -14,6 +14,7 @@ from identity_hub.events import Event
 from identity_hub.hub import IdentityHub
 from identity_hub.rollups import BucketSize
 from identity_hub.testing import MemoryStore
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE
 
 
@@ -97,7 +98,7 @@ async def test_golden_series_funnel_time_to_cohorts_ban_rate_and_proxy_quality()
     start, end = await _golden(hub, store)
     space = hub.space("analytics")
 
-    series = await space.analytics_series(
+    series = await space.analytics.series(
         "identities.added", start=start, end=end, bucket_size=BucketSize.DAY
     )
     assert sum(point.value for point in series.groups[0].points) == 2
@@ -105,29 +106,29 @@ async def test_golden_series_funnel_time_to_cohorts_ban_rate_and_proxy_quality()
     assert (
         series.cache_tag
         == (
-            await space.analytics_series("identities.added", start=start, end=end, bucket_size=BucketSize.DAY)
+            await space.analytics.series("identities.added", start=start, end=end, bucket_size=BucketSize.DAY)
         ).cache_tag
     )
 
-    funnel = await space.analytics_funnel(start=start, end=end)
+    funnel = await space.analytics.funnel(start=start, end=end)
     assert [(stage.key, stage.count) for stage in funnel.stages] == [
         ("added", 2),
         ("authenticated", 2),
         ("tier:basic", 1),
     ]
-    time_to = await space.analytics_time_to("added_to_authenticated", start=start, end=end)
+    time_to = await space.analytics.time_to("added_to_authenticated", start=start, end=end)
     assert time_to.samples == 2
     assert time_to.median_seconds == 15
     assert time_to.p90_seconds == 19
-    verification = await space.analytics_time_to("verification:email", start=start, end=end)
+    verification = await space.analytics.time_to("verification:email", start=start, end=end)
     assert (verification.samples, verification.median_seconds, verification.average_attempts) == (1, 60, 2)
 
-    cohorts = await space.analytics_cohorts(start=start, end=end)
+    cohorts = await space.analytics.cohorts(start=start, end=end)
     assert cohorts.coverage == "partial"
     assert cohorts.rows[0].cells[0].share == 0.5
-    rates = await space.analytics_ban_rate(start=start, end=end, group_by="batch")
+    rates = await space.analytics.ban_rate(start=start, end=end, group_by="batch")
     assert rates.items[0].key == "A" and rates.items[0].rate == 0.5
-    proxy = await space.analytics_proxy_quality(start=start, end=end)
+    proxy = await space.analytics.proxy_quality(start=start, end=end)
     assert (proxy.failures, proxy.quarantined, proxy.dead, proxy.recovered) == (1, 1, 1, 1)
 
 
@@ -136,7 +137,7 @@ async def test_analytics_rejects_unknown_dimensions_and_caps_points() -> None:
     start, end = await _golden(hub, store)
     space = hub.space("analytics")
     with pytest.raises(ValidationFailed):
-        await space.analytics_series(
+        await space.analytics.series(
             "identities.added",
             start=start,
             end=end,
@@ -144,14 +145,14 @@ async def test_analytics_rejects_unknown_dimensions_and_caps_points() -> None:
             group_by="identity_id",
         )
     with pytest.raises(ValidationFailed):
-        await space.analytics_series(
+        await space.analytics.series(
             "identities.added",
             start=start,
             end=start + timedelta(days=1),
             bucket_size=BucketSize.MINUTE,
         )
     with pytest.raises(ValidationFailed):
-        await space.analytics_series(
+        await space.analytics.series(
             "identities.added",
             start=start,
             end=end,
@@ -180,7 +181,7 @@ async def test_analytics_rejects_unknown_dimensions_and_caps_points() -> None:
         events.append(event)
     await hub.rollups.handle_events(events)
     with pytest.raises(ValidationFailed):
-        await space.analytics_series(
+        await space.analytics.series(
             "logins.failed",
             start=start,
             end=end,
@@ -223,7 +224,7 @@ async def test_analytics_daily_series_uses_wall_clock_days_across_dst() -> None:
         events.append(event)
     await hub.rollups.handle_events(events)
 
-    series = await space.analytics_series(
+    series = await space.analytics.series(
         "identities.added",
         start=local_start,
         end=local_start + timedelta(days=3),
@@ -238,7 +239,8 @@ async def test_analytics_daily_series_uses_wall_clock_days_across_dst() -> None:
 async def test_utilization_heatmap_uses_space_timezone() -> None:
     hub, _ = _hub()
     space = hub.space("analytics")
-    registered = await space.register(
+    registered = await register(
+        space,
         service=FAKE_EXCHANGE,
         external_ref="lease@example.test",
         credentials={"email": "lease@example.test", "password": "test"},
@@ -247,10 +249,12 @@ async def test_utilization_heatmap_uses_space_timezone() -> None:
         auth_state="authenticated",
     )
     start = hub.clock.now()
-    lease = await space.pool("analytics", service=FAKE_EXCHANGE).acquire(among=[registered.identity_id])
+    lease = await space.pools.define("analytics", service=FAKE_EXCHANGE).acquire(
+        among=[registered.identity_id]
+    )
     assert isinstance(registered.identity_id, UUID)
     hub.clock.advance(60)  # type: ignore[attr-defined]
     await lease.release()
-    report = await space.analytics_utilization(start=start, end=hub.clock.now())
+    report = await space.analytics.utilization(start=start, end=hub.clock.now())
     assert report.leased_seconds == 60
     assert report.heatmap[0].leases == 1

@@ -112,7 +112,7 @@ async def events_page(
     limit: int = Parameter(default=50, ge=1, le=200),
 ) -> ResourceEnvelope[EventPageResponse]:
     try:
-        page = await _handle(request, space_slug).event_page(
+        page = await _handle(request, space_slug).admin.event_page(
             filters=EventFilters(
                 type=type,
                 group=group,
@@ -162,7 +162,7 @@ async def event_detail(
     event_id: FromPath[UUID],
 ) -> ResourceEnvelope[EventItemResponse]:
     try:
-        item = await _handle(request, space_slug).event_detail(event_id)
+        item = await _handle(request, space_slug).admin.event_detail(event_id)
     except NotFound:
         raise NotFoundException("event not found") from None
     return ResourceEnvelope(data=_item(item))

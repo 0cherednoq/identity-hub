@@ -28,7 +28,7 @@ async def import_hub() -> IdentityHub:
 
 async def test_staged_import_finishes_and_removes_encrypted_payloads(import_hub: IdentityHub) -> None:
     space = import_hub.space("jobs")
-    run_id = await space.stage_import(
+    run_id = await space.imports.stage(
         service="fake_tg",
         source="accounts.jsonl",
         actor="admin:operator",
@@ -39,11 +39,10 @@ async def test_staged_import_finishes_and_removes_encrypted_payloads(import_hub:
         ],
     )
 
-    assert (await space.import_run(run_id)).state == "pending"  # type: ignore[union-attr]
+    assert (await space.imports.get(run_id)).state == "pending"
     assert await import_hub.import_runner.run_once() == 2
-    completed = await space.import_run(run_id)
+    completed = await space.imports.get(run_id)
 
-    assert completed is not None
     assert completed.state == "succeeded"
     assert (completed.total, completed.processed, completed.created) == (2, 2, 2)
     created_ids = completed.report["created_ids"]
@@ -60,7 +59,7 @@ async def test_staged_import_finishes_and_removes_encrypted_payloads(import_hub:
 
 async def test_expired_claim_is_resumed_without_duplicate(import_hub: IdentityHub) -> None:
     space = import_hub.space("resume")
-    run_id = await space.stage_import(
+    run_id = await space.imports.stage(
         service="fake_tg",
         source="resume.csv",
         records=[ImportRecord(external_ref="+200", credentials={"phone": "+200"})],
@@ -81,8 +80,7 @@ async def test_expired_claim_is_resumed_without_duplicate(import_hub: IdentityHu
     clock.advance(timedelta(minutes=6))
     assert await runner.run_once() == 1
 
-    completed = await space.import_run(run_id)
-    assert completed is not None
+    completed = await space.imports.get(run_id)
     assert completed.state == "succeeded" and completed.created == 1
     async with space._tx() as tx:
         found = await tx.find_by_refs([("fake_tg", "+200")])
@@ -91,7 +89,7 @@ async def test_expired_claim_is_resumed_without_duplicate(import_hub: IdentityHu
 
 async def test_cancel_waits_for_claimed_batch_boundary(import_hub: IdentityHub) -> None:
     space = import_hub.space("cancel")
-    run_id = await space.stage_import(
+    run_id = await space.imports.stage(
         service="fake_tg",
         source="cancel.jsonl",
         records=[ImportRecord(external_ref="+300"), ImportRecord(external_ref="+301")],
@@ -103,15 +101,13 @@ async def test_cancel_waits_for_claimed_batch_boundary(import_hub: IdentityHub) 
             limit=1,
             claim_for=timedelta(minutes=5),
         )
-    assert await space.cancel_import(run_id)
-    assert (await space.import_run(run_id)).state == "cancelling"  # type: ignore[union-attr]
+    assert await space.imports.cancel(run_id)
+    assert (await space.imports.get(run_id)).state == "cancelling"
 
-    run = await space.import_run(run_id)
-    assert run is not None
+    run = await space.imports.get(run_id)
     results = await import_hub.import_runner._process(space, run, claimed)
     async with space._tx(own=True) as tx:
         completed = await tx.finish_import_items(run_id, results)
 
-    assert completed is not None
     assert completed.state == "cancelled"
     assert completed.processed == 1

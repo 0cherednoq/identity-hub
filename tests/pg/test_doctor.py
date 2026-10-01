@@ -23,6 +23,7 @@ from identity_hub.postgres.models import (
     WebhookEndpointRecord,
 )
 from tests.conftest import TEST_KEYS
+from tests.fixtures.api import add_proxy, register
 from tests.fixtures.services import FAKE_TG, TgCredentials
 
 pytestmark = pytest.mark.pg
@@ -33,7 +34,8 @@ async def test_doctor_finds_and_fixes_denormalization(
     space: SpaceHandle,
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    registered = await space.register(
+    registered = await register(
+        space,
         service="fake_tg",
         external_ref="+doctor",
         lifecycle="ready",
@@ -72,7 +74,8 @@ async def test_rotate_key_rewraps_every_encrypted_table(
     hub.register_service(secret_service)
     await hub.start()
     space = hub.space("rotation")
-    registered = await space.register(
+    registered = await register(
+        space,
         service="secret_tg",
         external_ref="+rotate",
         credentials=TgCredentials(phone="+rotate", password=SecretStr("password")),
@@ -80,7 +83,7 @@ async def test_rotate_key_rewraps_every_encrypted_table(
         profile={"first_name": "Ada", "country": "GB"},
     )
     identity_id = registered.identity_id
-    await space.add_proxy("http://login:pass@127.0.0.1:8080", pool="rotate")
+    await add_proxy(space, "http://login:pass@127.0.0.1:8080", pool="rotate")
     await space.webhooks.create(
         url="https://hooks.example.test/rotate",
         secret=SecretStr("webhook-secret"),

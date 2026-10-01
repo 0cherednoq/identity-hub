@@ -16,8 +16,8 @@ pytestmark = pytest.mark.integration
 
 
 async def test_spaces_are_isolated_by_library_read_contract(seeded_spaces: SeededSpaces) -> None:
-    alpha_page = await seeded_spaces.alpha.search()
-    beta_page = await seeded_spaces.beta.search()
+    alpha_page = await seeded_spaces.alpha.identities.search(count=True)
+    beta_page = await seeded_spaces.beta.identities.search(count=True)
 
     assert {item.id for item in alpha_page.items} == set(seeded_spaces.alpha_ids)
     assert {item.id for item in beta_page.items} == set(seeded_spaces.beta_ids)

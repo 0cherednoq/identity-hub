@@ -125,7 +125,7 @@ async def lifecycle_command(
     data: LifecycleCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        decision = await scope.handle.set_lifecycle(
+        decision = await scope.handle.identities.set_lifecycle(
             identity_id, data.target, actor=scope.actor, reason=scope.reason
         )
         return ResourceEnvelope(
@@ -165,7 +165,9 @@ async def restore_standing_command(
     data: RestoreStandingCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        decision = await scope.handle.restore_standing(identity_id, actor=scope.actor, reason=scope.reason)
+        decision = await scope.handle.identities.restore_standing(
+            identity_id, actor=scope.actor, reason=scope.reason
+        )
         return ResourceEnvelope(
             data=AccountCommandResponse(
                 action="restore",
@@ -203,7 +205,7 @@ async def override_state_command(
     data: OverrideStateCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        decision = await scope.handle.override(
+        decision = await scope.handle.identities.override(
             identity_id,
             Override(
                 region=data.region,
@@ -253,7 +255,7 @@ async def unpin_state_command(
     data: UnpinStateCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        decision = await scope.handle.unpin(
+        decision = await scope.handle.identities.unpin(
             identity_id, data.region, data.key, actor=scope.actor, reason=scope.reason
         )
         return ResourceEnvelope(
@@ -294,7 +296,7 @@ async def resolve_requirement_command(
     data: ResolveRequirementCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        changed = await scope.handle.resolve_requirement(
+        changed = await scope.handle.verifications.requirements.resolve(
             identity_id, data.code, actor=scope.actor, reason=scope.reason
         )
         return ResourceEnvelope(
@@ -333,7 +335,7 @@ async def run_login_command(
     data: RunLoginCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        outcome = await scope.handle.run_login(identity_id)
+        outcome = await scope.handle.auth.login(identity_id)
         return ResourceEnvelope(
             data=AccountCommandResponse(action="run_login", changed=True, outcome=outcome, region="auth")
         )
@@ -365,7 +367,7 @@ async def resync_account_command(
     data: ResyncAccountCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        outcomes = await scope.handle.resync(identity_id, data.regions)
+        outcomes = await scope.handle.sync.refresh(identity_id, data.regions)
         return ResourceEnvelope(
             data=AccountCommandResponse(
                 action="resync",
@@ -402,7 +404,7 @@ async def answer_challenge_command(
     data: AnswerChallengeCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        outcome = await scope.handle.answer_challenge(
+        outcome = await scope.handle.auth.answer_challenge(
             data.challenge_id,
             data.answer.get_secret_value(),
             actor=scope.actor,
@@ -442,7 +444,7 @@ async def review_verification_command(
     data: ReviewVerificationCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        status = await scope.handle.review_verification(
+        status = await scope.handle.verifications.review(
             identity_id,
             data.factor,
             data.action,

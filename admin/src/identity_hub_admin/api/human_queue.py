@@ -65,7 +65,7 @@ async def human_queue(
     limit: int = Parameter(default=50, ge=1, le=200),
 ) -> ResourceEnvelope[HumanQueuePageResponse]:
     try:
-        page = await _handle(request, space_slug).human_queue(
+        page = await _handle(request, space_slug).admin.human_queue(
             kind=kind,
             service=service,
             urgency=urgency,

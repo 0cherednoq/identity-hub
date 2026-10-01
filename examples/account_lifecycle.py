@@ -20,6 +20,7 @@ from pydantic import BaseModel, SecretStr
 from identity_hub import (
     Blame,
     Fault,
+    IdentityCreate,
     IdentityHub,
     Lifecycle,
     LoginChallenge,
@@ -116,7 +117,7 @@ SERVICE = Service(
     probes=Probes(),
     error_classifier=ErrorClassifier(),
     standing_codes={"OK": Standing.GOOD, "USER_BANNED": Standing.BANNED},
-    proxy_policy=ProxyPolicy(pool="residential", sticky=True),
+    proxy_policy=ProxyPolicy(group="residential", sticky=True),
 )
 
 
@@ -129,7 +130,7 @@ class WalkthroughResult:
 
 
 async def _standing(space: Any, identity_id: UUID) -> str:
-    return str((await space.identity_card(identity_id)).identity.standing)
+    return str((await space.identities.card(identity_id)).identity.standing)
 
 
 async def run_walkthrough() -> WalkthroughResult:
@@ -141,22 +142,22 @@ async def run_walkthrough() -> WalkthroughResult:
     )
     await hub.start()
     space = hub.space("guide", "Guide")
-    await space.add_proxy("socks5://user:pass@10.0.0.1:1080", pool="residential")
+    await space.proxies.ensure("socks5://user:pass@10.0.0.1:1080", group="residential")
 
     # 1. Онбординг: регистрация → вход с SMS-кодом → ready
-    reg = await space.register(
-        service=SERVICE, external_ref="+10000000001", credentials={"phone": "+10000000001"}
+    reg = await space.identities.create(
+        IdentityCreate(service=SERVICE, external_ref="+10000000001", credentials={"phone": "+10000000001"})
     )
-    result.record("registered", (await space.identity_card(reg.identity_id)).identity.lifecycle)
-    result.record("login", await space.run_login(reg.identity_id))
-    challenge = (await space.identity_card(reg.identity_id)).open_challenge
+    result.record("registered", (await space.identities.card(reg.id)).identity.lifecycle)
+    result.record("login", await space.auth.login(reg.id))
+    challenge = (await space.identities.card(reg.id)).open_challenge
     assert challenge is not None
-    result.record("answer", await space.answer_challenge(UUID(challenge["id"]), PLATFORM.sms_code))
-    await space.set_lifecycle(reg.identity_id, Lifecycle.READY, actor="onboarding")
-    PLATFORM.statuses[str(reg.identity_id)] = "OK"
+    result.record("answer", await space.auth.answer_challenge(UUID(challenge["id"]), PLATFORM.sms_code))
+    await space.identities.set_lifecycle(reg.id, Lifecycle.READY, actor="onboarding")
+    PLATFORM.statuses[str(reg.id)] = "OK"
 
     # 2. Работа под арендой с прокси
-    pool = space.pool("senders", service=SERVICE)
+    pool = space.pools.define("senders", service=SERVICE)
     async with pool.lease(for_operation="send") as lease:
         result.record("proxy", lease.proxy is not None)
         session = await lease.session()
@@ -171,9 +172,9 @@ async def run_walkthrough() -> WalkthroughResult:
             await PLATFORM.send(Session(auth_key=SecretStr("x")), "hi")
     except FloodWait:
         pass
-    result.record("after_flood", (await space.identity_card(reg.identity_id)).identity.availability)
-    await space.override(
-        reg.identity_id, Override("availability", "", "available", reason="demo", actor="guide")
+    result.record("after_flood", (await space.identities.card(reg.id)).identity.availability)
+    await space.identities.override(
+        reg.id, Override("availability", "", "available", reason="demo", actor="guide")
     )
 
     # 4. Бан по ответу платформы → разбан человеком
@@ -183,36 +184,36 @@ async def run_walkthrough() -> WalkthroughResult:
             await PLATFORM.send(Session(auth_key=SecretStr("x")), "hi")
     except Banned:
         pass
-    result.record("after_ban", await _standing(space, reg.identity_id))
-    await space.restore_standing(reg.identity_id, actor="admin", reason="ложное срабатывание")
-    result.record("after_restore", await _standing(space, reg.identity_id))
+    result.record("after_ban", await _standing(space, reg.id))
+    await space.identities.restore_standing(reg.id, actor="admin", reason="ложное срабатывание")
+    result.record("after_restore", await _standing(space, reg.id))
 
     # 5. Бан вручную и сверка пробой: sticky banned не снимается наблюдением
-    await space.override(
-        reg.identity_id, Override("standing", "", Standing.BANNED, reason="жалоба", actor="admin")
+    await space.identities.override(
+        reg.id, Override("standing", "", Standing.BANNED, reason="жалоба", actor="admin")
     )
-    outcome = await space.resync(reg.identity_id, regions=("standing",))
+    outcome = await space.sync.refresh(reg.id, regions=("standing",))
     result.record("resync_banned", outcome["standing"])
-    await space.restore_standing(reg.identity_id, actor="admin", reason="проверено")
+    await space.identities.restore_standing(reg.id, actor="admin", reason="проверено")
 
     # 6. Бан на платформе обнаружен фоновой сверкой
-    PLATFORM.statuses[str(reg.identity_id)] = "USER_BANNED"
-    report = await space.reconcile(regions=("standing",), not_synced_for=timedelta(0))
-    result.record("reconcile", report.probed[reg.identity_id]["standing"])
-    result.record("after_reconcile", await _standing(space, reg.identity_id))
-    await space.restore_standing(reg.identity_id, actor="admin", reason="апелляция одобрена")
+    PLATFORM.statuses[str(reg.id)] = "USER_BANNED"
+    report = await space.sync.refresh_many(regions=("standing",), not_synced_for=timedelta(0))
+    result.record("reconcile", report.probed[reg.id]["standing"])
+    result.record("after_reconcile", await _standing(space, reg.id))
+    await space.identities.restore_standing(reg.id, actor="admin", reason="апелляция одобрена")
 
     # 7. Верификация: start/submit под арендой, решение человека вне аренды
-    async with pool.lease(for_operation="probe", among=[reg.identity_id]) as lease:
+    async with pool.lease(for_operation="probe", among=[reg.id]) as lease:
         kyc = lease.verification("kyc")
         await kyc.start()
         result.record("kyc_submitted", (await kyc.submit()).state)
-    status = await space.review_verification(reg.identity_id, "kyc", "approve", actor="admin", reason="ok")
+    status = await space.verifications.review(reg.id, "kyc", "approve", actor="admin", reason="ok")
     result.record("kyc_reviewed", status.state)
 
     # 8. Вывод из работы
-    await space.retire(reg.identity_id, actor="ops", reason="демонстрация завершена")
-    result.record("retired", (await space.identity_card(reg.identity_id)).identity.lifecycle)
+    await space.identities.retire(reg.id, actor="ops", reason="демонстрация завершена")
+    result.record("retired", (await space.identities.card(reg.id)).identity.lifecycle)
     return result
 
 

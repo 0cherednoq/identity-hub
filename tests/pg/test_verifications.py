@@ -14,20 +14,22 @@ from identity_hub.errors import AttemptsExhausted, ValidationFailed, Verificatio
 from identity_hub.hub import SpaceHandle
 from identity_hub.lease import Lease
 from identity_hub.postgres.models import EventRecord, IdentityRecord, RegionStateRecord, VerificationRecord
+from tests.fixtures.api import register
 from tests.fixtures.services import KycEvidence
 
 pytestmark = pytest.mark.pg
 
 
 async def _exchange(space: SpaceHandle) -> tuple[UUID, Lease]:
-    r = await space.register(
+    r = await register(
+        space,
         service="fake_exchange",
         external_ref="trader@x",
         credentials={"email": "trader@x", "password": "p"},
         session={"cookies": {"sid": "1"}},
         lifecycle="ready",
     )
-    lease = await space.pool("ex", service="fake_exchange").acquire(among=[r.identity_id])
+    lease = await space.pools.define("ex", service="fake_exchange").acquire(among=[r.identity_id])
     return r.identity_id, lease
 
 
@@ -65,11 +67,11 @@ async def test_full_kyc_cycle(space: SpaceHandle, sessionmaker: async_sessionmak
     approved = await kyc.approve()
     assert approved.state == "verified" and approved.expires_at is not None and approved.attempts == 1
     assert await _verified(sessionmaker, identity_id) == ["email", "kyc_id", "phone"]
-    assert (await space.verification_status(identity_id, "kyc_id")).state == "verified"
+    assert (await space.verifications.status(identity_id, "kyc_id")).state == "verified"
 
     # withdraw требует уровень full — теперь выдаётся (FR-10.5: verified_factors используется выборкой)
     await lease.release()
-    full = await space.pool("ex2", service="fake_exchange").acquire(for_operation="withdraw")
+    full = await space.pools.define("ex2", service="fake_exchange").acquire(for_operation="withdraw")
     assert full.identity_id == identity_id
 
     async with sessionmaker() as s:
@@ -128,24 +130,24 @@ async def test_resume_and_pending_expiry(
     first = await phone.start()
     again = await phone.start()  # возобновление
     assert first.region.version == again.region.version
-    assert await space.expire_verifications() == 0
+    assert await space.maintenance.expire_verifications() == 0
     async with sessionmaker() as s, s.begin():
         await s.execute(
             update(RegionStateRecord).where(RegionStateRecord.key == "phone").values(until=text("now()"))
         )
-    assert await space.expire_verifications() == 1
-    assert (await space.verification_status(identity_id, "phone")).state == "missing"
+    assert await space.maintenance.expire_verifications() == 1
+    assert (await space.verifications.status(identity_id, "phone")).state == "missing"
 
 
 async def test_requirements(space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     identity_id, _ = await _exchange(space)
-    assert await space.add_requirement(identity_id, "phone_verification")
-    assert not await space.add_requirement(identity_id, "phone_verification")
+    assert await space.verifications.requirements.add(identity_id, "phone_verification")
+    assert not await space.verifications.requirements.add(identity_id, "phone_verification")
     async with sessionmaker() as s:
         reqs: Any = (await s.execute(select(IdentityRecord.requirements))).scalar_one()
     assert [r["code"] for r in reqs] == ["phone_verification"]
-    assert await space.resolve_requirement(identity_id, "phone_verification")
-    assert not await space.resolve_requirement(identity_id, "phone_verification")
+    assert await space.verifications.requirements.resolve(identity_id, "phone_verification")
+    assert not await space.verifications.requirements.resolve(identity_id, "phone_verification")
     async with sessionmaker() as s:
         types = list((await s.execute(select(EventRecord.type))).scalars())
     assert "identity.requirement.added" in types and "identity.requirement.resolved" in types

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from identity_hub.api.identities import IdentityCreate
 from identity_hub.clock import FakeClock
 from identity_hub.crypto import StaticSecretsProvider
 from identity_hub.enums import Severity
@@ -122,24 +123,26 @@ async def seed_demo(hub: IdentityHub, environment: Environment) -> DemoSeedResul
         space = hub.space(spec.slug, spec.title)
         await space.ref()
         for index in range(1, spec.account_count + 1):
-            result = await space.register(
-                service=DEMO_SERVICE,
-                external_ref=f"{spec.slug}-{index:04d}",
-                profile={
-                    "display_name": f"Demo account {index:04d}",
-                    "country": ("UA", "PL", "DE", "US")[index % 4],
-                },
-                labels={"scenario": spec.state, "batch": (index - 1) // 50 + 1},
-                tags=("demo", spec.state),
-                lifecycle="ready" if index % 7 else "provisioning",
+            _identity, created_now = await space.identities.ensure(
+                IdentityCreate(
+                    service=DEMO_SERVICE,
+                    external_ref=f"{spec.slug}-{index:04d}",
+                    profile={
+                        "display_name": f"Demo account {index:04d}",
+                        "country": ("UA", "PL", "DE", "US")[index % 4],
+                    },
+                    labels={"scenario": spec.state, "batch": (index - 1) // 50 + 1},
+                    tags=("demo", spec.state),
+                    lifecycle="ready" if index % 7 else "provisioning",
+                ),
                 actor=DEMO_ACTOR,
             )
-            if result.created:
+            if created_now:
                 created += 1
             else:
                 existing += 1
         if spec.slug == "demo-large":
-            center = await space.delivery_center()
+            center = await space.admin.delivery_center()
             if not center.channels:
                 channel = await space.notifications.create_telegram_channel(
                     "Demo operations",
@@ -169,7 +172,7 @@ async def demo_counts(hub: IdentityHub) -> dict[str, int]:
     """Return scenario counts without exposing account details or secrets."""
     counts: dict[str, int] = {}
     for spec in DEMO_SPACES:
-        page = await hub.space(spec.slug, spec.title).search(limit=1)
+        page = await hub.space(spec.slug, spec.title).identities.search(limit=1, count=True)
         counts[spec.slug] = page.total or 0
     return counts
 

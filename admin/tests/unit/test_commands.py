@@ -9,6 +9,7 @@ from litestar.datastructures import State
 from litestar.params import FromPath
 from litestar.testing import TestClient
 from pydantic import SecretStr
+from tests.factories.api import register
 
 from identity_hub_admin.api.contracts import ContractModel, MutationContext
 from identity_hub_admin.api.routes import error_responses, route_meta
@@ -50,8 +51,8 @@ async def note_command(
 
     async def apply(scope: CommandScope) -> NoteResult:
         if not scope.dry_run:
-            await scope.handle.set_note(identity_id, data.note, actor=scope.actor)
-        card = await scope.handle.identity_card(identity_id)
+            await scope.handle.identities.set_note(identity_id, data.note, actor=scope.actor)
+        card = await scope.handle.identities.card(identity_id)
         return NoteResult(
             revision=card.revision,
             note=data.note if scope.dry_run else card.identity.note,
@@ -98,7 +99,8 @@ def _settings() -> AdminSettings:
 def test_gateway_replays_maps_revision_conflict_and_rejects_viewer() -> None:
     hub = create_demo_hub()
     asyncio.run(
-        hub.space("command-space", "Command space").register(
+        register(
+            hub.space("command-space", "Command space"),
             service=DEMO_SERVICE,
             external_ref="command-account",
             id=IDENTITY_ID,

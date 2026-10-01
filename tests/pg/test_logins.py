@@ -16,6 +16,7 @@ from identity_hub.errors import ValidationFailed
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import ChallengeRecord, EventRecord, IdentityRecord
 from identity_hub.protocols import LoginChallenge, LoginContext
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG, TgSession
 
 pytestmark = pytest.mark.pg
@@ -59,8 +60,8 @@ async def auth(hub: IdentityHub) -> FakeAuth:
 
 
 async def _reg(space: SpaceHandle, ref: str, **kwargs: Any) -> UUID:
-    result = await space.register(
-        service="tg_auth", external_ref=ref, credentials={"phone": ref}, lifecycle="ready", **kwargs
+    result = await register(
+        space, service="tg_auth", external_ref=ref, credentials={"phone": ref}, lifecycle="ready", **kwargs
     )
     return result.identity_id
 
@@ -85,7 +86,7 @@ async def test_run_logins_success_and_failure(
     ok = await _reg(space, "ok")
     bad = await _reg(space, "boom")
     authed = await _reg(space, "already", session={"auth_key": "x"})
-    report = await space.run_logins(service="tg_auth", limit=10)
+    report = await space.auth.login_many(service="tg_auth", limit=10)
     assert report.succeeded == [ok]
     assert list(report.failed) == [bad] and "ConnectionError" in report.failed[bad]
     assert authed not in auth.calls
@@ -94,7 +95,7 @@ async def test_run_logins_success_and_failure(
     types = await _types(sessionmaker)
     assert "identity.login.succeeded" in types and "identity.login.failed" in types
 
-    lease = await space.pool("p", service="tg_auth").acquire(among=[ok])  # сессия сохранена
+    lease = await space.pools.define("p", service="tg_auth").acquire(among=[ok])  # сессия сохранена
     session = await lease.session()
     assert isinstance(session, TgSession) and session.auth_key.get_secret_value() == "key-ok"
 
@@ -103,7 +104,7 @@ async def test_challenge_flow(
     auth: FakeAuth, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity_id = await _reg(space, "sms-1")
-    report = await space.run_logins(service="tg_auth")
+    report = await space.auth.login_many(service="tg_auth")
     assert report.challenged == [identity_id]
     assert await _auth_state(sessionmaker, identity_id) == "challenge"
     async with sessionmaker() as s:
@@ -111,7 +112,9 @@ async def test_challenge_flow(
     assert (challenge.kind, challenge.hint, challenge.resolved_at) == ("sms_code", "Код из SMS", None)
     assert b"h1" not in challenge.context_ciphertext
 
-    assert await space.answer_challenge(challenge.id, "000") == "challenged"  # неверный код — новый вопрос
+    assert (
+        await space.auth.answer_challenge(challenge.id, "000") == "challenged"
+    )  # неверный код — новый вопрос
     async with sessionmaker() as s:
         challenges = list(
             (await s.execute(select(ChallengeRecord).order_by(ChallengeRecord.created_at))).scalars()
@@ -119,9 +122,9 @@ async def test_challenge_flow(
     assert len(challenges) == 2 and challenges[0].resolved_at is not None
     assert challenges[0].answer_ciphertext is not None and b"000" not in challenges[0].answer_ciphertext
     with pytest.raises(ValidationFailed):
-        await space.answer_challenge(challenges[0].id, "12345")
+        await space.auth.answer_challenge(challenges[0].id, "12345")
 
-    assert await space.answer_challenge(challenges[1].id, "12345") == "succeeded"
+    assert await space.auth.answer_challenge(challenges[1].id, "12345") == "succeeded"
     assert await _auth_state(sessionmaker, identity_id) == "authenticated"
     types = await _types(sessionmaker)
     assert types.count("identity.challenge.opened") == 2
@@ -133,13 +136,13 @@ async def test_challenge_expiry(
     auth: FakeAuth, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity_id = await _reg(space, "sms-2")
-    await space.run_logins(service="tg_auth")
-    assert await space.expire_challenges() == 0
+    await space.auth.login_many(service="tg_auth")
+    assert await space.maintenance.expire_challenges() == 0
     async with sessionmaker() as s, s.begin():
         await s.execute(update(ChallengeRecord).values(expires_at=text("now() - interval '1 second'")))
     with pytest.raises(ValidationFailed, match="истёк"):
-        await space.answer_challenge(await _open_challenge_id(sessionmaker, identity_id), "12345")
-    assert await space.expire_challenges() == 1
+        await space.auth.answer_challenge(await _open_challenge_id(sessionmaker, identity_id), "12345")
+    assert await space.maintenance.expire_challenges() == 1
     assert await _auth_state(sessionmaker, identity_id) == "no_session"
     assert "identity.challenge.expired" in await _types(sessionmaker)
 
@@ -161,7 +164,7 @@ async def test_run_one_selected_login(
 ) -> None:
     selected = await _reg(space, "selected")
     untouched = await _reg(space, "untouched")
-    assert await space.run_login(selected) == "succeeded"
+    assert await space.auth.login(selected) == "succeeded"
     assert "selected" in auth.calls and "untouched" not in auth.calls
     assert await _auth_state(sessionmaker, selected) == "authenticated"
     assert await _auth_state(sessionmaker, untouched) == "no_session"
@@ -170,17 +173,18 @@ async def test_run_one_selected_login(
 async def test_linked_identity_leased_during_login(
     auth: FakeAuth, hub: IdentityHub, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    mail = await space.register(
+    mail = await register(
+        space,
         service="fake_exchange",
         external_ref="mail@x",
         credentials={"email": "mail@x", "password": "p"},
         lifecycle="ready",
     )
     identity_id = await _reg(space, "needs_mail", links={"recovery_email": mail.identity_id})
-    report = await space.run_logins(service="tg_auth")
+    report = await space.auth.login_many(service="tg_auth")
     assert report.succeeded == [identity_id], report.failed
     # аренда связанного аккаунта освобождена
-    free = await space.pool("x", service="fake_exchange").acquire(
+    free = await space.pools.define("x", service="fake_exchange").acquire(
         among=[mail.identity_id], for_operation="probe"
     )
     assert free.identity_id == mail.identity_id
@@ -189,4 +193,4 @@ async def test_linked_identity_leased_during_login(
 
 async def test_service_without_authenticator(space: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed):
-        await space.run_logins(service="fake_tg")
+        await space.auth.login_many(service="fake_tg")

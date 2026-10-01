@@ -222,7 +222,7 @@ async def space_overview(
     if handle is None or handle.slug != space_slug:
         raise NotFoundException("space not found")
     try:
-        value = await handle.space_overview(service=service)
+        value = await handle.admin.overview(service=service)
     except NotFound:
         raise NotFoundException("service not found") from None
     return ResourceEnvelope(data=_space_response(value))
