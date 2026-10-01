@@ -25,6 +25,8 @@
   `LeaseRevoked`, `LeaseExpired`, `DatabaseBusy`, `SchemaIncompatible`,
   `SecretConfigurationError`. CLI печатает `error[<code>]` и возвращает код выхода по таблице.
 
+- `StorageError` (код `storage_error`): ошибка хранилища без SQL и параметров запроса;
+  `DatabaseBusy.sqlstate`.
 - `Operation.previous_outcome` — исход прошлой попытки с тем же `key`
   (`"succeeded"`, `"failed"` или `None`).
 
@@ -58,6 +60,9 @@
   раньше `op.duplicate` был `True` и действие не повторялось никогда.
 - `pool.lease(idempotency_key=...)` из пула другого сервиса больше не возвращает чужую аренду
   вместе с её credentials; тот же ключ в другом пространстве не даёт `IntegrityError`.
+- Ошибки драйвера БД больше не выходят из библиотеки: lock/statement timeout, deadlock и конфликт
+  сериализации дают `DatabaseBusy`, остальное — `StorageError`. `token` аренды и параметры
+  запросов не попадают в тексты исключений, предупреждения heartbeat/release и отчёт импорта.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
 ### Deprecated

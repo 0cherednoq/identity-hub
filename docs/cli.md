@@ -119,7 +119,7 @@ identity-hub dispatcher --help
 |---|---|
 | `validation_error`, `not_found` | 2 |
 | `schema_incompatible` — ревизия схемы не та, что ожидает код | 3 |
-| `database_busy` | 4 |
+| `database_busy` — lock/statement timeout, deadlock; повторить позже | 4 |
 | `secret_configuration_error`, `decryption_failed` | 5 |
 | прочие | 1 |
 

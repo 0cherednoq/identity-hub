@@ -32,6 +32,7 @@ from identity_hub.errors import (
     LeaseUnavailable,
     StaleFencing,
     ValidationFailed,
+    describe_error,
 )
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
@@ -180,8 +181,9 @@ class Lease:
                 expires_at = await asyncio.wait_for(self._extend(), timeout=budget)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.warning("heartbeat аренды %s не прошёл", self.lease_id, exc_info=True)
+            except Exception as exc:
+                # без traceback и текста: в ошибке БД бывают параметры запроса с token аренды (S-8)
+                logger.warning("heartbeat аренды %s не прошёл: %s", self.lease_id, describe_error(exc))
             else:
                 if expires_at is None:
                     await self._mark_lost("revoked")  # аренды с нашим token больше нет
@@ -425,8 +427,8 @@ class Lease:
                             },
                         ),
                     )
-        except Exception:
-            logger.warning("не удалось освободить аренду %s", self.lease_id, exc_info=True)
+        except Exception as exc:
+            logger.warning("не удалось освободить аренду %s: %s", self.lease_id, describe_error(exc))
 
 
 @contextlib.asynccontextmanager

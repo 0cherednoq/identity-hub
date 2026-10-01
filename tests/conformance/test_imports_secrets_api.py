@@ -126,3 +126,30 @@ async def test_legacy_import_and_secret_names_warn(space: SpaceHandle) -> None:
         warnings.simplefilter("always")
         await space.reveal_secret(identity_id, "credentials", actor="admin")
     assert len(caught) == 1 and "zz-secret-99" not in str(caught[0].message)
+
+
+async def test_rejected_batch_report_has_no_foreign_exception_text(
+    space: SpaceHandle, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """F1.3 (R2-S03): текст чужого исключения (SQL-параметры, секреты) не идёт в отчёт и лог."""
+
+    async def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("[parameters: ('TOKEN-123', 'password=SECRET')]")
+
+    monkeypatch.setattr(type(space), "_import_links", broken)
+    report = await space.imports.run(
+        service="fake_tg", records=[ImportRecord(external_ref="+20", links={"recovery": "+21"})]
+    )
+
+    assert report.created == []
+    assert [reason for _ref, reason in report.failed] == ["пачка отклонена: RuntimeError"]
+    assert "TOKEN-123" not in caplog.text and "SECRET" not in caplog.text
+    assert "пачка импорта отклонена целиком: RuntimeError" in caplog.text
+
+
+async def test_rejected_batch_report_keeps_library_error_message(space: SpaceHandle) -> None:
+    report = await space.imports.run(
+        service="fake_tg", records=[ImportRecord(external_ref="+30", links={"recovery": "fake_tg:+404"})]
+    )
+    (reason,) = [reason for _ref, reason in report.failed]
+    assert reason.startswith("пачка отклонена: IdentityHubError[internal_error]: ") and "не найден" in reason

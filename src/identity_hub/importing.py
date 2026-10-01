@@ -22,7 +22,7 @@ from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle
-from identity_hub.errors import IdentityHubError
+from identity_hub.errors import IdentityHubError, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
 from identity_hub.store.base import ImportItemResult, NewImportItem, NewImportRun
@@ -331,8 +331,11 @@ class ImportingMixin(SpaceBase):
                         ),
                     )
         except Exception as exc:
-            logger.warning("пачка импорта отклонена целиком", exc_info=True)
-            reason = f"пачка отклонена: {type(exc).__name__}: {exc}"[:500]
+            # Текст чужого исключения в лог и отчёт не идёт: в нём бывают параметры SQL и секреты.
+            # Сообщения ошибок библиотеки безопасны по контракту (S-8) и объясняют причину отказа.
+            logger.warning("пачка импорта отклонена целиком: %s", describe_error(exc))
+            detail = f": {exc}" if isinstance(exc, IdentityHubError) else ""
+            reason = f"пачка отклонена: {describe_error(exc)}{detail}"[:500]
             report.failed.extend((p.record.external_ref, reason) for p in ready)
             return
         report.created.extend(created)

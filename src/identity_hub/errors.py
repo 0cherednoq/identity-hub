@@ -37,9 +37,11 @@ __all__ = [
     "SecretConfigurationError",
     "SpaceMismatch",
     "StaleFencing",
+    "StorageError",
     "TransitionNotAllowed",
     "ValidationFailed",
     "VerificationRequirementsNotMet",
+    "describe_error",
     "exit_code",
     "http_status",
 ]
@@ -288,9 +290,32 @@ class AttemptsExhausted(IdentityHubError):
 
 
 class DatabaseBusy(IdentityHubError):
-    """БД не взяла блокировку за отведённое время (lock timeout); повторить позже."""
+    """БД не уложилась в отведённое время: lock/statement timeout, deadlock, конфликт сериализации.
+
+    Повторить позже. SQL, параметры запроса и исходное исключение драйвера не сохраняются.
+    """
 
     code = "database_busy"
+    context_fields = ("sqlstate",)
+
+    def __init__(self, message: str | None = None, *, sqlstate: str | None = None) -> None:
+        self.sqlstate = sqlstate
+        super().__init__(message or "база данных занята: блокировка или запрос не уложились в срок")
+
+
+class StorageError(IdentityHubError):
+    """Ошибка хранилища, не описанная другим типом: нарушение ограничения, потеря соединения.
+
+    В сообщении только SQLSTATE: SQL, параметры (среди них `token` аренды и шифртексты) и исходное
+    исключение драйвера наружу не выходят (S-8).
+    """
+
+    code = "storage_error"
+    context_fields = ("sqlstate",)
+
+    def __init__(self, sqlstate: str | None = None) -> None:
+        self.sqlstate = sqlstate
+        super().__init__(f"ошибка хранилища (SQLSTATE {sqlstate or 'неизвестен'})")
 
 
 class SchemaIncompatible(IdentityHubError):
@@ -334,6 +359,7 @@ _HTTP_STATUS: dict[str, int] = {
     "attempts_exhausted": 409,
     "quota_exceeded": 429,
     "database_busy": 503,
+    "storage_error": 500,
     "schema_incompatible": 503,
     "secret_configuration_error": 500,
     "decryption_failed": 500,
@@ -348,6 +374,16 @@ _EXIT_CODE: dict[str, int] = {
     "secret_configuration_error": 5,
     "decryption_failed": 5,
 }
+
+
+def describe_error(exc: BaseException) -> str:
+    """Безопасное описание исключения для логов и отчётов: имя типа и стабильный код.
+
+    Текст чужого исключения не используется: в нём бывают URL с ключами, параметры SQL и `token`.
+    """
+    if isinstance(exc, IdentityHubError):
+        return f"{type(exc).__name__}[{exc.code}]"
+    return type(exc).__name__
 
 
 def http_status(error: IdentityHubError) -> int:

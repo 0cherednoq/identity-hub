@@ -84,6 +84,7 @@ uv run pytest
    engine = create_async_engine(
        "postgresql+asyncpg://app:password@localhost/app",
        pool_pre_ping=True,
+       hide_parameters=True,  # параметры запросов не попадают в тексты ошибок и логи
    )
    sessions = async_sessionmaker(engine, expire_on_commit=False)
    hub = IdentityHub(

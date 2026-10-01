@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from identity_hub.crypto import EnvSecretsProvider
 from identity_hub.hub import IdentityHub
 
-engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_async_engine(DATABASE_URL, pool_pre_ping=True, hide_parameters=True)
 sessions = async_sessionmaker(engine, expire_on_commit=False)
 hub = IdentityHub(
     sessionmaker=sessions,
@@ -107,6 +107,18 @@ await migrate(engine, db_schema="identity_hub")
 
 Не добавляйте metadata моделей Identity Hub в metadata приложения: публичным
 контрактом схемы являются миграции библиотеки, а не ORM-классы.
+
+## Ошибки базы данных и логи
+
+Библиотека не выпускает наружу исключения драйвера: ошибка БД превращается в `DatabaseBusy`
+(lock/statement timeout, deadlock, конфликт сериализации — повторите позже) или `StorageError`
+(всё остальное). В сообщении и `context` остаётся только SQLSTATE; SQL, параметры запроса и
+исходное исключение не сохраняются. Причина: среди параметров есть `token` аренды и шифртексты.
+
+Тот же engine использует и ваш код, поэтому создавайте его с `hide_parameters=True`: тогда
+SQLAlchemy не допишет `[parameters: ...]` к тексту ошибок ваших собственных запросов и к
+логу `sqlalchemy.engine`. Не включайте `echo=True` в продакшене: он печатает параметры всех
+запросов, включая запросы библиотеки.
 
 ## PgBouncer
 

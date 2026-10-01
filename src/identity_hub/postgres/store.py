@@ -42,7 +42,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.engine import Result
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable, Select
 
@@ -62,10 +62,13 @@ from identity_hub.enums import (
 )
 from identity_hub.errors import (
     ConcurrentModification,
+    DatabaseBusy,
     IdempotencyConflict,
+    IdentityHubError,
     LeaseUnavailable,
     NotFound,
     SpaceMismatch,
+    StorageError,
 )
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
@@ -240,11 +243,11 @@ class PgTx(StoreTx):
         self._now: datetime | None = None
 
     async def execute(self, stmt: Executable, params: Any = None) -> Result[Any]:
-        return await self.session.execute(stmt, params, execution_options=self.store.options)
+        return await _execute(self.session, stmt, params, execution_options=self.store.options)
 
     async def now(self) -> datetime:
         if self._now is None:
-            self._now = (await self.session.execute(select(func.now()))).scalar_one()
+            self._now = (await _execute(self.session, select(func.now()))).scalar_one()
         return self._now
 
     async def emit(self, drafts: Sequence[EventDraft]) -> list[UUID]:
@@ -283,7 +286,8 @@ class PgTx(StoreTx):
         await self.execute(insert(EventRecord).values(rows))
         if any(r["external"] for r in rows):
             # доставляется слушателям при коммите; при откате — нет (FR-13.6)
-            await self.session.execute(
+            await _execute(
+                self.session,
                 text("SELECT pg_notify(:channel, :payload)"),
                 {"channel": NOTIFY_CHANNEL, "payload": self.space.slug},
             )
@@ -3655,6 +3659,38 @@ def cast_uuid_array(ids: list[UUID]) -> Any:
     return sa_cast(ids, ARRAY(PGUUID(as_uuid=True)))
 
 
+_BUSY_SQLSTATES = frozenset(
+    {
+        "55P03",  # lock_not_available (lock_timeout)
+        "57014",  # query_canceled (statement_timeout)
+        "40P01",  # deadlock_detected
+        "40001",  # serialization_failure
+    }
+)
+
+
+def _translate(exc: DBAPIError) -> IdentityHubError:
+    """Ошибка драйвера → ошибка библиотеки без SQL и параметров (S-8, R2-S03).
+
+    Текст `DBAPIError` содержит `[parameters: ...]`: среди них `token` аренды и шифртексты.
+    """
+    sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+    sqlstate = str(sqlstate) if sqlstate else None
+    if sqlstate in _BUSY_SQLSTATES:
+        return DatabaseBusy(sqlstate=sqlstate)
+    return StorageError(sqlstate)
+
+
+async def _execute(session: AsyncSession, stmt: Any, *args: Any, **kwargs: Any) -> Result[Any]:
+    """`session.execute` с переводом ошибки драйвера; исходное исключение не остаётся в цепочке."""
+    try:
+        result: Result[Any] = await session.execute(stmt, *args, **kwargs)
+        return result
+    except DBAPIError as exc:
+        failure = _translate(exc)
+    raise failure  # вне except: у ошибки нет ни __cause__, ни __context__ с параметрами запроса
+
+
 class PgStore(Store):
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], db_schema: str | None = None) -> None:
         self.sessionmaker = sessionmaker
@@ -3663,8 +3699,11 @@ class PgStore(Store):
 
     @asynccontextmanager
     async def _own(self) -> AsyncIterator[AsyncSession]:
-        async with self.sessionmaker() as session, session.begin():
-            yield session
+        try:
+            async with self.sessionmaker() as session, session.begin():
+                yield session
+        except DBAPIError as exc:  # ошибка вне отдельного запроса: connect, commit, savepoint
+            raise _translate(exc) from None
 
     @asynccontextmanager
     async def transaction(self, space: SpaceRef, *, session: Any | None = None) -> AsyncIterator[PgTx]:
@@ -3679,13 +3718,16 @@ class PgStore(Store):
         if bound is not None and bound != space.id:
             raise SpaceMismatch(f"сессия уже связана с другим пространством, а не {space.slug!r}")
         session.info[SESSION_SPACE_KEY] = space.id
-        async with session.begin_nested():
-            await self._bind(session, space)
-            yield PgTx(self, session, space)
+        try:
+            async with session.begin_nested():
+                await self._bind(session, space)
+                yield PgTx(self, session, space)
+        except DBAPIError as exc:
+            raise _translate(exc) from None
 
     @staticmethod
     async def _bind(session: AsyncSession, space: SpaceRef) -> None:
-        await session.execute(text("SELECT set_config('ih.space', :slug, true)"), {"slug": space.slug})
+        await _execute(session, text("SELECT set_config('ih.space', :slug, true)"), {"slug": space.slug})
 
     # --------------------------------------------------------- реестр и пространства
 
@@ -3711,12 +3753,13 @@ class PgStore(Store):
             set_={"title": stmt.excluded.title, "synced_at": func.now()},
         )
         async with self._own() as session:
-            await session.execute(stmt, execution_options=self.options)
+            await _execute(session, stmt, execution_options=self.options)
 
     async def get_space(self, slug: str) -> SpaceRef | None:
         async with self.sessionmaker() as session:
             row = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(SpaceRecord.id, SpaceRecord.slug, SpaceRecord.title, SpaceRecord.timezone).where(
                         SpaceRecord.slug == slug
                     ),
@@ -3734,7 +3777,7 @@ class PgStore(Store):
                 return []
             stmt = stmt.where(SpaceRecord.slug.in_(sorted(slugs)))
         async with self.sessionmaker() as session:
-            rows = await session.execute(stmt, execution_options=self.options)
+            rows = await _execute(session, stmt, execution_options=self.options)
         return [SpaceRef(row.id, row.slug, row.title, row.timezone) for row in rows]
 
     # --------------------------------------------------------- журнал событий
@@ -3749,13 +3792,15 @@ class PgStore(Store):
     ) -> int | None:
         opts = self.options
         async with self._own() as session:
-            await session.execute(
+            await _execute(
+                session,
                 insert(CURSORS).values(consumer=consumer, last_id=0).on_conflict_do_nothing(),
                 execution_options=opts,
             )
         async with self._own() as session:
             locked = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(CURSORS.c.consumer)
                     .where(CURSORS.c.consumer == consumer)
                     .with_for_update(skip_locked=True),
@@ -3775,20 +3820,21 @@ class PgStore(Store):
             if external_only:
                 conditions.append(e.external.is_(True))
             stmt = (
-                select(e, SPACES.c.slug)
+                select(*e, SPACES.c.slug)
                 .join(SPACES, SPACES.c.id == e.space_id)
                 .join(cursor, tuple_(e.tx_id, e.id) > tuple_(cursor.c.last_tx_id, cursor.c.last_id))
                 .where(*conditions)
                 .order_by(e.tx_id, e.id)
                 .limit(limit)
             )
-            rows = list((await session.execute(stmt, execution_options=opts)).mappings())
+            rows = list((await _execute(session, stmt, execution_options=opts)).mappings())
             if not rows:
                 return 0
             events = [_event(r) for r in rows]
             await handler(events)
             last_id = rows[-1]["id"]
-            await session.execute(
+            await _execute(
+                session,
                 update(CURSORS)
                 .where(CURSORS.c.consumer == consumer)
                 .values(
@@ -3803,7 +3849,8 @@ class PgStore(Store):
     async def rollup_source_events(self, space_slug: str, start: datetime, end: datetime) -> list[Event]:
         async with self.sessionmaker() as session:
             rows = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(EVENTS, SPACES.c.slug)
                     .join(SPACES, SPACES.c.id == EVENTS.c.space_id)
                     .where(
@@ -3838,12 +3885,13 @@ class PgStore(Store):
             set_={"value": stmt.excluded.value, "updated_at": func.now()},
         )
         async with self._own() as session:
-            await session.execute(stmt, execution_options=self.options)
+            await _execute(session, stmt, execution_options=self.options)
 
     async def apply_metric_rollup_batch(self, batch_id: UUID, rows: Sequence[RollupDelta]) -> bool:
         async with self._own() as session:
             inserted = (
-                await session.execute(
+                await _execute(
+                    session,
                     insert(METRIC_BATCHES)
                     .values(id=batch_id)
                     .on_conflict_do_nothing()
@@ -3865,7 +3913,8 @@ class PgStore(Store):
                     value=row.value,
                 )
                 value = ROLLUPS.c.value + stmt.excluded.value if delta.additive else stmt.excluded.value
-                await session.execute(
+                await _execute(
+                    session,
                     stmt.on_conflict_do_update(
                         constraint="uq_ih_stats_rollup_key",
                         set_={"value": value, "updated_at": func.now()},
@@ -3876,7 +3925,8 @@ class PgStore(Store):
 
     async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int:
         async with self._own() as session:
-            result: Any = await session.execute(
+            result: Any = await _execute(
+                session,
                 delete(ROLLUPS).where(
                     ROLLUPS.c.space_id == space_id,
                     ROLLUPS.c.bucket_start >= start,
@@ -3888,7 +3938,8 @@ class PgStore(Store):
 
     async def purge_minute_rollups(self, before: datetime) -> int:
         async with self._own() as session:
-            result: Any = await session.execute(
+            result: Any = await _execute(
+                session,
                 delete(ROLLUPS).where(
                     ROLLUPS.c.bucket_size == str(BucketSize.MINUTE),
                     ROLLUPS.c.bucket_start < before,
@@ -3925,7 +3976,7 @@ class PgStore(Store):
         if dims is not None:
             stmt = stmt.where(ROLLUPS.c.dims == dict(dims))
         async with self.sessionmaker() as session:
-            records = (await session.execute(stmt, execution_options=self.options)).mappings()
+            records = (await _execute(session, stmt, execution_options=self.options)).mappings()
             return [
                 RollupRow(
                     RollupKey(
@@ -3945,7 +3996,8 @@ class PgStore(Store):
         async with self._own() as session:
             space_ids: list[UUID] = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(SPACES.c.id).order_by(SPACES.c.id),
                         execution_options=self.options,
                     )
@@ -3953,7 +4005,8 @@ class PgStore(Store):
             )
             if not space_ids:
                 return 0
-            await session.execute(
+            await _execute(
+                session,
                 insert(SNAPSHOT_COVERAGE)
                 .values(
                     [
@@ -3969,20 +4022,23 @@ class PgStore(Store):
                 .on_conflict_do_nothing(),
                 execution_options=self.options,
             )
-            await session.execute(
+            await _execute(
+                session,
                 select(SNAPSHOT_COVERAGE.c.space_id)
                 .where(SNAPSHOT_COVERAGE.c.taken_at == taken_at)
                 .order_by(SNAPSHOT_COVERAGE.c.space_id)
                 .with_for_update(),
                 execution_options=self.options,
             )
-            await session.execute(
+            await _execute(
+                session,
                 update(SNAPSHOT_COVERAGE)
                 .where(SNAPSHOT_COVERAGE.c.taken_at == taken_at)
                 .values(captured_at=func.now(), source=source, complete=True),
                 execution_options=self.options,
             )
-            await session.execute(
+            await _execute(
+                session,
                 delete(STATE_SNAPSHOTS).where(STATE_SNAPSHOTS.c.taken_at == taken_at),
                 execution_options=self.options,
             )
@@ -3995,7 +4051,8 @@ class PgStore(Store):
             )
             grouped = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(
                             IDENTITIES.c.space_id,
                             IDENTITIES.c.service,
@@ -4015,7 +4072,8 @@ class PgStore(Store):
                 ).mappings()
             )
             if grouped:
-                await session.execute(
+                await _execute(
+                    session,
                     insert(STATE_SNAPSHOTS).values(
                         [
                             {
@@ -4039,7 +4097,8 @@ class PgStore(Store):
         async with self.sessionmaker() as session:
             coverage = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(SNAPSHOT_COVERAGE)
                         .join(SPACES, SPACES.c.id == SNAPSHOT_COVERAGE.c.space_id)
                         .where(
@@ -4057,7 +4116,8 @@ class PgStore(Store):
             space_id = coverage[0]["space_id"]
             rows = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(STATE_SNAPSHOTS)
                         .where(
                             STATE_SNAPSHOTS.c.space_id == space_id,
@@ -4099,7 +4159,8 @@ class PgStore(Store):
 
     async def purge_state_snapshots(self, before: datetime) -> int:
         async with self._own() as session:
-            result: Any = await session.execute(
+            result: Any = await _execute(
+                session,
                 delete(SNAPSHOT_COVERAGE).where(SNAPSHOT_COVERAGE.c.taken_at < before),
                 execution_options=self.options,
             )
@@ -4110,7 +4171,8 @@ class PgStore(Store):
     async def enabled_webhook_endpoints(self) -> list[WebhookEndpointRow]:
         async with self.sessionmaker() as session:
             rows = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(WEBHOOK_ENDPOINTS, SPACES.c.slug.label("space_slug"))
                     .join(SPACES, SPACES.c.id == WEBHOOK_ENDPOINTS.c.space_id)
                     .where(WEBHOOK_ENDPOINTS.c.enabled.is_(True)),
@@ -4123,7 +4185,8 @@ class PgStore(Store):
         if not identity_ids:
             return {}
         async with self.sessionmaker() as session:
-            rows = await session.execute(
+            rows = await _execute(
+                session,
                 select(IDENTITIES.c.id, IDENTITIES.c.labels).where(IDENTITIES.c.id.in_(set(identity_ids))),
                 execution_options=self.options,
             )
@@ -4149,7 +4212,7 @@ class PgStore(Store):
             .on_conflict_do_nothing(constraint="uq_ih_webhook_deliveries_endpoint_event")
         )
         async with self._own() as session:
-            result = await session.execute(stmt, execution_options=self.options)
+            result = await _execute(session, stmt, execution_options=self.options)
             return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     async def claim_webhook_deliveries(self, *, limit: int, claim_for: timedelta) -> list[WebhookAttempt]:
@@ -4157,7 +4220,8 @@ class PgStore(Store):
         async with self._own() as session:
             locked: list[int] = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(d.id)
                         .join(WEBHOOK_ENDPOINTS, ep.id == d.endpoint_id)
                         .where(
@@ -4174,14 +4238,16 @@ class PgStore(Store):
             )
             if not locked:
                 return []
-            await session.execute(
+            await _execute(
+                session,
                 update(WEBHOOK_DELIVERIES)
                 .where(d.id.in_(locked))
                 .values(attempt=d.attempt + 1, next_attempt_at=func.now() + claim_for),
                 execution_options=self.options,
             )
             rows = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(
                         EVENTS,
                         SPACES.c.slug,
@@ -4232,7 +4298,8 @@ class PgStore(Store):
         d, ep = WEBHOOK_DELIVERIES.c, WEBHOOK_ENDPOINTS.c
         async with self._own() as session:
             row = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(
                         d.endpoint_id,
                         d.attempt,
@@ -4261,13 +4328,15 @@ class PgStore(Store):
                 "error": error[:2000] if error else None,
             }
             if succeeded:
-                await session.execute(
+                await _execute(
+                    session,
                     update(WEBHOOK_DELIVERIES)
                     .where(d.id == delivery_id)
                     .values(**common, status=DeliveryStatus.SUCCEEDED, delivered_at=func.now()),
                     execution_options=self.options,
                 )
-                await session.execute(
+                await _execute(
+                    session,
                     update(WEBHOOK_ENDPOINTS).where(ep.id == row.endpoint_id).values(failure_streak=0),
                     execution_options=self.options,
                 )
@@ -4275,7 +4344,8 @@ class PgStore(Store):
 
             streak = row.failure_streak + 1
             disabled = streak >= max_failures
-            await session.execute(
+            await _execute(
+                session,
                 update(WEBHOOK_DELIVERIES)
                 .where(d.id == delivery_id)
                 .values(
@@ -4285,7 +4355,8 @@ class PgStore(Store):
                 ),
                 execution_options=self.options,
             )
-            await session.execute(
+            await _execute(
+                session,
                 update(WEBHOOK_ENDPOINTS)
                 .where(ep.id == row.endpoint_id)
                 .values(
@@ -4296,7 +4367,8 @@ class PgStore(Store):
                 execution_options=self.options,
             )
             if disabled:
-                await session.execute(
+                await _execute(
+                    session,
                     insert(EVENTS).values(
                         event_id=new_id(),
                         type="webhook.endpoint.disabled",
@@ -4308,7 +4380,8 @@ class PgStore(Store):
                     ),
                     execution_options=self.options,
                 )
-                await session.execute(
+                await _execute(
+                    session,
                     text("SELECT pg_notify(:channel, :payload)"),
                     {"channel": NOTIFY_CHANNEL, "payload": row.slug},
                 )
@@ -4320,7 +4393,8 @@ class PgStore(Store):
         r, c = NOTIFICATION_RULES.c, NOTIFICATION_CHANNELS.c
         async with self.sessionmaker() as session:
             rows = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(
                         NOTIFICATION_RULES,
                         SPACES.c.slug.label("space_slug"),
@@ -4380,7 +4454,7 @@ class PgStore(Store):
                         ),
                         set_={"event_ids": event_ids},
                     )
-                result = await session.execute(stmt, execution_options=self.options)
+                result = await _execute(session, stmt, execution_options=self.options)
                 total += int(result.rowcount or 0)  # type: ignore[attr-defined]
         return total
 
@@ -4389,7 +4463,8 @@ class PgStore(Store):
         async with self._own() as session:
             locked: list[int] = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(n.id)
                         .join(NOTIFICATION_RULES, r.id == n.rule_id)
                         .join(NOTIFICATION_CHANNELS, c.id == n.channel_id)
@@ -4408,7 +4483,8 @@ class PgStore(Store):
             )
             if not locked:
                 return []
-            await session.execute(
+            await _execute(
+                session,
                 update(NOTIFICATIONS)
                 .where(n.id.in_(locked))
                 # `failed` закрывает partial unique «open digest»: событие, пришедшее во время
@@ -4422,7 +4498,8 @@ class PgStore(Store):
             )
             rows = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(
                             n.id.label("notification_id"),
                             n.attempt,
@@ -4446,7 +4523,8 @@ class PgStore(Store):
             )
             event_ids = {event_id for row in rows for event_id in row["event_ids"]}
             event_rows = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(EVENTS, SPACES.c.slug)
                     .join(SPACES, SPACES.c.id == EVENTS.c.space_id)
                     .where(EVENTS.c.event_id.in_(event_ids)),
@@ -4483,7 +4561,8 @@ class PgStore(Store):
         n = NOTIFICATIONS.c
         async with self._own() as session:
             row = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(n.attempt, n.status).where(n.id == notification_id).with_for_update(),
                     execution_options=self.options,
                 )
@@ -4503,7 +4582,8 @@ class PgStore(Store):
                     "scheduled_at": func.now() + retry_after,
                     "error": error[:2000] if error else None,
                 }
-            await session.execute(
+            await _execute(
+                session,
                 update(NOTIFICATIONS).where(n.id == notification_id).values(**values),
                 execution_options=self.options,
             )
@@ -4513,7 +4593,8 @@ class PgStore(Store):
 
     async def maintenance_spaces(self) -> list[SpaceRef]:
         async with self.sessionmaker() as session:
-            rows = await session.execute(
+            rows = await _execute(
+                session,
                 select(SPACES.c.id, SPACES.c.slug, SPACES.c.title, SPACES.c.timezone).order_by(SPACES.c.slug),
                 execution_options=self.options,
             )
@@ -4557,7 +4638,7 @@ class PgStore(Store):
             for name, stmt in statements.items():
                 if name not in names:
                     continue
-                result = await session.execute(stmt, execution_options=self.options)
+                result = await _execute(session, stmt, execution_options=self.options)
                 counts[name] = int(result.rowcount or 0)  # type: ignore[attr-defined]
             return counts
 
@@ -4566,7 +4647,8 @@ class PgStore(Store):
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         i = IDENTITIES.c
         async with self.sessionmaker() as session:
-            rows = await session.execute(
+            rows = await _execute(
+                session,
                 select(i.id, i.external_ref)
                 .where(i.service == service, i.normalize_version != version)
                 .order_by(i.id)
@@ -4583,11 +4665,13 @@ class PgStore(Store):
         i = IDENTITIES.c
         ids = sorted(identity_id for identity_id, _ref in updates)
         async with self._own() as session:
-            await session.execute(
+            await _execute(
+                session,
                 select(i.id).where(i.id.in_(ids)).order_by(i.id).with_for_update(key_share=True),
                 execution_options=self.options,
             )
-            others = await session.execute(
+            others = await _execute(
+                session,
                 select(i.id, i.normalized_ref).where(
                     i.service == service,
                     i.normalized_ref.in_({ref for _id, ref in updates}),
@@ -4599,14 +4683,16 @@ class PgStore(Store):
             if collisions:
                 return collisions
             # временные значения снимают конфликт уникальности при обмене ref между строками
-            await session.execute(
+            await _execute(
+                session,
                 update(IDENTITIES)
                 .where(i.id.in_(ids))
                 .values(normalized_ref=func.concat("~renormalize:", sa_cast(i.id, Text))),
                 execution_options=self.options,
             )
             for identity_id, ref in updates:
-                await session.execute(
+                await _execute(
+                    session,
                     update(IDENTITIES)
                     .where(i.id == identity_id)
                     .values(normalized_ref=ref, normalize_version=version),
@@ -4619,23 +4705,25 @@ class PgStore(Store):
         async with self._own() as session:
             identities = list(
                 (
-                    await session.execute(
+                    await _execute(
+                        session,
                         select(IDENTITIES, SPACES.c.slug).join(SPACES, SPACES.c.id == IDENTITIES.c.space_id),
                         execution_options=self.options,
                     )
                 ).mappings()
             )
             region_rows = (
-                await session.execute(select(REGION_STATES), execution_options=self.options)
+                await _execute(session, select(REGION_STATES), execution_options=self.options)
             ).mappings()
             regions = {(row["identity_id"], row["region"], row["key"]): row for row in region_rows}
-            event_rows = await session.execute(
-                select(EVENTS.c.identity_id, func.max(EVENTS.c.sequence))
+            event_rows = await _execute(
+                session,
+                select(EVENTS.c.identity_id, func.max(EVENTS.c.sequence).label("last_sequence"))
                 .where(EVENTS.c.identity_id.is_not(None), EVENTS.c.sequence.is_not(None))
                 .group_by(EVENTS.c.identity_id),
                 execution_options=self.options,
             )
-            event_seq = {row[0]: int(row[1]) for row in event_rows}
+            event_seq = {row.identity_id: int(row.last_sequence) for row in event_rows}
             for row in identities:
                 identity_id = row["id"]
                 changes: dict[str, Any] = {}
@@ -4678,7 +4766,8 @@ class PgStore(Store):
                     )
                     changes["event_seq"] = expected_seq
                 if fix and changes:
-                    await session.execute(
+                    await _execute(
+                        session,
                         update(IDENTITIES).where(IDENTITIES.c.id == identity_id).values(**changes),
                         execution_options=self.options,
                     )
@@ -4687,7 +4776,8 @@ class PgStore(Store):
                 select(BINDINGS.c.proxy_id, func.count().label("n")).group_by(BINDINGS.c.proxy_id).subquery()
             )
             proxies = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(
                         PROXIES.c.id,
                         PROXIES.c.bound_count,
@@ -4712,7 +4802,8 @@ class PgStore(Store):
                     )
                 )
                 if fix:
-                    await session.execute(
+                    await _execute(
+                        session,
                         update(PROXIES).where(PROXIES.c.id == row["id"]).values(bound_count=row["expected"]),
                         execution_options=self.options,
                     )
@@ -4770,7 +4861,8 @@ class PgStore(Store):
                 ciphertext = table.c[f"{prefix}ciphertext"]
                 rows = list(
                     (
-                        await session.execute(
+                        await _execute(
+                            session,
                             select(table)
                             .where(ciphertext.is_not(None), key != active)
                             .limit(remaining)
@@ -4788,7 +4880,8 @@ class PgStore(Store):
                     )
                     # у challenge тем же DEK зашифрован ответ — формат AAD не меняем
                     rotated = envelope.rewrap(payload, aad_of(row), upgrade=name != "challenges")
-                    await session.execute(
+                    await _execute(
+                        session,
                         update(table)
                         .where(*[column == row[column.name] for column in table.primary_key.columns])
                         .values(
@@ -4806,13 +4899,15 @@ class PgStore(Store):
         cursor_lag: dict[str, int] = {}
         cursor_updated_at: dict[str, datetime] = {}
         async with self.sessionmaker() as session:
-            cursors = await session.execute(
+            cursors = await _execute(
+                session,
                 select(CURSORS.c.consumer, CURSORS.c.last_tx_id, CURSORS.c.last_id, CURSORS.c.updated_at),
                 execution_options=self.options,
             )
             horizon = func.pg_snapshot_xmin(func.pg_current_snapshot())
             for cursor in cursors:
-                lag = await session.execute(
+                lag = await _execute(
+                    session,
                     select(func.count())
                     .select_from(EVENTS)
                     .where(
@@ -4836,7 +4931,8 @@ class PgStore(Store):
                 webhook_scope.append(SPACES.c.slug.in_(slugs))
                 notification_scope.append(SPACES.c.slug.in_(slugs))
             webhook = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(
                         func.count()
                         .filter(
@@ -4861,7 +4957,8 @@ class PgStore(Store):
                 )
             ).one()
             notification = (
-                await session.execute(
+                await _execute(
+                    session,
                     select(
                         func.count()
                         .filter(NOTIFICATIONS.c.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]))
@@ -4938,7 +5035,7 @@ class PgStore(Store):
             .on_conflict_do_nothing(index_elements=[SpaceRecord.slug])
         )
         async with self._own() as session:
-            await session.execute(stmt, execution_options=self.options)
+            await _execute(session, stmt, execution_options=self.options)
         found = await self.get_space(slug)
         if found is None:  # pragma: no cover - вставка или существующая строка гарантированы
             raise RuntimeError(f"пространство {slug} не создано")

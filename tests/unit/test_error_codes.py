@@ -58,6 +58,7 @@ EXPECTED_CODES = {
     "VerificationRequirementsNotMet": "verification_requirements_not_met",
     "AttemptsExhausted": "attempts_exhausted",
     "DatabaseBusy": "database_busy",
+    "StorageError": "storage_error",
     "SchemaIncompatible": "schema_incompatible",
     "SecretConfigurationError": "secret_configuration_error",
     "DecryptionFailed": "decryption_failed",
@@ -96,6 +97,8 @@ def test_every_code_has_http_status() -> None:
         (LeaseRevoked(uuid4(), "admin"), 409, 1),
         (QuotaExhausted("send", 60), 429, 1),
         (identity_hub.DatabaseBusy("lock timeout"), 503, 4),
+        (identity_hub.DatabaseBusy(sqlstate="57014"), 503, 4),
+        (identity_hub.StorageError("23505"), 500, 1),
         (SchemaIncompatible("0007", "0005"), 503, 3),
         (SecretConfigurationError("нет ключа"), 500, 5),
         (DecryptionFailed("bad tag"), 500, 5),
@@ -164,3 +167,8 @@ def test_cli_returns_exit_code_and_prints_code(
     monkeypatch.setattr(cli, "async_main", failing)
     assert cli.main(["doctor"]) == 3
     assert "error[schema_incompatible]" in capsys.readouterr().err
+
+
+def test_describe_error_never_uses_foreign_exception_text() -> None:
+    assert errors.describe_error(RuntimeError("token=SECRET")) == "RuntimeError"
+    assert errors.describe_error(identity_hub.StorageError("23505")) == "StorageError[storage_error]"
