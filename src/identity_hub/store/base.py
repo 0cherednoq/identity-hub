@@ -36,6 +36,8 @@ __all__ = [
     "DoctorIssue",
     "EventReadFilter",
     "EventReadRow",
+    "IdempotencyClaim",
+    "IdempotencyRequest",
     "IdentityRow",
     "ImportItemResult",
     "ImportItemRow",
@@ -409,12 +411,38 @@ class QuotaWindow:
 
 
 @dataclass(frozen=True, slots=True)
+class IdempotencyRequest:
+    """Заявка на ключ идемпотентности (IMP-03): ключ живёт в `namespace` до `ttl`."""
+
+    namespace: str  # пространство и семейство команд: `<space_id>:operation`
+    key: str
+    operation: str  # имя команды; у операции под арендой — её вид
+    fingerprint: str  # `domain.idempotency.fingerprint`: секретов не содержит
+    ttl: timedelta
+    owner_identity_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyClaim:
+    """Итог заявки. `claimed` — ключ занят этим вызовом: первая попытка либо повтор после `failed`."""
+
+    claimed: bool
+    attempt: int
+    previous_outcome: str | None = None  # "succeeded" | "failed" | None (нет или неизвестен)
+    owner_identity_id: UUID | None = None
+    result_type: str | None = None
+    result_version: int | None = None
+    result: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ChargeOutcome:
     """Результат списания: `duplicate` — ключ операции уже был (FR-7.5); `exhausted` — окно без единиц."""
 
     duplicate: bool = False
     exhausted: QuotaWindow | None = None
     reached: tuple[QuotaWindow, ...] = ()  # окна, израсходованные этой операцией до конца
+    claim: IdempotencyClaim | None = None  # заполнено, если списание шло с ключом идемпотентности
 
     @property
     def ok(self) -> bool:
@@ -1051,9 +1079,17 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def charge_quotas(
-        self, identity_id: UUID, charges: Sequence[QuotaCharge], *, operation_key: str | None, kind: str
+        self,
+        identity_id: UUID,
+        charges: Sequence[QuotaCharge],
+        *,
+        idempotency: IdempotencyRequest | None = None,
     ) -> ChargeOutcome:
-        """Атомарно списать по всем окнам (savepoint, G-2.2) и занять ключ операции (D-114)."""
+        """Атомарно списать по всем окнам (savepoint, G-2.2) и занять ключ идемпотентности (D-114).
+
+        Ключ уже занят — `duplicate=True`, квота не списана. Исчерпанное окно ключ не занимает.
+        Тот же ключ с другой командой — `IdempotencyConflict`.
+        """
 
     @abstractmethod
     async def bump_pacing(self, identity_id: UUID, charge: QuotaCharge) -> bool:
@@ -1063,8 +1099,29 @@ class StoreTx(ABC):
     async def quota_usage(self, identity_id: UUID) -> list[QuotaWindow]:
         """Окна квот аккаунта, актуальные на now() (для карточки и проверки допустимости)."""
 
+    # --------------------------------------------------------- идемпотентность (IMP-03)
+
     @abstractmethod
-    async def finish_operation_key(self, key: str, outcome: str) -> None: ...
+    async def claim_idempotency_key(self, request: IdempotencyRequest) -> IdempotencyClaim:
+        """Занять ключ в `request.namespace` либо вернуть сведения о прошлой попытке.
+
+        Ключ занимается, если его нет, он истёк или прошлая попытка закончилась `failed`.
+        Незакоммиченный победитель удерживает конкурента; его откат освобождает ключ.
+        Другая команда под тем же ключом — `IdempotencyConflict`.
+        """
+
+    @abstractmethod
+    async def complete_idempotency_key(
+        self,
+        namespace: str,
+        key: str,
+        outcome: str,
+        *,
+        result_type: str | None = None,
+        result_version: int | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Записать исход попытки (`succeeded` | `failed`) и типизированный результат для replay."""
 
     # --------------------------------------------------------- здоровье аккаунта (P4.2)
 

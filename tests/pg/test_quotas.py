@@ -61,9 +61,10 @@ async def test_operation_key_is_idempotent(
     (usage,) = await _all(sessionmaker, QuotaUsageRecord)
     assert usage.used == 1
     (key,) = await _all(sessionmaker, OperationKeyRecord)
-    assert (key.kind, key.outcome) == ("read_channel", None)
+    assert (key.operation, key.outcome, key.identity_id) == ("read_channel", None, identity_id)
+    assert key.namespace == f"{key.space_id}:operation"
     async with space._tx(own=True) as tx:
-        await tx.finish_operation_key("op-1", "succeeded")
+        await tx.complete_idempotency_key(key.namespace, "op-1", "succeeded")
     assert (await _all(sessionmaker, OperationKeyRecord))[0].outcome == "succeeded"
 
 

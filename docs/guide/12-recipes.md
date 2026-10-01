@@ -105,7 +105,13 @@ async with traders.lease(for_operation="withdraw") as lease:     # выдаст 
     async with lease.operation("withdraw", key=f"withdraw:{request.id}") as op:
         if not op.duplicate:
             await exchange(lease).withdraw(request.amount)
+        elif op.previous_outcome is None:
+            raise NeedsReconciliation(request.id)   # исход прошлой попытки неизвестен — сверить с биржей
 ```
+
+Повтор заявки после упавшей попытки выполнит вывод заново (`duplicate=False`), после успешной —
+пропустит его. Третий случай — [исход неизвестен](08-limits.md#идемпотентность-операции): для
+необратимых действий сверяйтесь с платформой, прежде чем повторять.
 
 Когда KYC истекает (`valid_for`), фактор становится `expired`, уровень `full` теряется
 (событие `identity.tier.lost`), и аккаунт перестаёт выдаваться под `withdraw`.

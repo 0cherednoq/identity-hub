@@ -25,8 +25,20 @@
   `LeaseRevoked`, `LeaseExpired`, `DatabaseBusy`, `SchemaIncompatible`,
   `SecretConfigurationError`. CLI печатает `error[<code>]` и возвращает код выхода по таблице.
 
+- `Operation.previous_outcome` — исход прошлой попытки с тем же `key`
+  (`"succeeded"`, `"failed"` или `None`).
+
 ### Changed
 
+- Ключ операции `lease.operation(kind, key=...)` действует в пределах пространства, а не всей
+  базы (миграция `0009`). Повтор после неуспешной попытки — новая попытка со списанием квоты
+  (`duplicate=False`, `previous_outcome="failed"`); после успешной — `duplicate=True`. Тот же
+  ключ с другим видом операции — `IdempotencyConflict`. Запись ключа переживает удаление
+  аккаунта и хранится `Retention.operation_keys` с момента последней попытки.
+- Сбой записи результата после успешно выполненной операции не выходит к вызывающему:
+  предупреждение в лог и метрика `identity_hub_failures_total{scope="operation_bookkeeping"}`.
+- Контракт `Store`: `charge_quotas(..., idempotency=IdempotencyRequest)`,
+  `claim_idempotency_key`, `complete_idempotency_key` вместо `operation_key`/`finish_operation_key`.
 - Уникальность identity — `(service, normalized_ref)`: `Service.normalize_ref` и
   `normalize_ref_version`, миграция `0008`, `hub.doctor.renormalize()` для смены нормализатора.
 - `hub.start()` проверяет ревизию схемы и бросает `SchemaIncompatible`, если она не та, что
@@ -40,6 +52,8 @@
 
 ### Fixed
 
+- Повтор операции с тем же `key` после сетевой ошибки больше не выглядит как «уже выполнено»:
+  раньше `op.duplicate` был `True` и действие не повторялось никогда.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
 ### Deprecated

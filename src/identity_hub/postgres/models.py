@@ -766,21 +766,30 @@ class QuotaUsageRecord(IdentityHubBase):
 
 
 class OperationKeyRecord(IdentityHubBase):
-    """Идемпотентность операций: повтор с тем же ключом не списывает квоту дважды."""
+    """Ключи идемпотентности (IMP-03): повтор команды с тем же ключом не выполняет её дважды.
+
+    `namespace` — пространство и семейство команд (`<space_id>:operation`); ключ уникален в нём.
+    """
 
     __tablename__ = "ih_operation_keys"
 
+    namespace: Mapped[str] = mapped_column(String(128), primary_key=True)
     key: Mapped[str] = mapped_column(String(256), primary_key=True)
-    identity_id: Mapped[UUID]
+    # аккаунт последней попытки; без FK: ключ переживает удаление аккаунта до expires_at (D-153)
+    identity_id: Mapped[UUID | None]
     space_id: Mapped[UUID]
-    kind: Mapped[str] = mapped_column(String(64))
-    outcome: Mapped[str | None] = mapped_column(String(32))  # None — в процессе
+    operation: Mapped[str] = mapped_column(String(64))
+    fingerprint_version: Mapped[int] = mapped_column(SmallInteger)  # 0 — запись до протокола
+    fingerprint: Mapped[str | None] = mapped_column(String(64))
+    attempt: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str | None] = mapped_column(String(32))  # None — выполняется или исход неизвестен
+    result_type: Mapped[str | None] = mapped_column(String(64))
+    result_version: Mapped[int | None] = mapped_column(SmallInteger)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (
-        _identity_fk(),
-        Index("ix_ih_operation_keys_created_at", "created_at"),
-    )
+    __table_args__ = (Index("ix_ih_operation_keys_expires_at", "expires_at"),)  # чистка истёкших ключей
 
 
 class ProviderOperationRecord(IdentityHubBase):

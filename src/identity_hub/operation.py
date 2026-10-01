@@ -15,10 +15,11 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from identity_hub._space import logger
 from identity_hub.domain.admissibility import IdentitySnapshot, evaluate
+from identity_hub.domain.idempotency import OPERATION_FAMILY, namespace
 from identity_hub.domain.regions import Command, Observation, Timer
 from identity_hub.enums import AuthState, Availability, ChangeSource, SessionStatus, Standing
 from identity_hub.errors import OperationNotAllowed, StaleFencing, TransitionNotAllowed
@@ -32,22 +33,40 @@ from identity_hub.store.base import StoreTx
 if TYPE_CHECKING:
     from identity_hub.lease import Lease
 
-__all__ = ["SUCCESS_DECAY", "Operation", "operation_scope"]
+__all__ = ["SUCCESS_DECAY", "Operation", "OperationOutcome", "operation_scope"]
 
 SUCCESS_DECAY = 0.5
 
+OperationOutcome = Literal["succeeded", "failed"]
+
 
 class Operation:
-    """Одна операция на платформе под арендой."""
+    """Одна операция на платформе под арендой.
+
+    С ключом `key` повтор различает исход прошлой попытки (D-152, D-153):
+
+    - `duplicate=True`, `previous_outcome="succeeded"` — действие уже выполнено, квота не списана;
+    - `duplicate=True`, `previous_outcome=None` — исход неизвестен: прошлая попытка ещё идёт,
+      была отменена или процесс упал. Действие могло выполниться — сверьтесь с платформой;
+    - `duplicate=False`, `previous_outcome="failed"` — прошлая попытка упала, это новая попытка;
+    - `duplicate=False`, `previous_outcome=None` — первая попытка.
+    """
 
     def __init__(
-        self, lease: Lease, kind: str, key: str | None, duplicate: bool, paused_until: datetime | None
+        self,
+        lease: Lease,
+        kind: str,
+        key: str | None,
+        duplicate: bool,
+        paused_until: datetime | None,
+        previous_outcome: OperationOutcome | None = None,
     ):
         self.lease = lease
         self.kind = kind
         self.key = key
         self.duplicate = duplicate  # ключ уже использован: квота не списана (FR-7.5)
         self.paused_until = paused_until  # pacing отправил аккаунт отдыхать после этой операции
+        self.previous_outcome = previous_outcome
 
     async def cool_down(self, retry_after: timedelta | float) -> None:
         """Rate limit / flood-wait: availability → cooling до now + retry_after; только удлиняет (FR-7.4)."""
@@ -58,7 +77,10 @@ class Operation:
             await _cooling(self.lease, tx, until)
 
     def __repr__(self) -> str:
-        return f"Operation(kind={self.kind!r}, lease_id={self.lease.lease_id}, duplicate={self.duplicate})"
+        return (
+            f"Operation(kind={self.kind!r}, lease_id={self.lease.lease_id}, duplicate={self.duplicate}, "
+            f"previous_outcome={self.previous_outcome!r})"
+        )
 
 
 @asynccontextmanager
@@ -105,7 +127,7 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
             lease_id=lease.lease_id,
             actor=lease.holder,
         )
-    op = Operation(lease, kind, key, result.duplicate, result.paused_until)
+    op = Operation(lease, kind, key, result.duplicate, result.paused_until, _outcome(result.previous_outcome))
     try:
         yield op
     except asyncio.CancelledError:
@@ -127,11 +149,40 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
         raise
     else:
         lease._count(kind, ok=True)
-        async with space._tx(own=True) as tx:
-            await tx.decay_error_score(lease.identity_id, SUCCESS_DECAY)
-            if key is not None and not op.duplicate:
-                await tx.finish_operation_key(key, "succeeded")
+        try:
+            await _record_success(lease, op)
+        except Exception as exc:
+            # Действие на платформе уже выполнено: сбой учёта не превращает успех в ошибку (R1-11).
+            # Исход ключа остаётся неизвестным — повтор получит duplicate=True и не выполнит действие.
+            logger.warning(
+                "операция %s выполнена, но учёт результата не записан: %s", kind, type(exc).__name__
+            )
+            record_metric(
+                space.hub.metrics,
+                "counter",
+                "identity_hub_failures_total",
+                space=space.slug,
+                service=service.name,
+                scope="operation_bookkeeping",
+                reason=type(exc).__name__,
+            )
         _observe_operation(lease, kind, started, "succeeded")
+
+
+def _outcome(value: str | None) -> OperationOutcome | None:
+    if value == "succeeded":
+        return "succeeded"
+    if value == "failed":
+        return "failed"
+    return None
+
+
+async def _record_success(lease: Lease, op: Operation) -> None:
+    space = lease.pool.space
+    async with space._tx(own=True) as tx:
+        await tx.decay_error_score(lease.identity_id, SUCCESS_DECAY)
+        if op.key is not None and not op.duplicate:
+            await tx.complete_idempotency_key(namespace(tx.space.id, OPERATION_FAMILY), op.key, "succeeded")
 
 
 def _observe_operation(lease: Lease, kind: str, started: float, status: str) -> None:
@@ -163,7 +214,7 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
         async with space._tx(own=True) as tx:
             now = await tx.now()
             if op.key is not None and not op.duplicate:
-                await tx.finish_operation_key(op.key, "failed")
+                await tx.complete_idempotency_key(namespace(tx.space.id, OPERATION_FAMILY), op.key, "failed")
             if fault.blame is Blame.IDENTITY:
                 score = await tx.add_error_score(lease.identity_id, fault.weight)
                 if fault.retry_after is not None:

@@ -48,6 +48,7 @@ from sqlalchemy.sql import Executable, Select
 
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload, associated_data
+from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import (
     AuthState,
@@ -59,7 +60,13 @@ from identity_hub.enums import (
     ProxyStatus,
     Severity,
 )
-from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, SpaceMismatch
+from identity_hub.errors import (
+    ConcurrentModification,
+    IdempotencyConflict,
+    LeaseUnavailable,
+    NotFound,
+    SpaceMismatch,
+)
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
 from identity_hub.postgres.migrate import SCHEMA_HEAD, VERSION_TABLE
@@ -111,6 +118,8 @@ from identity_hub.store.base import (
     DoctorIssue,
     EventReadFilter,
     EventReadRow,
+    IdempotencyClaim,
+    IdempotencyRequest,
     IdentityRow,
     ImportItemResult,
     ImportItemRow,
@@ -1075,19 +1084,20 @@ class PgTx(StoreTx):
     # --------------------------------------------------------- квоты
 
     async def charge_quotas(
-        self, identity_id: UUID, charges: Sequence[QuotaCharge], *, operation_key: str | None, kind: str
+        self,
+        identity_id: UUID,
+        charges: Sequence[QuotaCharge],
+        *,
+        idempotency: IdempotencyRequest | None = None,
     ) -> ChargeOutcome:
         savepoint = await self.session.begin_nested()
         try:
-            if operation_key is not None:
-                claimed = await self.execute(
-                    insert(OPERATION_KEYS)
-                    .values(key=operation_key, identity_id=identity_id, space_id=self.space.id, kind=kind)
-                    .on_conflict_do_nothing()
-                )
-                if not claimed.rowcount:  # type: ignore[attr-defined]
+            claim: IdempotencyClaim | None = None
+            if idempotency is not None:
+                claim = await self.claim_idempotency_key(idempotency)
+                if not claim.claimed:
                     await savepoint.rollback()
-                    return ChargeOutcome(duplicate=True)
+                    return ChargeOutcome(duplicate=True, claim=claim)
             reached: list[QuotaWindow] = []
             for charge in charges:
                 window_start = func.date_bin(
@@ -1125,7 +1135,7 @@ class PgTx(StoreTx):
                         QuotaWindow(charge.kind, charge.window_seconds, row.window_start, row.used)
                     )
             await savepoint.commit()
-            return ChargeOutcome(reached=tuple(reached))
+            return ChargeOutcome(reached=tuple(reached), claim=claim)
         except BaseException:
             if savepoint.is_active:
                 await savepoint.rollback()
@@ -1182,11 +1192,111 @@ class PgTx(StoreTx):
         )
         return [QuotaWindow(r.kind, r.window_seconds, r.window_start, r.used) for r in rows]
 
-    async def finish_operation_key(self, key: str, outcome: str) -> None:
+    # --------------------------------------------------------- идемпотентность (IMP-03)
+
+    async def claim_idempotency_key(self, request: IdempotencyRequest) -> IdempotencyClaim:
+        keys = OPERATION_KEYS.c
+        stmt = insert(OPERATION_KEYS).values(
+            namespace=request.namespace,
+            key=request.key,
+            identity_id=request.owner_identity_id,
+            space_id=self.space.id,
+            operation=request.operation,
+            fingerprint_version=FINGERPRINT_VERSION,
+            fingerprint=request.fingerprint,
+            attempt=1,
+            outcome=None,
+            expires_at=func.now() + request.ttl,
+        )
+        expired = keys.expires_at <= func.now()
+        same_command = and_(
+            keys.operation == stmt.excluded.operation,
+            or_(
+                keys.fingerprint_version == LEGACY_FINGERPRINT_VERSION,
+                keys.fingerprint == stmt.excluded.fingerprint,
+            ),
+        )
+        # Конкурент с тем же ключом ждёт на конфликте до коммита победителя; его откат освобождает ключ.
+        upsert = stmt.on_conflict_do_update(
+            index_elements=[keys.namespace, keys.key],
+            set_={
+                "identity_id": stmt.excluded.identity_id,
+                "space_id": stmt.excluded.space_id,
+                "operation": stmt.excluded.operation,
+                "fingerprint_version": stmt.excluded.fingerprint_version,
+                "fingerprint": stmt.excluded.fingerprint,
+                "attempt": case((expired, 1), else_=keys.attempt + 1),
+                "outcome": None,
+                "result_type": None,
+                "result_version": None,
+                "result": None,
+                "created_at": case((expired, func.now()), else_=keys.created_at),
+                "expires_at": stmt.excluded.expires_at,
+            },
+            where=or_(expired, and_(keys.outcome == "failed", same_command)),
+        ).returning(keys.attempt)
+        for _ in range(3):
+            attempt = (await self.execute(upsert)).scalar_one_or_none()
+            if attempt is not None:
+                return IdempotencyClaim(
+                    True, attempt, "failed" if attempt > 1 else None, request.owner_identity_id
+                )
+            row = (
+                await self.execute(
+                    select(
+                        keys.operation,
+                        keys.fingerprint_version,
+                        keys.fingerprint,
+                        keys.attempt,
+                        keys.outcome,
+                        keys.identity_id,
+                        keys.result_type,
+                        keys.result_version,
+                        keys.result,
+                    ).where(keys.namespace == request.namespace, keys.key == request.key)
+                )
+            ).one_or_none()
+            if row is None:  # запись удалена чисткой между двумя запросами — занять заново
+                continue
+            if row.operation != request.operation or (
+                row.fingerprint_version != LEGACY_FINGERPRINT_VERSION
+                and row.fingerprint != request.fingerprint
+            ):
+                raise IdempotencyConflict(row.operation)
+            return IdempotencyClaim(
+                False,
+                row.attempt,
+                row.outcome,
+                row.identity_id,
+                row.result_type,
+                row.result_version,
+                row.result,
+            )
+        raise ConcurrentModification("idempotency_key", request.operation)
+
+    async def complete_idempotency_key(
+        self,
+        namespace: str,
+        key: str,
+        outcome: str,
+        *,
+        result_type: str | None = None,
+        result_version: int | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
         await self.execute(
             update(OPERATION_KEYS)
-            .where(OPERATION_KEYS.c.key == key, OPERATION_KEYS.c.space_id == self.space.id)
-            .values(outcome=outcome)
+            .where(
+                OPERATION_KEYS.c.namespace == namespace,
+                OPERATION_KEYS.c.key == key,
+                OPERATION_KEYS.c.space_id == self.space.id,
+            )
+            .values(
+                outcome=outcome,
+                result_type=result_type,
+                result_version=result_version,
+                result=dict(result) if result is not None else None,
+            )
         )
 
     # --------------------------------------------------------- здоровье аккаунта
@@ -4422,9 +4532,7 @@ class PgStore(Store):
                     QUOTAS.c.window_start + func.make_interval(0, 0, 0, 0, 0, 0, QUOTAS.c.window_seconds)
                     <= func.now()
                 ),
-                "operation_keys": delete(OPERATION_KEYS).where(
-                    OPERATION_KEYS.c.created_at < func.now() - retention["operation_keys"]
-                ),
+                "operation_keys": delete(OPERATION_KEYS).where(OPERATION_KEYS.c.expires_at <= func.now()),
                 "lease_logs": delete(LEASE_LOGS).where(
                     LEASE_LOGS.c.ts < func.now() - retention["lease_logs"]
                 ),

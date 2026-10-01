@@ -19,9 +19,16 @@ from uuid import UUID, uuid4
 
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import EncryptedPayload, associated_data
+from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
-from identity_hub.errors import ConcurrentModification, LeaseUnavailable, NotFound, SpaceMismatch
+from identity_hub.errors import (
+    ConcurrentModification,
+    IdempotencyConflict,
+    LeaseUnavailable,
+    NotFound,
+    SpaceMismatch,
+)
 from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
@@ -36,6 +43,8 @@ from identity_hub.store.base import (
     DoctorIssue,
     EventReadFilter,
     EventReadRow,
+    IdempotencyClaim,
+    IdempotencyRequest,
     IdentityRow,
     ImportItemResult,
     ImportItemRow,
@@ -91,6 +100,22 @@ __all__ = ["MemoryStore", "MemoryTx"]
 MEMORY_SCHEMA_REVISION = "memory"
 
 
+@dataclass(frozen=True, slots=True)
+class _IdempotencyRecord:
+    space_id: UUID
+    owner_identity_id: UUID | None
+    operation: str
+    fingerprint_version: int
+    fingerprint: str | None
+    attempt: int
+    created_at: datetime
+    expires_at: datetime
+    outcome: str | None = None
+    result_type: str | None = None
+    result_version: int | None = None
+    result: dict[str, Any] | None = None
+
+
 @dataclass
 class _MemoryState:
     spaces: dict[str, SpaceRef] = field(default_factory=dict)
@@ -107,7 +132,7 @@ class _MemoryState:
     leases: dict[UUID, LeaseRow] = field(default_factory=dict)
     history: dict[UUID, LeaseHistoryRow] = field(default_factory=dict)
     quotas: dict[tuple[UUID, str, int, datetime], int] = field(default_factory=dict)
-    operation_keys: dict[str, tuple[UUID, str, str | None, datetime]] = field(default_factory=dict)
+    operation_keys: dict[tuple[str, str], _IdempotencyRecord] = field(default_factory=dict)
     import_runs: dict[UUID, ImportRunRow] = field(default_factory=dict)
     import_items: dict[tuple[UUID, int], dict[str, Any]] = field(default_factory=dict)
     provider_operations: dict[UUID, ProviderOperationRow] = field(default_factory=dict)
@@ -654,26 +679,39 @@ class MemoryTx(StoreTx):
         return lease
 
     async def charge_quotas(
-        self, identity_id: UUID, charges: Sequence[QuotaCharge], *, operation_key: str | None, kind: str
+        self,
+        identity_id: UUID,
+        charges: Sequence[QuotaCharge],
+        *,
+        idempotency: IdempotencyRequest | None = None,
     ) -> ChargeOutcome:
-        if operation_key is not None and operation_key in self.state.operation_keys:
-            return ChargeOutcome(duplicate=True)
+        claim: IdempotencyClaim | None = None
+        previous: _IdempotencyRecord | None = None
+        if idempotency is not None:
+            previous = self.state.operation_keys.get((idempotency.namespace, idempotency.key))
+            claim = await self.claim_idempotency_key(idempotency)
+            if not claim.claimed:
+                return ChargeOutcome(duplicate=True, claim=claim)
         planned: list[tuple[tuple[UUID, str, int, datetime], int, QuotaCharge]] = []
         for charge in charges:
             start = _window_start(self._now, charge)
             key = (identity_id, charge.kind, charge.window_seconds, start)
             used = self.state.quotas.get(key, 0)
             if used >= charge.limit:
+                if idempotency is not None:  # исчерпанная квота ключ не занимает
+                    slot = (idempotency.namespace, idempotency.key)
+                    if previous is None:
+                        del self.state.operation_keys[slot]
+                    else:
+                        self.state.operation_keys[slot] = previous
                 return ChargeOutcome(exhausted=QuotaWindow(charge.kind, charge.window_seconds, start, used))
             planned.append((key, used + 1, charge))
-        if operation_key is not None:
-            self.state.operation_keys[operation_key] = (identity_id, kind, None, self._now)
         reached: list[QuotaWindow] = []
         for key, used, charge in planned:
             self.state.quotas[key] = used
             if used >= charge.limit:
                 reached.append(QuotaWindow(charge.kind, charge.window_seconds, key[3], used))
-        return ChargeOutcome(reached=tuple(reached))
+        return ChargeOutcome(reached=tuple(reached), claim=claim)
 
     async def bump_pacing(self, identity_id: UUID, charge: QuotaCharge) -> bool:
         start = _window_start(self._now, charge)
@@ -691,10 +729,59 @@ class MemoryTx(StoreTx):
         ]
         return sorted(rows, key=lambda row: (row.kind, row.window_seconds))
 
-    async def finish_operation_key(self, key: str, outcome: str) -> None:
-        old = self.state.operation_keys.get(key)
-        if old and self._own(old[0]):
-            self.state.operation_keys[key] = (old[0], old[1], outcome, old[3])
+    async def claim_idempotency_key(self, request: IdempotencyRequest) -> IdempotencyClaim:
+        slot = (request.namespace, request.key)
+        old = self.state.operation_keys.get(slot)
+        expired = old is not None and old.expires_at <= self._now
+        if old is not None and not expired:
+            same = old.operation == request.operation and (
+                old.fingerprint_version == LEGACY_FINGERPRINT_VERSION
+                or old.fingerprint == request.fingerprint
+            )
+            if not same:
+                raise IdempotencyConflict(old.operation)
+            if old.outcome != "failed":
+                return IdempotencyClaim(
+                    False,
+                    old.attempt,
+                    old.outcome,
+                    old.owner_identity_id,
+                    old.result_type,
+                    old.result_version,
+                    deepcopy(old.result),
+                )
+        attempt = 1 if old is None or expired else old.attempt + 1
+        self.state.operation_keys[slot] = _IdempotencyRecord(
+            space_id=self.space.id,
+            owner_identity_id=request.owner_identity_id,
+            operation=request.operation,
+            fingerprint_version=FINGERPRINT_VERSION,
+            fingerprint=request.fingerprint,
+            attempt=attempt,
+            created_at=self._now if old is None or expired else old.created_at,
+            expires_at=self._now + request.ttl,
+        )
+        return IdempotencyClaim(True, attempt, "failed" if attempt > 1 else None, request.owner_identity_id)
+
+    async def complete_idempotency_key(
+        self,
+        namespace: str,
+        key: str,
+        outcome: str,
+        *,
+        result_type: str | None = None,
+        result_version: int | None = None,
+        result: Mapping[str, Any] | None = None,
+    ) -> None:
+        old = self.state.operation_keys.get((namespace, key))
+        if old is not None and old.space_id == self.space.id:
+            self.state.operation_keys[(namespace, key)] = replace(
+                old,
+                outcome=outcome,
+                result_type=result_type,
+                result_version=result_version,
+                result=deepcopy(dict(result)) if result is not None else None,
+            )
 
     async def add_error_score(self, identity_id: UUID, delta: float) -> float:
         row = self._own(identity_id)
@@ -2685,8 +2772,12 @@ class MemoryStore(Store):
                 for key in keys:
                     del self._state.quotas[key]
                 result["quota_windows"] = len(keys)
+            if "operation_keys" in names:
+                expired = [slot for slot, row in self._state.operation_keys.items() if row.expires_at <= now]
+                for slot in expired:
+                    del self._state.operation_keys[slot]
+                result["operation_keys"] = len(expired)
             cleanups: dict[str, tuple[Any, Callable[[Any], datetime]]] = {
-                "operation_keys": (self._state.operation_keys, lambda item: item[3]),
                 "lease_logs": (self._state.lease_logs, lambda item: item["ts"]),
                 "lease_history": (self._state.history, lambda item: item.released_at or now),
                 "events": (self._state.events, lambda item: item[0].occurred_at),

@@ -12,13 +12,14 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.domain.idempotency import OPERATION_FAMILY, fingerprint, namespace
 from identity_hub.domain.regions import Command, Timer
 from identity_hub.enums import Availability
 from identity_hub.errors import QuotaExhausted, TransitionNotAllowed
 from identity_hub.events import EventDraft
 from identity_hub.service import Pacing, Service
 from identity_hub.state import apply_region_change
-from identity_hub.store.base import IdentityRow, QuotaCharge, StoreTx
+from identity_hub.store.base import IdempotencyRequest, IdentityRow, QuotaCharge, StoreTx
 
 __all__ = ["PACING_KIND", "ChargeResult", "charge"]
 
@@ -29,6 +30,7 @@ PACING_KIND = "__pacing__"
 class ChargeResult:
     duplicate: bool = False  # ключ операции уже использован — квота не списана (FR-7.5)
     paused_until: datetime | None = None  # pacing: аккаунт отправлен отдыхать
+    previous_outcome: str | None = None  # исход прошлой попытки с тем же ключом (D-153)
 
 
 async def charge(
@@ -46,9 +48,20 @@ async def charge(
     """Списать квоты вида `kind` и pacing в транзакции `tx`. Исчерпание — QuotaExhausted."""
     rule = service.rule(kind)
     charges = [QuotaCharge(kind, q.window_seconds, q.origin, q.limit) for q in rule.quotas]
-    outcome = await tx.charge_quotas(identity.id, charges, operation_key=operation_key, kind=kind)
+    request = None
+    if operation_key is not None:
+        request = IdempotencyRequest(
+            namespace=namespace(tx.space.id, OPERATION_FAMILY),
+            key=operation_key,
+            operation=kind,
+            fingerprint=fingerprint(OPERATION_FAMILY, {"service": service.name, "kind": kind}),
+            ttl=space.hub.retention.operation_keys,
+            owner_identity_id=identity.id,
+        )
+    outcome = await tx.charge_quotas(identity.id, charges, idempotency=request)
+    previous_outcome = outcome.claim.previous_outcome if outcome.claim is not None else None
     if outcome.duplicate:
-        return ChargeResult(duplicate=True)
+        return ChargeResult(duplicate=True, previous_outcome=previous_outcome)
     if outcome.exhausted is not None:
         window = outcome.exhausted
         raise QuotaExhausted(
@@ -83,7 +96,7 @@ async def charge(
             lo, hi = pacing.pause
             paused_until = await tx.now() + timedelta(minutes=random.uniform(lo, hi))
             await _pause(space, tx, identity.id, paused_until, actor, lease_id)
-    return ChargeResult(paused_until=paused_until)
+    return ChargeResult(paused_until=paused_until, previous_outcome=previous_outcome)
 
 
 async def _pause(

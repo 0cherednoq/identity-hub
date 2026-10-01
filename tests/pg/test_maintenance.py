@@ -104,12 +104,16 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
         )
         await session.execute(
             insert(OperationKeyRecord).values(
+                namespace=f"{ref.id}:operation",
                 key="old-key",
                 identity_id=identity_id,
                 space_id=ref.id,
-                kind="old",
-                outcome="ok",
+                operation="old",
+                fingerprint_version=1,
+                attempt=1,
+                outcome="succeeded",
                 created_at=old,
+                expires_at=old,
             )
         )
         await session.execute(

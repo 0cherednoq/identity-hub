@@ -8,16 +8,20 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
+from identity_hub.domain.idempotency import fingerprint, namespace
 from identity_hub.domain.regions import RegionState
+from identity_hub.errors import IdempotencyConflict
 from identity_hub.events import EventDraft
 from identity_hub.store.base import (
     CandidateQuery,
+    IdempotencyRequest,
     LeaseCounters,
     NewIdentity,
     QuotaCharge,
@@ -29,6 +33,17 @@ from identity_hub.store.base import (
 )
 
 __all__ = ["StoreConformanceSuite"]
+
+
+def _idempotency(space: SpaceRef, key: str, *, owner: UUID | None = None) -> IdempotencyRequest:
+    return IdempotencyRequest(
+        namespace=namespace(space.id, "operation"),
+        key=key,
+        operation="write",
+        fingerprint=fingerprint("operation", {"kind": "write"}),
+        ttl=timedelta(days=1),
+        owner_identity_id=owner,
+    )
 
 
 def _identity(external_ref: str = "account-1", *, identity_id: UUID | None = None) -> NewIdentity:
@@ -130,14 +145,75 @@ class StoreConformanceSuite:
         charges = [QuotaCharge("write", 60, origin, 1), QuotaCharge("day", 86_400, origin, 10)]
         async with _tx(store_under_test, conformance_space) as transaction:
             assert await transaction.insert_identity(row)
-            first = await transaction.charge_quotas(row.id, charges, operation_key="op-1", kind="write")
+            op_1 = _idempotency(conformance_space, "op-1", owner=row.id)
+            first = await transaction.charge_quotas(row.id, charges, idempotency=op_1)
             assert first.ok and not first.duplicate
-            duplicate = await transaction.charge_quotas(row.id, charges, operation_key="op-1", kind="write")
+            assert first.claim is not None and first.claim.claimed
+            duplicate = await transaction.charge_quotas(row.id, charges, idempotency=op_1)
             assert duplicate.duplicate
-            exhausted = await transaction.charge_quotas(row.id, charges, operation_key="op-2", kind="write")
+            assert duplicate.claim is not None and not duplicate.claim.claimed
+            op_2 = _idempotency(conformance_space, "op-2", owner=row.id)
+            exhausted = await transaction.charge_quotas(row.id, charges, idempotency=op_2)
             assert not exhausted.ok
             usage = await transaction.quota_usage(row.id)
             assert {(item.kind, item.used) for item in usage} == {("day", 1), ("write", 1)}
+            # исчерпанная квота ключ не заняла: он свободен для следующей попытки
+            free = await transaction.claim_idempotency_key(op_2)
+            assert (free.claimed, free.attempt) == (True, 1)
+
+    async def test_idempotency_key_claim_complete_replay_conflict(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        request = _idempotency(conformance_space, "job-1")
+        async with _tx(store_under_test, conformance_space) as transaction:
+            first = await transaction.claim_idempotency_key(request)
+            assert (first.claimed, first.attempt, first.previous_outcome) == (True, 1, None)
+            unknown = await transaction.claim_idempotency_key(request)
+            assert (unknown.claimed, unknown.previous_outcome) == (False, None)
+
+            await transaction.complete_idempotency_key(request.namespace, request.key, "failed")
+            with pytest.raises(IdempotencyConflict):  # другая команда не занимает и упавший ключ
+                await transaction.claim_idempotency_key(replace(request, fingerprint="f" * 64))
+            retry = await transaction.claim_idempotency_key(request)
+            assert (retry.claimed, retry.attempt, retry.previous_outcome) == (True, 2, "failed")
+
+            await transaction.complete_idempotency_key(
+                request.namespace,
+                request.key,
+                "succeeded",
+                result_type="lease",
+                result_version=1,
+                result={"lease_id": "l-1"},
+            )
+            replay = await transaction.claim_idempotency_key(request)
+            assert (replay.claimed, replay.attempt, replay.previous_outcome) == (False, 2, "succeeded")
+            assert (replay.result_type, replay.result_version, replay.result) == (
+                "lease",
+                1,
+                {"lease_id": "l-1"},
+            )
+            with pytest.raises(IdempotencyConflict):
+                await transaction.claim_idempotency_key(replace(request, operation="other"))
+
+            # другой namespace — независимый ключ; истёкший ключ свободен
+            other = replace(request, namespace=f"{conformance_space.id}:other")
+            assert (await transaction.claim_idempotency_key(other)).claimed
+            expired = replace(request, key="job-2", ttl=timedelta(0))
+            assert (await transaction.claim_idempotency_key(expired)).attempt == 1
+            again = await transaction.claim_idempotency_key(replace(expired, operation="other"))
+            assert (again.claimed, again.attempt, again.previous_outcome) == (True, 1, None)
+
+    async def test_idempotency_key_released_by_rollback(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        request = _idempotency(conformance_space, "job-rollback")
+        with pytest.raises(RuntimeError):
+            async with _tx(store_under_test, conformance_space) as transaction:
+                assert (await transaction.claim_idempotency_key(request)).claimed
+                raise RuntimeError("rollback")
+        async with _tx(store_under_test, conformance_space) as transaction:
+            again = await transaction.claim_idempotency_key(request)
+            assert (again.claimed, again.attempt) == (True, 1)
 
     async def test_external_event_cursor_advances_only_after_success(
         self, store_under_test: Store, conformance_space: SpaceRef

@@ -6,6 +6,8 @@
 
 ## Порядок
 
+0. `ih_operation_keys` — ключ идемпотентности команды (`claim_idempotency_key`). Берётся первым,
+   до любых строк аккаунта: конкурент с тем же ключом ждёт здесь, ничего не удерживая.
 1. `ih_identities`. Если строк несколько — по возрастанию `id` через `StoreTx.lock_identities()`.
 2. Связанный аккаунт из `ih_identity_links`: зависимый раньше связанного.
 3. `ih_region_states`, `ih_verifications`, `ih_credentials`, `ih_sessions`.
@@ -34,6 +36,7 @@
 
 | Операция | Что блокируется | Порядок |
 |---|---|---|
+| `lease.operation(kind, key=...)` | строка ключа в `ih_operation_keys`, затем окна квот | п. 0, до identity |
 | Выбор кандидата аренды | строка `ih_identities`, `SKIP LOCKED` | одна строка |
 | Захват аренды | `ih_leases` выбранного аккаунта | после identity |
 | Импорт `update_session` | обновляемые identity пачки | `lock_identities`, по `id` |
