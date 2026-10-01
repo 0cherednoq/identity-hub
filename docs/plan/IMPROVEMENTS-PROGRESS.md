@@ -10,10 +10,16 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I1.1 Нормализация external_ref
+- **Начата:** 2026-10-01
 - **Шаги:**
-  - [ ] —
+  - [ ] Service.normalize_ref и normalize_ref_version
+  - [ ] миграция 0008: normalized_ref, backfill, коллизии, уникальность
+  - [ ] Store и модели: поиск и вставка по normalized_ref
+  - [ ] нормализация в create/ensure/find/import/links
+  - [ ] doctor: устаревшая версия нормализации и renormalize
+  - [ ] тесты: нормализаторы, дубли, импорт, миграция, parity
+  - [ ] документация и check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -35,7 +41,7 @@
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | done |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | done |  |  |
-| I1.1 | Нормализация external_ref | I0.3, I0.4 | todo |  |  |
+| I1.1 | Нормализация external_ref | I0.3, I0.4 | in_progress |  |  |
 | I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | todo |  |  |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
