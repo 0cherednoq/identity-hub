@@ -33,14 +33,14 @@ flowchart LR
 Квота проверяется только в `operation()`, остальное — и при выдаче аренды, и повторно в
 `operation()` по свежему снимку. Если условие не выполнено, `operation()` бросает
 `OperationNotAllowed` со списком `blockers` (`Blocker(code, detail, until)`), а
-`space.identity_card(id)` показывает `eligible` и `blockers`.
+`space.identities.card(id)` показывает `eligible` и `blockers`.
 
 ## Lifecycle — присутствие в парке
 
 ```mermaid
 stateDiagram-v2
     [*] --> provisioning : register / import
-    provisioning --> ready : set_lifecycle(READY)
+    provisioning --> ready : identities.activate()
     provisioning --> retired : retire()
     ready --> retired : retire()
     retired --> ready : set_lifecycle(READY, reason=...) — причина обязательна
@@ -53,8 +53,8 @@ stateDiagram-v2
 - Вернуть `ready → provisioning` командой нельзя (`TransitionNotAllowed`); только override.
 
 ```python
-await space.set_lifecycle(identity_id, Lifecycle.READY, actor="onboarding")
-await space.retire(identity_id, actor="ops", reason="больше не нужен")
+await space.identities.activate(identity_id, actor="onboarding")
+await space.identities.retire(identity_id, actor="ops", reason="больше не нужен")
 ```
 
 ## Standing — репутация на платформе
@@ -104,14 +104,14 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> no_session
-    no_session --> logging_in : run_login()
+    no_session --> logging_in : auth.login()
     logging_in --> authenticated : login() вернул сессию
     logging_in --> challenge : login() бросил LoginChallenge
     logging_in --> no_session : login() упал
     challenge --> logging_in : answer_challenge()
     challenge --> no_session : challenge истёк (таймер)
     authenticated --> session_invalid : Fault(SESSION_INVALID) / проба
-    session_invalid --> logging_in : run_login()
+    session_invalid --> logging_in : auth.login()
     no_session --> authenticated : mark_authenticated() / register с сессией
     session_invalid --> authenticated : mark_authenticated()
 ```
@@ -168,7 +168,7 @@ class TgErrors:
 ```python
 from identity_hub import Override, Standing
 
-await space.override(identity_id, Override(
+await space.identities.override(identity_id, Override(
     region="standing", key="", state=Standing.BANNED,
     reason="жалоба клиента", actor="admin:ivan",
 ))
@@ -177,7 +177,7 @@ await space.override(identity_id, Override(
 **Разбан** — только человеком, с причиной:
 
 ```python
-await space.restore_standing(identity_id, actor="admin:ivan", reason="ложное срабатывание")
+await space.identities.restore_standing(identity_id, actor="admin:ivan", reason="ложное срабатывание")
 ```
 
 `restore_standing` работает только из `banned`. Для других переходов (например,
@@ -187,13 +187,13 @@ await space.restore_standing(identity_id, actor="admin:ivan", reason="ложно
 что это ошибка, закрепите регион — наблюдения не будут его менять:
 
 ```python
-await space.override(identity_id, Override(
+await space.identities.override(identity_id, Override(
     "standing", "", Standing.GOOD,
     reason="бан ложный, ждём ответа поддержки", actor="admin:ivan",
     pin_for=timedelta(hours=6),
 ))
 # расхождения в это время пишутся событием identity.state.drift
-await space.unpin(identity_id, "standing", "", actor="admin:ivan", reason="поддержка ответила")
+await space.identities.unpin(identity_id, "standing", "", actor="admin:ivan", reason="поддержка ответила")
 ```
 
 Сводка:
@@ -201,7 +201,7 @@ await space.unpin(identity_id, "standing", "", actor="admin:ivan", reason="по�
 | Задача | Как |
 |---|---|
 | Забанить автоматически по ответу платформы | `ErrorClassifier` → `Fault(Blame.IDENTITY_BANNED)` |
-| Узнать о бане фоном | `Probes.standing` + `reconcile()` |
+| Узнать о бане фоном | `Probes.standing` + `sync.refresh_many()` |
 | Забанить вручную | `override(Override("standing", "", "banned", ...))` |
 | Ограничить временно | `Fault(IDENTITY_BANNED, standing="limited")` или проба с `until` |
 | Заморозить | override в `frozen` или проба |
@@ -221,10 +221,10 @@ flowchart LR
         E["Исключение в<br/>lease.operation()"] --> C["ErrorClassifier.classify"]
     end
     subgraph active["Активно, по расписанию"]
-        R["reconcile() / resync()"] --> P["Probes.auth / standing /<br/>verification"]
+        R["sync.refresh_many() /<br/>sync.refresh()"] --> P["Probes.auth / standing /<br/>verification"]
     end
     subgraph bulk["При импорте"]
-        I["import_many(<br/>UPDATE_SESSION,<br/>verifications)"]
+        I["imports.run(<br/>UPDATE_SESSION,<br/>verifications)"]
     end
     C --> O["Наблюдение"]
     P --> O
@@ -267,11 +267,11 @@ class TgProbes:
 
 ```python
 # один аккаунт — например, после жалобы или из админки
-outcome = await space.resync(identity_id, regions=("auth", "standing"))
+outcome = await space.sync.refresh(identity_id, regions=("auth", "standing"))
 # {'auth': 'unchanged', 'standing': 'applied'}
 
 # фоновая сверка: аккаунты, не сверявшиеся дольше not_synced_for
-report = await space.reconcile(
+report = await space.sync.refresh_many(
     regions=("auth", "standing"),
     service=TELEGRAM,
     not_synced_for=timedelta(hours=6),
@@ -280,20 +280,20 @@ report = await space.reconcile(
 report.probed, report.skipped_busy, report.failed
 ```
 
-**Библиотека не запускает сверку сама.** Вызывайте `reconcile()` периодически — например,
+**Библиотека не запускает сверку сама.** Вызывайте `sync.refresh_many()` периодически — например,
 задачей раз в 10 минут:
 
 ```python
 async def reconcile_loop(space):
     while True:
-        await space.reconcile(regions=("auth", "standing"), limit=100)
+        await space.sync.refresh_many(regions=("auth", "standing"), limit=100)
         await asyncio.sleep(600)
 ```
 
 Как это работает:
 
 - Проба берёт аккаунт в аренду (служебный пул `identity-hub:sync`) — занятые воркерами
-  аккаунты `reconcile` пропускает, а `resync` ждёт до 30 секунд.
+  аккаунты `refresh_many` пропускает, а `refresh` ждёт до 30 секунд.
 - Проба выполняется как операция `probe` и тратит её квоту, если вы её объявили. Так можно
   ограничить частоту проверок: `operations={"probe": OperationRule(needs_auth=False,
   standing=frozenset(Standing), quotas=(Quota(4, timedelta(hours=1)),))}`.

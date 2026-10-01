@@ -103,7 +103,7 @@ sequenceDiagram
     alt решение приходит от платформы
         W->>Hub: verification.reconcile(ProbeResult("verified"))
     else решает человек
-        Rev->>Hub: space.review_verification(id, "kyc_id", "approve", ...)
+        Rev->>Hub: space.verifications.review(id, "kyc_id", "approve", ...)
     end
     Hub->>Hub: → verified, until = now + valid_for
     Hub-->>W: события verification.changed, tier.reached("full")
@@ -121,11 +121,11 @@ async with pool.lease(for_operation="probe", among=[identity_id]) as lease:
 Решение без аренды — из админки или вашего бэк-офиса:
 
 ```python
-await space.review_verification(identity_id, "kyc_id", "approve", actor="admin:ivan", reason="документы в порядке")
-await space.review_verification(identity_id, "kyc_id", "reject", actor="admin:ivan", reason="нечитаемо", code="blurry")
-await space.review_verification(identity_id, "kyc_id", "abandon", actor="admin:ivan", reason="клиент передумал")
+await space.verifications.review(identity_id, "kyc_id", "approve", actor="admin:ivan", reason="документы в порядке")
+await space.verifications.review(identity_id, "kyc_id", "reject", actor="admin:ivan", reason="нечитаемо", code="blurry")
+await space.verifications.review(identity_id, "kyc_id", "abandon", actor="admin:ivan", reason="клиент передумал")
 
-status = await space.verification_status(identity_id, "kyc_id")
+status = await space.verifications.status(identity_id, "kyc_id")
 status.state, status.attempts, status.expires_at
 ```
 
@@ -133,7 +133,7 @@ status.state, status.attempts, status.expires_at
 
 | Источник | Как |
 |---|---|
-| Проба платформы | `Probes.verification(ctx, factor)` + `resync(id, ["verification"])` или `["verification:kyc_id"]` |
+| Проба платформы | `Probes.verification(ctx, factor)` + `sync.refresh(id, ["verification"])` или `["verification:kyc_id"]` |
 | Под арендой | `await lease.verification("email").reconcile("verified")` |
 | Импорт | `ImportRecord(verifications={"email": "verified"})` |
 | Таймер | `valid_for`, `pending_timeout` — обслуживание в диспетчере |

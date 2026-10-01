@@ -101,7 +101,7 @@ classDiagram
     }
     class Space {
         slug
-        register() / import_many()
+        identities.create()<br/>imports.run()
         pool()
         override() / set_lifecycle()
         search()
@@ -221,9 +221,9 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Pl as Платформа
 
-    App->>Hub: space.register(...) / import_many(...)
+    App->>Hub: identities.create(...) / imports.run(...)
     Hub->>DB: аккаунт (provisioning), зашифрованные секреты, событие
-    App->>Hub: run_login(id) (если нет сессии)
+    App->>Hub: auth.login(id) (если нет сессии)
     Hub->>App: Authenticator.login(ctx)
     App->>Pl: вход, SMS-код
     Hub->>DB: сессия, auth = authenticated
@@ -242,7 +242,7 @@ sequenceDiagram
         App->>Hub: выход из аренды
         Hub->>DB: release, история
     end
-    App->>Hub: reconcile() периодически
+    App->>Hub: sync.refresh_many() периодически
     Hub->>App: Probes.standing(ctx)
     App->>Pl: проверить статус
     Hub->>DB: наблюдение → standing

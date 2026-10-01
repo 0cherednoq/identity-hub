@@ -7,7 +7,34 @@
 
 Таблица строится из `identity_hub.api._migration.LEGACY`; тест
 `tests/test_space_surface.py` проверяет, что они совпадают. Колонка «Готово» показывает,
-с какой задачи доступно новое имя.
+с какой задачи доступно новое имя; все новые имена доступны начиная с I8.8a.
+
+Как перейти:
+
+1. Включите предупреждения как ошибки в тестах приложения:
+   `filterwarnings = ['error:.* устарел и будет удалён в 1\.0\.0b1:DeprecationWarning']`
+   (pytest) — каждое старое имя укажет на свою строку.
+2. Замените вызовы по таблице. Методы с той же сигнатурой меняются только по имени; особые
+   случаи — ниже.
+3. Сверьтесь с [картой API](guide/api.md).
+
+Особые случаи:
+
+- `space.register(**поля)` → `space.identities.ensure(IdentityCreate(**поля))` — возвращает
+  `(Identity, created)`; `actor` передаётся вторым аргументом, `identity.id` вместо
+  `result.identity_id`. Если повтор не нужен — `identities.create` (`AlreadyExists`).
+- `space.search` → `identities.search`: результат `Page[Identity]`, `count=False` по
+  умолчанию, `total_label` нет (`total > 1000` означает «1000+»).
+- `space.set_labels(merge=True)` → `identities.update(labels=...)`; без `merge` —
+  `identities.replace_labels`. `space.update_profile` → `identities.update(profile=...)`,
+  с `replace=True` — `identities.replace_profile`.
+- Методы `identities.*` возвращают DTO `Identity`, а не строку хранилища: ревизия —
+  `revision`, теги — `frozenset`.
+- `space.add_proxy(url, pool=)` → `proxies.ensure(url, group=)` → `(Proxy, created)`;
+  `space.add_proxies` → `proxies.create_many(..., on_conflict=)` → `created`/`skipped`.
+- `space.import_run` → `imports.get`: вместо `None` — `NotFound`.
+- `space.proxy_url_of(row)` → `await proxies.url(proxy_id)`.
+- `space.run_login` возвращает `LoginOutcome`; сравнение со строками прежнее.
 
 Термин: публичные имена используют `identity` (аккаунт во внешнем сервисе), не `account`.
 

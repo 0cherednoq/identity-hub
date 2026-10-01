@@ -10,7 +10,7 @@
 хранится в БД; имя пула попадает в историю аренд, события и метрики.
 
 ```python
-parsers = space.pool(
+parsers = space.pools.define(
     "parsers",
     service=TELEGRAM,
     tags=["parser"],                 # нужны все теги
@@ -76,7 +76,7 @@ flowchart TD
 from identity_hub import LeaseLost, LeaseUnavailable, OperationNotAllowed, QuotaExhausted
 
 async def worker(space):
-    pool = space.pool("senders", service=TELEGRAM, tags=["sender"])
+    pool = space.pools.define("senders", service=TELEGRAM, tags=["sender"])
     while True:
         job = await queue.get()
         try:
@@ -131,7 +131,7 @@ sequenceDiagram
 Отзыв аренды из вашего кода или админки:
 
 ```python
-await space.revoke_lease(identity_id, reason="зависший воркер", actor="admin:ivan")
+await space.pools.revoke(identity_id, reason="зависший воркер", actor="admin:ivan")
 ```
 
 ## Fencing — защита от «зомби»-воркеров
@@ -172,23 +172,23 @@ await space.revoke_lease(identity_id, reason="зависший воркер", ac
 - shared-захват не увеличивает fencing — параллельные арендаторы не вытесняют друг друга;
 - аккаунты выдаются по давности последнего захвата, так что нагрузка распределяется по парку;
 - живые shared-аренды не хранятся, поэтому `idempotency_key` не поддерживается
-  (`ValidationFailed`), а `revoke_lease` на них не действует;
+  (`ValidationFailed`), а `pools.revoke` на них не действует;
 - квоты общие на аккаунт: параллельные воркеры расходуют одну и ту же квоту.
 
 ```python
 MAIL = Service(name="mail", title="Почта", credentials=MailCredentials, lease_mode=LeaseMode.SHARED)
 
-async with space.pool("inbox", service=MAIL).lease(among=[mailbox_id]) as lease:
+async with space.pools.define("inbox", service=MAIL).lease(among=[mailbox_id]) as lease:
     await read_inbox(await lease.credentials())
 ```
 
 ## История и мониторинг
 
 ```python
-await space.lease_history(identity_id, limit=50)       # аренды аккаунта: кто, сколько, чем кончилась
-await space.lease_stats(identity_id, since=...)        # число, длительность, загрузка
-await space.lease_dashboard(group_by="pool")           # сводка по пулам: p95, доля потерь, живые аренды
-await pool.check_capacity()                            # сколько свободных аккаунтов
+await space.admin.lease_history(identity_id, limit=50)       # аренды аккаунта: кто, сколько, чем кончилась
+await space.admin.lease_stats(identity_id, since=...)        # число, длительность, загрузка
+await space.admin.lease_dashboard(group_by="pool")           # сводка по пулам: p95, доля потерь, живые аренды
+await pool.capacity()                            # сколько свободных аккаунтов
 ```
 
 Дальше: [лимиты](08-limits.md).

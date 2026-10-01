@@ -12,10 +12,10 @@ TELEGRAM = Service(
     credentials=TgCredentials, session=TgSession,
     operations={"read_channel": OperationRule(quotas=(Quota(300, timedelta(hours=1)),))},
     error_classifier=TgErrors(),                 # FLOOD_WAIT → cooling, бан → banned
-    proxy_policy=ProxyPolicy(pool="dc-proxies", sticky=False),   # IP не важен
+    proxy_policy=ProxyPolicy(group="dc-proxies", sticky=False),   # IP не важен
 )
 
-parsers = space.pool("parsers", service=TELEGRAM, tags=["parser"])
+parsers = space.pools.define("parsers", service=TELEGRAM, tags=["parser"])
 
 async def parse(channel: str):
     async with parsers.lease(for_operation="read_channel", wait=60) as lease:
@@ -40,10 +40,10 @@ TELEGRAM = Service(
         standing=frozenset({Standing.GOOD}),                   # limited-аккаунты не шлют
         quotas=(Quota(20, timedelta(hours=1)), Quota(100, timedelta(days=1))),
     )},
-    proxy_policy=ProxyPolicy(pool="residential", sticky=True, on_proxy_down=ProxyDownPolicy.WAIT),
+    proxy_policy=ProxyPolicy(group="residential", sticky=True, on_proxy_down=ProxyDownPolicy.WAIT),
     error_classifier=TgErrors(),
 )
-senders = space.pool(
+senders = space.pools.define(
     "senders", service=TELEGRAM, tags=["sender"],
     pacing=Pacing(work=Quota(8, timedelta(hours=1)), pause=(15, 40)),
 )
@@ -58,23 +58,23 @@ senders = space.pool(
 ввести SMS-код и только потом пустить в работу.
 
 ```python
-report = await space.import_many(service=TELEGRAM, records=read_supplier_csv(path))
+report = await space.imports.run(service=TELEGRAM, records=read_supplier_csv(path))
 # все в provisioning, auth = no_session
 
 async def onboarding_tick(space):          # запускать по расписанию, например раз в минуту
-    batch = await space.run_logins(service=TELEGRAM, limit=20)
+    batch = await space.auth.login_many(service=TELEGRAM, limit=20)
     for identity_id in batch.succeeded:
-        await space.set_lifecycle(identity_id, Lifecycle.READY, actor="onboarding")
+        await space.identities.activate(identity_id, actor="onboarding")
     for identity_id, error in batch.failed.items():
         log.warning("вход не удался: %s %s", identity_id, error)
 ```
 
-`run_logins` берёт аккаунты в `no_session` и `session_invalid`, поэтому неудачные попытки
+`auth.login_many` берёт аккаунты в `no_session` и `session_invalid`, поэтому неудачные попытки
 будут повторяться на каждом тике — ограничьте число попыток своим счётчиком (например, в
-`save_data`) и выводите безнадёжные аккаунты через `retire`.
+`data.save`) и выводите безнадёжные аккаунты через `identities.retire`.
 
 Оператор получает Telegram-уведомление о `identity.challenge.opened`, вводит код в вашем UI,
-тот вызывает `space.answer_challenge(challenge_id, code)`. Подписчик на
+тот вызывает `space.auth.answer_challenge(challenge_id, code)`. Подписчик на
 `identity.login.succeeded` переводит аккаунт в `ready`.
 
 ## Фоновая синхронизация статусов
@@ -86,7 +86,7 @@ TELEGRAM = Service(..., probes=TgProbes(), standing_codes={"USER_DEACTIVATED": "
 
 async def reconcile_loop(space):
     while True:
-        report = await space.reconcile(regions=("auth", "standing"), not_synced_for=timedelta(hours=6), limit=100)
+        report = await space.sync.refresh_many(regions=("auth", "standing"), not_synced_for=timedelta(hours=6), limit=100)
         await asyncio.sleep(300)
 ```
 
@@ -100,7 +100,7 @@ async def reconcile_loop(space):
 Объявление факторов и уровней — в разделе [верификация](06-verification.md). Работа:
 
 ```python
-traders = space.pool("traders", service=EXCHANGE)
+traders = space.pools.define("traders", service=EXCHANGE)
 async with traders.lease(for_operation="withdraw") as lease:     # выдаст только аккаунт с уровнем full
     async with lease.operation("withdraw", key=f"withdraw:{request.id}") as op:
         if not op.duplicate:
@@ -113,8 +113,12 @@ async with traders.lease(for_operation="withdraw") as lease:     # выдаст 
 ## Связка аккаунтов: Telegram + почта для восстановления
 
 ```python
-mail = await space.register(service=MAIL, external_ref="box@example.com", credentials=..., lifecycle=Lifecycle.READY)
-tg = await space.register(service=TELEGRAM, external_ref="+1...", links={"recovery_email": mail.identity_id})
+mail = await space.identities.create(
+    IdentityCreate(service=MAIL, external_ref="box@example.com", credentials=..., lifecycle=Lifecycle.READY)
+)
+tg = await space.identities.create(
+    IdentityCreate(service=TELEGRAM, external_ref="+1...", links={"recovery_email": mail.id})
+)
 
 class TgAuthenticator:
     async def login(self, ctx):
@@ -123,7 +127,7 @@ class TgAuthenticator:
         ...
 ```
 
-`await space.impact_of(mail.identity_id)` покажет, какие аккаунты пострадают, если почту
+`await space.links.impact(mail.id)` покажет, какие аккаунты пострадают, если почту
 потеряют.
 
 ## Несколько клиентов в одной базе
@@ -143,6 +147,6 @@ globex = hub.space("globex", "Globex")
 ```python
 async with sessions() as db, db.begin():
     db.add(Order(...))
-    await space.using(db).register(service=TELEGRAM, external_ref=phone, ...)
+    await space.using(db).identities.create(IdentityCreate(service=TELEGRAM, external_ref=phone, ...))
 # откат транзакции откатит и аккаунт с событием
 ```

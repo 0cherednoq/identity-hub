@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I8.9 API: руководство и примеры на новом API
-- **Начата:** 2026-10-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] карта API: точка входа, сущности, неймспейсы
-  - [ ] разделы руководства на новых именах
-  - [ ] README, integrations, CHANGELOG, api-migration
-  - [ ] тест: нет устаревших имён в документации
-  - [ ] check.sh и закрытие
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -34,7 +30,7 @@
 | I8.7 | API: auth, sync, links, data, verifications | I8.1 | done |  | параллельная ветка i8.7-namespaces |
 | I8.8a | API: неймспейсы admin, analytics, maintenance | I8.3, I8.4, I8.5, I8.6, I8.7 | done |  |  |
 | I8.8b | API: перевод admin/, тестов и примеров, запрет DeprecationWarning | I8.8a | done |  |  |
-| I8.9 | API: руководство и примеры на новом API | I8.8b | in_progress |  |  |
+| I8.9 | API: руководство и примеры на новом API | I8.8b | done |  |  |
 | I0.2a | Модель ошибок и маппинг HTTP/CLI | I0.1 | done |  |  |
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | done |  |  |
@@ -65,7 +61,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 14 / 40 done
+**Итого:** 15 / 40 done
 
 ## Журнал сессий
 
@@ -85,3 +81,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-01 · I0.3 · done · AAD identity-hub:v1 с чтением legacy и переводом в rotate-key, лимиты JSON/секрета до транзакции, SecretValue, D-148 · дальше I0.4
 2026-10-01 · I0.4 · done · hub.start сверяет ревизию схемы (SchemaIncompatible), migrate под pg_advisory_xact_lock на схему, документация CLI/интеграции · дальше I1.1 после слияния I8.8b
 2026-10-01 · I8.8b · done · admin/, examples, identity_hub.testing и все тесты на новых неймспейсах; фильтр pytest «устарел и будет удалён» как ошибка (библиотека и admin/); помощники tests/fixtures/api.py и admin/tests/factories/api.py; 680 + 89 тестов без предупреждений · дальше I8.9
+2026-10-01 · I8.9 · done · карта API (точка входа, неймспейсы, типовые операции по сущностям, состояния, лимиты), docs/guide/README/integrations/api-migration на новых именах, тест test_documentation_uses_current_api; фрагменты карты API выполнены на MemoryStore · дальше I8.10 после I1–I6

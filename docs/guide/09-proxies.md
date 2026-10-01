@@ -6,13 +6,18 @@
 ## Добавление прокси
 
 ```python
-proxy_id, created = await space.add_proxy("socks5://user:pass@1.2.3.4:1080", pool="residential-de", max_identities=3)
-
-await space.add_proxies(
-    ["socks5://u:p@1.2.3.5:1080", "http://u:p@1.2.3.6:8080"],
-    pool="residential-de",
-    max_identities=3,
+proxy, created = await space.proxies.ensure(
+    "socks5://user:pass@1.2.3.4:1080", group="residential-de", max_identities=3
 )
+
+result = await space.proxies.create_many(
+    ["socks5://u:p@1.2.3.5:1080", "http://u:p@1.2.3.6:8080"],
+    group="residential-de",
+    max_identities=3,
+    on_conflict="skip",          # уже добавленные — в result.skipped
+)
+page = await space.proxies.list(group="residential-de", status="alive")   # с числом привязанных identity
+proxy = await space.proxies.get(proxy.id)                                  # без логина и пароля
 ```
 
 - Схемы: `http`, `https`, `socks4`, `socks5`, `socks5h`, `mtproxy`.
@@ -31,7 +36,7 @@ from identity_hub import ProxyDownPolicy, ProxyPolicy
 TELEGRAM = Service(
     ...,
     proxy_policy=ProxyPolicy(
-        pool="residential-de",
+        group="residential-de",
         sticky=True,                              # аккаунт всегда ходит через один прокси
         max_identities=None,                      # None — брать max_identities самого прокси
         on_proxy_down=ProxyDownPolicy.WAIT,       # прокси упал: WAIT — не выдавать аккаунт, REBIND — перепривязать
@@ -62,7 +67,7 @@ flowchart TD
 | `sticky=True, REBIND` | Смена IP допустима, но постоянный IP предпочтителен |
 | `sticky=False` | IP не важен (парсинг публичных данных); ёмкость прокси в этом режиме не ограничивается |
 
-Ручная перепривязка: `await space.rebind_proxy(identity_id, new_proxy_id, reason="...", actor="admin")`.
+Ручная перепривязка: `await space.proxies.rebind(identity_id, new_proxy_id, reason="...", actor="admin")`.
 
 ## Здоровье прокси
 
@@ -76,8 +81,8 @@ stateDiagram-v2
 ```
 
 - Ошибки прокси приходят от классификатора ошибок (`Fault(Blame.PROXY)`) или напрямую:
-  `await space.report_proxy_failure(proxy_id, weight=1.0)`.
-- Успехи уменьшают счёт: `await space.report_proxy_success(proxy_id)` — библиотека сама его
+  `await space.proxies.report_failure(proxy_id, weight=1.0)`.
+- Успехи уменьшают счёт: `await space.proxies.report_success(proxy_id)` — библиотека сама его
   не вызывает.
 - Порог и backoff задаёт `IdentityHub(proxy_health=ProxyHealthPolicy(error_threshold=3.0,
   base_backoff=timedelta(seconds=60), max_backoff=timedelta(hours=1), dead_after=5))`.
@@ -91,14 +96,14 @@ async def check(url: str) -> bool:
 
 async def proxy_loop(space):
     while True:
-        await space.recheck_proxies(check, limit=50)     # quarantined, у которых наступило время проверки
+        await space.proxies.recheck_due(check, limit=50)     # quarantined, у которых наступило время проверки
         await asyncio.sleep(60)
 
-await space.recheck_proxy(proxy_id, check, actor="admin")                              # в том числе dead
-await space.override_proxy(proxy_id, "alive", reason="заменили", actor="admin")       # вручную
+await space.proxies.recheck(proxy_id, check, actor="admin")                              # в том числе dead
+await space.proxies.override(proxy_id, "alive", reason="заменили", actor="admin")       # вручную
 ```
 
-Обзор: `await space.proxy_overview()` — статусы, загрузка, ёмкость пулов;
-`await space.proxy_detail(proxy_id)` — привязанные аккаунты и история.
+Обзор: `await space.admin.proxy_overview()` — статусы, загрузка, ёмкость пулов;
+`await space.admin.proxy_detail(proxy_id)` — привязанные аккаунты и история.
 
 Дальше: [события и уведомления](10-events.md).

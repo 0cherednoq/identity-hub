@@ -50,7 +50,7 @@ SESSION = {"auth_key": "test"}
 
 async def test_quota_stops_sending(identity_hub_space, identity_hub_make_identity):
     await identity_hub_make_identity(service="telegram", tags=["sender"], session=SESSION)
-    pool = identity_hub_space.pool("senders", service="telegram", tags=["sender"])
+    pool = identity_hub_space.pools.define("senders", service="telegram", tags=["sender"])
 
     for i in range(20):
         async with pool.lease() as lease:
@@ -65,7 +65,7 @@ async def test_quota_stops_sending(identity_hub_space, identity_hub_make_identit
 
 async def test_cooldown_expires(identity_hub_space, identity_hub_make_identity, identity_hub_clock):
     identity_id = await identity_hub_make_identity(service="telegram", session=SESSION)
-    pool = identity_hub_space.pool("p", service="telegram")
+    pool = identity_hub_space.pools.define("p", service="telegram")
     async with pool.lease() as lease:
         async with lease.operation("send_message") as op:
             await op.cool_down(timedelta(minutes=5))
@@ -85,13 +85,13 @@ async def test_ban_event(identity_hub, identity_hub_space, identity_hub_make_ide
     identity_hub.events.subscribe("t", collect, types={"identity.standing.changed"})
 
     identity_id = await identity_hub_make_identity(service="telegram", session=SESSION)
-    await identity_hub_space.override(identity_id, Override("standing", "", "banned", reason="t", actor="t"))
+    await identity_hub_space.identities.override(identity_id, Override("standing", "", "banned", reason="t", actor="t"))
     await identity_hub.dispatcher.drain()
     assert seen[-1].data["to"] == "banned"
 ```
 
 Классификаторы ошибок, пробы и `Authenticator` тестируйте так же: подставьте фейковый клиент
-платформы, бросающий нужные исключения, и проверьте состояние через `space.identity_card(id)`.
+платформы, бросающий нужные исключения, и проверьте состояние через `space.identities.card(id)`.
 
 ## Ограничения MemoryStore
 

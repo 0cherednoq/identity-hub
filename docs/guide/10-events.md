@@ -41,7 +41,7 @@ flowchart LR
 | Пулы | `pool.capacity.low/empty`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка аккаунтов, проблемы воркеров |
 
 События аренд и операций (`lease.*`, `operation.*`) — журнальные: они видны в
-`space.event_page(filters=EventFilters(include_journal=True))`, но подписчикам и вебхукам не
+`space.admin.event_page(filters=EventFilters(include_journal=True))`, но подписчикам и вебхукам не
 отправляются. Своих типов событий добавить нельзя.
 
 ## Подписка в коде
@@ -133,8 +133,8 @@ await space.notifications.send_test(channel.id, "проверка")
 ```python
 from identity_hub.read import EventFilters
 
-page = await space.event_page(filters=EventFilters(identity_id=identity_id), limit=50)
-page = await space.event_page(filters=EventFilters(type="identity.standing.changed", severity="critical"))
+page = await space.admin.event_page(filters=EventFilters(identity_id=identity_id), limit=50)
+page = await space.admin.event_page(filters=EventFilters(type="identity.standing.changed", severity="critical"))
 ```
 
 Дальше: [тестирование](11-testing.md).

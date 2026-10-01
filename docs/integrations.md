@@ -176,7 +176,7 @@ async with hub.dispatcher.running():
 
 ```python
 async with sessions() as db_session, db_session.begin():
-    await hub.space("production").using(db_session).register(...)
+    await hub.space("production").using(db_session).identities.create(IdentityCreate(...))
     await application_repository.save(db_session, ...)
 ```
 

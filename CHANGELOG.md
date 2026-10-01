@@ -10,8 +10,12 @@
 
 - `SecretValue`: секрет со скрытым `repr`/`str`, без JSON и pickle; scrubber событий его отвергает.
 - Ресурсные неймспейсы пространства (`space.identities`, `space.imports`, `space.secrets`,
-  `space.proxies`, `space.pools`) с единой конвенцией глаголов; соответствие старых имён —
-  [`docs/api-migration.md`](docs/api-migration.md).
+  `space.proxies`, `space.pools`, `space.auth`, `space.sync`, `space.links`, `space.data`,
+  `space.verifications`, `space.admin`, `space.analytics`, `space.maintenance`) с единой
+  конвенцией глаголов; соответствие старых имён — [`docs/api-migration.md`](docs/api-migration.md).
+- `LoginOutcome` (`StrEnum`, значения прежних строк), `LoginReport`, `ReconcileReport` в корне пакета.
+- Руководство на новом API и страница [«Карта API»](docs/guide/api.md): точка входа, неймспейсы,
+  типовые операции по сущностям, изменение состояний и лимиты.
 - `Identity`, `IdentityCreate`, `IdentityFilter`, `Page`, `CreateManyResult`, `SecretRef`, `Proxy`.
 - Стабильные коды ошибок `IdentityHubError.code` и безопасный `context`; функции `http_status()`
   и `exit_code()`; новые типы `RevisionConflict`, `IdempotencyConflict`, `LeaseOwnershipLost`,

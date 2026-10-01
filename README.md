@@ -97,22 +97,24 @@ uv run pytest
    пространство и пул:
 
    ```python
-   from identity_hub import AuthState, Lifecycle
+   from identity_hub import AuthState, IdentityCreate, Lifecycle
 
    await hub.start()
    space = hub.space("production", "Production")
 
-   await space.register(
-       service=TELEGRAM,
-       external_ref="+12025550123",
-       credentials={"phone": "+12025550123"},
-       session={"auth_key": "secret-session"},
-       tags=["parser"],
-       lifecycle=Lifecycle.READY,
-       auth_state=AuthState.AUTHENTICATED,
+   await space.identities.create(
+       IdentityCreate(
+           service=TELEGRAM,
+           external_ref="+12025550123",
+           credentials={"phone": "+12025550123"},
+           session={"auth_key": "secret-session"},
+           tags=["parser"],
+           lifecycle=Lifecycle.READY,
+           auth_state=AuthState.AUTHENTICATED,
+       )
    )
 
-   parsers = space.pool("parsers", service=TELEGRAM, tags=["parser"])
+   parsers = space.pools.define("parsers", service=TELEGRAM, tags=["parser"])
    async with parsers.lease(for_operation="read_channel") as lease:
        session = await lease.session()
        async with lease.operation("read_channel", key="job:42"):

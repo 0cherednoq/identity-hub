@@ -8,8 +8,8 @@ cookie, OAuth-токен. Она хранится зашифрованной в 
 
 | Способ | Когда |
 |---|---|
-| Передать при `register` / `import_many` | Сессии уже есть (куплены, перенесены) |
-| `run_login` + ваш `Authenticator` | Нужно логиниться программно, в том числе с SMS/2FA |
+| Передать при `identities.create` / `imports.run` | Сессии уже есть (куплены, перенесены) |
+| `auth.login` + ваш `Authenticator` | Нужно логиниться программно, в том числе с SMS/2FA |
 | `lease.save_session` + `lease.mark_authenticated` | Вы логинитесь своим кодом под арендой |
 
 ## Authenticator
@@ -66,7 +66,7 @@ sequenceDiagram
     participant Auth as Authenticator
     participant Pl as Платформа
 
-    App->>Hub: run_login(identity_id)
+    App->>Hub: auth.login(identity_id)
     Hub->>Hub: аренда (пул identity-hub:login), auth → logging_in
     Hub->>Auth: login(ctx)
     Auth->>Pl: send_code(phone)
@@ -85,14 +85,14 @@ sequenceDiagram
 ```
 
 ```python
-outcome = await space.run_login(identity_id)             # "succeeded" | "challenged" | "failed"
+outcome = await space.auth.login(identity_id)             # "succeeded" | "challenged" | "failed"
 
 # где взять challenge_id:
-card = await space.identity_card(identity_id)
+card = await space.identities.card(identity_id)
 challenge = card.open_challenge       # {"id", "kind", "hint", "expires_at"} или None
 # либо из события identity.challenge.opened: event.data["challenge_id"]
 
-outcome = await space.answer_challenge(UUID(challenge["id"]), "12345", actor="operator:anna")
+outcome = await space.auth.answer_challenge(UUID(challenge["id"]), "12345", actor="operator:anna")
 ```
 
 - Если платформа спросила ещё раз (неверный код, второй фактор), `login` снова бросает
@@ -100,17 +100,17 @@ outcome = await space.answer_challenge(UUID(challenge["id"]), "12345", actor="op
 - Любое другое исключение в `login` → `auth = no_session`, событие `identity.login.failed`,
   исход `"failed"`.
 - Неотвеченный challenge истекает по таймеру (обслуживание в диспетчере) → `no_session`.
-- `run_login` работает для аккаунтов в `no_session` или `session_invalid`, в том числе в
+- `auth.login` работает для аккаунтов в `no_session` или `session_invalid`, в том числе в
   `provisioning` — так новый аккаунт логинят до перевода в `ready`.
 
 Пакетный вход всех аккаунтов без сессии:
 
 ```python
-report = await space.run_logins(service=TELEGRAM, limit=20)
+report = await space.auth.login_many(service=TELEGRAM, limit=20)
 report.succeeded, report.challenged, report.failed
 ```
 
-Библиотека не запускает вход сама: вызывайте `run_logins` по расписанию или по событию
+Библиотека не запускает вход сама: вызывайте `auth.login_many` по расписанию или по событию
 `identity.auth.changed` → `session_invalid`.
 
 ## Работа с сессией в аренде
@@ -142,11 +142,11 @@ async with pool.lease(for_operation="probe", among=[identity_id]) as lease:
 ```
 
 Так можно только для аккаунтов в `ready`. Для `provisioning` используйте `Authenticator` +
-`run_login`, либо запишите сессию вне аренды и переведите `auth` вручную:
+`auth.login`, либо запишите сессию вне аренды и переведите `auth` вручную:
 
 ```python
-await space.update_session(identity_id, session, actor="onboarding")     # auth не меняет
-await space.override(identity_id, Override(
+await space.secrets.replace_session(identity_id, session, actor="onboarding")     # auth не меняет
+await space.identities.override(identity_id, Override(
     "auth", "default", AuthState.AUTHENTICATED, reason="вход вручную", actor="onboarding",
 ))
 ```

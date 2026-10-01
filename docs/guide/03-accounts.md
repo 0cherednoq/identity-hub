@@ -1,16 +1,66 @@
 # 3. Аккаунты
 
-Все методы вызываются на пространстве: `space = hub.space("production")`. Пространство
-создаётся лениво при первом обращении к БД.
+Identity, или аккаунт, — учётная запись во внешнем сервисе. Все операции — в неймспейсе
+`space.identities` (и соседних `space.imports`, `space.secrets`, `space.links`, `space.data`).
+Пространство `space = hub.space("production")` создаётся лениво при первом обращении к БД.
 
-## Как добавить аккаунт
+Чтение возвращает лёгкий DTO `Identity` без секретов: `id`, `service`, `external_ref`,
+регионы (`lifecycle`, `standing`, `auth`, `availability`), `verified_factors`, `tags`,
+`labels`, `profile` (открытая часть), `attributes`, `note`, `revision`, `created_at`,
+`updated_at`.
 
-### Один аккаунт — `register`
+## Получить
 
 ```python
-from identity_hub import AuthState, Lifecycle
+identity = await space.identities.get(identity_id)                         # или NotFound
+identity = await space.identities.find(identity_id)                        # или None
+identity = await space.identities.get_by_ref("telegram", "+12025550123")   # по идентификатору платформы
+identity = await space.identities.find(service="telegram", external_ref="+12025550123")
 
-result = await space.register(
+card = await space.identities.card(identity_id)
+card.regions, card.verifications, card.lease, card.proxy, card.quotas, card.open_challenge
+card.eligible, card.blockers        # можно ли сейчас работать и что мешает
+```
+
+`get` — для кода, который работает с полями identity; `card` — тяжёлая карточка со
+состоянием, квотами, арендой и связями.
+
+### Список и поиск
+
+```python
+from identity_hub import IdentityFilter
+
+page = await space.identities.list(
+    IdentityFilter(service="telegram", standing=["banned", "frozen"], tags=["parser"]),
+    limit=100,
+    count=True,
+)
+page.items, page.next_cursor, page.total
+page = await space.identities.list(IdentityFilter(service="telegram"), after=page.next_cursor)
+
+total = await space.identities.count(IdentityFilter(lifecycle="ready"))
+page = await space.identities.search("service:telegram standing:banned farm:eu-1")
+```
+
+`list` принимает структурированный фильтр (внутри поля со списком — ИЛИ, между полями — И),
+`search` — строку запроса:
+
+| Выражение | Что ищет |
+|---|---|
+| `service:telegram` | сервис |
+| `lifecycle:ready`, `standing:banned`, `auth:session_invalid`, `availability:cooling` | значение региона; повтор ключа = ИЛИ |
+| `status:active` | `ready` и standing `good`/`limited` |
+| `tag:parser` | тег; несколько `tag:` — все сразу |
+| `farm:eu-1` | метка или поле `filterable_profile` |
+| UUID | точный id |
+| слово от 3 символов | подстрока в `external_ref`, заметке, метках, `searchable_profile` |
+
+## Создать
+
+```python
+from identity_hub import IdentityCreate, Lifecycle
+
+spec = IdentityCreate(
     service=TELEGRAM,
     external_ref="+12025550123",                  # идентификатор на платформе, 1–256 символов
     credentials={"phone": "+12025550123", "api_id": 1, "api_hash": "..."},
@@ -21,49 +71,67 @@ result = await space.register(
     labels={"farm": "eu-1", "batch": 17},
     note="куплен у поставщика X",
     lifecycle=Lifecycle.READY,                     # по умолчанию PROVISIONING
-    actor="importer",
 )
-result.identity_id    # UUID аккаунта
-result.created        # False, если такой аккаунт уже был
+identity = await space.identities.create(spec, actor="importer")        # уже есть → AlreadyExists
+identity, created = await space.identities.ensure(spec, actor="importer")  # get-or-create
 ```
 
 Что важно знать:
 
-- **Аккаунт уникален по `(service, external_ref)` во всём хабе**, а не только в пространстве.
-  Тот же номер в другом пространстве даст `AlreadyExists`.
-- **`register` идемпотентен и ничего не обновляет.** Повтор с тем же `external_ref` вернёт
-  `created=False` и не изменит данные. Для изменений — методы ниже.
-- **По умолчанию аккаунт создаётся в `provisioning` и в аренду не выдаётся.** Это сделано
-  намеренно: новый аккаунт сначала проверяют и логинят, потом переводят в `ready`. Если
-  аккаунт готов сразу, передайте `lifecycle=Lifecycle.READY`.
-- **`auth`** становится `authenticated`, если передана сессия, иначе `no_session`. Можно
-  задать явно через `auth_state=`.
-- Данные проверяются схемами сервиса и шифруются **до** обращения к базе.
-- Несколько сессий (например, мобильная и веб): `sessions={"default": {...}, "web": {...}}`.
+- **Уникальность.** Identity уникален по `(service, external_ref)` во всём хабе, а не только в
+  пространстве: тот же номер в другом пространстве даёт `AlreadyExists`.
+- **`ensure` ничего не обновляет.** Если identity уже есть, он возвращается как есть с
+  `created=False`. Для изменений — раздел «Изменить».
+- **По умолчанию identity создаётся в `provisioning` и в аренду не выдаётся.** Новый аккаунт
+  сначала логинят и проверяют, потом вводят в работу `activate`. Если он готов сразу,
+  передайте `lifecycle=Lifecycle.READY`.
+- **`auth`** становится `authenticated`, если передана сессия, иначе `no_session`; явно —
+  `auth_state=`.
+- Данные проверяются схемами сервиса и шифруются **до** обращения к базе. Секреты не попадают
+  в `repr(spec)`.
+- Несколько сессий: `sessions={"default": {...}, "web": {...}}`. Связи при создании:
+  `links={"recovery_email": mail_id}`.
 
-### Типовой путь нового аккаунта
+### Путь нового аккаунта
 
 ```mermaid
 flowchart LR
-    A["register()<br/>provisioning"] --> B{"есть сессия?"}
-    B -- нет --> C["run_login()<br/>→ authenticated"]
+    A["identities.create()<br/>provisioning"] --> B{"есть сессия?"}
+    B -- нет --> C["auth.login()<br/>→ authenticated"]
     B -- да --> D
-    C --> D["проверка<br/>(опционально)"]
-    D --> E["set_lifecycle(READY)"]
+    C --> D["sync.refresh()<br/>(после activate)"]
+    D --> E["identities.activate()"]
     E --> F["в работе:<br/>pool.lease()"]
 ```
 
 ```python
-reg = await space.register(service=TELEGRAM, external_ref=phone, credentials=creds)
-outcome = await space.run_login(reg.identity_id)        # "succeeded" / "challenged" / "failed"
-if outcome == "succeeded":
-    await space.set_lifecycle(reg.identity_id, Lifecycle.READY, actor="onboarding")
+from identity_hub import LoginOutcome
+
+identity = await space.identities.create(IdentityCreate(service=TELEGRAM, external_ref=phone, credentials=creds))
+outcome = await space.auth.login(identity.id)            # LoginOutcome: SUCCEEDED / CHALLENGED / FAILED
+if outcome is LoginOutcome.SUCCEEDED:
+    await space.identities.activate(identity.id, actor="onboarding")
 ```
 
-Проверить аккаунт пробой (`resync`) до перевода в `ready` в 1.0.0a1 нельзя — см.
+Проверить аккаунт пробой (`sync.refresh`) до `activate` в 1.0.0a1 нельзя — см.
 [ограничения](limitations.md).
 
-### Много аккаунтов — `import_many`
+## Создать массово
+
+```python
+result = await space.identities.create_many(specs, on_conflict="skip", actor="importer")
+result.created      # list[Identity] в порядке (service, external_ref)
+result.skipped      # уже существовавшие (только при on_conflict="skip")
+```
+
+Одна транзакция, до 1000 записей: вся пачка проверяется до записи, ошибки собираются в один
+`ValidationFailed`. `on_conflict="fail"` (по умолчанию) — при любом существующем identity
+ничего не создаётся и бросается `AlreadyExists` со списком ref.
+
+`create_many` — для своих данных, которые должны появиться целиком. Для внешних файлов
+поставщика с частичным успехом — импорт.
+
+## Импорт
 
 ```python
 from identity_hub import ImportRecord, OnExisting
@@ -75,13 +143,13 @@ records = [
         sessions={"default": {"auth_key": "..."}},
         tags=frozenset({"parser"}),
         labels={"batch": 17},
-        proxy="socks5://user:pass@1.2.3.4:1080",   # добавится в пул прокси сервиса
+        proxy="socks5://user:pass@1.2.3.4:1080",   # добавится в группу прокси сервиса
         links={"recovery_email": "mail:box@example.com"},
         verifications={"phone": "verified"},
     ),
     ...
 ]
-report = await space.import_many(
+report = await space.imports.run(
     service=TELEGRAM,
     records=records,                 # список, генератор или async-генератор
     batch_size=500,
@@ -90,45 +158,82 @@ report = await space.import_many(
 report.created, report.updated, report.skipped, report.failed   # списки id / (ref, причина)
 ```
 
-- Каждая пачка — отдельная транзакция; ошибка одной записи не роняет пачку.
-- Импортированные аккаунты всегда в `provisioning`.
-- `UPDATE_SESSION` обновляет сессии у уже существующих аккаунтов — удобно, когда поставщик
-  прислал свежие сессии.
-- `space.stage_import(...)` — фоновый вариант до 10 000 записей: данные сохраняются
-  зашифрованными, а обрабатывает их диспетчер. Отмена — `space.cancel_import(run_id)`.
-- `space.import_files(service=..., paths=[...])` — читает файлы вашими `FileImporter`
+| | `identities.create_many` | `imports.run` |
+|---|---|---|
+| Транзакция | одна на всё | одна на пачку |
+| Ошибка записи | откат всего | запись в `failed`, пачка идёт дальше |
+| Lifecycle | как в `IdentityCreate` | всегда `provisioning` |
+| Существующие | `fail` или `skip` | `skip`, `update_session` или `fail` |
+| Связи | по id | по строковому ref, в том числе внутри пачки |
+| Прокси и верификации | нет | да |
+
+- `UPDATE_SESSION` обновляет сессии у уже существующих аккаунтов — когда поставщик прислал
+  свежие.
+- `space.imports.stage(...)` — фоновый импорт до 10 000 записей: данные сохраняются
+  зашифрованными, обрабатывает их диспетчер. Состояние — `imports.get(run_id)`, отмена —
+  `imports.cancel(run_id)`.
+- `space.imports.run_files(service=..., paths=[...])` — читает файлы вашими `FileImporter`
   из `Service.importers` (`can_import(path)`, `read(path)` → `ImportRecord`). Готовых
   импортёров `.session`/tdata в библиотеке нет.
 
-## Как изменить данные
+## Изменить
 
 | Что | Метод |
 |---|---|
-| Метки (ключ-значение) | `set_labels(id, {"farm": "eu-2"}, merge=True)` — `None` удаляет ключ |
-| Теги | `add_tags(id, ["vip"])`, `remove_tags(id, [...])`, `set_tags(id, [...])` |
-| Профиль | `update_profile(id, {"city": "Berlin"})` — слияние; `replace=True` — замена |
-| Атрибуты | `set_attributes(id, {...})` — полная замена |
-| Заметка | `set_note(id, "text")` |
-| Credentials | `update_credentials(id, {...}, actor="admin")` — полная замена |
-| Сессия вне аренды | `update_session(id, {...}, actor="admin", slot="default")` |
+| Профиль, метки, заметка — частично, одним событием | `identities.update(id, profile={...}, labels={...}, note="...")` — слияние, `None` в значении удаляет ключ |
+| Профиль целиком | `identities.replace_profile(id, {...})` |
+| Метки целиком | `identities.replace_labels(id, {...})` |
+| Атрибуты целиком | `identities.replace_attributes(id, {...})` |
+| Теги | `identities.add_tags(id, ["vip"])`, `remove_tags(id, [...])`, `set_tags(id, [...])` |
+| Заметка | `identities.set_note(id, "text")` |
+| Credentials | `secrets.replace_credentials(id, {...}, actor="admin")` |
+| Сессия вне аренды | `secrets.replace_session(id, {...}, actor="admin", slot="default")` |
 | Сессия в аренде | `await lease.save_session(session)` |
+
+```python
+identity = await space.identities.update(
+    identity_id, profile={"city": "Berlin"}, labels={"farm": "eu-2", "old": None}, actor="ops"
+)
+```
 
 Метки — плоский словарь: ключ `[A-Za-z0-9_.-]{1,64}`, значение `str/int/float/bool`. Теги —
 `[A-Za-z0-9_.:-]{1,64}`. Каждое реальное изменение пишет событие `identity.updated`.
 Сменить `external_ref` нельзя.
 
-**Теги или метки?** Теги — для отбора в пулы (`pool(tags=["parser"])` требует все теги).
-Метки — для атрибутов со значением: поставщик, партия, ферма (`pool(labels={"farm": "eu-1"})`).
+**Теги или метки?** Теги — для отбора в пулы (`pools.define(..., tags=["parser"])` требует все
+теги). Метки — для атрибутов со значением: поставщик, партия, ферма
+(`pools.define(..., labels={"farm": "eu-1"})`).
 
-## Секреты: где лежат и как их получить
+## Состояние
+
+```python
+await space.identities.activate(identity_id, actor="onboarding")                 # → ready
+await space.identities.retire(identity_id, actor="ops", reason="продан")          # → retired
+await space.identities.activate(identity_id, actor="ops", reason="вернули")       # retired → ready, причина обязательна
+await space.identities.restore_standing(identity_id, actor="admin", reason="ложный бан")
+await space.identities.override(identity_id, Override("standing", "", "banned", reason="жалоба", actor="admin"))
+```
+
+Все регионы, машины состояний, бан и синхронизация с платформой — в разделе
+[Состояния](04-states.md).
+
+## Удалить
+
+```python
+await space.identities.delete(identity_id, actor="ops")
+```
+
+`delete` удаляет identity физически; журнал событий сохраняется. Если на identity ссылаются
+связи, сначала удалите их (`links.remove`). Для обратимого вывода из работы используйте
+`retire`.
+
+## Секреты
 
 | Данные | Хранение |
 |---|---|
 | credentials, сессии, evidence верификаций, логины прокси | всегда зашифрованы (AES-256-GCM, свой ключ на запись) |
 | profile | открыто; при `profile_encrypted=True` открыты только `filterable_profile` |
 | attributes, labels, tags, note | открыто |
-
-Получить секрет можно тремя путями:
 
 ```python
 # 1. Под арендой — основной путь для воркеров
@@ -138,10 +243,14 @@ async with pool.lease() as lease:
 
 # 2. В Authenticator / Probes — через ctx.credentials(), ctx.session()
 
-# 3. Вне аренды — только с аудитом (событие identity.secret.revealed)
-data = await space.reveal_secret(identity_id, "credentials", actor="admin:ivan", reason="миграция")
-# поле: "credentials" | "session" | "session:<slot>" | "profile" | "evidence:<factor>"
+# 3. Вне аренды — метаданные без значений и раскрытие с аудитом
+card = await space.secrets.describe(identity_id)        # есть ли credentials, какие слоты сессий
+from identity_hub import SecretRef
+data = await space.secrets.reveal(identity_id, SecretRef.CREDENTIALS, actor="admin:ivan", reason="миграция")
+data = await space.secrets.reveal(identity_id, SecretRef.session("web"), actor="admin:ivan")
 ```
+
+Каждое раскрытие пишет событие `identity.secret.revealed` в той же транзакции.
 
 ## Связи между аккаунтами
 
@@ -149,10 +258,10 @@ data = await space.reveal_secret(identity_id, "credentials", actor="admin:ivan",
 привязан к телефону.
 
 ```python
-await space.link(tg_id, "recovery_email", mail_id)      # одна связь на роль
-links = await space.links_of(tg_id)                      # outgoing / incoming
-impact = await space.impact_of(mail_id)                  # кого затронет потеря почты
-await space.unlink(tg_id, "recovery_email")
+await space.links.add(tg_id, "recovery_email", mail_id)      # одна связь на роль
+links = await space.links.of(tg_id)                           # outgoing / incoming
+impact = await space.links.impact(mail_id)                    # кого затронет потеря почты
+await space.links.remove(tg_id, "recovery_email")
 ```
 
 Внутри `Authenticator.login` связанный аккаунт доступен через `await ctx.linked("recovery_email")`
@@ -167,8 +276,8 @@ await space.unlink(tg_id, "recovery_email")
 class Warmup(BaseModel):
     day: int = 0
 
-record = await space.load_data(identity_id, "farm.warmup", Warmup)   # None, если нет
-version = await space.save_data(
+record = await space.data.load(identity_id, "farm.warmup", Warmup)   # None, если нет
+version = await space.data.save(
     identity_id, "farm.warmup", Warmup(day=3),
     expected_version=record.version if record else None,              # защита от гонок
 )
@@ -176,42 +285,5 @@ version = await space.save_data(
 
 Параллельная запись с устаревшей версией даёт `ConcurrentModification`. Данные открытые — не
 храните в них секреты.
-
-## Поиск и карточка
-
-```python
-page = await space.search("service:telegram standing:banned tag:parser farm:eu-1", limit=100)
-for row in page.items: ...
-page = await space.search("...", after=page.next_cursor)          # следующая страница
-
-card = await space.identity_card(identity_id)
-card.identity.standing, card.regions, card.lease, card.quotas
-card.eligible, card.blockers        # можно ли сейчас работать и что мешает
-```
-
-Синтаксис запроса:
-
-| Выражение | Что ищет |
-|---|---|
-| `service:telegram` | сервис |
-| `lifecycle:ready`, `standing:banned`, `auth:session_invalid`, `availability:cooling` | значение региона; повтор ключа = ИЛИ |
-| `status:active` | `ready` и standing `good`/`limited` |
-| `tag:parser` | тег; несколько `tag:` — все сразу |
-| `farm:eu-1` | метка или поле `filterable_profile` |
-| UUID | точный id |
-| слово от 3 символов | подстрока в `external_ref`, заметке, метках, `searchable_profile` |
-
-Отдельного метода «получить аккаунт по id» нет — используйте `identity_card`.
-
-## Вывод из работы и удаление
-
-```python
-await space.retire(identity_id, actor="ops", reason="продан")     # lifecycle → retired, данные сохраняются
-await space.set_lifecycle(identity_id, Lifecycle.READY, actor="ops", reason="вернули")  # обратно, причина обязательна
-await space.delete(identity_id, actor="ops")                        # физическое удаление
-```
-
-`retire` — обратимый вывод, аккаунт остаётся в базе и истории. `delete` удаляет аккаунт
-(журнал событий сохраняется); если на аккаунт ссылаются связи, сначала удалите их.
 
 Дальше: [состояния аккаунта](04-states.md).

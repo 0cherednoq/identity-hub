@@ -6,7 +6,7 @@
 | Механизм | Где задаётся | Что делает | Состояние аккаунта |
 |---|---|---|---|
 | **Квота** | `OperationRule.quotas` в сервисе | Не больше N операций вида за окно | не меняется; `operation()` бросает `QuotaExhausted` |
-| **Pacing** | `space.pool(..., pacing=)` | После N операций — отдых на случайное время | `availability = paused` |
+| **Pacing** | `space.pools.define(..., pacing=)` | После N операций — отдых на случайное время | `availability = paused` |
 | **Cooldown** | `op.cool_down()` или `Fault(retry_after=)` | Пауза по требованию платформы (flood-wait) | `availability = cooling` |
 | **Карантин** | `Service.quarantine_threshold` | Слишком много ошибок по вине аккаунта | `availability = quarantined` |
 
@@ -68,7 +68,7 @@ operations = {
 - Все окна операции списываются **атомарно**: если одно исчерпано, остальные не тронуты.
 - `QuotaExhausted.retry_at` — когда откроется окно. Сбросить квоту вручную нельзя.
 - При расходе последней единицы пишется событие `identity.quota.exhausted`.
-- Текущий расход: `(await space.identity_card(id)).quotas`.
+- Текущий расход: `(await space.identities.card(id)).quotas`.
 
 **Важно:** квоты не учитываются при выборе аккаунта в `pool.lease(for_operation=...)`. Аккаунт с
 исчерпанной квотой может быть выдан — ловите `QuotaExhausted` и берите следующий аккаунт:
@@ -92,7 +92,7 @@ for _ in range(5):
 ```python
 from identity_hub import Pacing, Quota
 
-senders = space.pool(
+senders = space.pools.define(
     "senders", service=TELEGRAM,
     pacing=Pacing(work=Quota(15, timedelta(hours=1)), pause=(20, 45)),   # после 15 операций — 20–45 минут отдыха
 )
@@ -170,7 +170,7 @@ TELEGRAM = Service(..., error_classifier=TgErrors())
 падал из-за собственной ошибки, а не аккаунта, — вернуть аккаунт можно так:
 
 ```python
-await space.override(identity_id, Override("availability", "", "available", reason="баг в воркере", actor="admin"))
+await space.identities.override(identity_id, Override("availability", "", "available", reason="баг в воркере", actor="admin"))
 ```
 
 Дальше: [прокси](09-proxies.md).
