@@ -93,7 +93,8 @@
   новая попытка, `duplicate=False`, квота списывается; исход неизвестен (процесс упал или учёт не
   записан) → `duplicate=True`, `op.previous_outcome is None`. Добавить
   `Operation.previous_outcome`.
-- Тот же ключ с другим видом операции или другим аккаунтом → `IdempotencyConflict`.
+- Тот же ключ с другим видом операции → `IdempotencyConflict`. Аккаунт в fingerprint не входит:
+  его выбирает пул, и повтор задачи под другим аккаунтом — штатный случай (`D-153`).
 - Сбой учёта после успешного тела (`R1-11`): не выходит к вызывающему — предупреждение в лог и
   метрика `identity_hub_failures_total{scope="operation_bookkeeping"}`.
 - Обновить `docs/guide/07-leases.md`, `08-limits.md`, `12-recipes.md`, `limitations.md`.
