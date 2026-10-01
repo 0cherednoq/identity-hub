@@ -168,6 +168,8 @@ bash scripts/check.sh
 - Добавить revision в события и read DTO. Region/data version остаются локальными CAS и не
   подменяют общую revision.
 - Синхронизировать PgStore/MemoryStore; повтор идемпотентной команды не увеличивает revision.
+- **Дополнение из ревью (`D-151`).** `R2-D23`: `hub.read.identities.c.revision` переводится на новую колонку, `READ_SCHEMA_VERSION`
+  повышается. Регрессионный тест `F2.4` (параллельные `add_tags`) остаётся зелёным.
 - **DoD:** две admin-сессии с одной revision, один победитель; rollback/savepoint; revision в
   последовательности событий; conformance для всех mutation families.
 
@@ -184,6 +186,7 @@ bash scripts/check.sh
   естественно удерживает конкурента; rollback освобождает ключ; наружного `pending` нет.
 - Перевести acquire, operation и новые idempotency key для register/import на общий primitive;
   результат replay типизирован и версионирован.
+- **Выполняется досрочно** задачами `F1.1` и `F1.2` из `RELEASE-FIXES-PLAN.md` (`D-151`).
 - **DoD:** barrier race winner/replay, same key/different body, rollback winner, namespace
   isolation, retention; одинаковое поведение memory/pg.
 
@@ -198,6 +201,8 @@ bash scripts/check.sh
 - Интегрировать register/import, credentials/session update и другие идемпотентные команды с
   секретами. Ротация создаёт новые записи новым ключом, старые проверяются до expires_at.
 - Отсутствующий historical key для живой записи даёт `SecretConfigurationError`, а не cache miss.
+- **Дополнение из ревью (`D-151`).** `R2-S16`: fingerprint прокси считается HMAC из fingerprint keyring вместо
+  SHA-256 без ключа; миграция пересчитывает значения.
 - **DoD:** одинаковый/другой secret, KEK ≠ HMAC key, rotation overlap, missing key, отсутствие
   secret/tag в repr/log/event; conformance replay.
 
@@ -231,6 +236,8 @@ bash scripts/check.sh
   lease и завершается после последней аренды.
 - История получает счётчики/last heartbeat периодически (default 5 min) и при close, а не на
   каждый heartbeat. Потеря отдельной аренды в batch ограждает только её владельца.
+- **Дополнение из ревью (`D-151`).** `R2-D01`: после удаления индексов тест `F2.2` (брошенная аренда закрывается при
+  600 освобождённых) остаётся зелёным.
 - **DoD:** 10 циклов дают `n_tup_hot_upd / n_tup_upd ≥ 0.9`; batch 100/500 имеет benchmark;
   shutdown не теряет close/counters; lifecycle-тесты проходят 3 раза.
 
@@ -245,6 +252,8 @@ bash scripts/check.sh
   provider-operation apply, cool_down и закрытие lease history.
 - Удалить проверки вида `fencing >= current` или проверку только sequence. PgStore блокирует
   identity до применения; MemoryStore повторяет ту же семантику.
+- **Дополнение из ревью (`D-151`).** `R1-15`: `operation_scope` проверяет fence под блокировкой строки и живую
+  аренду. `R2-S05`: чтение credentials и session проверяет fence в транзакции чтения.
 - **DoD:** подмена каждого поля, expired/reacquired/revoked lease и zombie write дают
   `LeaseOwnershipLost`; валидный fence атомарно пишет данные и событие.
 
@@ -258,6 +267,8 @@ bash scripts/check.sh
   expiry.
 - `revoke` фиксирует actor/reason, закрывает историю, увеличивает fencing и немедленно будит
   heartbeat coordinator. Повторный revoke детерминирован.
+- **Дополнение из ревью (`D-151`).** `R1-16`: в таблицу сценариев входит «тело блока завершилось успешно, аренда
+  потеряна по пути»; исход (`LeaseLost` с признаком завершённого тела) описан в руководстве.
 - **DoD:** таблица сценариев ошибок, renew clock skew, release/revoke races на barrier, события и
   history reason; pg/memory conformance.
 
@@ -276,6 +287,8 @@ bash scripts/check.sh
   kind/name отвергается до транзакции.
 - Реализовать lifecycle `active ↔ disabled`, `revoked` terminal и ленивую проверку expires_at.
   Секрет, public_value и metadata изменяются атомарно с revision/event.
+- **Дополнение из ревью (`D-151`).** `R2-P08`: `MemoryStore` хранит `version` и `updated_at` credentials и сессий;
+  conformance для `secrets.describe`.
 - **DoD:** migration roundtrip legacy data; несколько однотипных ключей; expiry/disable/revoke;
   tenant isolation и отсутствие секретов в read models.
 
@@ -418,6 +431,9 @@ bash scripts/check.sh
   100k при конкурентной lease/operation нагрузке.
 - Исправить query/index/statistics так, чтобы planner использовал selective GIN/trigram path;
   не менять результат, escaping и ограниченный count.
+- **Дополнение из ревью (`D-151`).** `R2-D08`: `account_search` без N+1 (пакетные запросы, тест на число
+  запросов). `R2-D09`: список по умолчанию использует индекс (кортежное сравнение курсора,
+  без `NULLS LAST` для `NOT NULL` колонок).
 - **DoD:** search p95 ≤ 100 ms; планы ключевых форм закреплены тестами без хрупкой проверки
   стоимости; pagination/tenant isolation не регрессируют.
 
@@ -647,6 +663,7 @@ I8.1–I8.9 стоят в прогрессе перед I0.2, а I8.10 — пе�
 - Удалить legacy-алиасы и `pool=` у `ProxyPolicy`. Allowlist `SpaceHandle` сводится к
   неймспейсам и `using`/`ref`. CHANGELOG — раздел Removed.
 - Выполняется после всех задач I1–I6; `I7.1` зависит от этой задачи.
+- **Выполняется досрочно** задачей `F6.4` из `RELEASE-FIXES-PLAN.md` (`D-151`).
 - **DoD:** `dir(SpaceHandle)` совпадает с allowlist; полный gate зелёный; migration guide
   отражает удаление.
 
