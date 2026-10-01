@@ -42,7 +42,7 @@ async def test_lease_p95_10k_accounts_50_workers(
 ) -> None:
     service, ref = await _load_space(hub)
     await seed_identities(db, space_id=ref.id, service=service.name, count=10_000, prefix="lease")
-    pool = hub.space("load").pool("load", service=service, holder="benchmark")
+    pool = hub.space("load").pools.define("load", service=service, holder="benchmark")
 
     async def acquire_one() -> tuple[float, Lease]:
         started = time.perf_counter()
@@ -78,7 +78,7 @@ async def test_lease_p95_10k_accounts_50_workers(
 async def test_operation_p95(hub: IdentityHub, db: AsyncEngine) -> None:
     service, ref = await _load_space(hub)
     await seed_identities(db, space_id=ref.id, service=service.name, count=1, prefix="operation")
-    lease = await hub.space("load").pool("load", service=service).acquire()
+    lease = await hub.space("load").pools.define("load", service=service).acquire()
 
     async def operation() -> None:
         async with lease.operation("work"):
@@ -96,7 +96,7 @@ async def test_search_p95_100k(hub: IdentityHub, db: AsyncEngine) -> None:
     space = hub.space("load")
 
     async def search() -> None:
-        page = await space.search("service:load search-099", limit=50, count=False)
+        page = await space.identities.search("service:load search-099", limit=50, count=False)
         assert page.items
 
     stats = await measure(search, iterations=20, warmup=3)
@@ -107,7 +107,7 @@ async def test_search_p95_100k(hub: IdentityHub, db: AsyncEngine) -> None:
 async def test_import_10k_under_60_seconds(hub: IdentityHub) -> None:
     records = [ImportRecord(f"import-{index:06d}") for index in range(10_000)]
     started = time.perf_counter()
-    report = await hub.space("load-import").import_many(service="fake_tg", records=records, batch_size=2_000)
+    report = await hub.space("load-import").imports.run(service="fake_tg", records=records, batch_size=2_000)
     elapsed = time.perf_counter() - started
     print(f"LOAD import count={report.total} elapsed={elapsed:.3f}s")
     assert report.total == 10_000 and len(report.created) == 10_000

@@ -13,7 +13,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from identity_hub.postgres import metadata
-from identity_hub.postgres.migrate import alembic_config, migrate
+from identity_hub.postgres.migrate import SCHEMA_HEAD, alembic_config, migrate
 
 pytestmark = pytest.mark.pg
 
@@ -43,7 +43,7 @@ async def test_migrate_is_idempotent_and_uses_own_version_table(prepared_db: Asy
     async with prepared_db.connect() as conn:
         version = (await conn.execute(text("SELECT version_num FROM ih_alembic_version"))).scalar_one()
         trgm = (await conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'"))).scalar()
-    assert version == "0007"
+    assert version == SCHEMA_HEAD
     assert trgm == 1
 
 
@@ -90,7 +90,7 @@ async def test_admin_foundations_upgrade_from_0004_and_downgrade(engine: AsyncEn
             ).scalars()
         )
     assert timezone == "UTC"
-    assert version == "0007"
+    assert version == SCHEMA_HEAD
     assert {
         "ih_import_runs",
         "ih_import_items",

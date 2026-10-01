@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -171,6 +171,10 @@ class Service:
     profile_encrypted: bool = False  # D-003
     importers: tuple[FileImporter, ...] = ()
     quarantine_threshold: float = 5.0  # error_score, при котором availability → quarantined
+    # Нормализация external_ref (IMP-08): уникальность и поиск — по результату. Смена функции
+    # требует новой версии и перенормализации (`hub.doctor.renormalize`), см. D-149.
+    normalize_ref: Callable[[str], str] = str.strip
+    normalize_ref_version: int = 0
 
     def __post_init__(self) -> None:
         errors = self._validate()
@@ -184,6 +188,25 @@ class Service:
             object.__setattr__(self, "operations", ops)
 
     # --------------------------------------------------------- доступ
+
+    def normalize_external_ref(self, external_ref: str) -> str:
+        """Нормализованный ref для уникальности и поиска; некорректный ввод — `ValidationFailed`.
+
+        В сообщение об ошибке не попадает исходное значение (это может быть телефон или email).
+        """
+        if not isinstance(external_ref, str) or not external_ref or len(external_ref) > 256:
+            raise ValidationFailed("external_ref: от 1 до 256 символов")
+        try:
+            normalized = self.normalize_ref(external_ref)
+        except (ValueError, TypeError) as exc:
+            raise ValidationFailed(
+                f"external_ref не прошёл нормализацию сервиса {self.name}: {type(exc).__name__}"
+            ) from None
+        if not isinstance(normalized, str) or not normalized or len(normalized) > 256:
+            raise ValidationFailed(
+                f"нормализация external_ref сервиса {self.name} вернула пустое или длинное значение"
+            )
+        return normalized
 
     def rule(self, kind: str) -> OperationRule:
         try:
@@ -235,6 +258,14 @@ class Service:
         errors: list[str] = []
         if not _NAME.match(self.name):
             errors.append("name: латиница в нижнем регистре, цифры и _, до 64 символов")
+        if not callable(self.normalize_ref):
+            errors.append("normalize_ref: нужна функция str -> str")
+        if self.normalize_ref_version < 0:
+            errors.append("normalize_ref_version ≥ 0")
+        if self.normalize_ref is not str.strip and self.normalize_ref_version == 0:
+            errors.append(
+                "normalize_ref_version: своя нормализация требует версии ≥ 1 (0 — str.strip по умолчанию)"
+            )
         profile_fields = set(self.profile.model_fields)
         for attr in ("filterable_profile", "searchable_profile"):
             unknown = set(getattr(self, attr)) - profile_fields

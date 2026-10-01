@@ -284,6 +284,8 @@ class IdentityRow:
     event_seq: int
     created_at: datetime
     updated_at: datetime
+    normalized_ref: str = ""  # Service.normalize_ref(external_ref), IMP-08
+    normalize_version: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +305,13 @@ class NewIdentity:
     note: str | None
     search_text: str
     profile_secret: EncryptedPayload | None = None
+    normalized_ref: str = ""  # пусто — `external_ref.strip()` (нормализация по умолчанию)
+    normalize_version: int = 0
+
+    @property
+    def unique_ref(self) -> str:
+        """Ключ уникальности `(service, unique_ref)` (IMP-08)."""
+        return self.normalized_ref or self.external_ref.strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -888,9 +897,9 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def find_identity(
-        self, identity_id: UUID, service: str, external_ref: str
+        self, identity_id: UUID, service: str, normalized_ref: str
     ) -> tuple[UUID, UUID] | None:
-        """(id, space_id) аккаунта с этим id или (service, external_ref) — во всех пространствах (FR-2.2)."""
+        """(id, space_id) аккаунта по id или (service, normalized_ref) во всех пространствах (FR-2.2)."""
 
     @abstractmethod
     async def insert_identity(self, row: NewIdentity) -> bool:
@@ -898,7 +907,7 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def find_by_refs(self, refs: Sequence[tuple[str, str]]) -> dict[tuple[str, str], tuple[UUID, UUID]]:
-        """(service, external_ref) → (id, space_id) — во всех пространствах (импорт, FR-2.2)."""
+        """(service, normalized_ref) → (id, space_id) — во всех пространствах (импорт, FR-2.2, IMP-08)."""
 
     @abstractmethod
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
@@ -1612,6 +1621,20 @@ class Store(ABC):
 
     @abstractmethod
     async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]: ...
+
+    @abstractmethod
+    async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
+        """(id, external_ref) identity сервиса с `normalize_version != version`, по возрастанию id."""
+
+    @abstractmethod
+    async def apply_normalizations(
+        self, service: str, version: int, updates: Sequence[tuple[UUID, str]]
+    ) -> list[list[UUID]]:
+        """Записать новые `normalized_ref` одной транзакцией (IMP-08).
+
+        Если после записи значения совпали бы между собой или с уже нормализованными identity
+        сервиса, ничего не меняется и возвращаются группы id коллизий; иначе — пустой список.
+        """
 
     # --------------------------------------------------------- метрики (P9.3)
 

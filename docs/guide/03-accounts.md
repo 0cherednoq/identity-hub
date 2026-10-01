@@ -78,8 +78,10 @@ identity, created = await space.identities.ensure(spec, actor="importer")  # get
 
 Что важно знать:
 
-- **Уникальность.** Identity уникален по `(service, external_ref)` во всём хабе, а не только в
-  пространстве: тот же номер в другом пространстве даёт `AlreadyExists`.
+- **Уникальность.** Identity уникален по `(service, normalized_ref)` во всём хабе, а не только в
+  пространстве: тот же номер в другом пространстве даёт `AlreadyExists`. `normalized_ref` — результат
+  `Service.normalize_ref(external_ref)`; `external_ref` хранится как ввели. Подробнее — «Нормализация
+  external_ref» ниже.
 - **`ensure` ничего не обновляет.** Если identity уже есть, он возвращается как есть с
   `created=False`. Для изменений — раздел «Изменить».
 - **По умолчанию identity создаётся в `provisioning` и в аренду не выдаётся.** Новый аккаунт
@@ -115,6 +117,34 @@ if outcome is LoginOutcome.SUCCEEDED:
 
 Проверить аккаунт пробой (`sync.refresh`) до `activate` в 1.0.0a1 нельзя — см.
 [ограничения](limitations.md).
+
+
+### Нормализация external_ref
+
+Сервис задаёт, какие записи `external_ref` считаются одним аккаунтом. По умолчанию это
+`str.strip` (версия `0`). Свою функцию объявляют вместе с версией `≥ 1`:
+
+```python
+def normalize_phone(raw: str) -> str:
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not 10 <= len(digits) <= 15:
+        raise ValueError("invalid phone")
+    return "+" + digits
+
+
+TELEGRAM = Service(name="telegram", title="Telegram", normalize_ref=normalize_phone, normalize_ref_version=1)
+```
+
+Нормализация выполняется до поиска и вставки: `+380 (50) 123-45-67` и `380501234567` — один
+identity, `identities.find(service=..., external_ref=...)` находит его по любой записи, импорт
+считает дубли после нормализации и разрешает ссылки `links` так же. Если функция бросает
+`ValueError`, запись отклоняется `ValidationFailed` без исходного значения в сообщении.
+
+**Смена нормализатора** — это миграция данных. Увеличьте `normalize_ref_version`, выкатите код
+и выполните `await hub.doctor.renormalize(TELEGRAM)`. Метод пересчитывает `normalized_ref`
+пачками. Пачку, в которой появились бы дубли, он не применяет и возвращает их id в
+`report.collisions`; записи, отвергнутые новой функцией, попадают в `report.invalid`. Разрешите
+дубли (удалите или объедините identity) и запустите снова — уже пересчитанные строки не трогаются.
 
 ## Создать массово
 

@@ -42,7 +42,8 @@ FORBIDDEN = {
 
 EXPECTED_COLUMNS = {
     "identities": {
-        "id", "space_id", "service", "external_ref", "lifecycle", "standing", "standing_code",
+        "id", "space_id", "service", "external_ref", "normalized_ref", "lifecycle", "standing",
+        "standing_code",
         "standing_until", "auth", "availability", "availability_until", "requirements",
         "verified_factors", "tags", "labels", "profile", "attributes", "note", "error_score",
         "revision", "created_at", "updated_at",

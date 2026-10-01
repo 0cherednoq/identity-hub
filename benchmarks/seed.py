@@ -28,6 +28,7 @@ async def seed_identities(
                 space_id,
                 service,
                 external_ref,
+                external_ref,  # normalized_ref: str.strip не меняет сгенерированный ref (D-149)
                 "ready",
                 "good",
                 "authenticated",
@@ -51,6 +52,7 @@ async def seed_identities(
                 "space_id",
                 "service",
                 "external_ref",
+                "normalized_ref",
                 "lifecycle",
                 "standing",
                 "auth_state",

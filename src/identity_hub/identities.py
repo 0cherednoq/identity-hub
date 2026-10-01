@@ -76,8 +76,7 @@ def prepare_identity(
     auth_state: AuthState | str | None = None,
 ) -> PreparedIdentity:
     """Валидация схемами сервиса и шифрование секретов (FR-2.4: до обращения к БД)."""
-    if not external_ref or len(external_ref) > 256:
-        raise ValidationFailed("external_ref: от 1 до 256 символов")
+    normalized_ref = service.normalize_external_ref(external_ref)  # IMP-08: до поиска и вставки
     if str(lifecycle) not in set(Lifecycle):
         raise ValidationFailed(f"lifecycle: неизвестное значение {lifecycle!r}")
     identity_id = identity_id or new_id()
@@ -126,6 +125,8 @@ def prepare_identity(
         note=note,
         search_text=build_search_text(service, identity_id, external_ref, open_profile, clean_labels, note),
         profile_secret=profile_secret,
+        normalized_ref=normalized_ref,
+        normalize_version=service.normalize_ref_version,
     )
     return PreparedIdentity(row=row, credentials=creds_payload, sessions=session_payloads, links=link_map)
 
@@ -233,7 +234,7 @@ class IdentitiesMixin(SpaceBase):
         )
 
     async def _existing(self, tx: Any, row: NewIdentity) -> RegisterResult | None:
-        found = await tx.find_identity(row.id, row.service, row.external_ref)
+        found = await tx.find_identity(row.id, row.service, row.unique_ref)
         if found is None:
             return None
         found_id, found_space = found

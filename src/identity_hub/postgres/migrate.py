@@ -16,7 +16,7 @@ __all__ = ["MIGRATION_LOCK_NAMESPACE", "SCHEMA_HEAD", "VERSION_TABLE", "alembic_
 SCRIPT_LOCATION = "identity_hub.postgres:migrations"
 VERSION_TABLE = "ih_alembic_version"
 # Ревизия, которую ожидает этот код; новая миграция обязана обновить значение (тест сверяет с alembic head).
-SCHEMA_HEAD = "0007"
+SCHEMA_HEAD = "0008"
 MIGRATION_LOCK_NAMESPACE = "identity_hub:migrate"
 
 

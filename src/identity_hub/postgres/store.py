@@ -373,7 +373,7 @@ class PgTx(StoreTx):
     # --------------------------------------------------------- регистрация
 
     async def find_identity(
-        self, identity_id: UUID, service: str, external_ref: str
+        self, identity_id: UUID, service: str, normalized_ref: str
     ) -> tuple[UUID, UUID] | None:
         row = (
             await self.execute(
@@ -381,7 +381,7 @@ class PgTx(StoreTx):
                 .where(
                     or_(
                         IDENTITIES.c.id == identity_id,
-                        and_(IDENTITIES.c.service == service, IDENTITIES.c.external_ref == external_ref),
+                        and_(IDENTITIES.c.service == service, IDENTITIES.c.normalized_ref == normalized_ref),
                     )
                 )
                 .limit(1)
@@ -395,6 +395,8 @@ class PgTx(StoreTx):
             "space_id": self.space.id,
             "service": row.service,
             "external_ref": row.external_ref,
+            "normalized_ref": row.unique_ref,
+            "normalize_version": row.normalize_version,
             "lifecycle": row.lifecycle,
             "standing": row.standing,
             "auth_state": row.auth_state,
@@ -416,10 +418,10 @@ class PgTx(StoreTx):
         pairs = list(dict.fromkeys(refs))
         rows = await self.execute(
             select(
-                IDENTITIES.c.id, IDENTITIES.c.space_id, IDENTITIES.c.service, IDENTITIES.c.external_ref
-            ).where(tuple_(IDENTITIES.c.service, IDENTITIES.c.external_ref).in_(pairs))
+                IDENTITIES.c.id, IDENTITIES.c.space_id, IDENTITIES.c.service, IDENTITIES.c.normalized_ref
+            ).where(tuple_(IDENTITIES.c.service, IDENTITIES.c.normalized_ref).in_(pairs))
         )
-        return {(r.service, r.external_ref): (r.id, r.space_id) for r in rows}
+        return {(r.service, r.normalized_ref): (r.id, r.space_id) for r in rows}
 
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
         if not ids:
@@ -4457,6 +4459,57 @@ class PgStore(Store):
 
     # --------------------------------------------------------- doctor / rotate-key
 
+    async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
+        i = IDENTITIES.c
+        async with self.sessionmaker() as session:
+            rows = await session.execute(
+                select(i.id, i.external_ref)
+                .where(i.service == service, i.normalize_version != version)
+                .order_by(i.id)
+                .limit(limit),
+                execution_options=self.options,
+            )
+            return [(row.id, row.external_ref) for row in rows]
+
+    async def apply_normalizations(
+        self, service: str, version: int, updates: Sequence[tuple[UUID, str]]
+    ) -> list[list[UUID]]:
+        if not updates:
+            return []
+        i = IDENTITIES.c
+        ids = sorted(identity_id for identity_id, _ref in updates)
+        async with self._own() as session:
+            await session.execute(
+                select(i.id).where(i.id.in_(ids)).order_by(i.id).with_for_update(key_share=True),
+                execution_options=self.options,
+            )
+            others = await session.execute(
+                select(i.id, i.normalized_ref).where(
+                    i.service == service,
+                    i.normalized_ref.in_({ref for _id, ref in updates}),
+                    i.id.not_in(ids),
+                ),
+                execution_options=self.options,
+            )
+            collisions = _normalization_collisions(updates, [(row.id, row.normalized_ref) for row in others])
+            if collisions:
+                return collisions
+            # временные значения снимают конфликт уникальности при обмене ref между строками
+            await session.execute(
+                update(IDENTITIES)
+                .where(i.id.in_(ids))
+                .values(normalized_ref=func.concat("~renormalize:", sa_cast(i.id, Text))),
+                execution_options=self.options,
+            )
+            for identity_id, ref in updates:
+                await session.execute(
+                    update(IDENTITIES)
+                    .where(i.id == identity_id)
+                    .values(normalized_ref=ref, normalize_version=version),
+                    execution_options=self.options,
+                )
+        return []
+
     async def doctor(self, *, fix: bool) -> list[DoctorIssue]:
         issues: list[DoctorIssue] = []
         async with self._own() as session:
@@ -4788,3 +4841,13 @@ class PgStore(Store):
         if space_id is not None and found.id != space_id:
             raise SpaceMismatch(f"пространство {slug!r} уже существует с другим id")
         return found
+
+
+def _normalization_collisions(
+    updates: Sequence[tuple[UUID, str]], others: Sequence[tuple[UUID, str]]
+) -> list[list[UUID]]:
+    """Группы id, которые после перенормализации получили бы один ref (IMP-08)."""
+    groups: dict[str, list[UUID]] = {}
+    for identity_id, ref in [*others, *updates]:
+        groups.setdefault(ref, []).append(identity_id)
+    return [sorted(ids) for _ref, ids in sorted(groups.items()) if len(ids) > 1]

@@ -27,6 +27,8 @@
 
 ### Changed
 
+- Уникальность identity — `(service, normalized_ref)`: `Service.normalize_ref` и
+  `normalize_ref_version`, миграция `0008`, `hub.doctor.renormalize()` для смены нормализатора.
 - `hub.start()` проверяет ревизию схемы и бросает `SchemaIncompatible`, если она не та, что
   ожидает код; `identity-hub migrate` берёт advisory lock на схему.
 - Associated data шифрования в формате `identity-hub:v1:…`; записи `1.0.0a1` читаются, `rotate-key`

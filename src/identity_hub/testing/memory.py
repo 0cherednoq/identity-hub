@@ -270,15 +270,15 @@ class MemoryTx(StoreTx):
         return True
 
     async def find_identity(
-        self, identity_id: UUID, service: str, external_ref: str
+        self, identity_id: UUID, service: str, normalized_ref: str
     ) -> tuple[UUID, UUID] | None:
         for row in self.state.identities.values():
-            if row.id == identity_id or (row.service == service and row.external_ref == external_ref):
+            if row.id == identity_id or (row.service == service and row.normalized_ref == normalized_ref):
                 return row.id, row.space_id
         return None
 
     async def insert_identity(self, row: NewIdentity) -> bool:
-        if await self.find_identity(row.id, row.service, row.external_ref) is not None:
+        if await self.find_identity(row.id, row.service, row.unique_ref) is not None:
             return False
         identity = IdentityRow(
             id=row.id,
@@ -305,6 +305,8 @@ class MemoryTx(StoreTx):
             event_seq=0,
             created_at=self._now,
             updated_at=self._now,
+            normalized_ref=row.unique_ref,
+            normalize_version=row.normalize_version,
         )
         self.state.identities[row.id] = identity
         if row.profile_secret is not None:
@@ -314,9 +316,9 @@ class MemoryTx(StoreTx):
     async def find_by_refs(self, refs: Sequence[tuple[str, str]]) -> dict[tuple[str, str], tuple[UUID, UUID]]:
         wanted = set(refs)
         return {
-            (row.service, row.external_ref): (row.id, row.space_id)
+            (row.service, row.normalized_ref): (row.id, row.space_id)
             for row in self.state.identities.values()
-            if (row.service, row.external_ref) in wanted
+            if (row.service, row.normalized_ref) in wanted
         }
 
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
@@ -2718,6 +2720,37 @@ class MemoryStore(Store):
                             del self._state.import_items[item_key]
                     result[name] = len(keys)
             return result
+
+    async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
+        async with self._lock:
+            rows = sorted(
+                (row for row in self._state.identities.values() if row.service == service),
+                key=lambda row: row.id,
+            )
+            return [(row.id, row.external_ref) for row in rows if row.normalize_version != version][:limit]
+
+    async def apply_normalizations(
+        self, service: str, version: int, updates: Sequence[tuple[UUID, str]]
+    ) -> list[list[UUID]]:
+        async with self._lock:
+            touched = {identity_id for identity_id, _ref in updates}
+            others = [
+                (row.id, row.normalized_ref)
+                for row in self._state.identities.values()
+                if row.service == service and row.id not in touched
+            ]
+            groups: dict[str, list[UUID]] = {}
+            for identity_id, ref in [*others, *updates]:
+                groups.setdefault(ref, []).append(identity_id)
+            collisions = [sorted(ids) for _ref, ids in sorted(groups.items()) if len(ids) > 1]
+            if collisions:
+                return collisions
+            for identity_id, ref in updates:
+                row = self._state.identities[identity_id]
+                self._state.identities[identity_id] = replace(
+                    row, normalized_ref=ref, normalize_version=version
+                )
+            return []
 
     async def doctor(self, *, fix: bool) -> list[DoctorIssue]:
         async with self._lock:

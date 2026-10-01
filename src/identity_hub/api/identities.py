@@ -71,6 +71,7 @@ class Identity:
     id: UUID
     service: str
     external_ref: str
+    normalized_ref: str  # ключ уникальности: Service.normalize_ref(external_ref)
     lifecycle: Lifecycle
     standing: Standing
     standing_code: str | None
@@ -99,6 +100,7 @@ class Identity:
             id=row.id,
             service=row.service,
             external_ref=row.external_ref,
+            normalized_ref=row.normalized_ref or row.external_ref.strip(),
             lifecycle=Lifecycle(row.lifecycle),
             standing=Standing(row.standing),
             standing_code=row.standing_code,
@@ -259,8 +261,9 @@ class Identities(Namespace):
         async with self._space._tx(own=True) as tx:
             if identity_id is None:
                 assert service is not None and external_ref is not None
-                name = service.name if isinstance(service, Service) else service
-                found = (await tx.find_by_refs([(name, external_ref)])).get((name, external_ref))
+                svc = self._space.hub.service(service)
+                key = (svc.name, svc.normalize_external_ref(external_ref))
+                found = (await tx.find_by_refs([key])).get(key)
                 if found is None or found[1] != tx.space.id:
                     return None
                 identity_id = found[0]
@@ -349,7 +352,7 @@ class Identities(Namespace):
             raise ValidationFailed(f"create_many: не больше {CREATE_MANY_LIMIT} записей; больше — imports")
         prepared = self._prepare_many(items)
         # единый порядок вставки: параллельные пересекающиеся пачки не дают deadlock
-        ordered = sorted(prepared, key=lambda pair: (pair[1].row.service, pair[1].row.external_ref))
+        ordered = sorted(prepared, key=lambda pair: (pair[1].row.service, pair[1].row.unique_ref))
         skipped: builtins.list[IdentityRef] = []
         async with self._space._tx() as tx:
             fresh: _Prepared = []
@@ -497,7 +500,7 @@ class Identities(Namespace):
             except (ValidationFailed, NotFound) as exc:
                 errors.append(f"{label}: {exc}")
                 continue
-            key = (item.row.service, item.row.external_ref)
+            key = (item.row.service, item.row.unique_ref)
             if key in seen_refs or item.row.id in seen_ids:
                 errors.append(f"{label}: повтор в пачке")
                 continue

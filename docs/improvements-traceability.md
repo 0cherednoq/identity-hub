@@ -19,7 +19,7 @@ Scope зафиксирован решением `D-142`. Задачи — в
 | IMP-05 | Полный lease fence | I2.3 | partial | planned: `tests/pg/test_lease_fence.py::test_zombie_with_equal_fencing_rejected`. Сейчас fencing сравнивается номером (`<=`) |
 | IMP-06 | Семантика renew/release/revoke | I2.4 | partial | planned: `tests/pg/test_lease_semantics.py::test_release_after_revoke_is_noop` |
 | IMP-07 | revision и expected_revision | I1.2 | missing | planned: `tests/pg/test_revision.py::test_stale_expected_revision_conflicts` |
-| IMP-08 | Нормализация external_ref | I1.1 | missing | planned: `tests/pg/test_normalized_ref.py::test_normalized_duplicate_rejected` |
+| IMP-08 | Нормализация external_ref | I1.1 | implemented | `tests/conformance/test_normalized_ref.py::test_phone_formats_are_one_identity`, `tests/conformance/test_normalized_ref.py::test_import_reports_duplicates_and_resolves_links_after_normalization`, `tests/conformance/test_normalized_ref.py::test_renormalize_collision_changes_nothing`, `tests/pg/test_normalized_ref_migration.py::test_migration_collision_stops_without_changes` |
 | IMP-09 | Несколько credentials | I3.1, I3.2 | missing | planned: `tests/pg/test_credentials_multi.py::test_two_keys_same_kind` |
 | IMP-10 | Два режима обновления session | I3.3 | missing | planned: `tests/pg/test_session_modes.py::test_replace_revokes_old` |
 | IMP-11 | Долговечные внешние операции | I4.1, I4.2, I4.3 | partial | planned: `tests/pg/test_provider_operations.py::test_claim_call_apply_recovery`. Сейчас есть таблица `ih_provider_operations` (миграция 0005) для админки, без claim/recovery |

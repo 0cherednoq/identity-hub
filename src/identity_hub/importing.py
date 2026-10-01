@@ -236,10 +236,15 @@ class ImportingMixin(SpaceBase):
         ready: list[_Prepared] = []
         seen: set[str] = set()
         for record in batch:  # валидация и шифрование — до транзакции (FR-2.4, T-5)
-            if record.external_ref in seen:
+            try:
+                key = svc.normalize_external_ref(record.external_ref)
+            except IdentityHubError as exc:
+                report.failed.append((record.external_ref, str(exc)))
+                continue
+            if key in seen:  # дубль считается после нормализации (IMP-08)
                 report.skipped.append((record.external_ref, "дубликат в пачке"))
                 continue
-            seen.add(record.external_ref)
+            seen.add(key)
             try:
                 sessions = dict(record.sessions)
                 auth = AuthState.NO_SESSION
@@ -278,7 +283,7 @@ class ImportingMixin(SpaceBase):
         failed: list[tuple[str, str]] = []
         try:
             async with self._tx(own=True) as tx:
-                refs = [(svc.name, p.record.external_ref) for p in ready]
+                refs = [(svc.name, p.prepared.row.unique_ref) for p in ready]
                 existing = await tx.find_by_refs(refs)
                 by_id = await tx.existing_identities([p.prepared.row.id for p in ready if p.record.id])
                 if mode is OnExisting.UPDATE_SESSION:
@@ -291,7 +296,7 @@ class ImportingMixin(SpaceBase):
                 to_link: list[_Prepared] = []
                 for item in ready:
                     row = item.prepared.row
-                    found = existing.get((svc.name, row.external_ref))
+                    found = existing.get((svc.name, row.unique_ref))
                     if found is not None or row.id in by_id:
                         await self._existing_record(tx, svc, item, found, mode, updated, skipped, failed)
                         continue
@@ -305,7 +310,7 @@ class ImportingMixin(SpaceBase):
                         await tx.adjust_proxy_load(proxy_id, 1)
                     for factor, state in item.record.verifications.items():
                         await self._initial_verification(tx, row.id, factor, state, actor)
-                    inserted[row.external_ref] = row.id
+                    inserted[row.unique_ref] = row.id
                     created.append(row.id)
                     if item.record.links:
                         to_link.append(item)
@@ -423,10 +428,11 @@ class ImportingMixin(SpaceBase):
                 await tx.insert_link(item.prepared.row.id, role, linked)
 
     def _link_ref(self, svc: Service, target: str) -> tuple[str, str]:
+        """Ссылка `[service:]external_ref` → (сервис, нормализованный ref целевого сервиса)."""
         prefix, sep, rest = target.partition(":")
         if sep and prefix in {s.name for s in self.hub.services}:
-            return prefix, rest
-        return svc.name, target
+            return prefix, self.hub.service(prefix).normalize_external_ref(rest)
+        return svc.name, svc.normalize_external_ref(target)
 
     async def _run_hook(self, hook: BatchHook, created: list[UUID], report: ImportReport) -> None:
         sessionmaker = getattr(self.hub.store, "sessionmaker", None)
@@ -506,7 +512,8 @@ class ImportRunner:
                 if (
                     existing is not None
                     and existing.service == run.service
-                    and existing.external_ref == record.external_ref
+                    and existing.normalized_ref
+                    == handle.hub.service(run.service).normalize_external_ref(record.external_ref)
                 ):
                     results.append(
                         ImportItemResult(

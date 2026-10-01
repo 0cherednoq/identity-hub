@@ -10,16 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I1.1 Нормализация external_ref
-- **Начата:** 2026-10-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Service.normalize_ref и normalize_ref_version
-  - [ ] миграция 0008: normalized_ref, backfill, коллизии, уникальность
-  - [ ] Store и модели: поиск и вставка по normalized_ref
-  - [ ] нормализация в create/ensure/find/import/links
-  - [ ] doctor: устаревшая версия нормализации и renormalize
-  - [ ] тесты: нормализаторы, дубли, импорт, миграция, parity
-  - [ ] документация и check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -41,7 +35,7 @@
 | I0.2b | Порядок блокировок и архитектурные границы | I0.2a | done |  |  |
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | done |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | done |  |  |
-| I1.1 | Нормализация external_ref | I0.3, I0.4 | in_progress |  |  |
+| I1.1 | Нормализация external_ref | I0.3, I0.4 | done |  |  |
 | I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | todo |  |  |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
@@ -67,7 +61,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 16 / 40 done
+**Итого:** 17 / 40 done
 
 ## Журнал сессий
 
@@ -89,3 +83,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-01 · I8.8b · done · admin/, examples, identity_hub.testing и все тесты на новых неймспейсах; фильтр pytest «устарел и будет удалён» как ошибка (библиотека и admin/); помощники tests/fixtures/api.py и admin/tests/factories/api.py; 680 + 89 тестов без предупреждений · дальше I8.9
 2026-10-01 · I8.9 · done · карта API (точка входа, неймспейсы, типовые операции по сущностям, состояния, лимиты), docs/guide/README/integrations/api-migration на новых именах, тест test_documentation_uses_current_api; фрагменты карты API выполнены на MemoryStore · дальше I8.10 после I1–I6
 2026-10-01 · I5.1 · done · hub.read: ReadSchema (6 таблиц, белый список колонок, версия 1, явная db_schema), join с таблицей приложения и among= в default/custom схеме, SQL без секретных полей, D-150 (параллельная ветка) · дальше I5.2 после I4.3
+2026-10-01 · I1.1 · done · normalized_ref (миграция 0008), Service.normalize_ref/version, нормализация во всех путях, doctor.renormalize, D-149; tests/load переведены на новый API · дальше I1.2

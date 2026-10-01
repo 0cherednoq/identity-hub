@@ -166,9 +166,10 @@ async def test_capped_count(space: SpaceHandle, sessionmaker: async_sessionmaker
     async with sessionmaker() as s, s.begin():
         await s.execute(
             text(
-                "INSERT INTO ih_identities (id, space_id, service, external_ref, lifecycle, standing, "
-                "auth_state, availability, error_score, fencing_seq, event_seq) "
-                "SELECT gen_random_uuid(), :space, 'fake_tg', 'bulk-' || g, 'ready', 'good', 'no_session', "
+                "INSERT INTO ih_identities (id, space_id, service, external_ref, normalized_ref, lifecycle, "
+                "standing, auth_state, availability, error_score, fencing_seq, event_seq) "
+                "SELECT gen_random_uuid(), :space, 'fake_tg', 'bulk-' || g, 'bulk-' || g, 'ready', 'good', "
+                "'no_session', "
                 "'available', 0, 0, 0 FROM generate_series(1, :n) g"
             ),
             {"space": ref.id, "n": COUNT_LIMIT + 5},

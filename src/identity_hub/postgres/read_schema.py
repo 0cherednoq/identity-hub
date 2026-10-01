@@ -37,6 +37,7 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "space_id": "space_id",
             "service": "service",
             "external_ref": "external_ref",
+            "normalized_ref": "normalized_ref",
             "lifecycle": "lifecycle",
             "standing": "standing",
             "standing_code": "standing_code",

@@ -27,6 +27,7 @@ from sqlalchemy import (
     Interval,
     LargeBinary,
     MetaData,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -253,13 +254,21 @@ class ImportItemRecord(EncryptedPayloadMixin, IdentityHubBase):
 # ---------------------------------------------------------------- идентичности
 
 
+def _default_normalized_ref(context: Any) -> str:
+    """Вставка без normalized_ref (ORM, фикстуры) — нормализация по умолчанию `str.strip` (D-149)."""
+    return str(context.get_current_parameters()["external_ref"]).strip()
+
+
 class IdentityRecord(IdentityHubBase):
     __tablename__ = "ih_identities"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="RESTRICT"))
     service: Mapped[str] = mapped_column(ForeignKey("ih_services.name", ondelete="RESTRICT"))
-    external_ref: Mapped[str] = mapped_column(String(256))  # телефон, логин, email
+    external_ref: Mapped[str] = mapped_column(String(256))  # телефон, логин, email — как ввели
+    # результат Service.normalize_ref: уникальность и поиск (IMP-08, миграция 0008)
+    normalized_ref: Mapped[str] = mapped_column(String(256), default=_default_normalized_ref)
+    normalize_version: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"))
 
     # --- регионы состояния (денормализовано для выборки; источник правды для
     #     синхронизируемых регионов — ih_region_states)
@@ -315,7 +324,7 @@ class IdentityRecord(IdentityHubBase):
 
     __table_args__ = (
         # глобально, а не в пространстве: один аккаунт не должен жить в двух пространствах
-        UniqueConstraint("service", "external_ref", name="uq_ih_identities_service_ref"),
+        UniqueConstraint("service", "normalized_ref", name="uq_ih_identities_service_normalized_ref"),
         # составной ключ для FK из дочерних таблиц — гарантирует совпадение space_id
         UniqueConstraint("id", "space_id", name="uq_ih_identities_id_space"),
         _enum_check("lifecycle", Lifecycle),
