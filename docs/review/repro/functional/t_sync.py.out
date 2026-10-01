@@ -1,0 +1,161 @@
+
+=== S1 refresh_many starved by provisioning identities
+сверка аккаунта 01a0f8d7-ef1c-77b4-9b77-581322d79994 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+сверка аккаунта 01a0f8d7-ef20-7598-affa-030345bb81f5 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+сверка аккаунта 01a0f8d7-ef21-77f1-8ac0-34d8221b2dd5 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+  run 0: probed=0 skipped=0 failed=['OperationNotAllowed: операция probe недопустима: lifecycle: ', 'OperationNotAllowed: операция probe недопустима: lifecycle: ', 'OperationNotAllowed: операция probe недопустима: lifecycle: ']
+сверка аккаунта 01a0f8d7-ef1c-77b4-9b77-581322d79994 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+сверка аккаунта 01a0f8d7-ef20-7598-affa-030345bb81f5 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+сверка аккаунта 01a0f8d7-ef21-77f1-8ac0-34d8221b2dd5 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+  run 1: probed=0 skipped=0 failed=['OperationNotAllowed: операция probe недопустима: lifecycle: ', 'OperationNotAllowed: операция probe недопустима: lifecycle: ', 'OperationNotAllowed: операция probe недопустима: lifecycle: ']
+сверка аккаунта 01a0f8d7-ef1c-77b4-9b77-581322d79994 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+сверка аккаунта 01a0f8d7-ef20-7598-affa-030345bb81f5 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+сверка аккаунта 01a0f8d7-ef21-77f1-8ac0-34d8221b2dd5 не удалась
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 125, in _reconcile
+    report.probed[identity_id] = await self._probe(lease, svc, targets)
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\sync.py", line 157, in _probe
+    async with lease.operation(PROBE_OPERATION):
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\operation.py", line 96, in operation_scope
+    raise OperationNotAllowed(kind, blockers)
+identity_hub.errors.OperationNotAllowed: операция probe недопустима: lifecycle: provisioning
+  run 2: probed=0 skipped=0 failed=['OperationNotAllowed: операция probe недопустима: lifecycle: ', 'OperationNotAllowed: операция probe недопустима: lifecycle: ', 'OperationNotAllowed: операция probe недопустима: lifecycle: ']
+  ready identities ever probed: False
+
+=== S2 probe raising
+  classifier=None: last='RuntimeError: platform 502' error_score=0.0 availability=available
+  !! EXC TimeoutError 
+
+=== S3 partial Probes / naive datetime / empty targets
+  auth only-standing Probes: {'auth': 'not_probed'}
+  naive observed_at -> TypeError can't compare offset-naive and offset-aware datetimes
+  refresh_many(['verification']) -> IndexError list index out of range
+
+=== S4 probe slower than 40s
+  result: {'standing': 'applied'}
+  standing: banned
+
+=== S5 standing timers starved by frozen-until rows
+  maintenance 0: region_timers=0 limited identity standing: limited
+  maintenance 1: region_timers=0 limited identity standing: limited
+  maintenance 2: region_timers=0 limited identity standing: limited
+
+=== S6 override verification / standing key
+  region state: verified identity.verified_factors: set()
+  eligible: True ()
+  after Override(standing,key='typo',banned): identity.standing = banned
+  restore ok -> banned
+  override of undeclared factor accepted
+
+=== S7 identity of unregistered service poisons maintenance
+  maintenance -> NotFound service не найден: b
+  service-a identity standing (should be good): limited

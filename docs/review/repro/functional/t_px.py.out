@@ -1,0 +1,17 @@
+
+=== V1 review/expiry
+  approve straight from pending (MANUAL, no submit): verified attempts: 0
+  3 days later (valid_for=1d), no maintenance run: lease for op requiring kyc granted; verified_factors = {'kyc'}
+  operation 'work' allowed with expired verification
+
+=== P1 outage -> dead forever
+  after 3 failures: ['quarantined', 'quarantined', 'quarantined']
+  !! EXC TypeError 'async_generator' object is not an iterator
+
+=== P2 pin bypass
+  pinned(7d) quarantined proxy after failed rechecks: dead pinned_until: 2026-01-08 00:00:00+00:00
+
+=== P3 import capacity
+  created: 10 proxy max_identities: 3 bound_count: 10
+  repr(parse_proxy_url): ParsedProxy(scheme='http', host='10.0.0.1', port=80, username='user', password='S3cret')
+  Proxies API: ['create', 'create_many', 'ensure', 'get', 'health', 'list', 'override', 'rebind', 'recheck', 'recheck_due', 'report_failure', 'report_success', 'url']

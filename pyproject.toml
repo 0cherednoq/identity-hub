@@ -86,7 +86,7 @@ exclude = ["__pycache__", "*.pyc"]
 line-length = 110
 target-version = "py312"
 src = ["src", "tests"]
-extend-exclude = ["*.md"]
+extend-exclude = ["*.md", "docs/review/repro"]  # repro — разовые скрипты ревью
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "RUF"]

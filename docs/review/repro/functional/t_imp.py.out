@@ -1,0 +1,63 @@
+
+=== E1 bad proxy url aborts import
+  imports.run -> ValueError Port could not be cast to integer value as 'abc'
+  identities committed despite exception (report lost): 2
+
+=== E2 one bad link rejects whole batch
+пачка импорта отклонена целиком
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\importing.py", line 317, in _import_batch
+    await self._import_links(tx, svc, to_link, inserted)
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\importing.py", line 426, in _import_links
+    raise IdentityHubError(f"связь {role}: аккаунт {service_name}:{ref} не найден")
+identity_hub.errors.IdentityHubError: связь email: аккаунт svc:nope не найден
+  created: 0 failed: 6 пачка отклонена: IdentityHubError: связь email: аккаунт svc:nope не найден
+
+=== E3 staged update_session
+  runner processed: 1
+  run state: succeeded created/updated/skipped/failed: 0 0 0 1
+  report: {'created_ids': [], 'skipped': [], 'failed': [{'position': 1, 'external_ref': 'c1', 'code': 'record_rejected', 'reason': 'record did not produce an import outcome'}]}
+  identity auth actually: authenticated (verify_sessions=True was requested)
+
+=== E4 staged poison record
+  run_once -> ValueError Port could not be cast to integer value as 'abc'
+  run_once -> ValueError Port could not be cast to integer value as 'abc'
+  run_once -> ValueError Port could not be cast to integer value as 'abc'
+  run1: running run2: pending
+обработчик due-очереди упал; элементы будут повторены
+Traceback (most recent call last):
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\dispatch\dispatcher.py", line 107, in run_once
+    total += await pump()
+             ^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\importing.py", line 485, in run_once
+    results = await self._process(handle, run, claimed)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\importing.py", line 531, in _process
+    report = await handle._import_many(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\importing.py", line 116, in _import_many
+    await self._import_batch(
+        svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id
+    )
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\importing.py", line 273, in _import_batch
+    proxy = self._prepare_proxy(record.proxy, pool, None, None, None, None, None, 3, None)  # type: ignore[attr-defined]
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\proxies.py", line 156, in _prepare_proxy
+    parsed = parse_proxy_url(url)
+  File "C:\Users\user\Desktop\AccountLibrarry\src\identity_hub\proxies.py", line 86, in parse_proxy_url
+    if not parts.hostname or parts.port is None:
+                             ^^^^^^^^^^
+  File "C:\Users\user\AppData\Roaming\uv\python\cpython-3.14-windows-x86_64-none\Lib\urllib\parse.py", line 182, in port
+    raise ValueError(f"Port could not be cast to integer value as {port!r}")
+ValueError: Port could not be cast to integer value as 'abc'
+  dispatcher.drain: 0
+
+=== E5 report content
+  failed: [('+79990001122', 'credentials не соответствует схеме Creds'), ('x2', 'credentials не соответствует схеме Creds')]
+  staged report: ImportRunInfo(id=UUID('01a0f8db-8b6e-73d1-958b-03d428364626'), service='svc', actor='import', source='s', state='succeeded', on_existing='skip', verify_sessions=False, labels={}, started_at=datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc), updated_at=datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc), finished_at=datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc), cancel_requested_at=None, total=1, processed=1, created=0, updated=0, skipped=0, failed=1, report={'created_ids': [], 'skipped': [], 'failed': [{'position': 1, 'external_ref': '+79990001133', 'code': 'record_rejected', 'reason': 'credentials не соответствует схеме Creds'}]})
+
+=== E6 file importers
+  importer received paths as-is: ['..\\..\\..\\..\\etc\\passwd', 'C:\\Windows\\win.ini']
+  importer returning list -> TypeError 'async for' requires an object with __aiter__ method, got list

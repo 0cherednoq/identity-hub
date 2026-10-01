@@ -1,0 +1,14 @@
+
+=== N1 burst without digest
+  300 bans, no digest -> {'succeeded': 200, 'dead': 100} delivered: 200 API calls: 2100
+
+=== N2 large digest
+  150 bans, digest 300s -> {'dead': 1} events in digest: 150 error: TelegramRejected: HTTP 400: Bad Request: message is too long too_long: 1
+
+=== R1 rollups cost / rebuild
+  events=601, rollup batches=7, rows re-read from ih_events=2207 (sizes [101, 101, 201, 301, 401, 501, 601]...)
+  telemetry rollup rows before rebuild: 6
+  after rollups.rebuild: telemetry rows: 0 event rows: 18
+
+=== M1 metric buffer growth
+  worker process w/o dispatcher, 120 min: pending metric keys = 720
