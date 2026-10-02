@@ -156,7 +156,7 @@ class _MemoryState:
     events: list[tuple[Event, UUID, bool]] = field(default_factory=list)
     cursors: dict[str, int] = field(default_factory=dict)
     rollups: dict[RollupKey, float] = field(default_factory=dict)
-    metric_batches: set[UUID] = field(default_factory=set)
+    metric_batches: dict[UUID, datetime] = field(default_factory=dict)  # квитанция → время записи
     state_snapshots: dict[tuple[UUID, str, str, str, datetime], int] = field(default_factory=dict)
     snapshot_coverage: dict[tuple[UUID, datetime], tuple[datetime, str, bool]] = field(default_factory=dict)
     webhook_endpoints: dict[UUID, WebhookEndpointRow] = field(default_factory=dict)
@@ -2595,7 +2595,7 @@ class MemoryStore(Store):
         async with self._lock:
             if batch_id in self._state.metric_batches:
                 return False
-            self._state.metric_batches.add(batch_id)
+            self._state.metric_batches[batch_id] = self.clock.now()
             for delta in rows:
                 row = delta.row
                 if delta.additive:
@@ -3030,11 +3030,12 @@ class MemoryStore(Store):
             return sorted(self._state.spaces.values(), key=lambda row: row.slug)
 
     async def cleanup_maintenance(
-        self, retention: Mapping[str, timedelta], names: frozenset[str]
+        self, retention: Mapping[str, timedelta], names: frozenset[str], *, batch_size: int = 1000
     ) -> dict[str, int]:
-        async with self._lock:
+        async with self._lock:  # в памяти транзакций нет: `batch_size` на результат не влияет
             now = self.clock.now()
             result: dict[str, int] = {}
+            never = datetime.max.replace(tzinfo=UTC)  # незавершённое не удаляется, как NULL в SQL
             if "quota_windows" in names:
                 keys = [key for key in self._state.quotas if key[3] + timedelta(seconds=key[2]) <= now]
                 for key in keys:
@@ -3047,27 +3048,44 @@ class MemoryStore(Store):
                 result["operation_keys"] = len(expired)
             cleanups: dict[str, tuple[Any, Callable[[Any], datetime]]] = {
                 "lease_logs": (self._state.lease_logs, lambda item: item["ts"]),
-                "lease_history": (self._state.history, lambda item: item.released_at or now),
+                "lease_history": (self._state.history, lambda item: item.released_at or never),
                 "events": (self._state.events, lambda item: item[0].occurred_at),
                 "webhook_deliveries": (self._state.webhook_deliveries, lambda item: item.created_at),
                 "notifications": (self._state.notifications, lambda item: item["scheduled_at"]),
                 "import_runs": (
                     self._state.import_runs,
-                    lambda item: item.finished_at or now,
+                    lambda item: item.finished_at or never,
                 ),
                 "provider_operations": (
                     self._state.provider_operations,
-                    lambda item: item.finished_at or now,
+                    lambda item: item.finished_at or never,
                 ),
+                "metric_batches": (self._state.metric_batches, lambda item: item),
+                "closed_challenges": (self._state.challenges, lambda item: item.resolved_at or never),
             }
-            for name in names & cleanups.keys():
+            # порядок фиксирован: доставки удалённых событий прибавляются к счёту `webhook_deliveries`
+            for name in [name for name in cleanups if name in names]:
                 collection, timestamp = cleanups[name]
                 retention_key = "deliveries" if name in {"webhook_deliveries", "notifications"} else name
                 cutoff = now - retention[retention_key]
                 if isinstance(collection, list):
                     old_count = len(collection)
+                    gone = (
+                        {item[0].event_id for item in collection if timestamp(item) < cutoff}
+                        if name == "events"
+                        else set()
+                    )
                     collection[:] = [item for item in collection if timestamp(item) >= cutoff]
                     result[name] = old_count - len(collection)
+                    if name == "events":
+                        orphaned = [
+                            delivery_id
+                            for delivery_id, row in self._state.webhook_deliveries.items()
+                            if row.event_id in gone
+                        ]
+                        for delivery_id in orphaned:
+                            del self._state.webhook_deliveries[delivery_id]
+                        result["webhook_deliveries"] = result.get("webhook_deliveries", 0) + len(orphaned)
                 else:
                     keys = [key for key, item in collection.items() if timestamp(item) < cutoff]
                     for key in keys:
@@ -3081,6 +3099,18 @@ class MemoryStore(Store):
                         for lease_id in [k for k in self._state.history_spaces if k not in collection]:
                             del self._state.history_spaces[lease_id]
                     result[name] = len(keys)
+            for name, size in (("rollup_hours", BucketSize.HOUR), ("rollup_days", BucketSize.DAY)):
+                if name not in names:
+                    continue
+                cutoff = now - retention[name]
+                rollup_keys = [
+                    key
+                    for key in self._state.rollups
+                    if key.bucket_size == size and key.bucket_start < cutoff
+                ]
+                for rollup_key in rollup_keys:
+                    del self._state.rollups[rollup_key]
+                result[name] = len(rollup_keys)
             return result
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:

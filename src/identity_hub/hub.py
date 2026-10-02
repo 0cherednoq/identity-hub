@@ -93,7 +93,11 @@ class Retention:
     import_runs: timedelta = timedelta(days=90)
     provider_operations: timedelta = timedelta(days=30)
     rollup_minutes: timedelta = timedelta(hours=48)
+    rollup_hours: timedelta = timedelta(days=90)
+    rollup_days: timedelta = timedelta(days=730)
     state_snapshots: timedelta = timedelta(days=365)
+    metric_batches: timedelta = timedelta(days=7)  # квитанции записи метрик (защита от повтора пачки)
+    closed_challenges: timedelta = timedelta(days=30)  # закрытые вопросы платформы
 
 
 class IdentityHub:

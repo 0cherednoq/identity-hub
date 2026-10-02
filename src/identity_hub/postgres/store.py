@@ -4452,6 +4452,8 @@ class PgStore(Store):
                             d.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
                             d.next_attempt_at <= func.now(),
                             ep.enabled.is_(True),
+                            # доставка без события не отправится никогда: её удалит retention
+                            select(literal(1)).where(e.event_id == d.event_id).exists(),
                         )
                         .order_by(d.next_attempt_at, d.id)
                         .limit(limit)
@@ -4869,46 +4871,144 @@ class PgStore(Store):
         return [SpaceRef(row.id, row.slug, row.title, row.timezone) for row in rows]
 
     async def cleanup_maintenance(
-        self, retention: Mapping[str, timedelta], names: frozenset[str]
+        self, retention: Mapping[str, timedelta], names: frozenset[str], *, batch_size: int = 1000
     ) -> dict[str, int]:
-        async with self._own() as session:
-            statements = {
-                "quota_windows": delete(QUOTAS).where(
-                    QUOTAS.c.window_start + func.make_interval(0, 0, 0, 0, 0, 0, QUOTAS.c.window_seconds)
-                    <= func.now()
-                ),
-                "operation_keys": delete(OPERATION_KEYS).where(OPERATION_KEYS.c.expires_at <= func.now()),
-                "lease_logs": delete(LEASE_LOGS).where(
-                    LEASE_LOGS.c.ts < func.now() - retention["lease_logs"]
-                ),
-                "lease_history": delete(HISTORY).where(
-                    HISTORY.c.released_at.is_not(None),
-                    HISTORY.c.released_at < func.now() - retention["lease_history"],
-                ),
-                "webhook_deliveries": delete(WEBHOOK_DELIVERIES).where(
-                    WEBHOOK_DELIVERIES.c.created_at < func.now() - retention["deliveries"]
-                ),
-                "notifications": delete(NOTIFICATIONS).where(
-                    func.coalesce(NOTIFICATIONS.c.sent_at, NOTIFICATIONS.c.scheduled_at)
-                    < func.now() - retention["deliveries"]
-                ),
-                "events": delete(EVENTS).where(EVENTS.c.occurred_at < func.now() - retention["events"]),
-                "import_runs": delete(IMPORT_RUNS).where(
-                    IMPORT_RUNS.c.finished_at.is_not(None),
-                    IMPORT_RUNS.c.finished_at < func.now() - retention["import_runs"],
-                ),
-                "provider_operations": delete(PROVIDER_OPERATIONS).where(
-                    PROVIDER_OPERATIONS.c.finished_at.is_not(None),
-                    PROVIDER_OPERATIONS.c.finished_at < func.now() - retention["provider_operations"],
-                ),
-            }
-            counts: dict[str, int] = {}
-            for name, stmt in statements.items():
-                if name not in names:
-                    continue
-                result = await _execute(session, stmt, execution_options=self.options)
-                counts[name] = int(result.rowcount or 0)  # type: ignore[attr-defined]
-            return counts
+        now = func.now()
+        counts: dict[str, int] = {}
+
+        def older(column: Any, name: str) -> Any:
+            return column < now - retention[name]
+
+        if "quota_windows" in names:
+            counts["quota_windows"] = 0
+            for seconds in await self._quota_window_sizes():
+                # отдельно на каждый размер окна: так условие ложится на индекс (window_seconds, window_start)
+                counts["quota_windows"] += await self._delete_batches(
+                    QUOTAS,
+                    [
+                        QUOTAS.c.window_seconds == seconds,
+                        QUOTAS.c.window_start <= now - timedelta(seconds=seconds),
+                    ],
+                    batch_size,
+                )
+        simple: dict[str, Callable[[], tuple[Table, list[Any]]]] = {
+            "operation_keys": lambda: (OPERATION_KEYS, [OPERATION_KEYS.c.expires_at <= now]),
+            "lease_logs": lambda: (LEASE_LOGS, [older(LEASE_LOGS.c.ts, "lease_logs")]),
+            "webhook_deliveries": lambda: (
+                WEBHOOK_DELIVERIES,
+                [older(WEBHOOK_DELIVERIES.c.created_at, "deliveries")],
+            ),
+            "notifications": lambda: (
+                NOTIFICATIONS,
+                [older(func.coalesce(NOTIFICATIONS.c.sent_at, NOTIFICATIONS.c.scheduled_at), "deliveries")],
+            ),
+            "import_runs": lambda: (IMPORT_RUNS, [older(IMPORT_RUNS.c.finished_at, "import_runs")]),
+            "provider_operations": lambda: (
+                PROVIDER_OPERATIONS,
+                [older(PROVIDER_OPERATIONS.c.finished_at, "provider_operations")],
+            ),
+            "metric_batches": lambda: (
+                METRIC_BATCHES,
+                [older(METRIC_BATCHES.c.created_at, "metric_batches")],
+            ),
+            "closed_challenges": lambda: (CHALLENGES, [older(CHALLENGES.c.resolved_at, "closed_challenges")]),
+            "rollup_hours": lambda: (
+                ROLLUPS,
+                [
+                    ROLLUPS.c.bucket_size == str(BucketSize.HOUR),
+                    older(ROLLUPS.c.bucket_start, "rollup_hours"),
+                ],
+            ),
+            "rollup_days": lambda: (
+                ROLLUPS,
+                [ROLLUPS.c.bucket_size == str(BucketSize.DAY), older(ROLLUPS.c.bucket_start, "rollup_days")],
+            ),
+        }
+        for name, build in simple.items():
+            if name in names:
+                table, conditions = build()
+                counts[name] = await self._delete_batches(table, conditions, batch_size)
+        if names & {"lease_history", "events"}:
+            # по пространствам: условие ложится на индексы (space_id, released_at) и (space_id, occurred_at)
+            spaces = [space.id for space in await self.maintenance_spaces()]
+            if "lease_history" in names:
+                counts["lease_history"] = 0
+                for space_id in spaces:
+                    counts["lease_history"] += await self._delete_batches(
+                        HISTORY,
+                        [HISTORY.c.space_id == space_id, older(HISTORY.c.released_at, "lease_history")],
+                        batch_size,
+                    )
+            if "events" in names:
+                events = deliveries = 0
+                for space_id in spaces:
+                    removed = await self._delete_event_batches(
+                        [EVENTS.c.space_id == space_id, older(EVENTS.c.occurred_at, "events")], batch_size
+                    )
+                    events += removed[0]
+                    deliveries += removed[1]
+                counts["events"] = events
+                counts["webhook_deliveries"] = counts.get("webhook_deliveries", 0) + deliveries
+        return counts
+
+    async def _quota_window_sizes(self) -> list[int]:
+        """Разные `window_seconds` в таблице квот: обход по индексу без чтения всех строк."""
+        q = QUOTAS.c
+        sizes = select(func.min(q.window_seconds).label("seconds")).cte("sizes", recursive=True)
+        following = select(func.min(q.window_seconds)).where(q.window_seconds > sizes.c.seconds)
+        sizes = sizes.union_all(select(following.scalar_subquery()).where(sizes.c.seconds.is_not(None)))
+        async with self.sessionmaker() as session:
+            rows = await _execute(
+                session,
+                select(sizes.c.seconds).where(sizes.c.seconds.is_not(None)),
+                execution_options=self.options,
+            )
+            return [int(seconds) for seconds in rows.scalars()]
+
+    @staticmethod
+    def _batch(table: Table, conditions: Sequence[Any], batch_size: int) -> Any:
+        """`DELETE` не больше `batch_size` строк, подходящих под `conditions`."""
+        keys = list(table.primary_key.columns)
+        key: Any = keys[0] if len(keys) == 1 else tuple_(*keys)
+        return delete(table).where(key.in_(select(*keys).where(*conditions).limit(batch_size)))
+
+    async def _delete_batches(self, table: Table, conditions: Sequence[Any], batch_size: int) -> int:
+        """Удалять пачками, каждая в своей транзакции, пока подходящие строки не кончатся."""
+        total = 0
+        while True:
+            async with self._own() as session:
+                result: Any = await _execute(
+                    session, self._batch(table, conditions, batch_size), execution_options=self.options
+                )
+                deleted = int(result.rowcount or 0)
+            total += deleted
+            if deleted < batch_size:
+                return total
+
+    async def _delete_event_batches(self, conditions: Sequence[Any], batch_size: int) -> tuple[int, int]:
+        """События вместе с их доставками вебхуков: (удалено событий, удалено доставок)."""
+        events = deliveries = 0
+        while True:
+            async with self._own() as session:
+                event_ids = list(
+                    (
+                        await _execute(
+                            session,
+                            self._batch(EVENTS, conditions, batch_size).returning(EVENTS.c.event_id),
+                            execution_options=self.options,
+                        )
+                    ).scalars()
+                )
+                if event_ids:
+                    result: Any = await _execute(
+                        session,
+                        delete(WEBHOOK_DELIVERIES).where(WEBHOOK_DELIVERIES.c.event_id.in_(event_ids)),
+                        execution_options=self.options,
+                    )
+                    deliveries += int(result.rowcount or 0)
+            events += len(event_ids)
+            if len(event_ids) < batch_size:
+                return events, deliveries
 
     # --------------------------------------------------------- doctor / rotate-key
 

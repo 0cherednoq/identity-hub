@@ -51,7 +51,9 @@ identity-hub rollups --factory app:hub --rebuild --space main \
 Обе команды изменяют данные и требуют подтверждения флагом `--yes`.
 
 Минутные строки автоматически удаляются dispatcher-ом раз в час после 48 часов (срок меняется
-через `Retention.rollup_minutes`). Ручная очистка:
+через `Retention.rollup_minutes`). Часовые корзины хранятся 90 дней (`Retention.rollup_hours`),
+суточные — 730 дней (`Retention.rollup_days`); их удаляет суточное обслуживание. Ручная очистка
+минутных строк:
 
 ```console
 identity-hub rollups --factory app:hub --purge-minutes --yes

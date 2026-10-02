@@ -242,3 +242,21 @@ async def test_user_transport_is_not_closed_and_hub_is_a_context_manager() -> No
         await make_identity(hub.space("s", "S"), service="svc")  # start() выполнен
 
     assert transport.closed == 0  # транспорт создал вызывающий — он его и закрывает
+
+
+async def test_day_bucket_survives_purge_of_its_hour_buckets() -> None:
+    """F4.1b: часовые корзины суток уже очищены — сутки пересчитываются по журналу, а не по остаткам."""
+    hub, clock, space = await _hub()
+    await _emit(space, 2)
+    await hub.dispatcher.drain()
+    clock.advance(3600)
+    await _emit(space, 1)  # событие дождётся обработки позже срока хранения часовых корзин
+    clock.advance(timedelta(days=100))
+    counts = await hub._store.cleanup_maintenance(
+        {"rollup_hours": hub.retention.rollup_hours}, frozenset({"rollup_hours"})
+    )
+    assert counts["rollup_hours"] > 0
+
+    await hub.dispatcher.drain()
+
+    assert await _total(hub, BucketSize.DAY) == 3

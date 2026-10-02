@@ -1787,9 +1787,21 @@ class Store(ABC):
 
     @abstractmethod
     async def cleanup_maintenance(
-        self, retention: Mapping[str, timedelta], names: frozenset[str]
+        self, retention: Mapping[str, timedelta], names: frozenset[str], *, batch_size: int = 1000
     ) -> dict[str, int]:
-        """Удалить завершившиеся окна квот и старые журнальные данные по времени БД."""
+        """Удалить по времени хранилища данные категорий `names`; вернуть число строк по категориям.
+
+        Категории: `quota_windows` (завершившиеся окна), `operation_keys` (истёкшие ключи),
+        `lease_logs`, `lease_history` (закрытые аренды), `webhook_deliveries`, `notifications`,
+        `events`, `import_runs`, `provider_operations` (завершённые), `metric_batches`,
+        `closed_challenges`, `rollup_hours`, `rollup_days`. Срок берётся из `retention` по имени
+        категории; у `webhook_deliveries` и `notifications` общий срок `deliveries`, у
+        `quota_windows` срока нет.
+
+        Вместе с событиями удаляются их доставки вебхуков; они входят в счёт `webhook_deliveries`.
+        Удаление идёт пачками не больше `batch_size` строк, каждая — в своей транзакции: сбой
+        посреди чистки не откатывает уже удалённое, а долгая транзакция не держит блокировки.
+        """
 
     # --------------------------------------------------------- doctor / rotate-key (P9.2)
 

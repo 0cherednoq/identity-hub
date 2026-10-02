@@ -223,8 +223,8 @@ class StatsRollups:
 
         Из журнала перечитываются только затронутые минуты, а не сутки: часовые корзины
         собираются из минутных, суточные — из часовых (R2-F11). Так стоимость пачки не растёт
-        с числом событий за день. Для событий старше хранимых минутных корзин час или сутки
-        пересчитываются по журналу.
+        с числом событий за день. Для событий старше хранимых минутных корзин час
+        пересчитывается по журналу; сутки старше хранимых часовых корзин — тоже по журналу.
         """
         if not events:
             return
@@ -233,11 +233,16 @@ class StatsRollups:
         for event in events:
             if event.space in spaces:
                 by_space[event.space].append(event)
-        fresh_after = self.hub.clock.now() - self.hub.retention.rollup_minutes + timedelta(hours=1)
+        now = self.hub.clock.now()
+        fresh_after = now - self.hub.retention.rollup_minutes + timedelta(hours=1)
+        # сутки с запасом: часовые корзины суток либо все на месте, либо сутки считаются по журналу
+        hours_after = now - self.hub.retention.rollup_hours + timedelta(days=2)
         for slug, items in by_space.items():
-            await self._recompute(spaces[slug], items, fresh_after)
+            await self._recompute(spaces[slug], items, fresh_after, hours_after)
 
-    async def _recompute(self, space: Any, events: list[Event], fresh_after: datetime) -> None:
+    async def _recompute(
+        self, space: Any, events: list[Event], fresh_after: datetime, hours_after: datetime
+    ) -> None:
         store = self.hub._store
         minutes = sorted(
             {bucket_start(event.occurred_at, BucketSize.MINUTE, space.timezone) for event in events}
@@ -267,8 +272,8 @@ class StatsRollups:
         rows = []
         for day in days:
             end = next_bucket(day, BucketSize.DAY, space.timezone)
-            if day.minute == 0 and end.minute == 0:
-                # сутки пространства состоят из целых часов UTC
+            if day.minute == 0 and end.minute == 0 and day >= hours_after:
+                # сутки пространства состоят из целых часов UTC, и их часовые корзины ещё хранятся
                 rows += _summed(
                     await store.event_rollup_rows(space.id, BucketSize.HOUR, day, end), day, BucketSize.DAY
                 )

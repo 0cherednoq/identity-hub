@@ -213,6 +213,11 @@ class ImportRunRecord(IdentityHubBase):
             "updated_at",
             postgresql_where=text("state IN ('pending', 'running', 'cancelling')"),
         ),
+        Index(
+            "ix_ih_import_runs_finished",
+            "finished_at",
+            postgresql_where=text("finished_at IS NOT NULL"),
+        ),
     )
 
 
@@ -647,6 +652,8 @@ class ChallengeRecord(IdentityHubBase):
         ),
         # все вопросы аккаунта, включая закрытые: каскад при удалении аккаунта (миграция 0014)
         Index("ix_ih_challenges_identity", "identity_id", "created_at"),
+        # чистка закрытых вопросов по сроку хранения (миграция 0015)
+        Index("ix_ih_challenges_resolved", "resolved_at", postgresql_where=text("resolved_at IS NOT NULL")),
     )
 
 
@@ -796,7 +803,8 @@ class QuotaUsageRecord(IdentityHubBase):
 
     __table_args__ = (
         _identity_fk(),
-        Index("ix_ih_quota_usage_window_start", "window_start"),  # для чистки старых окон
+        # чистка завершившихся окон: отдельно по каждому размеру окна (миграция 0015)
+        Index("ix_ih_quota_usage_window", "window_seconds", "window_start"),
     )
 
 
@@ -867,6 +875,11 @@ class ProviderOperationRecord(IdentityHubBase):
             "ix_ih_provider_operations_stale",
             "claim_expires_at",
             postgresql_where=text("state = 'running'"),
+        ),
+        Index(
+            "ix_ih_provider_operations_finished",
+            "finished_at",
+            postgresql_where=text("finished_at IS NOT NULL"),
         ),
     )
 
@@ -1035,6 +1048,12 @@ class StatsRollupRecord(IdentityHubBase):
             "bucket_start",
             postgresql_where=text("bucket_size = '1m'"),
         ),
+        Index(
+            "ix_ih_stats_rollup_coarse_retention",
+            "bucket_size",
+            "bucket_start",
+            postgresql_where=text("bucket_size IN ('1h', '1d')"),
+        ),
     )
 
 
@@ -1045,6 +1064,8 @@ class StatsMetricBatchRecord(IdentityHubBase):
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_ih_stats_metric_batches_created_at", "created_at"),)
 
 
 class StateSnapshotCoverageRecord(IdentityHubBase):
@@ -1150,6 +1171,8 @@ class WebhookDeliveryRecord(IdentityHubBase):
             "next_attempt_at",
             postgresql_where=text("status IN ('pending', 'failed')"),
         ),
+        Index("ix_ih_webhook_deliveries_created_at", "created_at"),  # чистка по сроку хранения
+        Index("ix_ih_webhook_deliveries_event_id", "event_id"),  # доставки удаляемых событий
     )
 
 
@@ -1228,6 +1251,8 @@ class NotificationRecord(IdentityHubBase):
         CheckConstraint("status IN ('pending', 'succeeded', 'failed', 'dead')", name="status_valid"),
         Index("ix_ih_notifications_rule_id", "rule_id"),
         Index("ix_ih_notifications_channel_id", "channel_id"),
+        # чистка по сроку хранения: отправленные — от sent_at, остальные — от scheduled_at
+        Index("ix_ih_notifications_retention", text("(COALESCE(sent_at, scheduled_at))")),
         # одно открытое окно дайджеста на правило
         Index(
             "uq_ih_notifications_open_digest",

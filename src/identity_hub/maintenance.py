@@ -26,6 +26,7 @@ class MaintenanceSchedule:
     cleanup_hourly_seconds: float = 3600
     cleanup_daily_seconds: float = 86400
     batch_size: int = 500
+    cleanup_batch_size: int = 1000  # строк на одну транзакцию удаления
 
 
 @dataclass(slots=True)
@@ -182,11 +183,17 @@ class Maintenance:
             "operation_keys": retention.operation_keys,
             "import_runs": retention.import_runs,
             "provider_operations": retention.provider_operations,
+            "metric_batches": retention.metric_batches,
+            "closed_challenges": retention.closed_challenges,
+            "rollup_hours": retention.rollup_hours,
+            "rollup_days": retention.rollup_days,
         }
 
     async def _hourly(self) -> MaintenanceReport:
         counts = await self.hub._store.cleanup_maintenance(
-            self._retention(), frozenset({"quota_windows", "operation_keys"})
+            self._retention(),
+            frozenset({"quota_windows", "operation_keys"}),
+            batch_size=self.schedule.cleanup_batch_size,
         )
         return MaintenanceReport(Counter(counts))
 
@@ -202,7 +209,12 @@ class Maintenance:
                     "events",
                     "import_runs",
                     "provider_operations",
+                    "metric_batches",
+                    "closed_challenges",
+                    "rollup_hours",
+                    "rollup_days",
                 }
             ),
+            batch_size=self.schedule.cleanup_batch_size,
         )
         return MaintenanceReport(Counter(counts))
