@@ -15,12 +15,26 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-__all__ = ["MIGRATION_LOCK_NAMESPACE", "SCHEMA_HEAD", "VERSION_TABLE", "alembic_config", "migrate"]
+__all__ = [
+    "MIGRATION_LOCK_NAMESPACE",
+    "SCHEMA_COMPATIBLE",
+    "SCHEMA_HEAD",
+    "VERSION_TABLE",
+    "alembic_config",
+    "migrate",
+]
 
 SCRIPT_LOCATION = "identity_hub.postgres:migrations"
 VERSION_TABLE = "ih_alembic_version"
 # Ревизия, которую ожидает этот код; новая миграция обязана обновить значение (тест сверяет с alembic head).
 SCHEMA_HEAD = "0016"
+# Ревизии, на которых этот код работает (D-152, D-182): `hub.start()` принимает любую из них.
+# Новая ревизия добавляется в множество; прежние остаются, пока код работает и без неё
+# (ревизия только добавляет то, что код использует необязательно: индексы, пересчёт данных,
+# колонку со значением по умолчанию). Если код без новой ревизии работать не может, все более
+# старые ревизии из множества убираются. Сейчас нижняя граница — 0014 (статус доставки `paused`):
+# 0015 добавляет индексы, 0016 пересчитывает счётчик привязок.
+SCHEMA_COMPATIBLE = frozenset({"0014", "0015", "0016"})
 MIGRATION_LOCK_NAMESPACE = "identity_hub:migrate"
 # имя схемы подставляется в SQL: только обычный идентификатор PostgreSQL (до 63 символов)
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")

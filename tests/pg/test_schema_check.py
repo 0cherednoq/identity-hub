@@ -11,18 +11,21 @@ from uuid import uuid4
 
 import pytest
 from alembic.script import ScriptDirectory
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from identity_hub import IdentityHub, SchemaIncompatible, StaticSecretsProvider
 from identity_hub.postgres.migrate import (
     MIGRATION_LOCK_NAMESPACE,
+    SCHEMA_COMPATIBLE,
     SCHEMA_HEAD,
     VERSION_TABLE,
     alembic_config,
     migrate,
 )
 from tests.conftest import TEST_KEYS
+from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_TG
 
 pytestmark = [pytest.mark.anyio, pytest.mark.pg]
@@ -121,3 +124,73 @@ async def test_regular_work_does_not_take_migration_lock(db: AsyncEngine, schema
             )
         finally:
             await transaction.rollback()
+
+
+# ---------------------------------------------------------------- F4.3: совместимые ревизии (R1-17)
+
+_OLDEST_COMPATIBLE = min(SCHEMA_COMPATIBLE)
+_REVISIONS = [script.revision for script in ScriptDirectory.from_config(alembic_config()).walk_revisions()]
+
+
+def test_compatible_revisions_are_a_tail_of_history_ending_at_head() -> None:
+    """Код совместим с непрерывным хвостом истории: дыр и ревизий старше/новее истории нет."""
+    history = sorted(_REVISIONS)
+    assert SCHEMA_HEAD in SCHEMA_COMPATIBLE
+    assert sorted(SCHEMA_COMPATIBLE) == history[history.index(_OLDEST_COMPATIBLE) :]
+
+
+@pytest.mark.parametrize("revision", sorted(SCHEMA_COMPATIBLE))
+async def test_compatible_revision_starts_and_works(db: AsyncEngine, schema: str, revision: str) -> None:
+    """R1-17: код запускается и работает на любой ревизии из `SCHEMA_COMPATIBLE` — выкат без простоя."""
+    await migrate(db, db_schema=schema, revision=revision)
+    hub = _hub(db, schema)
+
+    await hub.start()
+
+    space = hub.space("compat", "Compat")
+    reg = await register(
+        space, service="fake_tg", external_ref="+100", lifecycle="ready", session={"auth_key": "k"}
+    )
+    lease = await space.pools.define("p", service="fake_tg").acquire()
+    assert lease.identity_id == reg.identity_id
+    await lease.release()
+    endpoint = await space.webhooks.create(
+        url="https://hooks.example.test/compat", secret=SecretStr("s"), event_types=["identity.updated"]
+    )
+    await space.webhooks.set_enabled(endpoint.id, False, reason="test")
+    report = await hub.maintenance.run_all()
+    assert report.counts["leases"] == 0
+
+
+async def test_revision_older_than_compatible_points_to_migrate(db: AsyncEngine, schema: str) -> None:
+    history = sorted(_REVISIONS)
+    too_old = history[history.index(_OLDEST_COMPATIBLE) - 1]
+    await migrate(db, db_schema=schema, revision=too_old)
+
+    with pytest.raises(SchemaIncompatible) as exc:
+        await _hub(db, schema).start()
+
+    assert exc.value.actual == too_old
+    assert "identity-hub migrate" in str(exc.value)
+
+
+async def test_revision_newer_than_code_points_to_package_upgrade(db: AsyncEngine, schema: str) -> None:
+    """Схема новее кода: `migrate` не поможет, нужно обновить пакет."""
+    await migrate(db, db_schema=schema)
+    await _set_versions(db, schema, ["9999"])
+
+    with pytest.raises(SchemaIncompatible) as exc:
+        await _hub(db, schema).start()
+
+    message = str(exc.value)
+    assert "identity-hub migrate" not in message and "обновите" in message
+
+
+async def test_missing_schema_points_to_migrate(db: AsyncEngine, schema: str) -> None:
+    async with db.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+
+    with pytest.raises(SchemaIncompatible) as exc:
+        await _hub(db, schema).start()
+
+    assert "identity-hub migrate" in str(exc.value)

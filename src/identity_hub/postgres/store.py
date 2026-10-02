@@ -74,7 +74,7 @@ from identity_hub.errors import (
 )
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
-from identity_hub.postgres.migrate import SCHEMA_HEAD, VERSION_TABLE
+from identity_hub.postgres.migrate import SCHEMA_COMPATIBLE, SCHEMA_HEAD, VERSION_TABLE
 from identity_hub.postgres.models import (
     XID8,
     BindingRecord,
@@ -3956,6 +3956,9 @@ class PgStore(Store):
                 return SCHEMA_HEAD, []
             revisions = [str(row[0]) for row in rows]
             return SCHEMA_HEAD, revisions
+
+    def compatible_revisions(self, expected: str) -> frozenset[str]:
+        return SCHEMA_COMPATIBLE
 
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         if not services:

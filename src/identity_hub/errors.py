@@ -327,7 +327,15 @@ class SchemaIncompatible(IdentityHubError):
     def __init__(self, expected: str, actual: str | None) -> None:
         self.expected = expected
         self.actual = actual
-        super().__init__(f"схема БД {actual or 'отсутствует'}, ожидается {expected}")
+        if actual is None:
+            remedy = "выполните `identity-hub migrate`"
+        elif "," in actual:
+            remedy = "в таблице версий несколько ревизий: восстановите её, затем `identity-hub migrate`"
+        elif actual > expected:  # номера ревизий — строки одной длины с ведущими нулями
+            remedy = "схема новее кода: обновите пакет identity-hub"
+        else:
+            remedy = "выполните `identity-hub migrate`"
+        super().__init__(f"схема БД {actual or 'отсутствует'}, ожидается {expected}; {remedy}")
 
 
 class SecretConfigurationError(IdentityHubError):

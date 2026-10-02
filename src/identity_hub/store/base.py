@@ -1614,6 +1614,10 @@ class Store(ABC):
         Фактических несколько — разветвлённая история; пусто — схема не создана.
         """
 
+    def compatible_revisions(self, expected: str) -> frozenset[str]:
+        """Ревизии схемы, на которых работает код библиотеки; по умолчанию — только ожидаемая."""
+        return frozenset({expected})
+
     @abstractmethod
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         """Зеркало реестра сервисов для админки (FR-1.3)."""

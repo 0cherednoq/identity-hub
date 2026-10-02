@@ -238,11 +238,12 @@ class IdentityHub:
     async def start(self) -> None:
         """Проверить ревизию схемы и синхронизировать реестр сервисов (FR-1.3, IMP-15).
 
-        Схема БД должна быть ровно той ревизии, что ожидает код: иначе `SchemaIncompatible`
-        (без URL и SQL). Миграции `start()` не применяет — это `identity-hub migrate`.
+        Схема БД должна быть одной из ревизий, с которыми работает код (`SCHEMA_COMPATIBLE`):
+        иначе `SchemaIncompatible` (без URL и SQL) с указанием, что делать. Миграции `start()`
+        не применяет — это `identity-hub migrate`.
         """
         expected, actual = await self._store.schema_revisions()
-        if actual != [expected]:
+        if len(actual) != 1 or actual[0] not in self._store.compatible_revisions(expected):
             raise SchemaIncompatible(expected, ", ".join(actual) or None)
         await self._store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
 
