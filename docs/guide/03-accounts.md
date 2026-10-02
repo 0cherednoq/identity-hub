@@ -201,7 +201,8 @@ report.created, report.updated, report.skipped, report.failed   # списки i
   свежие.
 - `space.imports.stage(...)` — фоновый импорт до 10 000 записей: данные сохраняются
   зашифрованными, обрабатывает их диспетчер. Состояние — `imports.get(run_id)`, отмена —
-  `imports.cancel(run_id)`.
+  `imports.cancel(run_id)`. Если запись не удалось расшифровать (мастер-ключ убран до ротации),
+  прогон завершается `failed` с кодом `staged_payload_unreadable`, а запись остаётся в БД.
 - `space.imports.run_files(service=..., paths=[...])` — читает файлы вашими `FileImporter`
   из `Service.importers` (`can_import(path)`, `read(path)` → `ImportRecord`). Готовых
   импортёров `.session`/tdata в библиотеке нет.

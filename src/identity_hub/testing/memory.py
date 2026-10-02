@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from identity_hub.clock import Clock, SystemClock
-from identity_hub.crypto.envelope import EncryptedPayload, associated_data
+from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
@@ -33,6 +33,7 @@ from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
+    UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
     CandidateQuery,
@@ -81,12 +82,14 @@ from identity_hub.store.base import (
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
+    RotationBatch,
     SearchFilter,
     ServiceRow,
     SessionMetadataRow,
     SpaceRef,
     Store,
     StoreTx,
+    UnreadableSecret,
     VerificationRow,
     WebhookAttempt,
     WebhookDeliveryRow,
@@ -2179,11 +2182,17 @@ class MemoryTx(StoreTx):
             if item_run == run_id and item["state"] in {"pending", "running"}
         ]
         running = [item for item in open_items if item["state"] == "running"]
+        unreadable_keys = {
+            key
+            for key, item in self.state.import_items.items()
+            if key[0] == run_id and item.get("error_code") == UNREADABLE_IMPORT_ITEM
+        }
         terminal = None
         if run.cancel_requested_at is not None and not running:
             terminal = "cancelled"
         elif not open_items:
-            terminal = "succeeded"
+            # нерасшифрованные записи — не «успех»: прогон failed, сами записи остаются (R2-S09)
+            terminal = "failed" if unreadable_keys else "succeeded"
         row = replace(
             run,
             state=terminal or run.state,
@@ -2198,7 +2207,8 @@ class MemoryTx(StoreTx):
         )
         self.state.import_runs[run_id] = row
         if terminal:
-            for key in [key for key in self.state.import_items if key[0] == run_id]:
+            keep = unreadable_keys if terminal == "failed" else set()
+            for key in [key for key in self.state.import_items if key[0] == run_id and key not in keep]:
                 del self.state.import_items[key]
         return deepcopy(row)
 
@@ -2917,67 +2927,83 @@ class MemoryStore(Store):
                         self._state.proxy_load[proxy_id] = expected_load
             return issues
 
-    async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]:
+    def _rotation_views(self) -> dict[str, tuple[Any, Callable[[Any], bytes]]]:
+        state = self._state
+        return {
+            "credentials": (state.credentials, lambda key: associated_data("ih_credentials", key)),
+            "sessions": (
+                _PayloadView(state.sessions, 0),
+                lambda key: associated_data("ih_sessions", key[0], key[1]),
+            ),
+            "challenges": (
+                _AttributePayloadView(state.challenges, "context"),
+                lambda key: associated_data("ih_challenges", state.challenges[key].identity_id, str(key)),
+            ),
+            "verifications": (
+                _AttributePayloadView(state.verifications, "evidence", skip_none=True),
+                lambda key: associated_data("ih_verifications", key[0], key[1]),
+            ),
+            "proxies": (
+                _AttributePayloadView(state.proxies, "secret"),
+                lambda key: associated_data("ih_proxies", key),
+            ),
+            "webhooks": (
+                _AttributePayloadView(state.webhook_endpoints, "secret"),
+                lambda key: associated_data("ih_webhook_endpoints", key),
+            ),
+            "notification_channels": (
+                _PayloadView(state.notification_channels, 1),
+                lambda key: associated_data("ih_notification_channels", key),
+            ),
+            "profiles": (
+                state.profile_secrets,
+                lambda key: associated_data("ih_identities", key, "profile"),
+            ),
+            "import_items": (
+                _ItemPayloadView(state.import_items, "payload"),
+                lambda key: associated_data("ih_import_items", key[0], str(key[1])),
+            ),
+        }
+
+    async def rotate_key(
+        self, envelope: Any, *, table: str, limit: int, after: tuple[Any, ...] | None = None
+    ) -> RotationBatch:
         active = envelope.active_key_id
-        remaining = max(0, limit)
-        counts: dict[str, int] = {}
-
-        def rotate(name: str, mapping: Any, aad: Callable[[Any, Any], bytes]) -> None:
-            nonlocal remaining
-            count = 0
-            for key, payload in list(mapping.items()):
-                if remaining == 0:
-                    break
-                if payload.key_id == active:
-                    continue
-                mapping[key] = envelope.rewrap(payload, aad(key, payload), upgrade=name != "challenges")
-                count += 1
-                remaining -= 1
-            if count:
-                counts[name] = count
-
+        size = max(1, limit)
         async with self._lock:
-            rotate(
-                "credentials", self._state.credentials, lambda key, _: associated_data("ih_credentials", key)
-            )
-            rotate(
-                "sessions",
-                _PayloadView(self._state.sessions, 0),
-                lambda key, _: associated_data("ih_sessions", key[0], key[1]),
-            )
-            rotate(
-                "challenges",
-                _AttributePayloadView(self._state.challenges, "context"),
-                lambda key, _: associated_data(
-                    "ih_challenges", self._state.challenges[key].identity_id, str(key)
+            view, aad = self._rotation_views()[table]
+            stale = sorted(
+                (
+                    (_rotation_cursor(key), key, payload)
+                    for key, payload in list(view.items())
+                    if payload.key_id != active
                 ),
+                key=lambda item: item[0],
             )
-            rotate(
-                "verifications",
-                _AttributePayloadView(self._state.verifications, "evidence", skip_none=True),
-                lambda key, _: associated_data("ih_verifications", key[0], key[1]),
-            )
-            rotate(
-                "proxies",
-                _AttributePayloadView(self._state.proxies, "secret"),
-                lambda key, _: associated_data("ih_proxies", key),
-            )
-            rotate(
-                "webhooks",
-                _AttributePayloadView(self._state.webhook_endpoints, "secret"),
-                lambda key, _: associated_data("ih_webhook_endpoints", key),
-            )
-            rotate(
-                "notification_channels",
-                _PayloadView(self._state.notification_channels, 1),
-                lambda key, _: associated_data("ih_notification_channels", key),
-            )
-            rotate(
-                "profiles",
-                self._state.profile_secrets,
-                lambda key, _: associated_data("ih_identities", key, "profile"),
-            )
-        return counts
+            page = [item for item in stale if after is None or item[0] > after][:size]
+            rotated = 0
+            unreadable: list[UnreadableSecret] = []
+            for cursor, key, payload in page:
+                try:
+                    view[key] = envelope.rewrap(payload, aad(key), upgrade=table != "challenges")
+                except DecryptionFailed:
+                    unreadable.append(UnreadableSecret(table, "/".join(cursor)))
+                    continue
+                rotated += 1
+        last = page[-1][0] if len(page) >= size else None
+        return RotationBatch(rotated, tuple(unreadable), last)
+
+    async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
+        usage: dict[str, dict[str, int]] = {}
+        async with self._lock:
+            for name, (view, _aad) in self._rotation_views().items():
+                counts: dict[str, int] = defaultdict(int)
+                for _key, payload in list(view.items()):
+                    if payload.key_id != active:
+                        counts[payload.key_id] += 1
+                if counts:
+                    usage[name] = dict(counts)
+        return usage
 
     async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         async with self._lock:
@@ -3040,6 +3066,25 @@ class MemoryStore(Store):
                     "notifications": any(row.get("error") is not None for row in notification_rows),
                 },
             )
+
+
+def _rotation_cursor(key: Any) -> tuple[str, ...]:
+    """Первичный ключ записи как кортеж строк: порядок обхода и идентификатор в отчёте ротации."""
+    return tuple(str(part) for part in (key if isinstance(key, tuple) else (key,)))
+
+
+class _ItemPayloadView:
+    """Изменяемое представление payload внутри записей-словарей (элементы импорта)."""
+
+    def __init__(self, source: dict[Any, dict[str, Any]], field_name: str) -> None:
+        self.source = source
+        self.field_name = field_name
+
+    def items(self) -> list[tuple[Any, EncryptedPayload]]:
+        return [(key, row[self.field_name]) for key, row in self.source.items()]
+
+    def __setitem__(self, key: Any, value: EncryptedPayload) -> None:
+        self.source[key][self.field_name] = value
 
 
 class _PayloadView:

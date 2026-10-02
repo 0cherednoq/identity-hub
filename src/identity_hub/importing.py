@@ -20,12 +20,13 @@ from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
 from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
+from identity_hub.crypto.envelope import DecryptionFailed
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle
 from identity_hub.errors import IdentityHubError, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
-from identity_hub.store.base import ImportItemResult, NewImportItem, NewImportRun
+from identity_hub.store.base import UNREADABLE_IMPORT_ITEM, ImportItemResult, NewImportItem, NewImportRun
 
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub
@@ -499,6 +500,17 @@ class ImportRunner:
             try:
                 raw = self.hub._envelope.open_json(item.payload, _import_aad(run.id, item.position))
                 records.append((item, _payload_record(raw)))
+            except DecryptionFailed:
+                # ключа нет или шифртекст повреждён: запись остаётся в БД, прогон завершится failed
+                results.append(
+                    ImportItemResult(
+                        item.position,
+                        item.claim_token,
+                        "failed",
+                        error_code=UNREADABLE_IMPORT_ITEM,
+                        error="staged payload cannot be decrypted",
+                    )
+                )
             except Exception as exc:
                 results.append(
                     ImportItemResult(

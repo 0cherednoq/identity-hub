@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable, Select
 
 from identity_hub._ids import new_id
-from identity_hub.crypto.envelope import EncryptedPayload, associated_data
+from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import (
@@ -111,6 +111,7 @@ from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
     NOTIFY_CHANNEL,
+    UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
     CandidateQuery,
@@ -159,12 +160,14 @@ from identity_hub.store.base import (
     ProxyRow,
     QuotaCharge,
     QuotaWindow,
+    RotationBatch,
     SearchFilter,
     ServiceRow,
     SessionMetadataRow,
     SpaceRef,
     Store,
     StoreTx,
+    UnreadableSecret,
     VerificationRow,
     WebhookAttempt,
     WebhookDeliveryRow,
@@ -3331,7 +3334,18 @@ class PgTx(StoreTx):
         if run.cancel_requested_at is not None and remaining_running == 0:
             terminal = "cancelled"
         elif remaining_open == 0:
-            terminal = "succeeded"
+            unreadable = (
+                await self.execute(
+                    select(func.count())
+                    .select_from(IMPORT_ITEMS)
+                    .where(
+                        IMPORT_ITEMS.c.run_id == run_id,
+                        IMPORT_ITEMS.c.error_code == UNREADABLE_IMPORT_ITEM,
+                    )
+                )
+            ).scalar_one()
+            # нерасшифрованные записи — не «успех»: прогон failed, сами записи остаются (R2-S09)
+            terminal = "failed" if unreadable else "succeeded"
         values: dict[str, Any] = {
             "processed": IMPORT_RUNS.c.processed + accepted,
             "created": IMPORT_RUNS.c.created + counts["created"],
@@ -3345,7 +3359,10 @@ class PgTx(StoreTx):
             values.update(state=terminal, finished_at=func.now())
         await self.execute(update(IMPORT_RUNS).where(IMPORT_RUNS.c.id == run_id).values(**values))
         if terminal is not None:
-            await self.execute(delete(IMPORT_ITEMS).where(IMPORT_ITEMS.c.run_id == run_id))
+            finished = delete(IMPORT_ITEMS).where(IMPORT_ITEMS.c.run_id == run_id)
+            if terminal == "failed":
+                finished = finished.where(IMPORT_ITEMS.c.error_code.is_distinct_from(UNREADABLE_IMPORT_ITEM))
+            await self.execute(finished)
         return await self.get_import_run(run_id)
 
     async def request_import_cancel(self, run_id: UUID) -> ImportRunRow | None:
@@ -4809,91 +4826,118 @@ class PgStore(Store):
                     )
         return issues
 
-    async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]:
-        active = envelope.active_key_id
-        counts: dict[str, int] = {}
-        specs: list[tuple[str, Table, str, Callable[[Any], bytes]]] = [
-            ("credentials", CREDENTIALS, "", lambda r: associated_data("ih_credentials", r["identity_id"])),
-            (
-                "sessions",
+    def _rotation_specs(self) -> dict[str, tuple[Table, str, Callable[[Any], bytes]]]:
+        return {
+            "credentials": (CREDENTIALS, "", lambda r: associated_data("ih_credentials", r["identity_id"])),
+            "sessions": (
                 SESSIONS,
                 "",
                 lambda r: associated_data("ih_sessions", r["identity_id"], r["slot"]),
             ),
-            (
-                "challenges",
+            "challenges": (
                 CHALLENGES,
                 "context_",
                 lambda r: associated_data("ih_challenges", r["identity_id"], str(r["id"])),
             ),
-            (
-                "verifications",
+            "verifications": (
                 VERIFICATIONS,
                 "evidence_",
                 lambda r: associated_data("ih_verifications", r["identity_id"], r["factor"]),
             ),
-            ("proxies", PROXIES, "", lambda r: associated_data("ih_proxies", r["id"])),
-            (
-                "webhooks",
+            "proxies": (PROXIES, "", lambda r: associated_data("ih_proxies", r["id"])),
+            "webhooks": (
                 WEBHOOK_ENDPOINTS,
                 "",
                 lambda r: associated_data("ih_webhook_endpoints", r["id"]),
             ),
-            (
-                "notification_channels",
+            "notification_channels": (
                 NOTIFICATION_CHANNELS,
                 "",
                 lambda r: associated_data("ih_notification_channels", r["id"]),
             ),
-            (
-                "profiles",
+            "profiles": (
                 IDENTITIES,
                 "profile_",
                 lambda r: associated_data("ih_identities", r["id"], "profile"),
             ),
-        ]
-        remaining = max(0, limit)
+            # незавершённый импорт: без него удаление старого ключа делает записи нечитаемыми (R2-S09)
+            "import_items": (
+                IMPORT_ITEMS,
+                "",
+                lambda r: associated_data("ih_import_items", r["run_id"], str(r["position"])),
+            ),
+        }
+
+    async def rotate_key(
+        self, envelope: Any, *, table: str, limit: int, after: tuple[Any, ...] | None = None
+    ) -> RotationBatch:
+        target, prefix, aad_of = self._rotation_specs()[table]
+        active = envelope.active_key_id
+        size = max(1, limit)
+        primary = list(target.primary_key.columns)
+        key = target.c[f"{prefix}key_id"]
+        stmt = select(target).where(target.c[f"{prefix}ciphertext"].is_not(None), key != active)
+        if after is not None:
+            bound = [literal(value, type_=column.type) for column, value in zip(primary, after, strict=True)]
+            stmt = stmt.where(tuple_(*primary) > tuple_(*bound))
+        rotated = 0
+        unreadable: list[UnreadableSecret] = []
         async with self._own() as session:
-            for name, table, prefix, aad_of in specs:
-                if remaining == 0:
-                    break
-                key = table.c[f"{prefix}key_id"]
-                ciphertext = table.c[f"{prefix}ciphertext"]
-                rows = list(
-                    (
-                        await _execute(
-                            session,
-                            select(table)
-                            .where(ciphertext.is_not(None), key != active)
-                            .limit(remaining)
-                            .with_for_update(skip_locked=True),
-                            execution_options=self.options,
-                        )
-                    ).mappings()
-                )
-                for row in rows:
-                    payload = EncryptedPayload(
-                        row[f"{prefix}key_id"],
-                        row[f"{prefix}wrapped_dek"],
-                        row[f"{prefix}nonce"],
-                        row[f"{prefix}ciphertext"],
-                    )
-                    # у challenge тем же DEK зашифрован ответ — формат AAD не меняем
-                    rotated = envelope.rewrap(payload, aad_of(row), upgrade=name != "challenges")
+            rows = list(
+                (
                     await _execute(
                         session,
-                        update(table)
-                        .where(*[column == row[column.name] for column in table.primary_key.columns])
-                        .values(
-                            # nonce и шифротекст меняются, когда строка переходит на AAD v1 (IMP-16)
-                            **rotated.columns(prefix)
-                        ),
+                        # заблокированные строки пропускаются: их подберёт следующий проход (R2-S08)
+                        stmt.order_by(*primary).limit(size).with_for_update(skip_locked=True),
                         execution_options=self.options,
                     )
-                if rows:
-                    counts[name] = len(rows)
-                    remaining -= len(rows)
-        return counts
+                ).mappings()
+            )
+            for row in rows:
+                payload = EncryptedPayload(
+                    row[f"{prefix}key_id"],
+                    row[f"{prefix}wrapped_dek"],
+                    row[f"{prefix}nonce"],
+                    row[f"{prefix}ciphertext"],
+                )
+                try:
+                    # у challenge тем же DEK зашифрован ответ — формат AAD не меняем
+                    renewed = envelope.rewrap(payload, aad_of(row), upgrade=table != "challenges")
+                except DecryptionFailed:
+                    unreadable.append(
+                        UnreadableSecret(table, "/".join(str(row[column.name]) for column in primary))
+                    )
+                    continue
+                await _execute(
+                    session,
+                    update(target)
+                    .where(*[column == row[column.name] for column in primary])
+                    .values(
+                        # nonce и шифротекст меняются, когда строка переходит на AAD v1 (IMP-16)
+                        **renewed.columns(prefix)
+                    ),
+                    execution_options=self.options,
+                )
+                rotated += 1
+        cursor = tuple(rows[-1][column.name] for column in primary) if len(rows) >= size else None
+        return RotationBatch(rotated, tuple(unreadable), cursor)
+
+    async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
+        usage: dict[str, dict[str, int]] = {}
+        async with self.sessionmaker() as session:
+            for name, (target, prefix, _aad) in self._rotation_specs().items():
+                key = target.c[f"{prefix}key_id"]
+                rows = await _execute(
+                    session,
+                    select(key, func.count())
+                    .where(target.c[f"{prefix}ciphertext"].is_not(None), key != active)
+                    .group_by(key),
+                    execution_options=self.options,
+                )
+                counts = {str(row[0]): int(row[1]) for row in cast(Any, rows)}
+                if counts:
+                    usage[name] = counts
+        return usage
 
     async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         cursor_lag: dict[str, int] = {}

@@ -27,6 +27,8 @@ NOTIFY_CHANNEL = "ih_events"
 
 __all__ = [
     "NOTIFY_CHANNEL",
+    "ROTATION_TABLES",
+    "UNREADABLE_IMPORT_ITEM",
     "AttentionChallengeRow",
     "AttentionIdentityRow",
     "CandidateQuery",
@@ -74,11 +76,13 @@ __all__ = [
     "ProxyRow",
     "QuotaCharge",
     "QuotaWindow",
+    "RotationBatch",
     "SearchFilter",
     "ServiceRow",
     "SpaceRef",
     "Store",
     "StoreTx",
+    "UnreadableSecret",
     "VerificationRow",
     "WebhookAttempt",
     "WebhookDeliveryRow",
@@ -184,6 +188,40 @@ class DoctorIssue:
     entity_id: UUID
     expected: Any
     actual: Any
+
+
+ROTATION_TABLES: tuple[str, ...] = (
+    "credentials",
+    "sessions",
+    "challenges",
+    "verifications",
+    "proxies",
+    "webhooks",
+    "notification_channels",
+    "profiles",
+    "import_items",
+)
+"""Имена наборов с шифртекстом, которые обходит ротация мастер-ключа (S-3)."""
+
+UNREADABLE_IMPORT_ITEM = "staged_payload_unreadable"
+"""Код элемента импорта, который не удалось расшифровать: строка сохраняется, прогон — `failed`."""
+
+
+@dataclass(frozen=True, slots=True)
+class UnreadableSecret:
+    """Строка, которую не удалось расшифровать при ротации: набор и первичный ключ через `/`."""
+
+    table: str
+    id: str
+
+
+@dataclass(frozen=True, slots=True)
+class RotationBatch:
+    """Одна пачка ротации набора. `cursor is None` — набор пройден до конца."""
+
+    rotated: int
+    unreadable: tuple[UnreadableSecret, ...] = ()
+    cursor: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1677,7 +1715,19 @@ class Store(ABC):
     async def doctor(self, *, fix: bool) -> list[DoctorIssue]: ...
 
     @abstractmethod
-    async def rotate_key(self, envelope: Any, *, limit: int) -> dict[str, int]: ...
+    async def rotate_key(
+        self, envelope: Any, *, table: str, limit: int, after: tuple[Any, ...] | None = None
+    ) -> RotationBatch:
+        """Переобернуть до `limit` строк набора `table` (из `ROTATION_TABLES`) после курсора `after`.
+
+        Строки под неактивным ключом берутся по возрастанию первичного ключа; заблокированные
+        другой транзакцией пропускаются (их подберёт следующий проход), нерасшифровываемые
+        не меняются и возвращаются в `unreadable`.
+        """
+
+    @abstractmethod
+    async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
+        """Набор → `key_id` → число строк с шифртекстом под ключом, отличным от `active`."""
 
     @abstractmethod
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:

@@ -27,6 +27,8 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `hub.doctor.inactive_keys()` и поля `RotationReport.remaining`, `unreadable`,
+  `unreadable_total`, `complete`.
 - `FileSecretsProvider.reload()` — перечитать файл мастер-ключей без перезапуска процесса.
 - Событие `proxy.secret.revealed` (аудит `space.proxies.url`).
 - `WebhookPolicy.proxy` — явный исходящий прокси доставки вебхуков; ошибка доставки
@@ -50,6 +52,12 @@
   не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
   проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
   размера действуют для полей `extra` в `ih_lease_logs`.
+- `hub.doctor.rotate_key()` проходит все наборы до конца за один вызов (`limit` — размер пачки)
+  и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
+  нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
+  сообщает о строках под неактивным ключом.
+- Контракт `Store`: `rotate_key(envelope, table=, limit=, after=)` → `RotationBatch`,
+  новый `inactive_key_usage(active)`.
 - Мастер-ключи: `key_id` — `[A-Za-z0-9_.-]{1,64}`; ключ из одинаковых байтов в
   `IDENTITY_HUB_KEK` и файле отклоняется; BOM игнорируется; `keys()` провайдера — отображение
   только для чтения; провайдер нельзя сериализовать `pickle`.
@@ -99,6 +107,10 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- `rotate-key` больше не завершается «успешно», оставив строки под старым ключом (пропуск
+  заблокированных строк и выход по неполной пачке); одна нечитаемая строка не обрывает пачку.
+- Фоновый импорт после удаления старого ключа: прогон завершается `failed`, а не `succeeded`,
+  и нерасшифрованные записи не удаляются.
 - Ошибка формата мастер-ключа больше не печатает материал ключа (перепутанный порядок
   `base64:key_id`) в исключении и stderr CLI.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.

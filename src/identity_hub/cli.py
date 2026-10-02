@@ -131,18 +131,27 @@ async def async_main(args: argparse.Namespace) -> int:
         for issue in issues:
             marker = "fixed" if args.fix else "issue"
             print(f"{marker}: {issue.space} {issue.kind} {issue.entity_id}")
-        return 0 if not issues or args.fix else 1
+        # строки под неактивным ключом --fix не исправляет: это делает rotate-key
+        inactive = await hub.doctor.inactive_keys()
+        for table, keys in sorted(inactive.items()):
+            for key_id, count in sorted(keys.items()):
+                print(f"issue: inactive-key {table} {key_id} {count}")
+        return 1 if inactive or (issues and not args.fix) else 0
     if args.command == "rotate-key":
         if args.batch_size < 1:
             raise ValueError("--batch-size должен быть положительным")
-        total = 0
-        while True:
-            rotation_report = await hub.doctor.rotate_key(limit=args.batch_size)
-            total += rotation_report.total
-            if rotation_report.total < args.batch_size:
-                break
-        print(total)
-        return 0
+        rotation_report = await hub.doctor.rotate_key(limit=args.batch_size)
+        print(rotation_report.total)
+        for table, keys in sorted(rotation_report.remaining.items()):
+            for key_id, count in sorted(keys.items()):
+                print(f"remaining: {table} {key_id} {count}")
+        for row in rotation_report.unreadable:
+            print(f"unreadable: {row.table} {row.id}")
+        hidden = rotation_report.unreadable_total - len(rotation_report.unreadable)
+        if hidden > 0:
+            print(f"unreadable: ещё {hidden}")
+        # остаток под прежним ключом: удалять его из конфигурации нельзя
+        return 0 if rotation_report.complete else 1
     if args.command == "rollups":
         if args.rebuild:
             if not args.space or not args.start or not args.end:

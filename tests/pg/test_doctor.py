@@ -148,3 +148,41 @@ async def test_rotate_key_rewraps_every_encrypted_table(
         )
         for column in key_columns:
             assert set((await session.execute(select(column))).scalars()) == {"k2"}
+
+
+async def test_rotate_key_reports_locked_rows_and_finishes_after_unlock(
+    hub: IdentityHub,
+    space: SpaceHandle,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """R2-S08: строки, заблокированные другим процессом, не считаются переобёрнутыми."""
+    for n in range(4):
+        await register(
+            space,
+            service="fake_tg",
+            external_ref=f"+lock{n}",
+            credentials=TgCredentials(phone=f"+lock{n}", password=SecretStr("p")),
+        )
+    hub._envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
+
+    async with sessionmaker() as locker, locker.begin():
+        locked = (
+            await locker.execute(
+                select(CredentialsRecord.identity_id)
+                .order_by(CredentialsRecord.identity_id)
+                .limit(2)
+                .with_for_update()
+            )
+        ).scalars()
+        assert len(list(locked)) == 2
+
+        report = await hub.doctor.rotate_key(limit=3, lock_retries=2, retry_delay=0)
+
+        assert report.counts == {"credentials": 2}
+        assert report.remaining == {"credentials": {"k1": 2}}
+        assert not report.complete and report.unreadable == ()
+
+    report = await hub.doctor.rotate_key(limit=3)
+    assert report.counts == {"credentials": 2} and report.complete
+    async with sessionmaker() as session:
+        assert set((await session.execute(select(CredentialsRecord.key_id))).scalars()) == {"k2"}

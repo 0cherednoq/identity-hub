@@ -10,16 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F1.8 Ротация ключей
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: заблокированные строки, нечитаемая строка, ih_import_items, импорт с нерасшифровываемым payload
-  - [ ] Store: обход ih_import_items, остаток по таблицам и key_id, пропуск нечитаемых строк (PgStore и MemoryStore)
-  - [ ] doctor.rotate_key: цикл до отсутствия остатка, отчёт; проверка doctor
-  - [ ] CLI rotate-key: остаток и код возврата
-  - [ ] импорт: нерасшифровываемый элемент не удаляется, прогон failed
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -36,7 +30,7 @@
 | F1.6a | Секреты вне аренды, аудит и repr | F0.1 | done |  | часть F1.6 (D-156) |
 | F1.6b | Публичная поверхность хаба | F1.6a | done |  | часть F1.6 (D-156) |
 | F1.7 | Провайдеры ключей | F0.1 | done |  |  |
-| F1.8 | Ротация ключей | F0.1 | in_progress |  |  |
+| F1.8 | Ротация ключей | F0.1 | done |  |  |
 | F2.1 | Heartbeat и освобождение аренды | F0.1 | todo |  |  |
 | F2.2 | Чистильщик аренд и удаление аккаунта | F0.1 | todo |  |  |
 | F2.3 | Часы и ожидание | F2.1 | todo |  |  |
@@ -68,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 10 / 41 done
+**Итого:** 11 / 41 done
 
 ## Журнал сессий
 
@@ -84,3 +78,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F1.6a · done · Lease.check() бросает LeaseLost после освобождения; credentials()/session() сверяют fencing в транзакции чтения (отзыв и перехват видны до heartbeat, LeaseOwnershipLost); Lease.proxy — SecretValue; proxies.url(actor, reason) с событием proxy.secret.revealed; secrets.reveal требует непустые actor и reason; repr ImportRecord/LeaseRow/ParsedProxy/IdentityCreate без секретов; 983 passed, admin unit 67 passed · дальше F1.6b: приватные store/envelope и служебные объекты хаба (≈250 обращений в src, admin, tests), публичный контракт в docs/guide/api.md, tests/test_public_api.py
 2026-10-02 · F1.6b · done · store, envelope, import_runner, metric_rollups, rollups, state_snapshots, webhook_dispatcher, notification_dispatcher, metrics_reporter хаба — приватные; публичные hub.sessionmaker и hub.webhook_policy; admin без PgStore и hub.store; контракт хаба в docs/guide/api.md и тест поверхности; D-158; 984 passed, admin unit 67 passed · дальше F1.7
 2026-10-02 · F1.7 · done · parse_keys: ошибки по номеру записи без ключа и key_id, BOM, алфавит и длина key_id, отказ ключу из одинаковых байтов; keys() только для чтения, запрет pickle; FileSecretsProvider.reload() с сохранением прежних ключей при ошибке; порядок ротации в docs/cli.md; D-159; 1005 passed · дальше F1.8
+2026-10-02 · F1.8 · done · Store.rotate_key постраничный по наборам с курсором (включая ih_import_items), inactive_key_usage; Doctor.rotate_key проходит до конца с повторами для заблокированных строк, отчёт remaining/unreadable/complete; Doctor.inactive_keys; CLI rotate-key и doctor печатают остаток, код 1; импорт с нерасшифрованными элементами — failed, элементы сохраняются; D-160; 1017 passed · дальше F2.1 (фаза аренды)
