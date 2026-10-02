@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections import defaultdict
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
@@ -27,6 +27,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    any_,
     case,
     delete,
     func,
@@ -206,9 +207,18 @@ SNAPSHOT_COVERAGE = cast(Table, StateSnapshotCoverageRecord.__table__)
 SPACES = cast(Table, SpaceRecord.__table__)
 WEBHOOK_ENDPOINTS = cast(Table, WebhookEndpointRecord.__table__)
 WEBHOOK_DELIVERIES = cast(Table, WebhookDeliveryRecord.__table__)
+DOCTOR_PAGE = 1000  # аккаунтов на одну транзакцию doctor
 _OPEN_DELIVERY = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
 # результат попытки принимается и у доставки, поставленной на паузу после захвата
 _FINISHABLE_DELIVERY = (*_OPEN_DELIVERY, DeliveryStatus.PAUSED)
+
+
+def _any_of(column: Any, values: Iterable[Any]) -> Any:
+    """`column = ANY(:values)` одним параметром-массивом.
+
+    `IN (…)` с длинным списком упирается в предел 32 767 параметров запроса asyncpg (R2-D06).
+    """
+    return column == any_(literal(list(values), ARRAY(column.type)))
 
 
 def _pause_deliveries(endpoint_id: UUID) -> Any:
@@ -470,7 +480,7 @@ class PgTx(StoreTx):
             return set()
         rows = await self.execute(
             select(IDENTITIES.c.id).where(
-                IDENTITIES.c.id.in_(list(ids)), IDENTITIES.c.space_id == self.space.id
+                _any_of(IDENTITIES.c.id, ids), IDENTITIES.c.space_id == self.space.id
             )
         )
         return set(rows.scalars())
@@ -693,13 +703,13 @@ class PgTx(StoreTx):
                 func.count().label("n"),
                 func.array_agg(LINKS.c.role).label("roles"),
             )
-            .where(LINKS.c.identity_id.in_(id_list), LINKS.c.space_id == self.space.id)
+            .where(_any_of(LINKS.c.identity_id, id_list), LINKS.c.space_id == self.space.id)
             .group_by(LINKS.c.identity_id)
             .subquery()
         )
         incoming = (
             select(LINKS.c.linked_identity_id.label("id"), func.count().label("n"))
-            .where(LINKS.c.linked_identity_id.in_(id_list), LINKS.c.space_id == self.space.id)
+            .where(_any_of(LINKS.c.linked_identity_id, id_list), LINKS.c.space_id == self.space.id)
             .group_by(LINKS.c.linked_identity_id)
             .subquery()
         )
@@ -1021,7 +1031,7 @@ class PgTx(StoreTx):
             return
         await self.execute(
             select(IDENTITIES.c.id)
-            .where(IDENTITIES.c.id.in_(ordered), IDENTITIES.c.space_id == self.space.id)
+            .where(_any_of(IDENTITIES.c.id, ordered), IDENTITIES.c.space_id == self.space.id)
             .order_by(IDENTITIES.c.id)
             .with_for_update(key_share=True)
         )
@@ -2170,7 +2180,7 @@ class PgTx(StoreTx):
             return
         await self.execute(
             update(IDENTITIES)
-            .where(IDENTITIES.c.id.in_(list(identity_ids)), IDENTITIES.c.space_id == self.space.id)
+            .where(_any_of(IDENTITIES.c.id, identity_ids), IDENTITIES.c.space_id == self.space.id)
             # clock_timestamp: попытки одной транзакции получают то же время, разных — растущее
             .values(probe_attempted_at=func.clock_timestamp())
         )
@@ -2656,7 +2666,7 @@ class PgTx(StoreTx):
         region_rows = await self.execute(
             select(REGION_STATES).where(
                 REGION_STATES.c.space_id == self.space.id,
-                REGION_STATES.c.identity_id.in_(identity_ids),
+                _any_of(REGION_STATES.c.identity_id, identity_ids),
             )
         )
         regions: dict[UUID, list[tuple[str, str, RegionState]]] = {}
@@ -2676,7 +2686,7 @@ class PgTx(StoreTx):
                 CHALLENGES.c.expires_at,
             ).where(
                 CHALLENGES.c.space_id == self.space.id,
-                CHALLENGES.c.identity_id.in_(identity_ids),
+                _any_of(CHALLENGES.c.identity_id, identity_ids),
                 CHALLENGES.c.resolved_at.is_(None),
             )
         )
@@ -4417,7 +4427,9 @@ class PgStore(Store):
         async with self.sessionmaker() as session:
             rows = await _execute(
                 session,
-                select(IDENTITIES.c.id, IDENTITIES.c.labels).where(IDENTITIES.c.id.in_(set(identity_ids))),
+                select(IDENTITIES.c.id, IDENTITIES.c.labels).where(
+                    _any_of(IDENTITIES.c.id, set(identity_ids))
+                ),
                 execution_options=self.options,
             )
         return {row.id: dict(row.labels) for row in rows}
@@ -5041,14 +5053,14 @@ class PgStore(Store):
         async with self._own() as session:
             await _execute(
                 session,
-                select(i.id).where(i.id.in_(ids)).order_by(i.id).with_for_update(key_share=True),
+                select(i.id).where(_any_of(i.id, ids)).order_by(i.id).with_for_update(key_share=True),
                 execution_options=self.options,
             )
             others = await _execute(
                 session,
                 select(i.id, i.normalized_ref).where(
                     i.service == service,
-                    i.normalized_ref.in_({ref for _id, ref in updates}),
+                    _any_of(i.normalized_ref, {ref for _id, ref in updates}),
                     i.id.not_in(ids),
                 ),
                 execution_options=self.options,
@@ -5060,7 +5072,7 @@ class PgStore(Store):
             await _execute(
                 session,
                 update(IDENTITIES)
-                .where(i.id.in_(ids))
+                .where(_any_of(i.id, ids))
                 .values(normalized_ref=func.concat("~renormalize:", sa_cast(i.id, Text))),
                 execution_options=self.options,
             )
@@ -5076,76 +5088,29 @@ class PgStore(Store):
 
     async def doctor(self, *, fix: bool) -> list[DoctorIssue]:
         issues: list[DoctorIssue] = []
-        async with self._own() as session:
-            identities = list(
-                (
-                    await _execute(
-                        session,
-                        select(IDENTITIES, SPACES.c.slug).join(SPACES, SPACES.c.id == IDENTITIES.c.space_id),
-                        execution_options=self.options,
-                    )
-                ).mappings()
-            )
-            region_rows = (
-                await _execute(session, select(REGION_STATES), execution_options=self.options)
-            ).mappings()
-            regions = {(row["identity_id"], row["region"], row["key"]): row for row in region_rows}
-            event_rows = await _execute(
-                session,
-                select(EVENTS.c.identity_id, func.max(EVENTS.c.sequence).label("last_sequence"))
-                .where(EVENTS.c.identity_id.is_not(None), EVENTS.c.sequence.is_not(None))
-                .group_by(EVENTS.c.identity_id),
-                execution_options=self.options,
-            )
-            event_seq = {row.identity_id: int(row.last_sequence) for row in event_rows}
-            for row in identities:
-                identity_id = row["id"]
-                changes: dict[str, Any] = {}
-                standing = regions.get((identity_id, "standing", ""))
-                if standing is not None:
-                    expected = (standing["state"], standing["code"], standing["until"])
-                    actual = (row["standing"], row["standing_code"], row["standing_until"])
-                    if actual != expected:
-                        issues.append(DoctorIssue("standing", row["slug"], identity_id, expected, actual))
-                        changes.update(
-                            standing=expected[0], standing_code=expected[1], standing_until=expected[2]
+        after: UUID | None = None
+        while True:
+            # страницами по id: память и время линейны по числу аккаунтов (R2-D07)
+            async with self._own() as session:
+                page = select(IDENTITIES, SPACES.c.slug).join(SPACES, SPACES.c.id == IDENTITIES.c.space_id)
+                if after is not None:
+                    page = page.where(IDENTITIES.c.id > after)
+                identities = list(
+                    (
+                        await _execute(
+                            session,
+                            page.order_by(IDENTITIES.c.id).limit(DOCTOR_PAGE),
+                            execution_options=self.options,
                         )
-                auth = regions.get((identity_id, "auth", "default"))
-                if auth is not None and row["auth_state"] != auth["state"]:
-                    issues.append(
-                        DoctorIssue("auth_state", row["slug"], identity_id, auth["state"], row["auth_state"])
-                    )
-                    changes["auth_state"] = auth["state"]
-                verified = sorted(
-                    key
-                    for (owner, region, key), state in regions.items()
-                    if owner == identity_id and region == "verification" and state["state"] == "verified"
+                    ).mappings()
                 )
-                if sorted(row["verified_factors"]) != verified:
-                    issues.append(
-                        DoctorIssue(
-                            "verified_factors",
-                            row["slug"],
-                            identity_id,
-                            verified,
-                            list(row["verified_factors"]),
-                        )
-                    )
-                    changes["verified_factors"] = verified
-                expected_seq = event_seq.get(identity_id, 0)
-                # После retention старые события отсутствуют, поэтому доказуем только нижнюю границу.
-                if row["event_seq"] < expected_seq:
-                    issues.append(
-                        DoctorIssue("event_seq", row["slug"], identity_id, expected_seq, row["event_seq"])
-                    )
-                    changes["event_seq"] = expected_seq
-                if fix and changes:
-                    await _execute(
-                        session,
-                        update(IDENTITIES).where(IDENTITIES.c.id == identity_id).values(**changes),
-                        execution_options=self.options,
-                    )
-
+                if not identities:
+                    break
+                after = identities[-1]["id"]
+                issues += await self._doctor_page(session, identities, fix=fix)
+            if len(identities) < DOCTOR_PAGE:
+                break
+        async with self._own() as session:
             binding_counts = (
                 select(BINDINGS.c.proxy_id, func.count().label("n")).group_by(BINDINGS.c.proxy_id).subquery()
             )
@@ -5181,6 +5146,74 @@ class PgStore(Store):
                         update(PROXIES).where(PROXIES.c.id == row["id"]).values(bound_count=row["expected"]),
                         execution_options=self.options,
                     )
+        return issues
+
+    async def _doctor_page(
+        self, session: AsyncSession, identities: list[Any], *, fix: bool
+    ) -> list[DoctorIssue]:
+        """Сверить денормализованные поля страницы аккаунтов с регионами и журналом событий."""
+        ids = [row["id"] for row in identities]
+        regions: dict[UUID, dict[tuple[str, str], Any]] = defaultdict(dict)
+        region_rows = await _execute(
+            session,
+            select(REGION_STATES).where(_any_of(REGION_STATES.c.identity_id, ids)),
+            execution_options=self.options,
+        )
+        for region in region_rows.mappings():
+            regions[region["identity_id"]][(region["region"], region["key"])] = region
+        event_rows = await _execute(
+            session,
+            select(EVENTS.c.identity_id, func.max(EVENTS.c.sequence).label("last_sequence"))
+            .where(_any_of(EVENTS.c.identity_id, ids), EVENTS.c.sequence.is_not(None))
+            .group_by(EVENTS.c.identity_id),
+            execution_options=self.options,
+        )
+        event_seq = {row.identity_id: int(row.last_sequence) for row in event_rows}
+        issues: list[DoctorIssue] = []
+        for row in identities:
+            identity_id = row["id"]
+            own = regions.get(identity_id, {})
+            changes: dict[str, Any] = {}
+            standing = own.get(("standing", ""))
+            if standing is not None:
+                expected = (standing["state"], standing["code"], standing["until"])
+                actual = (row["standing"], row["standing_code"], row["standing_until"])
+                if actual != expected:
+                    issues.append(DoctorIssue("standing", row["slug"], identity_id, expected, actual))
+                    changes.update(
+                        standing=expected[0], standing_code=expected[1], standing_until=expected[2]
+                    )
+            auth = own.get(("auth", "default"))
+            if auth is not None and row["auth_state"] != auth["state"]:
+                issues.append(
+                    DoctorIssue("auth_state", row["slug"], identity_id, auth["state"], row["auth_state"])
+                )
+                changes["auth_state"] = auth["state"]
+            verified = sorted(
+                key
+                for (region, key), state in own.items()
+                if region == "verification" and state["state"] == "verified"
+            )
+            if sorted(row["verified_factors"]) != verified:
+                issues.append(
+                    DoctorIssue(
+                        "verified_factors", row["slug"], identity_id, verified, list(row["verified_factors"])
+                    )
+                )
+                changes["verified_factors"] = verified
+            expected_seq = event_seq.get(identity_id, 0)
+            # После retention старые события отсутствуют, поэтому доказуем только нижнюю границу.
+            if row["event_seq"] < expected_seq:
+                issues.append(
+                    DoctorIssue("event_seq", row["slug"], identity_id, expected_seq, row["event_seq"])
+                )
+                changes["event_seq"] = expected_seq
+            if fix and changes:
+                await _execute(
+                    session,
+                    update(IDENTITIES).where(IDENTITIES.c.id == identity_id).values(**changes),
+                    execution_options=self.options,
+                )
         return issues
 
     def _rotation_specs(self) -> dict[str, tuple[Table, str, Callable[[Any], bytes]]]:
@@ -5353,7 +5386,7 @@ class PgStore(Store):
                     )
                     .select_from(WEBHOOK_DELIVERIES)
                     .join(WEBHOOK_ENDPOINTS, WEBHOOK_ENDPOINTS.c.id == WEBHOOK_DELIVERIES.c.endpoint_id)
-                    .join(SPACES, *webhook_scope),
+                    .join(SPACES, and_(*webhook_scope)),
                     execution_options=self.options,
                 )
             ).one()
@@ -5373,7 +5406,7 @@ class PgStore(Store):
                     )
                     .select_from(NOTIFICATIONS)
                     .join(NOTIFICATION_RULES, NOTIFICATION_RULES.c.id == NOTIFICATIONS.c.rule_id)
-                    .join(SPACES, *notification_scope),
+                    .join(SPACES, and_(*notification_scope)),
                     execution_options=self.options,
                 )
             ).one()
