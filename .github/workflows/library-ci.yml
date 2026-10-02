@@ -66,6 +66,56 @@ jobs:
       # check.sh начинает с автоисправления: непустой diff означает неотформатированный код.
       - run: git diff --exit-code
 
+  pgbouncer:
+    # дымовой набор pg-тестов через PgBouncer в режиме транзакций по рецепту docs/integrations.md (F4.5)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: identity_hub_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d identity_hub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      pgbouncer:
+        image: edoburu/pgbouncer:latest
+        env:
+          DB_HOST: postgres
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: identity_hub_test
+          POOL_MODE: transaction
+          AUTH_TYPE: scram-sha-256
+          MAX_CLIENT_CONN: "500"
+          DEFAULT_POOL_SIZE: "20"
+          # без поддержки prepared statements в самом PgBouncer: рецепт должен работать и так
+          MAX_PREPARED_STATEMENTS: "0"
+        ports:
+          - 6432:5432
+    env:
+      IH_TEST_PGBOUNCER: "1"
+      IH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:6432/identity_hub_test
+      IH_TEST_MIGRATE_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/identity_hub_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked --all-extras
+      - run: >-
+          uv run pytest -m pg -q -rfE
+          tests/pg/test_pgbouncer.py tests/pg/test_acquire.py tests/pg/test_lease_lifecycle.py
+          tests/pg/test_outbox.py tests/pg/test_register.py tests/pg/test_dispatcher.py
+
   package:
     runs-on: ubuntu-latest
     strategy:

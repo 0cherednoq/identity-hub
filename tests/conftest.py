@@ -1,9 +1,16 @@
-"""Общие фикстуры: PostgreSQL 16 (testcontainers или IH_TEST_DATABASE_URL)."""
+"""Общие фикстуры: PostgreSQL 16 (testcontainers или IH_TEST_DATABASE_URL).
+
+`IH_TEST_PGBOUNCER=1` — `IH_TEST_DATABASE_URL` указывает на PgBouncer в режиме транзакций:
+engine создаётся по рецепту из docs/integrations.md, а миграции идут по прямому адресу
+`IH_TEST_MIGRATE_DATABASE_URL` (сессионная блокировка `migrate` через PgBouncer не работает).
+"""
 
 from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -28,9 +35,19 @@ def database_url() -> Iterator[str]:
         yield pg.get_connection_url()
 
 
+def pgbouncer_connect_args() -> dict[str, Any]:
+    """Рецепт asyncpg для PgBouncer в режиме транзакций (docs/integrations.md, R2-D04)."""
+    return {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    }
+
+
 @pytest.fixture(scope="session")
 async def engine(database_url: str) -> AsyncIterator[AsyncEngine]:
-    eng = create_async_engine(database_url, pool_size=10, max_overflow=40)
+    connect_args = pgbouncer_connect_args() if os.environ.get("IH_TEST_PGBOUNCER") == "1" else {}
+    eng = create_async_engine(database_url, pool_size=10, max_overflow=40, connect_args=connect_args)
     try:
         yield eng
     finally:
@@ -42,7 +59,15 @@ async def prepared_db(engine: AsyncEngine) -> AsyncEngine:
     """Схема библиотеки в public, накатывается миграциями один раз на прогон."""
     from identity_hub.postgres.migrate import migrate
 
-    await migrate(engine)
+    direct = os.environ.get("IH_TEST_MIGRATE_DATABASE_URL")
+    if direct is None:
+        await migrate(engine)
+        return engine
+    migrator = create_async_engine(direct)
+    try:
+        await migrate(migrator)
+    finally:
+        await migrator.dispose()
     return engine
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 from uuid import UUID
 
@@ -100,6 +101,10 @@ async def test_secrets_never_reach_journal(space: SpaceHandle) -> None:
             await space._emit(tx, EventDraft("identity.updated", actor="w", data={"password": "x"}))
 
 
+@pytest.mark.skipif(
+    os.environ.get("IH_TEST_PGBOUNCER") == "1",
+    reason="LISTEN через PgBouncer в режиме транзакций не доставляется (F4.5, проверяется в test_pgbouncer)",
+)
 async def test_notify_on_commit(space: SpaceHandle, db: AsyncEngine) -> None:
     await space.ref()
     received: asyncio.Queue[str] = asyncio.Queue()

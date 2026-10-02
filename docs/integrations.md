@@ -146,21 +146,42 @@ SQLAlchemy не допишет `[parameters: ...]` к тексту ошибок 
 ## PgBouncer
 
 Обычные операции поддерживают transaction pooling: каждая операция получает
-короткую транзакцию из SQLAlchemy pool. Для asyncpg отключите кэш prepared
-statements, если соединение идёт через PgBouncer в transaction mode:
+короткую транзакцию из SQLAlchemy pool, а настройки сессии (`set_config(…, true)`,
+`pg_advisory_xact_lock`) живут только внутри транзакции. asyncpg при этом должен не
+полагаться на prepared statements соединения: в режиме транзакций следующий запрос может
+уйти на другое серверное соединение, где такого statement нет
+(`prepared statement "__asyncpg_stmt_N__" does not exist`). Нужны все три настройки:
 
 ```python
+from uuid import uuid4
+
 engine = create_async_engine(
-    DATABASE_URL,
-    connect_args={"prepared_statement_cache_size": 0},
+    DATABASE_URL,  # адрес PgBouncer
+    connect_args={
+        "statement_cache_size": 0,  # кэш asyncpg
+        "prepared_statement_cache_size": 0,  # кэш диалекта SQLAlchemy
+        # уникальные имена: неименованные statement asyncpg PgBouncer путает между клиентами
+        "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+    },
     pool_pre_ping=True,
 )
 ```
 
-`LISTEN/NOTIFY` требует закреплённого соединения и не совместим с transaction
-pooling. Для процесса `dispatcher` используйте прямой URL PostgreSQL. Если
-прямое соединение недоступно, диспетчер продолжит работать polling-циклами с
-большей задержкой. Миграции также рекомендуется выполнять напрямую.
+Рецепт проверен на PgBouncer 1.26 в режиме `transaction` и с `max_prepared_statements = 0`, и с
+настройкой по умолчанию; в CI его проверяет job `pgbouncer`. Начиная с PgBouncer 1.21 prepared
+statements в этом режиме может поддерживать сам PgBouncer (`max_prepared_statements` больше 0) —
+рецепт с этим совместим. Одной настройки `prepared_statement_cache_size: 0` недостаточно: под
+конкурентной нагрузкой с ней падали от 19 до 26 операций из 60.
+
+`LISTEN/NOTIFY` требует закреплённого соединения и через PgBouncer в режиме транзакций не
+работает. Диспетчер это обнаруживает сам: при подписке он отправляет пробное уведомление с
+другого соединения, и если оно не дошло за 5 секунд, возвращает соединение в пул и пишет в лог
+`identity_hub` (уровень INFO) «LISTEN недоступен: …; диспетчер работает в режиме опроса». В
+режиме опроса события доставляются с задержкой до `poll_interval`. Чтобы события будили
+диспетчер сразу, дайте процессу `dispatcher` прямой URL PostgreSQL.
+
+Миграции (`identity-hub migrate`) запускайте только по прямому адресу или через пул в режиме
+сессии: их блокировка от параллельного запуска сессионная.
 
 ## Dishka
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -72,6 +73,7 @@ from identity_hub.errors import (
     NotFound,
     SpaceMismatch,
     StorageError,
+    describe_error,
 )
 from identity_hub.events import Event, EventDraft
 from identity_hub.postgres import schema_options
@@ -207,6 +209,8 @@ SNAPSHOT_COVERAGE = cast(Table, StateSnapshotCoverageRecord.__table__)
 SPACES = cast(Table, SpaceRecord.__table__)
 WEBHOOK_ENDPOINTS = cast(Table, WebhookEndpointRecord.__table__)
 WEBHOOK_DELIVERIES = cast(Table, WebhookDeliveryRecord.__table__)
+LISTEN_PROBE_TIMEOUT = 5.0  # секунд ждать пробное уведомление при подписке LISTEN
+_logger = logging.getLogger("identity_hub")
 DOCTOR_PAGE = 1000  # аккаунтов на одну транзакцию doctor
 _OPEN_DELIVERY = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
 # результат попытки принимается и у доставки, поставленной на паузу после захвата
@@ -5422,38 +5426,71 @@ class PgStore(Store):
 
     @asynccontextmanager
     async def listen(self, channel: str) -> AsyncIterator[asyncio.Event | None]:
+        """LISTEN на отдельном соединении; `None` — уведомлений нет, вызывающий работает опросом.
+
+        Подписка проверяется пробным NOTIFY с другого соединения: через PgBouncer в режиме
+        транзакций LISTEN «проходит», но уведомления не доходят (R2-D21). Тогда соединение
+        сразу возвращается в пул, а в лог пишется, что диспетчер работает в режиме опроса.
+        """
         engine = self.sessionmaker.kw.get("bind")
-        signal = asyncio.Event()
         if engine is None:
             yield None
             return
+        signal = asyncio.Event()
+
+        def notified(*_: Any) -> None:
+            signal.set()
+
+        conn: Any = None
+        driver: Any = None
+        reason = "драйвер не поддерживает LISTEN"
         try:
             conn = await engine.connect()
-        except Exception:
+            raw = await conn.get_raw_connection()
+            candidate = raw.driver_connection
+            if candidate is not None and hasattr(candidate, "add_listener"):
+                if await self._notifications_arrive(engine, candidate):
+                    await candidate.add_listener(channel, notified)
+                    driver = candidate
+                else:
+                    reason = "пробное уведомление не дошло (PgBouncer в режиме транзакций?)"
+        except Exception as exc:
+            reason = describe_error(exc)
+        if driver is None:
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    await conn.close()
+            _logger.info("LISTEN недоступен: %s; диспетчер работает в режиме опроса", reason)
             yield None
             return
         try:
-            raw = await conn.get_raw_connection()
-            driver = raw.driver_connection
-            if driver is None or not hasattr(driver, "add_listener"):
-                yield None
-                return
-
-            def notified(*_: Any) -> None:
-                signal.set()
-
-            try:
-                await driver.add_listener(channel, notified)
-            except Exception:  # PgBouncer в transaction mode и т.п. — режим опроса (ТЗ §8.7)
-                yield None
-                return
-            try:
-                yield signal
-            finally:
-                with contextlib.suppress(Exception):
-                    await driver.remove_listener(channel, notified)
+            yield signal
         finally:
+            with contextlib.suppress(Exception):
+                await driver.remove_listener(channel, notified)
             await conn.close()
+
+    @staticmethod
+    async def _notifications_arrive(engine: Any, driver: Any) -> bool:
+        """Доходит ли до этого соединения NOTIFY, отправленный с другого соединения пула."""
+        probe = f"ih_listen_probe_{uuid4().hex}"
+        arrived = asyncio.Event()
+
+        def got(*_: Any) -> None:
+            arrived.set()
+
+        await driver.add_listener(probe, got)
+        try:
+            async with engine.begin() as other:
+                await other.execute(text("SELECT pg_notify(:channel, '')"), {"channel": probe})
+            try:
+                await asyncio.wait_for(arrived.wait(), timeout=LISTEN_PROBE_TIMEOUT)
+            except TimeoutError:
+                return False
+            return True
+        finally:
+            with contextlib.suppress(Exception):
+                await driver.remove_listener(probe, got)
 
     async def ensure_space(
         self,

@@ -46,3 +46,12 @@ def test_package_job_installs_wheel_and_runs_examples() -> None:
     script = (ROOT / "scripts" / "check_package.sh").read_text(encoding="utf-8")
     for example in ("telegram_service.py", "account_lifecycle.py"):
         assert example in script
+
+
+def test_pgbouncer_job_runs_smoke_set_through_transaction_pooling() -> None:
+    """F4.5 (R2-D04): рецепт PgBouncer проверяется в CI, миграции идут мимо него."""
+    job = _job("pgbouncer")
+    assert "pgbouncer" in job and "POOL_MODE: transaction" in job
+    assert 'IH_TEST_PGBOUNCER: "1"' in job
+    assert "IH_TEST_MIGRATE_DATABASE_URL" in job and ":5432/" in job and ":6432/" in job
+    assert "tests/pg/test_pgbouncer.py" in job
