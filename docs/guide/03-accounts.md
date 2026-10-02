@@ -53,7 +53,19 @@ page = await space.identities.search("service:telegram standing:banned farm:eu-1
 | `tag:parser` | тег; несколько `tag:` — все сразу |
 | `farm:eu-1` | метка или поле `filterable_profile` |
 | UUID | точный id |
+| `id:9f3c2a` | окончание id (шестнадцатеричные цифры без дефисов, от 3 символов) |
 | слово от 3 символов | подстрока в `external_ref`, заметке, метках, `searchable_profile` |
+
+Строка запроса — не длиннее 1000 символов и не больше 50 условий; иначе `ValidationFailed`.
+
+Страница для админки `space.admin.identity_page(query, options=AccountSearchOptions(sort_by=...))`
+сортирует по `created_at`, `external_ref`, `service`, регионам, `error_score`, `last_leased_at`,
+`synced_at`, `eligible`, `leased`, `verification_tier` или по полю профиля — `profile:<key>` для
+ключа из `filterable_profile`. Строки сравниваются по кодам символов, одинаково на любой базе:
+заглавные латинские буквы идут раньше строчных. Поле профиля сортируется как текст, поэтому
+числа идут в порядке `"100"`, `"25"`, `"4"`; аккаунты без значения — в конце. Курсор `after`
+действителен только для той сортировки, с которой получен: чужой или изменённый курсор —
+`ValidationFailed`.
 
 ## Создать
 

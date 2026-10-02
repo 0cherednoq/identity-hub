@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
+from identity_hub.domain.query import profile_sort_text
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
@@ -1466,8 +1467,7 @@ class MemoryTx(StoreTx):
 
     def _search_sort_value(self, row: IdentityRow, flt: SearchFilter) -> Any:
         if flt.sort_by.startswith("profile:"):
-            value = row.profile.get(flt.sort_by.partition(":")[2])
-            return None if value is None else str(value)
+            return profile_sort_text(row.profile.get(flt.sort_by.partition(":")[2]))
         if flt.sort_by == "eligible":
             return int(
                 row.lifecycle == "ready"

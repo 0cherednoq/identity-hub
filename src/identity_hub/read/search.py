@@ -17,7 +17,7 @@ from uuid import UUID
 
 from identity_hub._space import SpaceBase
 from identity_hub.api._base import legacy
-from identity_hub.domain.query import SearchQuery, parse_query
+from identity_hub.domain.query import SearchQuery, parse_query, profile_sort_text
 from identity_hub.errors import ValidationFailed
 from identity_hub.service import Service
 from identity_hub.store.base import IdentityRow, SearchFilter
@@ -201,6 +201,18 @@ def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         raise ValidationFailed("некорректный курсор пагинации") from None
 
 
+# тип значения сортировки в курсоре; прочие поля, включая `profile:<key>`, — строки
+_CURSOR_KINDS = {
+    "created_at": "datetime",
+    "last_leased_at": "datetime",
+    "synced_at": "datetime",
+    "eligible": "number",
+    "leased": "number",
+    "error_score": "number",
+    "verification_tier": "number",
+}
+
+
 def _encode_account_cursor(sort_by: str, sort_desc: bool, value: Any, identity_id: UUID) -> str:
     kind: str
     encoded: Any
@@ -230,11 +242,15 @@ def _decode_account_cursor(cursor: str, expected_sort: str, expected_desc: bool)
         )
         if version != 1 or sort_by != expected_sort or sort_desc is not expected_desc:
             raise ValueError
+        # значение должно быть того типа, что и колонка сортировки: иначе сравнение в хранилище
+        # падает ошибкой типов вместо отказа на курсоре (R2-D05)
+        if kind not in (_CURSOR_KINDS.get(expected_sort, "string"), "null"):
+            raise ValueError
         if kind == "datetime":
             value: Any = datetime.fromisoformat(encoded)
-        elif (kind == "bool" and isinstance(encoded, bool)) or (
-            kind == "number" and isinstance(encoded, (int, float))
-        ):
+            if value.tzinfo is None:
+                raise ValueError
+        elif kind == "number" and isinstance(encoded, (int, float)) and not isinstance(encoded, bool):
             value = encoded
         elif kind == "null" and encoded is None:
             value = None
@@ -546,7 +562,7 @@ def _highest_tier(service: Service, factors: frozenset[str]) -> str | None:
 
 def _account_sort_value(item: AccountListItem, sort_by: str) -> Any:
     if sort_by.startswith("profile:"):
-        return item.profile.get(sort_by.partition(":")[2])
+        return profile_sort_text(item.profile.get(sort_by.partition(":")[2]))
     values: dict[str, Any] = {
         "auth_state": item.auth,
         "availability": item.availability,

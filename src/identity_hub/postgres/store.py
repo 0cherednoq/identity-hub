@@ -2190,7 +2190,8 @@ class PgTx(StoreTx):
         if flt.exact_id is not None:
             conditions.append(i.id == flt.exact_id)
         if flt.short_id is not None:
-            conditions.append(sa_cast(i.id, Text).endswith(flt.short_id))
+            # окончание id без дефисов: как `UUID.hex` в MemoryStore, длина окончания любая
+            conditions.append(func.replace(sa_cast(i.id, Text), "-", "").endswith(flt.short_id))
         if flt.services:
             conditions.append(i.service.in_(sorted(flt.services)))
         for column, values in flt.regions.items():
@@ -2336,18 +2337,20 @@ class PgTx(StoreTx):
                     REGION_STATES.c.changed_at < flt.standing_changed_to
                 )
             conditions.append(standing_changed.exists())
+        # строки сравниваются по кодам символов (COLLATE "C"): порядок не зависит от локали базы
+        # и совпадает с MemoryStore (R2-P16)
         direct_sort = {
-            "auth_state": i.auth_state,
-            "availability": i.availability,
+            "auth_state": i.auth_state.collate("C"),
+            "availability": i.availability.collate("C"),
             "created_at": i.created_at,
             "error_score": i.error_score,
-            "external_ref": i.external_ref,
-            "lifecycle": i.lifecycle,
-            "service": i.service,
-            "standing": i.standing,
+            "external_ref": i.external_ref.collate("C"),
+            "lifecycle": i.lifecycle.collate("C"),
+            "service": i.service.collate("C"),
+            "standing": i.standing.collate("C"),
         }
         if flt.sort_by.startswith("profile:"):
-            sort_expr = i.profile[flt.sort_by.partition(":")[2]].astext
+            sort_expr = i.profile[flt.sort_by.partition(":")[2]].astext.collate("C")
         elif flt.sort_by == "eligible":
             sort_expr = case((eligible, 1), else_=0)
         elif flt.sort_by == "leased":

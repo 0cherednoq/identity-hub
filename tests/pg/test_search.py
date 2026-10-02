@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from identity_hub.errors import ValidationFailed
 from identity_hub.hub import SpaceHandle
@@ -200,3 +200,26 @@ async def test_search_uses_gin_indexes(
         )
     assert "ix_ih_identities_search" in trgm
     assert "ix_ih_identities_labels" in labels
+
+
+async def test_string_sort_is_independent_of_database_locale(space: SpaceHandle, db: AsyncEngine) -> None:
+    """F4.4a (R2-P16): строки сортируются с COLLATE "C" — порядок не зависит от локали базы."""
+    from sqlalchemy import event
+
+    statements: list[str] = []
+
+    def capture(_conn: object, _cursor: object, statement: str, *_rest: object) -> None:
+        statements.append(statement)
+
+    event.listen(db.sync_engine, "before_cursor_execute", capture)
+    try:
+        for sort_by in ("external_ref", "profile:country", "standing"):
+            await space.admin.identity_page("", options=AccountSearchOptions(sort_by=sort_by), count=False)
+    finally:
+        event.remove(db.sync_engine, "before_cursor_execute", capture)
+
+    ordered = [
+        statement for statement in statements if "ORDER BY" in statement and "ih_identities" in statement
+    ]
+    assert len(ordered) == 3
+    assert all('COLLATE "C"' in statement.split("ORDER BY")[1] for statement in ordered)

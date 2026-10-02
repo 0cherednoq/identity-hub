@@ -4,21 +4,37 @@
 
 - `service:` — сервис; `lifecycle: standing: auth: availability:` — регионы; `status:` — D-105;
 - `tag:` — тег; прочие `ключ:значение` — фильтры, разрешаемые в profile/labels при поиске;
-- полный UUID — точный поиск по id; прочие слова — подстрочный поиск, короче 3 символов игнорируются.
+- полный UUID — точный поиск по id; `id:<hex>` — по окончанию id без дефисов;
+- прочие слова — подстрочный поиск, короче 3 символов игнорируются;
+- строка длиннее `MAX_QUERY_LENGTH` или с числом условий больше `MAX_QUERY_TOKENS` — `ValidationFailed`.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
 from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
+from identity_hub.errors import ValidationFailed
 
-__all__ = ["MIN_TERM_LENGTH", "REGION_KEYS", "SearchQuery", "parse_query"]
+__all__ = [
+    "MAX_QUERY_LENGTH",
+    "MAX_QUERY_TOKENS",
+    "MIN_TERM_LENGTH",
+    "REGION_KEYS",
+    "SearchQuery",
+    "parse_query",
+    "profile_sort_text",
+]
 
 MIN_TERM_LENGTH = 3
+# каждое слово запроса — отдельное условие ILIKE: без предела запрос из сотен слов нагружает базу
+MAX_QUERY_LENGTH = 1000
+MAX_QUERY_TOKENS = 50
 REGION_KEYS = {
     "lifecycle": frozenset(Lifecycle),
     "standing": frozenset(Standing),
@@ -66,7 +82,21 @@ def _tokens(text: str) -> list[str]:
         return text.replace('"', " ").replace("'", " ").split()
 
 
+def profile_sort_text(value: Any) -> str | None:
+    """Значение поля профиля для сортировки: текст в том же виде, что `profile ->> 'key'` в PostgreSQL."""
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return json.dumps(value, ensure_ascii=False)
+
+
 def parse_query(text: str) -> SearchQuery:
+    if len(text) > MAX_QUERY_LENGTH:
+        raise ValidationFailed(f"строка поиска длиннее {MAX_QUERY_LENGTH} символов")
+    tokens = _tokens(text)
+    if len(tokens) > MAX_QUERY_TOKENS:
+        raise ValidationFailed(f"в строке поиска больше {MAX_QUERY_TOKENS} условий")
     services: set[str] = set()
     regions: dict[str, set[str]] = {}
     any_region: set[str] = set()
@@ -76,7 +106,7 @@ def parse_query(text: str) -> SearchQuery:
     exact_id: UUID | None = None
     short_id: str | None = None
 
-    for token in _tokens(text):
+    for token in tokens:
         match = _TOKEN.match(token)
         if match is None:
             parsed = _as_uuid(token)
