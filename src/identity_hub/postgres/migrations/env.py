@@ -30,6 +30,8 @@ def _configure(connection: Connection) -> None:
         version_table_schema=db_schema,
         compare_type=True,
         compare_server_default=False,
+        # каждая ревизия — своя транзакция: сбой не откатывает предыдущие, возможен autocommit_block
+        transaction_per_migration=True,
         include_object=_only_identity_hub,
         render_item=_render_item,
     )

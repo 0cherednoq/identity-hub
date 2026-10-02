@@ -4,7 +4,8 @@ Revision ID: 0008
 Revises: 0007
 Create Date: 2026-10-01
 
-Backfill выполняется нормализацией по умолчанию (`str.strip`, версия 0): миграция не знает
+Backfill выполняется нормализацией по умолчанию (`str.strip`, версия 0) одним `UPDATE` с
+`btrim` по тому же набору пробельных символов: миграция не знает
 нормализаторов сервисов из кода приложения. Сервисы со своей нормализацией после upgrade
 переводятся `hub.doctor.renormalize(service)`. Коллизии после нормализации останавливают
 миграцию с безопасным списком id, данные не меняются (транзакционный DDL PostgreSQL).
@@ -12,7 +13,6 @@ Backfill выполняется нормализацией по умолчани
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -23,7 +23,10 @@ down_revision: str | None = "0007"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-BATCH = 1000
+# пробельные символы, которые убирает `str.strip`: backfill совпадает с нормализацией по умолчанию
+_WHITESPACE = "".join(
+    map(chr, [9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760, *range(8192, 8203), 8232, 8233])
+) + "".join(map(chr, [8239, 8287, 12288]))
 
 
 def _schema() -> str | None:
@@ -50,26 +53,18 @@ def upgrade() -> None:
         schema=schema,
     )
     bind = op.get_bind()
-    rows = bind.execute(sa.select(identities.c.id, identities.c.service, identities.c.external_ref)).all()
-    groups: dict[tuple[str, str], list[str]] = defaultdict(list)
-    updates = []
-    for row in rows:
-        normalized = row.external_ref.strip()
-        groups[(row.service, normalized)].append(str(row.id))
-        updates.append({"row_id": row.id, "normalized": normalized})
-    collisions = {key: ids for key, ids in groups.items() if len(ids) > 1}
+    normalized = sa.func.btrim(identities.c.external_ref, sa.literal(_WHITESPACE))
+    collisions = bind.execute(
+        sa.select(identities.c.service, sa.func.array_agg(sa.cast(identities.c.id, sa.String())))
+        .group_by(identities.c.service, normalized)
+        .having(sa.func.count() > 1)
+        .order_by(identities.c.service, normalized)
+    ).all()
     if collisions:
-        listed = "; ".join(
-            f"{service}: {', '.join(sorted(ids))}" for (service, _ref), ids in sorted(collisions.items())
-        )
+        listed = "; ".join(f"{service}: {', '.join(sorted(ids))}" for service, ids in collisions)
         raise RuntimeError(f"после нормализации external_ref совпали identity (id): {listed}")
-    statement = (
-        sa.update(identities)
-        .where(identities.c.id == sa.bindparam("row_id"))
-        .values(normalized_ref=sa.bindparam("normalized"))
-    )
-    for start in range(0, len(updates), BATCH):
-        bind.execute(statement, updates[start : start + BATCH])
+    # один UPDATE на всю таблицу: построчный backfill держал ACCESS EXCLUSIVE минутами (R2-D12)
+    bind.execute(sa.update(identities).values(normalized_ref=normalized))
     op.alter_column("ih_identities", "normalized_ref", nullable=False, schema=schema)
     op.drop_constraint("uq_ih_identities_service_ref", "ih_identities", type_="unique", schema=schema)
     op.create_unique_constraint(
