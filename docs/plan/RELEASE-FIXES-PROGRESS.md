@@ -10,17 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F3.4 Вход и challenge
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: четыре сценария t_login.py, вход дольше 45 с, повторный login, затирание ответа challenge
-  - [ ] _login: аренда с heartbeat, откат auth под shield при любом исключении, сессия не по схеме — FAILED
-  - [ ] Service.login_timeout вокруг Authenticator.login
-  - [ ] override или команда из challenge/logging_in закрывает challenge; шифртекст ответа затирается
-  - [ ] обслуживание: logging_in без живой аренды → no_session
-  - [ ] повторный login — LeaseUnavailable сразу; связанная аренда с wait не больше остатка; закрытие связанных аренд
-  - [ ] документация, limitations.md, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -45,7 +38,7 @@
 | F3.1 | Диспетчер: изоляция сбойного события | F0.1 | done |  |  |
 | F3.2 | Вебхуки: параллельная доставка | F0.1 | done |  |  |
 | F3.3 | Уведомления Telegram | F0.1 | done |  |  |
-| F3.4 | Вход и challenge | F0.1 | in_progress |  |  |
+| F3.4 | Вход и challenge | F0.1 | done |  |  |
 | F3.5 | Сверка с платформой | F0.1 | todo |  |  |
 | F3.6 | Обслуживание и таймеры | F0.1 | todo |  |  |
 | F3.7 | Прокси | F0.1 | todo |  |  |
@@ -69,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 18 / 41 done
+**Итого:** 19 / 41 done
 
 ## Журнал сессий
 
@@ -93,3 +86,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F3.1 · done · колбэки subscribe: курсор по одному событию через возвращаемое значение обработчика process_events, max_attempts (5), журнальное dispatcher.event.skipped и метрика; изоляция пакетных потребителей и pump-ов закреплена тестом; гарантии доставки и влияние долгой транзакции в 10-events.md; D-165; 1065 passed, admin unit 67 passed · дальше F3.2
 2026-10-02 · F3.2 · done · deliver_due: endpoint'ы параллельно под WebhookPolicy.concurrency, внутри endpoint'а по очереди, окно старта внутри срока захвата, Store.release_webhook_deliveries для неотправленных; pump-ы диспетчера одновременно; finish не стирает ручную причину отключения; MemoryStore: limit после фильтра; D-166; 1079 passed, admin unit 67 passed · дальше F3.3
 2026-10-02 · F3.3 · done · 429 не расходует попытку и ставит канал на паузу (paused_until), claim не берёт каналы на паузе; дайджест частями до 4096 единиц UTF-16, обрезка одиночного сообщения; миграция 0012: уникальность (rule_id, event_ids[1]) без дайджеста и paused_until; паритет MemoryStore (sent_at, NotFound, порядок rules, limit после фильтра); шаблон без вложенных полей; UNSET для thread_id; D-167; 1105 passed, admin unit 67 passed · дальше F3.4
+2026-10-02 · F3.4 · done · вход под арендой с heartbeat; откат auth в исходное состояние под shield при сбое вне аутентификатора и при отмене; Service.login_timeout; override/команда из challenge и logging_in закрывает challenge; resolve_challenge стирает ответ; обслуживание сбрасывает брошенный logging_in (Store.stuck_logins); повторный login — LeaseUnavailable сразу; linked ждёт не дольше остатка основной аренды; оговорка снята из limitations.md; D-168; 1115 passed, admin unit 67 passed · дальше F3.5

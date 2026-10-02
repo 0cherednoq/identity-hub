@@ -16,7 +16,7 @@ from identity_hub._space import SpaceBase, logger
 from identity_hub.api._base import legacy
 from identity_hub.domain import regions as machine
 from identity_hub.domain.regions import Change, Command, Observation, RegionDecision, RegionState, Timer
-from identity_hub.enums import Lifecycle, Standing
+from identity_hub.enums import AuthState, Lifecycle, Standing
 from identity_hub.errors import ConcurrentModification, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.store.base import IdentityRow, StoreTx
@@ -121,6 +121,16 @@ async def apply_region_change(
                 await tx.update_identity(identity_id, columns)
         if not saved:
             continue
+        if (
+            region == "auth"
+            and key == DEFAULT_SLOT
+            and decision.state.state not in (AuthState.CHALLENGE, AuthState.LOGGING_IN)
+        ):
+            # Вход закончен или сброшен (в том числе override): открытый challenge закрывается,
+            # иначе новый вход не смог бы задать вопрос, а ответ на старый не прошёл бы (R2-F01).
+            pending = await tx.open_challenge_of(identity_id)
+            if pending is not None:
+                await tx.resolve_challenge(pending.id)
         if decision.warning:
             logger.warning(
                 "%s",

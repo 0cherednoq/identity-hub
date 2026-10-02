@@ -1935,7 +1935,8 @@ class PgTx(StoreTx):
         result = await self.execute(
             update(CHALLENGES)
             .where(CHALLENGES.c.id == challenge_id, CHALLENGES.c.resolved_at.is_(None))
-            .values(resolved_at=func.now())
+            # ответ (SMS-код, пароль 2FA) после закрытия не нужен: шифртекст не хранится (R2-F20)
+            .values(resolved_at=func.now(), answer_nonce=None, answer_ciphertext=None)
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -3501,6 +3502,28 @@ class PgTx(StoreTx):
             if row["standing_due"]:
                 result.append((row["id"], "standing"))
         return result
+
+    async def stuck_logins(self, limit: int) -> list[tuple[UUID, datetime]]:
+        i, r = IDENTITIES.c, REGION_STATES.c
+        since = func.coalesce(r.changed_at, i.updated_at).label("since")
+        live = (
+            select(LEASES.c.identity_id)
+            .where(LEASES.c.identity_id == i.id, LEASES.c.expires_at > func.now())
+            .exists()
+        )
+        rows = await self.execute(
+            select(i.id, since)
+            .select_from(
+                IDENTITIES.outerjoin(
+                    REGION_STATES,
+                    and_(r.identity_id == i.id, r.region == "auth", r.key == "default"),
+                )
+            )
+            .where(i.space_id == self.space.id, i.auth_state == AuthState.LOGGING_IN, ~live)
+            .order_by(since, i.id)
+            .limit(limit)
+        )
+        return [(row.id, row.since) for row in rows]
 
     async def expire_leases(self, limit: int) -> int:
         # Отбор идёт от открытой истории (частичный индекс ix_ih_lease_history_open_space):

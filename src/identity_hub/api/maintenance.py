@@ -20,6 +20,10 @@ class SpaceMaintenance(Namespace):
         """Закрыть просроченные challenge: auth → no_session, событие `identity.challenge.expired`."""
         return await self._space._expire_challenges(limit=limit)
 
+    async def expire_logins(self, *, limit: int = 100) -> int:
+        """Вернуть в `no_session` аккаунты, застрявшие в `logging_in` без аренды дольше срока входа."""
+        return await self._space._expire_logins(limit=limit)
+
     async def expire_verifications(self, *, limit: int = 100) -> int:
         """Истёкшие сроки: verified → expired, pending → missing (ТЗ §8.9, обслуживание)."""
         return await self._space._expire_verifications(limit=limit)

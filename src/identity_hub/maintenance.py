@@ -104,6 +104,7 @@ class Maintenance:
             batch = self.schedule.batch_size
             report.add("verifications", await space.maintenance.expire_verifications(limit=batch))
             report.add("challenges", await space.maintenance.expire_challenges(limit=batch))
+            report.add("logins", await space.maintenance.expire_logins(limit=batch))
         report.add("lease_loss_aggregates", await self.hub.flush_lease_losses())
         return report
 

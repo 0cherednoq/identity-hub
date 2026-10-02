@@ -87,6 +87,7 @@ class FakeClock:
     async def sleep(self, seconds: float) -> None:
         """Сдвинуть время на `seconds`, давая ход фоновым задачам в моменты их пробуждения."""
         target = self._mono + max(0.0, seconds)
+        await asyncio.sleep(0)  # только что созданные фоновые задачи успевают встать в idle()
         while True:
             due = self._next_wake()
             if due is None or due > target:

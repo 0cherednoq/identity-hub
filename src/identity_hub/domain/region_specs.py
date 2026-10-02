@@ -74,7 +74,10 @@ AUTH = RegionSpec(
     event_type="identity.auth.changed",
     transitions={
         AuthState.NO_SESSION: _fs(AuthState.LOGGING_IN, AuthState.AUTHENTICATED),
-        AuthState.LOGGING_IN: _fs(AuthState.CHALLENGE, AuthState.AUTHENTICATED, AuthState.NO_SESSION),
+        # → session_invalid: вход начинался из session_invalid и был прерван — состояние возвращается
+        AuthState.LOGGING_IN: _fs(
+            AuthState.CHALLENGE, AuthState.AUTHENTICATED, AuthState.NO_SESSION, AuthState.SESSION_INVALID
+        ),
         # challenge → authenticated: вход завершён вручную (mark_authenticated, FR-5.6)
         AuthState.CHALLENGE: _fs(AuthState.LOGGING_IN, AuthState.AUTHENTICATED, AuthState.NO_SESSION),
         AuthState.AUTHENTICATED: _fs(AuthState.SESSION_INVALID, AuthState.NO_SESSION),

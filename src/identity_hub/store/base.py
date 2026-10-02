@@ -1382,7 +1382,8 @@ class StoreTx(ABC):
         """Сохранить зашифрованный ответ; False — challenge уже закрыт."""
 
     @abstractmethod
-    async def resolve_challenge(self, challenge_id: UUID) -> bool: ...
+    async def resolve_challenge(self, challenge_id: UUID) -> bool:
+        """Закрыть challenge и стереть шифртекст ответа; False — уже закрыт."""
 
     @abstractmethod
     async def expired_challenges(self, limit: int) -> list[ChallengeRow]: ...
@@ -1540,6 +1541,13 @@ class StoreTx(ABC):
     @abstractmethod
     async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
         """Истёкшие денормализованные standing/availability таймеры."""
+
+    @abstractmethod
+    async def stuck_logins(self, limit: int) -> list[tuple[UUID, datetime]]:
+        """Аккаунты пространства в `auth=logging_in` без живой аренды: `(id, с какого момента)`.
+
+        Вход держит аренду с heartbeat; `logging_in` без аренды — след упавшего процесса.
+        """
 
     @abstractmethod
     async def expire_leases(self, limit: int) -> int:

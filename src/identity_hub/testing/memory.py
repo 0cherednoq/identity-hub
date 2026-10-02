@@ -1744,7 +1744,9 @@ class MemoryTx(StoreTx):
         row = await self.get_challenge(challenge_id)
         if row is None or row.resolved_at is not None:
             return False
-        self.state.challenges[challenge_id] = replace(row, resolved_at=self._now)
+        self.state.challenges[challenge_id] = replace(
+            row, resolved_at=self._now, answer_nonce=None, answer_ciphertext=None
+        )
         return True
 
     async def expired_challenges(self, limit: int) -> list[ChallengeRow]:
@@ -2290,6 +2292,18 @@ class MemoryTx(StoreTx):
                 due.append((row.availability_until, row.id, "availability"))
         due.sort()
         return [(identity_id, region) for _, identity_id, region in due[:limit]]
+
+    async def stuck_logins(self, limit: int) -> list[tuple[UUID, datetime]]:
+        stuck: list[tuple[UUID, datetime]] = []
+        for row in self.state.identities.values():
+            if row.space_id != self.space.id or row.auth_state != "logging_in":
+                continue
+            lease = self.state.leases.get(row.id)
+            if lease is not None and lease.expires_at > self._now:
+                continue
+            region = self.state.regions.get((row.id, "auth", "default"))
+            stuck.append((row.id, region.changed_at if region is not None else row.updated_at))
+        return sorted(stuck, key=lambda item: (item[1], item[0]))[:limit]
 
     async def expire_leases(self, limit: int) -> int:
         expired = sorted(

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -23,7 +24,7 @@ from identity_hub.crypto import associated_data
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, Lifecycle, Standing
-from identity_hub.errors import LeaseUnavailable, NotFound, ValidationFailed
+from identity_hub.errors import LeaseUnavailable, NotFound, ValidationFailed, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.protocols import LoginChallenge
 from identity_hub.service import Service
@@ -40,6 +41,8 @@ LOGIN_POOL = "identity-hub:login"
 LOGIN_AUTH_STATES = frozenset({AuthState.NO_SESSION, AuthState.SESSION_INVALID})
 ALL_LIFECYCLES = frozenset({Lifecycle.PROVISIONING, Lifecycle.READY})
 LOGIN_STANDING = frozenset({Standing.GOOD, Standing.LIMITED, Standing.APPEALING})
+LOGIN_ABANDONED_GRACE = timedelta(seconds=60)
+"""Запас сверх `Service.login_timeout`, после которого `logging_in` без аренды считается брошенным."""
 
 
 class LoginOutcome(StrEnum):
@@ -130,14 +133,28 @@ class _LoginContext:
             lifecycles=ALL_LIFECYCLES,
             shared=pool.shared,
         )
-        lease = await pool.acquire(query=query, wait=pool.timing.ttl)
+        # занятый связанный аккаунт ждём не дольше остатка основной аренды (R2-F22)
+        clock = self._space.hub.clock
+        remaining = max(0.0, self._lease._deadline() - clock.monotonic())
+        lease = await pool.acquire(query=query, wait=min(pool.timing.ttl.total_seconds(), remaining))
+        lease._start(None)  # вход бывает долгим: связанная аренда тоже продлевается
         self._linked[role] = lease
         return _LinkedIdentity(lease)
 
+    @property
+    def lost(self) -> bool:
+        """Основная или связанная аренда потеряна: heartbeat отменил задачу входа."""
+        return self._lease._cancelled_by_us or any(lease._cancelled_by_us for lease in self._linked.values())
+
     async def close(self) -> None:
-        for lease in self._linked.values():
-            await lease.release()
-        self._linked.clear()
+        linked, self._linked = self._linked, {}
+        for lease in linked.values():
+            try:  # сбой освобождения одной аренды не оставляет остальные до TTL
+                await lease.release()
+            except Exception as exc:
+                logger.warning(
+                    "не удалось освободить связанную аренду %s: %s", lease.lease_id, describe_error(exc)
+                )
 
 
 class LoginMixin(SpaceBase):
@@ -148,6 +165,9 @@ class LoginMixin(SpaceBase):
         service = self.hub.service(identity.service)
         if service.authenticator is None:
             raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
+        if identity.auth_state == AuthState.LOGGING_IN:
+            # вход уже идёт в другой задаче или процессе; брошенный вход сбросит обслуживание
+            raise LeaseUnavailable(f"аккаунт {identity_id} уже выполняет вход")
         if identity.auth_state not in LOGIN_AUTH_STATES:
             raise ValidationFailed(f"вход недоступен из состояния auth={identity.auth_state}")
         pool: Pool = self._pool(LOGIN_POOL, service=service)  # type: ignore[attr-defined]
@@ -158,7 +178,7 @@ class LoginMixin(SpaceBase):
             auth_states=LOGIN_AUTH_STATES,
             among=[identity_id],
         )
-        lease = await pool.acquire(query=query, wait=pool.timing.ttl)
+        lease = await pool.acquire(query=query)  # занят — сразу LeaseUnavailable (R2-F21)
         outcome, _error = await self._login(lease, service, None, None, None)
         return outcome
 
@@ -281,6 +301,36 @@ class LoginMixin(SpaceBase):
                 count += 1
         return count
 
+    async def _expire_logins(self, *, limit: int = 100) -> int:
+        """`logging_in` без живой аренды дольше срока входа → `no_session` (процесс упал во время входа)."""
+        async with self._tx(own=True) as tx:
+            now = await tx.now()
+            stuck = await tx.stuck_logins(limit)
+        count = 0
+        for identity_id, since in stuck:
+            async with self._tx(own=True) as tx:
+                identity = await tx.get_identity(identity_id)
+                if identity is None or identity.auth_state != AuthState.LOGGING_IN:
+                    continue
+                timeout = self.hub.service(identity.service).login_timeout + LOGIN_ABANDONED_GRACE
+                if since + timeout > now or await tx.current_lease(identity_id) is not None:
+                    continue
+                await apply_region_change(
+                    self, tx, identity_id, "auth", DEFAULT_SLOT, Command(AuthState.NO_SESSION, actor="timer")
+                )
+                await self._emit(
+                    tx,
+                    EventDraft(
+                        "identity.login.failed",
+                        actor="timer",
+                        service=identity.service,
+                        identity_id=identity_id,
+                        data={"error": "LoginAbandoned"},
+                    ),
+                )
+                count += 1
+        return count
+
     # --------------------------------------------------------- внутреннее
 
     async def _login(
@@ -291,36 +341,99 @@ class LoginMixin(SpaceBase):
         answer: str | None,
         context: Mapping[str, Any] | None,
     ) -> tuple[LoginOutcome, str | None]:
+        """Один вход под арендой `lease`; аренда и связанные аренды освобождаются здесь.
+
+        После перевода в `logging_in` любое завершение, кроме успеха и нового challenge, возвращает
+        `auth` в состояние до входа — в том числе при отмене задачи (под `shield`). Сбой самого
+        аутентификатора — `no_session`, как и раньше.
+        """
         assert svc.authenticator is not None
         ctx = _LoginContext(self, lease, answer, context)
+        initial = AuthState(lease.identity.auth_state)
+        entered = False
+        lease._start(None)  # heartbeat: вход с SMS-кодом легко длится дольше ttl − safety_margin
         try:
             await self._set_auth(lease, AuthState.LOGGING_IN)
+            entered = True
             try:
-                session = await svc.authenticator.login(ctx)
+                async with asyncio.timeout(svc.login_timeout.total_seconds()):
+                    session = await svc.authenticator.login(ctx)
             except LoginChallenge as asked:
                 if challenge is not None:
                     await self._resolve(challenge.id)
                 await self._open_challenge(lease, asked)
+                entered = False
                 return LoginOutcome.CHALLENGED, None
             except Exception as exc:
+                name = "LoginTimeout" if isinstance(exc, TimeoutError) else type(exc).__name__
                 if challenge is not None:
                     await self._resolve(challenge.id)
-                error = f"{type(exc).__name__}: {exc}"[:500]
-                await self._set_auth(
-                    lease, AuthState.NO_SESSION, "identity.login.failed", {"error": type(exc).__name__}
-                )
-                return LoginOutcome.FAILED, error
+                await self._set_auth(lease, AuthState.NO_SESSION, "identity.login.failed", {"error": name})
+                entered = False
+                return LoginOutcome.FAILED, f"{name}: {exc}"[:500]
             await lease.save_session(session)
             if challenge is not None:
                 await self._resolve(challenge.id)
             await self._set_auth(lease, AuthState.AUTHENTICATED, "identity.login.succeeded", {})
+            entered = False
             return LoginOutcome.SUCCEEDED, None
+        except asyncio.CancelledError:
+            if entered:
+                await asyncio.shield(self._restore_auth(lease, initial, challenge, "CancelledError"))
+            if not ctx.lost:
+                raise  # отмена вызывающего: состояние возвращено, отмена продолжается
+            task = asyncio.current_task()
+            if task is not None:
+                task.uncancel()  # задачу отменил heartbeat потерянной аренды — это исход входа
+            return LoginOutcome.FAILED, "LeaseLost"
         except Exception as exc:
-            logger.exception("вход аккаунта %s прерван", lease.identity_id)
+            logger.warning("вход аккаунта %s прерван: %s", lease.identity_id, describe_error(exc))
+            if entered:
+                await asyncio.shield(self._restore_auth(lease, initial, challenge, type(exc).__name__))
             return LoginOutcome.FAILED, f"{type(exc).__name__}: {exc}"[:500]
         finally:
             await ctx.close()
             await lease.release()
+
+    async def _restore_auth(
+        self, lease: Lease, initial: AuthState, challenge: ChallengeRow | None, error: str
+    ) -> None:
+        """Вернуть `auth` в состояние до входа. Не бросает: если аренда уже потеряна, сбросит обслуживание."""
+        try:
+            async with self._tx(own=True) as tx:
+                await lease._check_fencing(tx)
+                target = initial
+                if initial is AuthState.CHALLENGE:
+                    # ответ на challenge уже использован: без открытого вопроса возвращаться некуда
+                    current = await tx.get_challenge(challenge.id) if challenge is not None else None
+                    if current is None or current.resolved_at is not None:
+                        target = AuthState.NO_SESSION
+                await apply_region_change(
+                    self,
+                    tx,
+                    lease.identity_id,
+                    "auth",
+                    DEFAULT_SLOT,
+                    Command(target, actor=lease.holder),
+                    lease_id=lease.lease_id,
+                )
+                await self._emit(
+                    tx,
+                    EventDraft(
+                        "identity.login.failed",
+                        actor=lease.holder,
+                        service=lease.service,
+                        identity_id=lease.identity_id,
+                        lease_id=lease.lease_id,
+                        data={"error": error},
+                    ),
+                )
+        except Exception as exc:
+            logger.warning(
+                "не удалось вернуть auth аккаунта %s после прерванного входа: %s",
+                lease.identity_id,
+                describe_error(exc),
+            )
 
     async def _set_auth(
         self, lease: Lease, state: AuthState, event: str | None = None, data: Mapping[str, Any] | None = None

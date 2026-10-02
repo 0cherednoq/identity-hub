@@ -120,7 +120,9 @@ async def test_challenge_flow(
             (await s.execute(select(ChallengeRecord).order_by(ChallengeRecord.created_at))).scalars()
         )
     assert len(challenges) == 2 and challenges[0].resolved_at is not None
-    assert challenges[0].answer_ciphertext is not None and b"000" not in challenges[0].answer_ciphertext
+    # R2-F20: ответ на закрытый challenge не хранится даже зашифрованным
+    assert challenges[0].answered_at is not None
+    assert challenges[0].answer_ciphertext is None and challenges[0].answer_nonce is None
     with pytest.raises(ValidationFailed):
         await space.auth.answer_challenge(challenges[0].id, "12345")
 
