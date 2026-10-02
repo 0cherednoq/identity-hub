@@ -212,10 +212,10 @@ async def delivery_center(
             notification_next_cursor=_next_cursor(center.notifications.next_before, "scheduled_at"),
             preview_window_started_at=center.preview_window_started_at,
             retry_policy=DeliveryRetryPolicyResponse(
-                base_seconds=int(handle.hub.webhook_dispatcher.policy.retry_base.total_seconds()),
-                cap_seconds=int(handle.hub.webhook_dispatcher.policy.retry_cap.total_seconds()),
-                max_attempts=handle.hub.webhook_dispatcher.policy.max_failures,
-                jitter_ratio=handle.hub.webhook_dispatcher.policy.retry_jitter,
+                base_seconds=int(handle.hub.webhook_policy.retry_base.total_seconds()),
+                cap_seconds=int(handle.hub.webhook_policy.retry_cap.total_seconds()),
+                max_attempts=handle.hub.webhook_policy.max_failures,
+                jitter_ratio=handle.hub.webhook_policy.retry_jitter,
             ),
         )
     )

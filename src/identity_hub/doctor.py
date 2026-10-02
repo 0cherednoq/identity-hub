@@ -46,10 +46,10 @@ class Doctor:
         self.hub = hub
 
     async def check(self, *, fix: bool = False) -> list[DoctorIssue]:
-        return await self.hub.store.doctor(fix=fix)
+        return await self.hub._store.doctor(fix=fix)
 
     async def rotate_key(self, *, limit: int = 500) -> RotationReport:
-        return RotationReport(await self.hub.store.rotate_key(self.hub.envelope, limit=limit))
+        return RotationReport(await self.hub._store.rotate_key(self.hub._envelope, limit=limit))
 
     async def renormalize(self, service: Service | str, *, batch_size: int = 1000) -> RenormalizeReport:
         """Пересчитать `normalized_ref` identity сервиса после смены `normalize_ref_version` (D-149).
@@ -66,7 +66,7 @@ class Doctor:
         while True:
             stale = [
                 row
-                for row in await self.hub.store.stale_normalizations(
+                for row in await self.hub._store.stale_normalizations(
                     svc.name, version, batch_size + len(blocked)
                 )
                 if row[0] not in blocked
@@ -80,7 +80,7 @@ class Doctor:
                 except ValidationFailed:
                     invalid.append(identity_id)
                     blocked.add(identity_id)
-            found = await self.hub.store.apply_normalizations(svc.name, version, updates)
+            found = await self.hub._store.apply_normalizations(svc.name, version, updates)
             if found:
                 collisions.extend(found)
                 blocked.update(identity_id for identity_id, _ref in stale)

@@ -90,7 +90,7 @@ class Dispatcher:
             attempted_at = self.hub.clock.now()
             self._runtime[consumer.name] = replace(self._runtime[consumer.name], last_attempt_at=attempted_at)
             try:
-                handled = await self.hub.store.process_events(
+                handled = await self.hub._store.process_events(
                     consumer.name,
                     consumer.handler,
                     limit=self.batch_size,
@@ -122,7 +122,7 @@ class Dispatcher:
     async def run(self, stop: asyncio.Event | None = None) -> None:
         """Цикл диспетчера до `stop`. LISTEN будит сразу; без него — опрос `poll_interval` (FR-13.6)."""
         stop = stop or asyncio.Event()
-        async with self.hub.store.listen(NOTIFY_CHANNEL) as signal:
+        async with self.hub._store.listen(NOTIFY_CHANNEL) as signal:
             if signal is None:
                 logger.info("LISTEN недоступен — диспетчер работает в режиме опроса")
             while not stop.is_set():

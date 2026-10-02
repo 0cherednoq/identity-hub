@@ -31,7 +31,7 @@ class SecretsAdminMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.credentials, credentials, "credentials")
-        payload = self.hub.envelope.seal_model(model, associated_data("ih_credentials", identity_id))
+        payload = self.hub._envelope.seal_model(model, associated_data("ih_credentials", identity_id))
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
             await tx.put_credentials(identity_id, payload)
@@ -61,7 +61,7 @@ class SecretsAdminMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.session, session, "session")
-        payload = self.hub.envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
+        payload = self.hub._envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
             fencing = await tx.current_fencing(identity_id, lock=True)
@@ -93,7 +93,7 @@ class SecretsAdminMixin(SpaceBase):
         """
         actor, reason = require_actor_and_reason(actor, reason, "раскрытие секрета")
         kind, _, key = field.partition(":")
-        envelope = self.hub.envelope
+        envelope = self.hub._envelope
         async with self._tx(own=True) as tx:
             row = await self._identity(tx, identity_id)
             service = self.hub.service(row.service)

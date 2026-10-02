@@ -159,7 +159,7 @@ def space_without_tx(identity_hub: IdentityHub, monkeypatch: pytest.MonkeyPatch)
     def forbidden(*_args: Any, **_kwargs: Any) -> Any:
         raise _NoTransaction("транзакция не должна открываться для слишком большого ввода")
 
-    monkeypatch.setattr(identity_hub.store, "transaction", forbidden)
+    monkeypatch.setattr(identity_hub._store, "transaction", forbidden)
     return space
 
 

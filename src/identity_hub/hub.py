@@ -129,8 +129,8 @@ class IdentityHub:
             store = PgStore(sessionmaker, db_schema=db_schema)
         if secrets is None:
             raise ValidationFailed("нужен SecretsProvider (мастер-ключи)")
-        self.store = store
-        self.envelope = Envelope(secrets)
+        self._store = store
+        self._envelope = Envelope(secrets)
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         try:
@@ -144,33 +144,33 @@ class IdentityHub:
         self.lease_log_sink = LeaseLogSink(lease_logs)
         self.dispatcher = Dispatcher(self)
         self.webhook_dev_hosts = frozenset(webhook_dev_hosts)
-        self.webhook_dispatcher = WebhookDispatcher(self, webhooks)
-        self.dispatcher.add_consumer("webhooks", self.webhook_dispatcher.handle_events)
-        self.dispatcher.add_pump(self.webhook_dispatcher.deliver_due)
+        self._webhook_dispatcher = WebhookDispatcher(self, webhooks)
+        self.dispatcher.add_consumer("webhooks", self._webhook_dispatcher.handle_events)
+        self.dispatcher.add_pump(self._webhook_dispatcher.deliver_due)
         if telegram_transport is None:
             from identity_hub.telegram_notify import HttpTelegramTransport
 
-            telegram_transport = HttpTelegramTransport(timeout=self.webhook_dispatcher.policy.timeout)
-        self.notification_dispatcher = NotificationDispatcher(
-            self, telegram_transport, policy=self.webhook_dispatcher.policy
+            telegram_transport = HttpTelegramTransport(timeout=self._webhook_dispatcher.policy.timeout)
+        self._notification_dispatcher = NotificationDispatcher(
+            self, telegram_transport, policy=self._webhook_dispatcher.policy
         )
-        self.dispatcher.add_consumer("notifications", self.notification_dispatcher.handle_events)
-        self.dispatcher.add_pump(self.notification_dispatcher.deliver_due)
-        self.import_runner = ImportRunner(self)
-        self.dispatcher.add_pump(self.import_runner.run_once)
+        self.dispatcher.add_consumer("notifications", self._notification_dispatcher.handle_events)
+        self.dispatcher.add_pump(self._notification_dispatcher.deliver_due)
+        self._import_runner = ImportRunner(self)
+        self.dispatcher.add_pump(self._import_runner.run_once)
         self.maintenance = Maintenance(self, maintenance)
         self.dispatcher.add_pump(self.maintenance.run_due)
         self.doctor = Doctor(self)
-        self.metric_rollups = RollupMetricsBuffer(self)
-        self.metrics: MetricsHook = CompositeMetrics(self.metric_rollups, metrics or NullMetrics())
-        self.dispatcher.add_pump(self.metric_rollups.flush)
-        self.metrics_reporter = MetricsReporter(self)
-        self.dispatcher.add_pump(self.metrics_reporter.run_due)
-        self.rollups = StatsRollups(self)
-        self.dispatcher.add_consumer("stats-rollups", self.rollups.handle_events, include_internal=True)
-        self.dispatcher.add_pump(self.rollups.run_due)
-        self.state_snapshots = StateSnapshots(self)
-        self.dispatcher.add_pump(self.state_snapshots.run_due)
+        self._metric_rollups = RollupMetricsBuffer(self)
+        self.metrics: MetricsHook = CompositeMetrics(self._metric_rollups, metrics or NullMetrics())
+        self.dispatcher.add_pump(self._metric_rollups.flush)
+        self._metrics_reporter = MetricsReporter(self)
+        self.dispatcher.add_pump(self._metrics_reporter.run_due)
+        self._rollups = StatsRollups(self)
+        self.dispatcher.add_consumer("stats-rollups", self._rollups.handle_events, include_internal=True)
+        self.dispatcher.add_pump(self._rollups.run_due)
+        self._state_snapshots = StateSnapshots(self)
+        self.dispatcher.add_pump(self._state_snapshots.run_due)
         self.events = self.dispatcher  # hub.events.subscribe(name, fn, types=...) — ТЗ §11
         self.strict_events = strict_events  # SecretLeak вместо вырезания секретов в событиях
         # external_ref и labels (телефон, email) не уходят в события и вебхуки (D-152)
@@ -210,16 +210,30 @@ class IdentityHub:
     def services(self) -> tuple[Service, ...]:
         return tuple(self._services.values())
 
+    @property
+    def sessionmaker(self) -> async_sessionmaker[AsyncSession] | None:
+        """Фабрика сессий PostgreSQL, на которой работает хаб; `None` для другого хранилища.
+
+        Нужна, чтобы открыть свою транзакцию и передать её в `space.using(session)`.
+        """
+        maker: async_sessionmaker[AsyncSession] | None = getattr(self._store, "sessionmaker", None)
+        return maker
+
+    @property
+    def webhook_policy(self) -> WebhookPolicy:
+        """Политика повторов и таймаутов доставки вебхуков и уведомлений."""
+        return self._webhook_dispatcher.policy
+
     async def start(self) -> None:
         """Проверить ревизию схемы и синхронизировать реестр сервисов (FR-1.3, IMP-15).
 
         Схема БД должна быть ровно той ревизии, что ожидает код: иначе `SchemaIncompatible`
         (без URL и SQL). Миграции `start()` не применяет — это `identity-hub migrate`.
         """
-        expected, actual = await self.store.schema_revisions()
+        expected, actual = await self._store.schema_revisions()
         if actual != [expected]:
             raise SchemaIncompatible(expected, ", ".join(actual) or None)
-        await self.store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
+        await self._store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
 
     # --------------------------------------------------------- пространства
 
@@ -231,7 +245,7 @@ class IdentityHub:
         """Вернуть существующее пространство, не создавая новое."""
         ref = self._spaces.get(slug)
         if ref is None:
-            ref = await self.store.get_space(slug)
+            ref = await self._store.get_space(slug)
             if ref is None:
                 return None
             self._spaces[slug] = ref
@@ -287,7 +301,7 @@ class IdentityHub:
     async def _space_ref(self, slug: str, title: str | None, space_id: UUID | None) -> SpaceRef:
         ref = self._spaces.get(slug)
         if ref is None:
-            ref = await self.store.ensure_space(slug, title, space_id, timezone=self.timezone)
+            ref = await self._store.ensure_space(slug, title, space_id, timezone=self.timezone)
             self._spaces[slug] = ref
         return ref
 

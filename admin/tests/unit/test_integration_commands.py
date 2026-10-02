@@ -65,7 +65,7 @@ def _confirmation(code: str) -> dict[str, object]:
 
 def test_notification_crud_test_send_validation_rbac_and_redacted_reads() -> None:
     hub, transport = _hub()
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     with TestClient(create_admin_app(_settings(), hub=hub)) as client:
         created = client.post(
             f"/api/v1/spaces/{SPACE}/notification-channels",
@@ -181,7 +181,7 @@ def test_notification_crud_test_send_validation_rbac_and_redacted_reads() -> Non
 
 def test_webhook_one_time_values_ssrf_rotation_and_audited_idempotent_retry() -> None:
     hub, _ = _hub()
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     with TestClient(create_admin_app(_settings(), hub=hub)) as client:
         body = {
             "url": "https://hooks.example.test/private/path?token=hidden",

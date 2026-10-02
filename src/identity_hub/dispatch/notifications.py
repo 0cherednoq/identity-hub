@@ -186,7 +186,7 @@ class Notifications:
         if not bot_token.get_secret_value():
             raise ValidationFailed("bot_token не может быть пустым")
         channel_id = id or new_id()
-        secret = self.space.hub.envelope.seal_model(
+        secret = self.space.hub._envelope.seal_model(
             _TelegramSecret(bot_token=bot_token),
             associated_data("ih_notification_channels", channel_id),
         )
@@ -231,7 +231,7 @@ class Notifications:
             }
         secret = None
         if bot_token is not None:
-            secret = self.space.hub.envelope.seal_model(
+            secret = self.space.hub._envelope.seal_model(
                 _TelegramSecret(bot_token=bot_token),
                 associated_data("ih_notification_channels", channel_id),
             )
@@ -325,12 +325,12 @@ class Notifications:
             row = await tx.get_notification_channel_secret(channel_id)
         if row is None:
             raise NotFound("notification channel", channel_id)
-        token = self.space.hub.envelope.open_model(
+        token = self.space.hub._envelope.open_model(
             _TelegramSecret,
             row.secret,
             associated_data("ih_notification_channels", channel_id),
         ).bot_token
-        await self.space.hub.notification_dispatcher.transport.send_message(
+        await self.space.hub._notification_dispatcher.transport.send_message(
             token,
             row.config["chat_id"],
             text,
@@ -356,9 +356,9 @@ class NotificationDispatcher:
         self.policy = policy
 
     async def handle_events(self, events: list[Event]) -> None:
-        targets = await self.hub.store.enabled_notification_targets()
+        targets = await self.hub._store.enabled_notification_targets()
         identity_ids = [event.identity_id for event in events if event.identity_id is not None]
-        labels = await self.hub.store.identity_labels(identity_ids)
+        labels = await self.hub._store.identity_labels(identity_ids)
         items: list[NotificationEnqueue] = []
         for event in events:
             event_labels = labels.get(event.identity_id, {}) if event.identity_id is not None else {}
@@ -383,10 +383,10 @@ class NotificationDispatcher:
                         scheduled,
                     )
                 )
-        await self.hub.store.enqueue_notifications(items)
+        await self.hub._store.enqueue_notifications(items)
 
     async def deliver_due(self) -> int:
-        attempts = await self.hub.store.claim_notifications(
+        attempts = await self.hub._store.claim_notifications(
             limit=self.policy.batch_size, claim_for=self.policy.claim_for
         )
         for attempt in attempts:
@@ -395,7 +395,7 @@ class NotificationDispatcher:
             error: str | None = None
             max_attempts = self.policy.max_failures
             try:
-                token = self.hub.envelope.open_model(
+                token = self.hub._envelope.open_model(
                     _TelegramSecret,
                     attempt.channel_secret,
                     associated_data("ih_notification_channels", attempt.channel_id),
@@ -419,7 +419,7 @@ class NotificationDispatcher:
                 error = f"TelegramUnavailable: {exc}"
             except Exception as exc:
                 error = type(exc).__name__
-            await self.hub.store.finish_notification(
+            await self.hub._store.finish_notification(
                 attempt.notification_id,
                 attempt.attempt,
                 succeeded=succeeded,

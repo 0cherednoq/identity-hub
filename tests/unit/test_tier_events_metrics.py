@@ -60,7 +60,7 @@ async def test_tier_events_are_atomic_and_not_duplicated_by_reads() -> None:
     await email.reconcile("missing")
     await lease.release()
 
-    store = hub.store
+    store = hub._store
     assert isinstance(store, MemoryStore)
     tiers = [
         (event.type, event.data["tier"], event.data["factor"])
@@ -116,4 +116,4 @@ async def test_broken_metrics_backend_never_breaks_domain_operations() -> None:
     async with lease.operation("view_balance"):
         pass
     await lease.release()
-    await hub.metrics_reporter.collect()
+    await hub._metrics_reporter.collect()

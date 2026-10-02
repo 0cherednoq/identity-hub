@@ -64,7 +64,7 @@ async def background_snapshot(
 ) -> BackgroundSnapshot:
     now = hub.clock.now()
     slugs = None if allowed_spaces is None or "*" in allowed_spaces else frozenset(allowed_spaces)
-    metrics = await hub.store.metrics_snapshot(slugs)
+    metrics = await hub._store.metrics_snapshot(slugs)
     runtime = hub.dispatcher.runtime
     processes: list[BackgroundProcess] = []
     for consumer in sorted(hub.dispatcher.consumers):

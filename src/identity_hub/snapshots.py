@@ -47,7 +47,7 @@ class StateSnapshots:
 
     async def capture(self, *, at: datetime | None = None, source: str = "scheduled") -> int:
         taken_at = snapshot_hour(at or self.hub.clock.now())
-        return await self.hub.store.capture_state_snapshot(taken_at, source=source)
+        return await self.hub._store.capture_state_snapshot(taken_at, source=source)
 
     async def backfill_current(self, *, at: datetime | None = None) -> int:
         """Capture only the current hour; never synthesize earlier history."""
@@ -56,11 +56,11 @@ class StateSnapshots:
     async def frames(self, space_slug: str, *, start: datetime, end: datetime) -> list[StateSnapshotFrame]:
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValidationFailed("snapshot range must be aware and non-empty")
-        return await self.hub.store.read_state_snapshots(space_slug, start, end)
+        return await self.hub._store.read_state_snapshots(space_slug, start, end)
 
     async def purge(self, *, before: datetime | None = None) -> int:
         cutoff = before or (self.hub.clock.now() - self.hub.retention.state_snapshots)
-        return await self.hub.store.purge_state_snapshots(cutoff)
+        return await self.hub._store.purge_state_snapshots(cutoff)
 
     async def run_due(self) -> int:
         hour = snapshot_hour(self.hub.clock.now())

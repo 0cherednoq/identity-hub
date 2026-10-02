@@ -138,7 +138,7 @@ async def _seed_command_target(hub: Any) -> None:
 
 def test_state_commands_follow_machine_revision_roles_and_audit() -> None:
     hub = create_demo_hub()
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     with TestClient(create_admin_app(_settings(), hub=hub)) as client:
         item = client.get(
             "/api/v1/spaces/demo-large/accounts?lifecycle=ready&limit=1",
@@ -294,7 +294,7 @@ def test_override_unpin_restore_and_requirement_resolution() -> None:
 def test_login_challenge_and_manual_verification_are_guarded_and_secret_free() -> None:
     hub = _interaction_hub()
     asyncio.run(_seed_interaction_target(hub))
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     app = create_admin_app(_settings().model_copy(update={"demo_mode": False}), hub=hub)
     with TestClient(app) as client:
         detail_url = f"/api/v1/spaces/demo-large/accounts/{INTERACTION_ID}"
@@ -422,7 +422,7 @@ async def _seed_resource_commands(hub: IdentityHub) -> tuple[UUID, UUID]:
 def test_lease_proxy_and_link_commands_are_guarded_scoped_and_impact_aware() -> None:
     hub = create_demo_hub()
     proxy_id, foreign_proxy_id = asyncio.run(_seed_resource_commands(hub))
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     detail_url = f"/api/v1/spaces/demo-large/accounts/{RESOURCE_TARGET_ID}"
     with TestClient(create_admin_app(_settings(), hub=hub)) as client:
         lease_section = client.get(

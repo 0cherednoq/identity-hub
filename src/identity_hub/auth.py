@@ -204,7 +204,7 @@ class LoginMixin(SpaceBase):
         """
         if not answer:
             raise ValidationFailed("пустой ответ на challenge")
-        envelope = self.hub.envelope
+        envelope = self.hub._envelope
         async with self._tx(own=True) as tx:
             challenge = await tx.get_challenge(challenge_id)
             if challenge is None:
@@ -353,7 +353,7 @@ class LoginMixin(SpaceBase):
         challenge_id = new_id()
         aad = associated_data("ih_challenges", lease.identity_id, str(challenge_id))
         context = asked.context if asked.context is not None else {}
-        payload = self.hub.envelope.seal_model(context, aad)
+        payload = self.hub._envelope.seal_model(context, aad)
         hint = sanitize_text(asked.hint) or ""  # уходит во внешнее событие и очередь человека
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)

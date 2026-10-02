@@ -94,10 +94,10 @@ async def test_rotate_key_rewraps_every_encrypted_table(
     )
 
     challenge_id = new_id()
-    challenge_payload = hub.envelope.seal(
+    challenge_payload = hub._envelope.seal(
         b"{}", associated_data("ih_challenges", identity_id, str(challenge_id))
     )
-    evidence = hub.envelope.seal(b"{}", associated_data("ih_verifications", identity_id, "phone"))
+    evidence = hub._envelope.seal(b"{}", associated_data("ih_verifications", identity_id, "phone"))
     ref = await space.ref()
     async with sessionmaker() as session, session.begin():
         await session.execute(
@@ -121,7 +121,7 @@ async def test_rotate_key_rewraps_every_encrypted_table(
             )
         )
 
-    hub.envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
+    hub._envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
     report = await hub.doctor.rotate_key(limit=100)
 
     assert report.total == 8

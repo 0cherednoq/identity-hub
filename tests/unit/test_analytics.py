@@ -88,8 +88,8 @@ async def _golden(hub: IdentityHub, store: MemoryStore) -> tuple[datetime, datet
         store._state.events.append((event, ref.id, not event_type.startswith(("lease.", "operation."))))
         events.append(event)
     store._state.next_event_id = len(events) + 1
-    await hub.rollups.handle_events(events)
-    await hub.state_snapshots.capture(at=hub.clock.now())
+    await hub._rollups.handle_events(events)
+    await hub._state_snapshots.capture(at=hub.clock.now())
     return start, end
 
 
@@ -179,7 +179,7 @@ async def test_analytics_rejects_unknown_dimensions_and_caps_points() -> None:
         )
         store._state.events.append((event, ref.id, True))
         events.append(event)
-    await hub.rollups.handle_events(events)
+    await hub._rollups.handle_events(events)
     with pytest.raises(ValidationFailed):
         await space.analytics.series(
             "logins.failed",
@@ -222,7 +222,7 @@ async def test_analytics_daily_series_uses_wall_clock_days_across_dst() -> None:
         )
         store._state.events.append((event, ref.id, True))
         events.append(event)
-    await hub.rollups.handle_events(events)
+    await hub._rollups.handle_events(events)
 
     series = await space.analytics.series(
         "identities.added",

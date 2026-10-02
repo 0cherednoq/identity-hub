@@ -22,7 +22,6 @@ from identity_hub.errors import (
     VerificationRequirementsNotMet,
 )
 from identity_hub.hub import SpaceHandle
-from identity_hub.postgres.store import PgStore
 from litestar import Request
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
@@ -117,9 +116,9 @@ class CommandGateway:
         identity_id: UUID | None,
         transaction_mode: Literal["atomic", "external"] = "atomic",
     ) -> ResultT:
-        store = handle.hub.store
-        if isinstance(store, PgStore) and transaction_mode == "atomic":
-            async with store.sessionmaker() as session:
+        sessionmaker = handle.hub.sessionmaker
+        if sessionmaker is not None and transaction_mode == "atomic":
+            async with sessionmaker() as session:
                 transaction = await session.begin()
                 try:
                     bound = handle.using(session)

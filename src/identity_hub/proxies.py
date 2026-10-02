@@ -167,7 +167,7 @@ class ProxiesMixin(SpaceBase):
         secret = ProxySecret(
             username=parsed.username, password=SecretStr(parsed.password) if parsed.password else None
         )
-        payload = self.hub.envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
+        payload = self.hub._envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
         return NewProxy(
             id=proxy_id,
             pool=pool,
@@ -216,7 +216,7 @@ class ProxiesMixin(SpaceBase):
         return url
 
     def _proxy_url_of(self, row: ProxyRow) -> str:
-        secret = self.hub.envelope.open_model(ProxySecret, row.secret, associated_data("ih_proxies", row.id))
+        secret = self.hub._envelope.open_model(ProxySecret, row.secret, associated_data("ih_proxies", row.id))
         auth = ""
         if secret.username:
             auth = quote(secret.username, safe="")

@@ -75,7 +75,7 @@ def _payload(content: str, *, format: str = "jsonl") -> dict[str, object]:
 def test_jsonl_import_is_idempotent_resumable_and_secret_safe() -> None:
     hub = _hub()
     asyncio.run(_seed(hub))
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     secret = "never-return-this-session-secret"
     content = "\n".join(
         (
@@ -112,7 +112,7 @@ def test_jsonl_import_is_idempotent_resumable_and_secret_safe() -> None:
             json=_payload(content),
         )
         run_id = first.json()["data"]["id"]
-        assert asyncio.run(hub.import_runner.run_once()) == 2
+        assert asyncio.run(hub._import_runner.run_once()) == 2
         detail = client.get(
             f"/api/v1/spaces/import-space/imports/{run_id}",
             headers={"Authorization": "Bearer viewer-import-token"},
@@ -217,7 +217,7 @@ def test_pending_import_can_be_cancelled_at_a_batch_boundary() -> None:
             headers=_headers("operator", "cancel-import-0002"),
             json={"reason": "operator stopped the batch"},
         )
-        assert asyncio.run(hub.import_runner.run_once()) == 0
+        assert asyncio.run(hub._import_runner.run_once()) == 0
 
     assert started.status_code == 201
     assert cancelled.status_code == 201

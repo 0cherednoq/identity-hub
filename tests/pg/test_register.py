@@ -68,7 +68,7 @@ async def test_register_full(
     (creds,) = await _one(sessionmaker, CredentialsRecord, result.identity_id)
     assert b"hunter2" not in creds.ciphertext
     payload = EncryptedPayload(creds.key_id, creds.wrapped_dek, creds.nonce, creds.ciphertext)
-    opened = hub.envelope.open_model(
+    opened = hub._envelope.open_model(
         TgCredentials, payload, associated_data("ih_credentials", result.identity_id)
     )
     assert opened.password is not None and opened.password.get_secret_value() == "hunter2"
@@ -79,7 +79,7 @@ async def test_register_full(
     session_payload = EncryptedPayload(
         session_row.key_id, session_row.wrapped_dek, session_row.nonce, session_row.ciphertext
     )
-    restored = hub.envelope.open_model(
+    restored = hub._envelope.open_model(
         TgSession, session_payload, associated_data("ih_sessions", result.identity_id, "default")
     )
     assert restored.auth_key.get_secret_value() == "AAAA"
@@ -200,5 +200,5 @@ async def test_encrypted_profile(hub: IdentityHub, sessionmaker: async_sessionma
     payload = EncryptedPayload(
         row.profile_key_id, row.profile_wrapped_dek, row.profile_nonce, row.profile_ciphertext
     )
-    secret = hub.envelope.open_json(payload, associated_data("ih_identities", result.identity_id, "profile"))
+    secret = hub._envelope.open_json(payload, associated_data("ih_identities", result.identity_id, "profile"))
     assert secret == {"first_name": "Olena"}

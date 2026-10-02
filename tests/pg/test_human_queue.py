@@ -28,7 +28,7 @@ async def test_postgres_human_queue_is_scoped_and_never_reads_challenge_context(
     )
     challenge_id = new_id()
     secret = "never-return-postgres-secret"
-    context = hub.envelope.seal(
+    context = hub._envelope.seal(
         f'{{"answer":"{secret}"}}'.encode(),
         associated_data("ih_challenges", registered.identity_id, str(challenge_id)),
     )

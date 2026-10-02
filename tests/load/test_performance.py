@@ -120,13 +120,13 @@ async def test_event_latency_p95(hub: IdentityHub) -> None:
     samples: list[float] = []
     for index in range(20):
         started = time.perf_counter()
-        async with hub.store.transaction(ref) as transaction:
+        async with hub._store.transaction(ref) as transaction:
             await transaction.emit([EventDraft("identity.imported", "benchmark", data={"index": index})])
 
         async def handled(events: list[Event]) -> None:
             assert events
 
-        count = await hub.store.process_events(f"load-latency-{index}", handled, limit=100)
+        count = await hub._store.process_events(f"load-latency-{index}", handled, limit=100)
         assert count is not None and count >= 1
         samples.append(time.perf_counter() - started)
     stats = summarize(samples)

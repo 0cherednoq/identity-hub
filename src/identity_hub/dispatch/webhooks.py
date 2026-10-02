@@ -251,7 +251,7 @@ class Webhooks:
         if not secret.get_secret_value():
             raise ValidationFailed("секрет вебхука не может быть пустым")
         endpoint_id = id or new_id()
-        payload = self.space.hub.envelope.seal_model(
+        payload = self.space.hub._envelope.seal_model(
             _WebhookSecrets(current=secret), associated_data("ih_webhook_endpoints", endpoint_id)
         )
         async with self.space._tx() as tx:
@@ -306,7 +306,7 @@ class Webhooks:
             row = await tx.get_webhook_endpoint(endpoint_id)
             if row is None:
                 raise NotFound("webhook endpoint", endpoint_id)
-            current = self.space.hub.envelope.open_model(
+            current = self.space.hub._envelope.open_model(
                 _WebhookSecrets,
                 row.secret,
                 associated_data("ih_webhook_endpoints", endpoint_id),
@@ -316,7 +316,7 @@ class Webhooks:
                 previous=current.current,
                 previous_until=self.space.hub.clock.now() + overlap,
             )
-            payload = self.space.hub.envelope.seal_model(
+            payload = self.space.hub._envelope.seal_model(
                 rotated, associated_data("ih_webhook_endpoints", endpoint_id)
             )
             if not await tx.update_webhook_secret(endpoint_id, payload):
@@ -339,7 +339,7 @@ class Webhooks:
         if row is None:
             raise NotFound("webhook endpoint", endpoint_id)
         validate_webhook_url(row.url, dev_hosts=self.space.hub.webhook_dev_hosts)
-        secrets = self.space.hub.envelope.open_model(
+        secrets = self.space.hub._envelope.open_model(
             _WebhookSecrets,
             row.secret,
             associated_data("ih_webhook_endpoints", endpoint_id),
@@ -353,7 +353,7 @@ class Webhooks:
             separators=(",", ":"),
             sort_keys=True,
         ).encode()
-        dispatcher = self.space.hub.webhook_dispatcher
+        dispatcher = self.space.hub._webhook_dispatcher
         failure: str | None = None
         response = None
         try:
@@ -401,9 +401,9 @@ class WebhookDispatcher:
         )
 
     async def handle_events(self, events: list[Event]) -> None:
-        endpoints = await self.hub.store.enabled_webhook_endpoints()
+        endpoints = await self.hub._store.enabled_webhook_endpoints()
         identity_ids = [event.identity_id for event in events if event.identity_id is not None]
-        labels = await self.hub.store.identity_labels(identity_ids)
+        labels = await self.hub._store.identity_labels(identity_ids)
         pairs = [
             (endpoint.id, event.event_id)
             for event in events
@@ -414,10 +414,10 @@ class WebhookDispatcher:
                 labels.get(event.identity_id, {}) if event.identity_id is not None else {},
             )
         ]
-        await self.hub.store.enqueue_webhook_deliveries(pairs)
+        await self.hub._store.enqueue_webhook_deliveries(pairs)
 
     async def deliver_due(self) -> int:
-        attempts = await self.hub.store.claim_webhook_deliveries(
+        attempts = await self.hub._store.claim_webhook_deliveries(
             limit=self.policy.batch_size, claim_for=self.policy.claim_for
         )
         if not attempts:
@@ -450,7 +450,7 @@ class WebhookDispatcher:
                 except Exception as exc:  # ошибка сети становится записью доставки, диспетчер живёт дальше
                     error = type(exc).__name__
                 elapsed_ms = max(0, round((time.monotonic() - started) * 1000))
-                await self.hub.store.finish_webhook_delivery(
+                await self.hub._store.finish_webhook_delivery(
                     attempt.delivery_id,
                     attempt.attempt,
                     succeeded=succeeded,
@@ -463,7 +463,7 @@ class WebhookDispatcher:
         return len(attempts)
 
     def _active_secrets(self, endpoint_id: UUID, payload: Any) -> list[SecretStr]:
-        secrets = self.hub.envelope.open_model(
+        secrets = self.hub._envelope.open_model(
             _WebhookSecrets,
             payload,
             associated_data("ih_webhook_endpoints", endpoint_id),

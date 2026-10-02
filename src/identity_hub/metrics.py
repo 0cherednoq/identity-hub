@@ -140,7 +140,7 @@ class RollupMetricsBuffer:
             self._pending.clear()
         if not self._retries:
             return 0
-        spaces = {space.slug: space for space in await self.hub.store.list_spaces()}
+        spaces = {space.slug: space for space in await self.hub._store.list_spaces()}
         batch_id, batch = self._retries[0]
         deltas: list[RollupDelta] = []
         for (mode, metric, minute, slug, labels), value in batch.items():
@@ -158,7 +158,7 @@ class RollupMetricsBuffer:
                 BucketSize.MINUTE,
             )
             deltas.append(RollupDelta(RollupRow(key, value), additive=mode == "add"))
-        await self.hub.store.apply_metric_rollup_batch(batch_id, deltas)
+        await self.hub._store.apply_metric_rollup_batch(batch_id, deltas)
         self._retries.pop(0)
         return len(deltas)
 
@@ -195,7 +195,7 @@ class MetricsReporter:
         return 0  # gauges не являются обработанными элементами очереди Dispatcher.drain()
 
     async def collect(self) -> None:
-        snapshot = await self.hub.store.metrics_snapshot()
+        snapshot = await self.hub._store.metrics_snapshot()
         hook = self.hub.metrics
         for consumer, lag in snapshot.cursor_lag.items():
             record_metric(hook, "gauge", "identity_hub_dispatcher_cursor_lag", lag, consumer=consumer)

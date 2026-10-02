@@ -49,6 +49,31 @@ space = hub.space("production")         # пространство: изоляц
 | `hub.read` | read-схема Core | `identities`, `leases`, `lease_history`, `region_states`, `events`, `proxies` — для join и `among=` | [Интеграция](../integrations.md#read-схема-join-с-таблицами-приложения) |
 | `space.maintenance` | обслуживание | `expire_challenges`, `expire_verifications`, `reindex_search` | обычно вызывает диспетчер |
 
+## Контракт хаба
+
+Публичные члены `IdentityHub` перечислены ниже полностью. Всё остальное — имена с `_`:
+хранилище, шифрование и служебные объекты диспетчера не входят в контракт и могут меняться
+без предупреждения. Расшифровать секрет в обход аренды и аудита через хаб нельзя.
+
+| Член | Назначение |
+|---|---|
+| `hub.start()` | проверить ревизию схемы и синхронизировать реестр сервисов |
+| `hub.register_service(service)`, `hub.service(name)`, `hub.services` | реестр сервисов |
+| `hub.space(slug)`, `hub.get_space(slug)` | пространство; `get_space` не создаёт новое |
+| `hub.list_spaces()`, `hub.spaces_matrix()`, `hub.service_catalog()`, `hub.background_snapshot()` | сводные read-модели по пространствам для админок |
+| `hub.read` | read-схема Core для join и `among=` |
+| `hub.events` | `subscribe(name, fn, types=...)` — подписчики в коде, см. [События](10-events.md) |
+| `hub.dispatcher` | фоновый цикл: `running()`, `run_once()`, `drain()` |
+| `hub.maintenance` | обслуживание по расписанию: таймеры и retention |
+| `hub.doctor` | диагностика и починка данных (`identity-hub doctor`) |
+| `hub.metrics` | хук метрик, заданный параметром `metrics` |
+| `hub.lease_log_sink` | обработчик `logging` для записи логов аренды в `ih_lease_logs` |
+| `hub.flush_lease_losses()` | выпустить накопленные события `worker.leases_lost` |
+| `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
+| `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
+| `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |
+| `hub.strict_events`, `hub.redact_refs_in_events` | режимы очистки событий |
+
 ## Конвенция глаголов
 
 | Метод | Что делает |

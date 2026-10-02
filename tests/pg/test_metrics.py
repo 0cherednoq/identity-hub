@@ -29,7 +29,7 @@ async def test_metrics_hook_called_at_required_points(hub: IdentityHub, space: S
     async with space._tx() as tx:
         await space._emit(tx, EventDraft("pool.capacity.low", actor="metrics"))
     await hub.dispatcher.drain()
-    await hub.metrics_reporter.collect()
+    await hub._metrics_reporter.collect()
 
     names = {event.name for event in metrics.events}
     assert names >= {

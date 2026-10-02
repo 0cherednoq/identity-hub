@@ -339,7 +339,7 @@ async def test_public_webhook_dispatch(memory_hub: IdentityHub) -> None:
 
 async def test_public_notification_dispatch(memory_hub: IdentityHub) -> None:
     transport = FakeTelegramTransport()
-    memory_hub.notification_dispatcher.transport = transport
+    memory_hub._notification_dispatcher.transport = transport
     space = memory_hub.space("memory")
     channel = await space.notifications.create_telegram_channel(
         "Ops", bot_token=SecretStr("123456:memory-token"), chat_id=-100
@@ -378,7 +378,7 @@ async def test_direct_delivery_tests_do_not_touch_production_queues_or_cursors(
     memory_hub: IdentityHub,
 ) -> None:
     transport = FakeTelegramTransport()
-    memory_hub.notification_dispatcher.transport = transport
+    memory_hub._notification_dispatcher.transport = transport
     space = memory_hub.space("delivery-tests")
     channel = await space.notifications.create_telegram_channel(
         "Probe", bot_token=SecretStr("123456:test-token"), chat_id=-200
@@ -393,7 +393,7 @@ async def test_direct_delivery_tests_do_not_touch_production_queues_or_cursors(
     await space.notifications.send_test(channel.id, "direct probe")
     response_code = await space.webhooks.send_test(endpoint.id)
 
-    store = cast(MemoryStore, memory_hub.store)
+    store = cast(MemoryStore, memory_hub._store)
     assert response_code == 202
     assert route.call_count == 1
     assert transport.sent[0]["text"] == "direct probe"
@@ -427,15 +427,15 @@ async def test_public_key_rotation_covers_all_secret_kinds(memory_hub: IdentityH
     )
 
     challenge_id = new_id()
-    challenge = memory_hub.envelope.seal(
+    challenge = memory_hub._envelope.seal(
         b"{}", associated_data("ih_challenges", identity_id, str(challenge_id))
     )
-    evidence = memory_hub.envelope.seal(b"{}", associated_data("ih_verifications", identity_id, "phone"))
+    evidence = memory_hub._envelope.seal(b"{}", associated_data("ih_verifications", identity_id, "phone"))
     async with space._tx() as transaction:
         assert await transaction.open_challenge(challenge_id, identity_id, "sms", "***", challenge, None)
         await transaction.save_verification(identity_id, "phone", {"attempts": 0}, evidence)
 
-    memory_hub.envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
+    memory_hub._envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
     report = await memory_hub.doctor.rotate_key(limit=100)
 
     assert report.total == 8
@@ -472,7 +472,7 @@ async def test_human_queue_prioritizes_and_isolates_secret_free_attention(
 
     challenge_id = await exchange("challenge@example.test")
     challenge_row_id = new_id()
-    sealed = memory_hub.envelope.seal(
+    sealed = memory_hub._envelope.seal(
         b'{"answer":"never-return-this-secret"}',
         associated_data("ih_challenges", challenge_id, str(challenge_row_id)),
     )

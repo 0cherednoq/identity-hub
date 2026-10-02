@@ -316,7 +316,7 @@ class Lease:
         if payload is None:
             return None
         aad = associated_data("ih_credentials", self.identity_id)
-        return self.pool.space.hub.envelope.open_model(self.pool.service.credentials, payload, aad)
+        return self.pool.space.hub._envelope.open_model(self.pool.service.credentials, payload, aad)
 
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         """Расшифрованная действующая сессия слота или None."""
@@ -327,7 +327,7 @@ class Lease:
         if found is None or found[1] != SessionStatus.VALID:
             return None
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub.envelope.open_model(self.pool.service.session, found[0], aad)
+        return self.pool.space.hub._envelope.open_model(self.pool.service.session, found[0], aad)
 
     async def save_session(
         self,
@@ -340,7 +340,7 @@ class Lease:
         self.check()
         model = validate_model(self.pool.service.session, session, "session")
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        payload = self.pool.space.hub.envelope.seal_model(model, aad)  # до открытия транзакции (T-5)
+        payload = self.pool.space.hub._envelope.seal_model(model, aad)  # до открытия транзакции (T-5)
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
             if not await tx.put_session(

@@ -80,7 +80,7 @@ async def test_encrypted_profile_update(
     async with space._tx() as tx:
         payload = await tx.get_profile_secret(r.identity_id)
     assert payload is not None
-    secret = hub.envelope.open_json(payload, associated_data("ih_identities", r.identity_id, "profile"))
+    secret = hub._envelope.open_json(payload, associated_data("ih_identities", r.identity_id, "profile"))
     assert secret == {"first_name": "Olena", "last_name": "K"}
 
 

@@ -37,7 +37,7 @@ async def test_postgres_rollups_are_idempotent_rebuildable_and_include_internal_
     await hub.dispatcher.drain()
     after = datetime.now(UTC) + timedelta(minutes=1)
 
-    lease_rows = await hub.rollups.rows(
+    lease_rows = await hub._rollups.rows(
         "tennet",
         metric="leases.acquired",
         bucket_size=BucketSize.MINUTE,
@@ -45,7 +45,7 @@ async def test_postgres_rollups_are_idempotent_rebuildable_and_include_internal_
         end=after,
     )
     assert sum(row.value for row in lease_rows) == 1
-    telemetry = await hub.rollups.rows(
+    telemetry = await hub._rollups.rows(
         "tennet",
         metric="telemetry.lease_duration_seconds.count",
         bucket_size=BucketSize.MINUTE,
@@ -54,9 +54,9 @@ async def test_postgres_rollups_are_idempotent_rebuildable_and_include_internal_
     )
     assert sum(row.value for row in telemetry) == 1
 
-    raw = await hub.store.rollup_source_events("tennet", before, after)
-    await hub.rollups.handle_events(raw)
-    repeated = await hub.rollups.rows(
+    raw = await hub._store.rollup_source_events("tennet", before, after)
+    await hub._rollups.handle_events(raw)
+    repeated = await hub._rollups.rows(
         "tennet",
         metric="identities.added",
         bucket_size=BucketSize.MINUTE,
@@ -67,8 +67,8 @@ async def test_postgres_rollups_are_idempotent_rebuildable_and_include_internal_
 
     async with sessionmaker.begin() as session:
         await session.execute(text("UPDATE ih_stats_rollup SET value = 999"))
-    await hub.rollups.rebuild("tennet", before, after)
-    rebuilt = await hub.rollups.rows(
+    await hub._rollups.rebuild("tennet", before, after)
+    rebuilt = await hub._rollups.rows(
         "tennet",
         metric="leases.acquired",
         bucket_size=BucketSize.MINUTE,
@@ -119,7 +119,7 @@ async def test_rollup_cursor_does_not_lose_late_commit(hub: IdentityHub, space: 
     await task
     await hub.dispatcher.drain()
 
-    rows = await hub.rollups.rows(
+    rows = await hub._rollups.rows(
         "tennet",
         metric="events.total",
         bucket_size=BucketSize.MINUTE,

@@ -30,9 +30,9 @@ async def test_postgres_snapshot_matches_current_slice_and_two_workers_do_not_du
             lifecycle="ready",
         )
     hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-    await asyncio.gather(hub.state_snapshots.capture(at=hour), hub.state_snapshots.capture(at=hour))
+    await asyncio.gather(hub._state_snapshots.capture(at=hour), hub._state_snapshots.capture(at=hour))
 
-    frames = await hub.state_snapshots.frames("tennet", start=hour, end=hour + timedelta(hours=1))
+    frames = await hub._state_snapshots.frames("tennet", start=hour, end=hour + timedelta(hours=1))
     assert len(frames) == 1 and frames[0].complete
     assert sum(row.count for row in frames[0].rows if row.region == "standing") == 2
 
@@ -59,7 +59,7 @@ async def test_postgres_empty_space_has_complete_zero_frame(hub: IdentityHub) ->
     empty = hub.space("empty-snapshot")
     await empty.ref()
     hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-    await hub.state_snapshots.backfill_current(at=hour)
-    frames = await hub.state_snapshots.frames("empty-snapshot", start=hour, end=hour + timedelta(hours=1))
+    await hub._state_snapshots.backfill_current(at=hour)
+    frames = await hub._state_snapshots.frames("empty-snapshot", start=hour, end=hour + timedelta(hours=1))
     assert len(frames) == 1
     assert frames[0].complete and frames[0].rows == ()

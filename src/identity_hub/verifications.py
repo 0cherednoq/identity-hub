@@ -180,7 +180,7 @@ class Verification:
                 raise ValidationFailed(f"верификация {self.factor} не принимает evidence")
             model = validate_model(self.spec.evidence, evidence, "evidence")
             aad = associated_data("ih_verifications", self.lease.identity_id, self.factor)
-            payload = self.lease.pool.space.hub.envelope.seal_model(model, aad)
+            payload = self.lease.pool.space.hub._envelope.seal_model(model, aad)
         actor = self.lease.holder
         return await self._run(lambda flow, s, verified, now: flow.start(s, verified, now, actor), payload)
 
@@ -237,7 +237,7 @@ class Verification:
         if row is None or row.evidence is None:
             return None
         aad = associated_data("ih_verifications", self.lease.identity_id, self.factor)
-        return self.lease.pool.space.hub.envelope.open_model(self.spec.evidence, row.evidence, aad)
+        return self.lease.pool.space.hub._envelope.open_model(self.spec.evidence, row.evidence, aad)
 
 
 class VerificationsMixin(SpaceBase):

@@ -90,7 +90,7 @@ class Maintenance:
         return report
 
     async def _spaces(self) -> list[SpaceHandle]:
-        refs = await self.hub.store.maintenance_spaces()
+        refs = await self.hub._store.maintenance_spaces()
         return [self.hub.space(ref.slug, ref.title, space_id=ref.id) for ref in refs]
 
     async def _normalize(self) -> MaintenanceReport:
@@ -127,13 +127,13 @@ class Maintenance:
         }
 
     async def _hourly(self) -> MaintenanceReport:
-        counts = await self.hub.store.cleanup_maintenance(
+        counts = await self.hub._store.cleanup_maintenance(
             self._retention(), frozenset({"quota_windows", "operation_keys"})
         )
         return MaintenanceReport(Counter(counts))
 
     async def _daily(self) -> MaintenanceReport:
-        counts = await self.hub.store.cleanup_maintenance(
+        counts = await self.hub._store.cleanup_maintenance(
             self._retention(),
             frozenset(
                 {

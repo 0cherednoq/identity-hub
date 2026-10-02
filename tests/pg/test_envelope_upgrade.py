@@ -21,14 +21,14 @@ async def test_rotate_key_upgrades_legacy_credentials(
         IdentityCreate(service="fake_tg", external_ref="+aad", credentials={"phone": "+aad"})
     )
     aad = associated_data("ih_credentials", identity.id)
-    legacy = hub.envelope.seal(b'{"phone":"+aad","password":"legacy-pass"}', aad.legacy)
+    legacy = hub._envelope.seal(b'{"phone":"+aad","password":"legacy-pass"}', aad.legacy)
     async with space._tx(own=True) as tx:
         await tx.put_credentials(identity.id, legacy)
 
     revealed = await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin", reason="тест")
     assert revealed["password"] == "legacy-pass"
 
-    hub.envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
+    hub._envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))
     report = await hub.doctor.rotate_key(limit=100)
     assert report.counts.get("credentials") == 1
 
@@ -41,4 +41,4 @@ async def test_rotate_key_upgrades_legacy_credentials(
     stored = EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext)
     assert stored.key_id == "k2"
     # строка читается строго текущим форматом AAD, без legacy-запасного пути
-    assert b"legacy-pass" in hub.envelope.open(stored, bytes(aad))
+    assert b"legacy-pass" in hub._envelope.open(stored, bytes(aad))

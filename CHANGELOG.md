@@ -49,6 +49,10 @@
   не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
   проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
   размера действуют для полей `extra` в `ih_lease_logs`.
+- Публичный контракт `IdentityHub` зафиксирован ([карта API](docs/guide/api.md#контракт-хаба)):
+  `store`, `envelope`, `import_runner`, `metric_rollups`, `rollups`, `state_snapshots`,
+  `webhook_dispatcher`, `notification_dispatcher`, `metrics_reporter` стали приватными. Добавлены
+  `hub.sessionmaker` и `hub.webhook_policy`.
 - `Lease.proxy` возвращает `SecretValue`; строка URL — `lease.proxy.reveal()`. `LoginContext.proxy_url`
   и `ProbeContext.proxy_url` остаются строкой.
 - `space.proxies.url(proxy_id, *, actor, reason)` и `space.secrets.reveal(..., actor, reason)`:

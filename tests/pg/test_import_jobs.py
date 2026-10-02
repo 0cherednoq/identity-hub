@@ -38,7 +38,7 @@ async def test_postgres_staging_is_encrypted_and_removed_after_success(
         assert secret.encode() not in item.ciphertext
         assert b"sensitive staging note" not in item.ciphertext
 
-    assert await hub.import_runner.run_once() == 1
+    assert await hub._import_runner.run_once() == 1
     completed = await space.imports.get(run_id)
 
     assert completed.state == "succeeded"

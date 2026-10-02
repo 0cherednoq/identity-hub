@@ -87,7 +87,7 @@ class SpaceBase:
         """Транзакция операции. `own=True` — всегда своя (факты внешнего мира, ТЗ §7.2)."""
         ref = await self.ref()
         session: Any = None if own else self._session
-        async with self.hub.store.transaction(ref, session=session) as tx:
+        async with self.hub._store.transaction(ref, session=session) as tx:
             yield tx
 
     async def _emit(self, tx: StoreTx, *drafts: EventDraft) -> list[UUID]:

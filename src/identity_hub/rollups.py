@@ -199,7 +199,7 @@ class StatsRollups:
     async def handle_events(self, events: list[Event]) -> None:
         if not events:
             return
-        spaces = {space.slug: space for space in await self.hub.store.list_spaces()}
+        spaces = {space.slug: space for space in await self.hub._store.list_spaces()}
         impacted: set[RollupKey] = set()
         bounds: dict[str, tuple[datetime, datetime]] = {}
         for event in events:
@@ -218,17 +218,17 @@ class StatsRollups:
         totals: defaultdict[RollupKey, float] = defaultdict(float)
         for slug, (start, end) in bounds.items():
             space = spaces[slug]
-            raw = await self.hub.store.rollup_source_events(slug, start, end)
+            raw = await self.hub._store.rollup_source_events(slug, start, end)
             for event in raw:
                 for key, value in _keys(event, space.id, space.timezone):
                     if key in impacted:
                         totals[key] += value
-        await self.hub.store.replace_rollups([RollupRow(key, totals[key]) for key in impacted])
+        await self.hub._store.replace_rollups([RollupRow(key, totals[key]) for key in impacted])
 
     async def rebuild(self, space_slug: str, start: datetime, end: datetime) -> int:
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValidationFailed("rollup rebuild requires an aware, non-empty time range")
-        spaces = {space.slug: space for space in await self.hub.store.list_spaces()}
+        spaces = {space.slug: space for space in await self.hub._store.list_spaces()}
         space = spaces.get(space_slug)
         if space is None:
             raise ValidationFailed(f"unknown space: {space_slug}")
@@ -238,19 +238,19 @@ class StatsRollups:
             next_bucket(bucket_start(last, size, space.timezone), size, space.timezone) for size in BucketSize
         ]
         expanded_start, expanded_end = min(starts), max(ends)
-        events = await self.hub.store.rollup_source_events(space_slug, expanded_start, expanded_end)
+        events = await self.hub._store.rollup_source_events(space_slug, expanded_start, expanded_end)
         totals: defaultdict[RollupKey, float] = defaultdict(float)
         for event in events:
             for key, value in _keys(event, space.id, space.timezone):
                 totals[key] += value
-        await self.hub.store.clear_rollups(space.id, expanded_start, expanded_end)
+        await self.hub._store.clear_rollups(space.id, expanded_start, expanded_end)
         rows = [RollupRow(key, value) for key, value in totals.items()]
-        await self.hub.store.replace_rollups(rows)
+        await self.hub._store.replace_rollups(rows)
         return len(rows)
 
     async def purge_minutes(self, *, before: datetime | None = None) -> int:
         cutoff = before or (self.hub.clock.now() - self.hub.retention.rollup_minutes)
-        return await self.hub.store.purge_minute_rollups(cutoff)
+        return await self.hub._store.purge_minute_rollups(cutoff)
 
     async def run_due(self) -> int:
         now = self.hub.clock.monotonic()
@@ -271,7 +271,7 @@ class StatsRollups:
         service: str | None = None,
         dims: Mapping[str, str] | None = None,
     ) -> list[RollupRow]:
-        return await self.hub.store.read_rollups(
+        return await self.hub._store.read_rollups(
             space_slug,
             metric=metric,
             bucket_size=bucket_size,
@@ -295,7 +295,7 @@ class StatsRollups:
         """Return a dense series; missing persisted buckets are explicit zeroes."""
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValidationFailed("rollup series requires an aware, non-empty time range")
-        spaces = {space.slug: space for space in await self.hub.store.list_spaces()}
+        spaces = {space.slug: space for space in await self.hub._store.list_spaces()}
         space = spaces.get(space_slug)
         if space is None:
             raise ValidationFailed(f"unknown space: {space_slug}")

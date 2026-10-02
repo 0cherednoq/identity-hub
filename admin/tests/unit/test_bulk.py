@@ -151,7 +151,7 @@ def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
 def test_exports_escape_csv_formulas_are_audited_and_viewer_is_denied() -> None:
     hub = _hub()
     asyncio.run(_seed(hub))
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     app = create_admin_app(_settings(), hub=hub)
     payload = {
         "reason": "support export",

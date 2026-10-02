@@ -226,7 +226,7 @@ def _row_dimensions(row: RollupRow) -> dict[str, str]:
 async def _snapshot_coverage(
     space: AnalyticsMixin, start: datetime, end: datetime
 ) -> Literal["complete", "partial"]:
-    frames = await space.hub.state_snapshots.frames(space.slug, start=start, end=end)
+    frames = await space.hub._state_snapshots.frames(space.slug, start=start, end=end)
     present = {frame.taken_at for frame in frames if frame.complete}
     cursor = snapshot_hour(start)
     last = snapshot_hour(end - timedelta(microseconds=1))
@@ -269,7 +269,7 @@ class AnalyticsMixin(SpaceBase):
             raise ValidationFailed("analytics response exceeds 1000 points")
         duration = end - start
         previous_start, previous_end = first - duration, first
-        current = await self.hub.store.read_rollups(
+        current = await self.hub._store.read_rollups(
             self.slug,
             metric=metric,
             bucket_size=bucket_size,
@@ -278,7 +278,7 @@ class AnalyticsMixin(SpaceBase):
             service=None,
             dims=None,
         )
-        previous = await self.hub.store.read_rollups(
+        previous = await self.hub._store.read_rollups(
             self.slug,
             metric=metric,
             bucket_size=bucket_size,
@@ -591,7 +591,7 @@ class AnalyticsMixin(SpaceBase):
         self, start: datetime, end: datetime, *, service: str | None = None
     ) -> list[Event]:
         _validate_range(start, end)
-        events = await self.hub.store.rollup_source_events(self.slug, start, end)
+        events = await self.hub._store.rollup_source_events(self.slug, start, end)
         return [event for event in events if service is None or event.service == service]
 
     analytics_ban_rate = legacy(_analytics_ban_rate, "analytics_ban_rate")

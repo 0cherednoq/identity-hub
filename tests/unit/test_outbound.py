@@ -286,7 +286,7 @@ async def test_delivery_to_name_resolving_inside_is_refused(hub: IdentityHub, ho
     endpoint = await space.webhooks.create(
         url=f"https://{host}/hook", secret=SecretStr("s"), event_types=["identity.*"]
     )
-    hub.webhook_dispatcher.resolver = _resolver({host: ["10.0.0.5"]})
+    hub._webhook_dispatcher.resolver = _resolver({host: ["10.0.0.5"]})
     await register(space, service="fake_tg", external_ref="+ssrf")
 
     await hub.dispatcher.drain()
@@ -307,7 +307,7 @@ async def test_dispatcher_client_pins_address_and_takes_proxy_only_from_policy(
         store=MemoryStore(),
         webhook_dev_hosts=["localhost"],
     )
-    client = plain.webhook_dispatcher.client()
+    client = plain._webhook_dispatcher.client()
     backend = client._transport._pool._network_backend  # type: ignore[attr-defined]
     assert isinstance(backend, PinnedBackend) and backend._allow == {"localhost"}
     assert client.trust_env is False and client._mounts == {}
@@ -318,7 +318,7 @@ async def test_dispatcher_client_pins_address_and_takes_proxy_only_from_policy(
         store=MemoryStore(),
         webhooks=WebhookPolicy(proxy="http://egress.example:3128"),
     )
-    client = proxied.webhook_dispatcher.client()
+    client = proxied._webhook_dispatcher.client()
     pool = client._transport._pool  # type: ignore[attr-defined]
     assert isinstance(pool, httpcore.AsyncHTTPProxy)
     assert bytes(pool._proxy_url.host) == b"egress.example"

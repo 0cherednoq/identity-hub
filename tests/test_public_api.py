@@ -67,3 +67,57 @@ def test_section_11_types_are_importable_from_package_root() -> None:
 
 def test_unsupported_quota_reset_is_not_public() -> None:
     assert "reset_quotas" not in identity_hub.__all__
+
+
+HUB_PUBLIC = {
+    # жизненный цикл и реестр сервисов
+    "start",
+    "register_service",
+    "service",
+    "services",
+    # пространства и сводные read-модели
+    "space",
+    "get_space",
+    "list_spaces",
+    "spaces_matrix",
+    "service_catalog",
+    "background_snapshot",
+    # события, фоновые процессы, диагностика
+    "read",
+    "events",
+    "dispatcher",
+    "maintenance",
+    "doctor",
+    "metrics",
+    "lease_log_sink",
+    "flush_lease_losses",
+    # настройки, заданные конструктором
+    "clock",
+    "retention",
+    "timezone",
+    "admin_base_url",
+    "db_schema",
+    "proxy_health",
+    "strict_events",
+    "redact_refs_in_events",
+    "webhook_dev_hosts",
+    "webhook_policy",
+    "sessionmaker",
+}
+
+
+def test_hub_public_surface_is_fixed_and_documented() -> None:
+    """R1-29: контракт хаба — явный список; хранилище, шифрование и служебные объекты приватны."""
+    from identity_hub import StaticSecretsProvider
+    from identity_hub.testing import MemoryStore
+
+    hub = IdentityHub(store=MemoryStore(), secrets=StaticSecretsProvider({"k": b"\x01" * 32}, "k"))
+    public = {name for name in dir(hub) if not name.startswith("_")}
+
+    assert public == HUB_PUBLIC
+    for internal in ("store", "envelope", "import_runner", "metric_rollups", "rollups", "state_snapshots"):
+        assert not hasattr(hub, internal)  # R2-S10: расшифровка в обход аудита недоступна
+    assert hub.sessionmaker is None and hub.webhook_policy.max_failures > 0
+
+    guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
+    assert [name for name in sorted(HUB_PUBLIC) if f"`hub.{name}" not in guide] == []

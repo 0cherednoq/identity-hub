@@ -72,8 +72,8 @@ async def test_5xx_retries_disable_endpoint_and_manual_retry_recovers(
     space: SpaceHandle,
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    hub.webhook_dispatcher.policy = replace(
-        hub.webhook_dispatcher.policy,
+    hub._webhook_dispatcher.policy = replace(
+        hub._webhook_dispatcher.policy,
         max_failures=2,
         retry_base=timedelta(0),
         retry_jitter=0,
@@ -107,7 +107,7 @@ async def test_5xx_retries_disable_endpoint_and_manual_retry_recovers(
     assert disabled_event.data == {"endpoint_id": str(endpoint.id), "failure_streak": 2}
 
     await space.webhooks.retry(failed.id)
-    assert await hub.webhook_dispatcher.deliver_due() == 1
+    assert await hub._webhook_dispatcher.deliver_due() == 1
     assert route.call_count == 3
     retried = (await space.webhooks.deliveries(endpoint.id))[0]
     assert retried.status == "succeeded" and retried.attempt == 1

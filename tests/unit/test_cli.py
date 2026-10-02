@@ -72,7 +72,7 @@ def memory_hub_factory() -> IdentityHub:
         _PURGE_CALLS.append(before)
         return 7
 
-    hub.rollups.purge_minutes = purge_minutes  # type: ignore[method-assign]
+    hub._rollups.purge_minutes = purge_minutes  # type: ignore[method-assign]
     return hub
 
 

@@ -98,7 +98,7 @@ def _confirmation(code: str) -> dict[str, object]:
 def test_reveal_and_update_require_admin_reauth_never_cache_and_audit_without_values() -> None:
     hub = _hub()
     asyncio.run(_seed(hub))
-    store = cast(MemoryStore, hub.store)
+    store = cast(MemoryStore, hub._store)
     app = create_admin_app(_settings(), hub=hub)
     base = f"/api/v1/spaces/secret-space/accounts/{SECRET_ID}"
     with TestClient(app) as client:

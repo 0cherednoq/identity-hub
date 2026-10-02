@@ -210,7 +210,7 @@ class DeliveriesReadMixin(SpaceBase):
             )
 
         identity_ids = [row.identity_id for row in events if row.identity_id is not None]
-        labels = await self.hub.store.identity_labels(identity_ids)
+        labels = await self.hub._store.identity_labels(identity_ids)
         preview_counts = {
             rule.id: sum(
                 _matches_rule(

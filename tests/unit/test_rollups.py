@@ -40,15 +40,15 @@ async def test_rollup_retry_is_idempotent_and_series_fills_zeroes() -> None:
     hub, clock, store = _hub(start)
     await _register(hub, "first@example.test")
     first_batch = [event for event, _, _ in store._state.events]
-    await hub.rollups.handle_events(first_batch)
-    await hub.rollups.handle_events(first_batch)
+    await hub._rollups.handle_events(first_batch)
+    await hub._rollups.handle_events(first_batch)
 
     clock.advance(timedelta(minutes=2))
     previous_count = len(store._state.events)
     await _register(hub, "second@example.test")
-    await hub.rollups.handle_events([event for event, _, _ in store._state.events[previous_count:]])
+    await hub._rollups.handle_events([event for event, _, _ in store._state.events[previous_count:]])
 
-    points = await hub.rollups.series(
+    points = await hub._rollups.series(
         "analytics",
         metric="identities.added",
         bucket_size=BucketSize.MINUTE,
@@ -72,7 +72,7 @@ async def test_dispatcher_rolls_up_internal_lease_events_and_rebuilds_from_oracl
     await lease.release()
     await hub.dispatcher.drain()
 
-    rows = await hub.rollups.rows(
+    rows = await hub._rollups.rows(
         "analytics",
         metric="leases.acquired",
         bucket_size=BucketSize.HOUR,
@@ -81,7 +81,7 @@ async def test_dispatcher_rolls_up_internal_lease_events_and_rebuilds_from_oracl
     )
     assert sum(row.value for row in rows) == 1
 
-    telemetry = await hub.rollups.rows(
+    telemetry = await hub._rollups.rows(
         "analytics",
         metric="telemetry.lease_duration_seconds.count",
         bucket_size=BucketSize.MINUTE,
@@ -94,7 +94,7 @@ async def test_dispatcher_rolls_up_internal_lease_events_and_rebuilds_from_oracl
     assert (
         sum(
             row.value
-            for row in await hub.rollups.rows(
+            for row in await hub._rollups.rows(
                 "analytics",
                 metric="telemetry.lease_duration_seconds.count",
                 bucket_size=BucketSize.MINUTE,
@@ -107,8 +107,8 @@ async def test_dispatcher_rolls_up_internal_lease_events_and_rebuilds_from_oracl
 
     for key in list(store._state.rollups):
         store._state.rollups[key] = 999
-    await hub.rollups.rebuild("analytics", start, start + timedelta(hours=1))
-    rebuilt = await hub.rollups.rows(
+    await hub._rollups.rebuild("analytics", start, start + timedelta(hours=1))
+    rebuilt = await hub._rollups.rows(
         "analytics",
         metric="leases.acquired",
         bucket_size=BucketSize.HOUR,
@@ -122,9 +122,9 @@ async def test_minute_retention_keeps_hour_and_day_rollups() -> None:
     start = datetime(2026, 1, 1, 12, tzinfo=UTC)
     hub, _, store = _hub(start)
     await _register(hub, "retention@example.test")
-    await hub.rollups.handle_events([event for event, _, _ in store._state.events])
+    await hub._rollups.handle_events([event for event, _, _ in store._state.events])
 
-    assert await hub.rollups.purge_minutes(before=start + timedelta(minutes=1)) > 0
+    assert await hub._rollups.purge_minutes(before=start + timedelta(minutes=1)) > 0
     assert not any(key.bucket_size is BucketSize.MINUTE for key in store._state.rollups)
     assert {key.bucket_size for key in store._state.rollups} == {
         BucketSize.HOUR,

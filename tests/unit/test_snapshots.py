@@ -42,8 +42,8 @@ async def test_snapshot_matches_current_slice_and_same_hour_is_idempotent() -> N
     await _register(hub, "one@example.test")
     await _register(hub, "two@example.test")
 
-    await asyncio.gather(hub.state_snapshots.capture(), hub.state_snapshots.capture())
-    frames = await hub.state_snapshots.frames(
+    await asyncio.gather(hub._state_snapshots.capture(), hub._state_snapshots.capture())
+    frames = await hub._state_snapshots.frames(
         "snapshots", start=now.replace(minute=0), end=now.replace(minute=0) + timedelta(hours=1)
     )
     assert len(frames) == 1
@@ -58,9 +58,9 @@ async def test_empty_complete_frame_distinguishes_zero_from_missing_coverage() -
     now = datetime(2026, 1, 1, 12, 25, tzinfo=UTC)
     hub, _ = _hub(now)
     await hub.space("snapshots").ref()
-    await hub.state_snapshots.capture()
+    await hub._state_snapshots.capture()
 
-    frames = await hub.state_snapshots.frames(
+    frames = await hub._state_snapshots.frames(
         "snapshots", start=now.replace(minute=0), end=now.replace(minute=0) + timedelta(hours=2)
     )
     assert len(frames) == 1
@@ -72,15 +72,15 @@ async def test_backfill_only_captures_current_hour_and_retention_removes_old_cov
     now = datetime(2026, 1, 3, 12, 25, tzinfo=UTC)
     hub, _ = _hub(now, retention=timedelta(hours=24))
     await _register(hub, "backfill@example.test")
-    await hub.state_snapshots.backfill_current()
+    await hub._state_snapshots.backfill_current()
 
-    frames = await hub.state_snapshots.frames(
+    frames = await hub._state_snapshots.frames(
         "snapshots", start=now - timedelta(days=7), end=now + timedelta(hours=1)
     )
     assert len(frames) == 1
     assert frames[0].source == "backfill"
     assert frames[0].taken_at == now.replace(minute=0)
-    assert await hub.state_snapshots.purge(before=now + timedelta(hours=1)) == 1
-    assert not await hub.state_snapshots.frames(
+    assert await hub._state_snapshots.purge(before=now + timedelta(hours=1)) == 1
+    assert not await hub._state_snapshots.frames(
         "snapshots", start=now - timedelta(days=7), end=now + timedelta(hours=1)
     )

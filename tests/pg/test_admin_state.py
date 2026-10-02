@@ -16,7 +16,7 @@ pytestmark = pytest.mark.pg
 
 async def test_space_timezone_defaults_and_uses_hub_setting(hub: IdentityHub) -> None:
     default = await hub.space("default-timezone").ref()
-    custom = await hub.store.ensure_space("custom-timezone", timezone="Europe/Simferopol")
+    custom = await hub._store.ensure_space("custom-timezone", timezone="Europe/Simferopol")
 
     assert default.timezone == "UTC"
     assert custom.timezone == "Europe/Simferopol"

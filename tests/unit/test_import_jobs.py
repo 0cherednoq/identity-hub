@@ -40,14 +40,14 @@ async def test_staged_import_finishes_and_removes_encrypted_payloads(import_hub:
     )
 
     assert (await space.imports.get(run_id)).state == "pending"
-    assert await import_hub.import_runner.run_once() == 2
+    assert await import_hub._import_runner.run_once() == 2
     completed = await space.imports.get(run_id)
 
     assert completed.state == "succeeded"
     assert (completed.total, completed.processed, completed.created) == (2, 2, 2)
     created_ids = completed.report["created_ids"]
     assert isinstance(created_ids, list) and len(created_ids) == 2
-    store = import_hub.store
+    store = import_hub._store
     assert isinstance(store, MemoryStore)
     assert store._state.import_items == {}
     assert "phone" not in repr(completed)
@@ -105,7 +105,7 @@ async def test_cancel_waits_for_claimed_batch_boundary(import_hub: IdentityHub) 
     assert (await space.imports.get(run_id)).state == "cancelling"
 
     run = await space.imports.get(run_id)
-    results = await import_hub.import_runner._process(space, run, claimed)
+    results = await import_hub._import_runner._process(space, run, claimed)
     async with space._tx(own=True) as tx:
         completed = await tx.finish_import_items(run_id, results)
 

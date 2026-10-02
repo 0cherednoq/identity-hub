@@ -184,7 +184,7 @@ class ImportingMixin(SpaceBase):
         items = [
             NewImportItem(
                 position=position,
-                payload=self.hub.envelope.seal(
+                payload=self.hub._envelope.seal(
                     pydantic_core.to_json(_record_payload(record)),
                     _import_aad(import_id, position),
                 ),
@@ -371,8 +371,8 @@ class ImportingMixin(SpaceBase):
         fencing = await tx.current_fencing(identity_id, lock=True)
         for slot, payload in item.prepared.sessions.items():
             # шифротекст привязан к id записи импорта через AAD — перешифровать под существующий id
-            session = self.hub.envelope.open_json(payload, _aad(item.prepared.row.id, slot))
-            resealed = self.hub.envelope.seal(_to_json(session), _aad(identity_id, slot))
+            session = self.hub._envelope.open_json(payload, _aad(item.prepared.row.id, slot))
+            resealed = self.hub._envelope.seal(_to_json(session), _aad(identity_id, slot))
             await tx.put_session(identity_id, slot, resealed, fencing=fencing or 0)
         from identity_hub.state import DEFAULT_SLOT, apply_region_change
 
@@ -439,7 +439,7 @@ class ImportingMixin(SpaceBase):
         return svc.name, svc.normalize_external_ref(target)
 
     async def _run_hook(self, hook: BatchHook, created: list[UUID], report: ImportReport) -> None:
-        sessionmaker = getattr(self.hub.store, "sessionmaker", None)
+        sessionmaker = getattr(self.hub._store, "sessionmaker", None)
         try:
             if sessionmaker is None:
                 await hook(None, list(created))
@@ -468,7 +468,7 @@ class ImportRunner:
 
     async def run_once(self) -> int:
         processed = 0
-        for ref in await self.hub.store.maintenance_spaces():
+        for ref in await self.hub._store.maintenance_spaces():
             handle = self.hub.space(ref.slug, ref.title, space_id=ref.id)
             async with handle._tx(own=True) as tx:
                 runs = await tx.active_import_runs(limit=1)
@@ -497,7 +497,7 @@ class ImportRunner:
         results: list[ImportItemResult] = []
         for item in claimed:
             try:
-                raw = self.hub.envelope.open_json(item.payload, _import_aad(run.id, item.position))
+                raw = self.hub._envelope.open_json(item.payload, _import_aad(run.id, item.position))
                 records.append((item, _payload_record(raw)))
             except Exception as exc:
                 results.append(

@@ -120,7 +120,7 @@ async def list_spaces(
 ) -> tuple[SpaceInfo, ...]:
     """List spaces after applying the caller's authorization scope."""
     allowed = None if allowed_spaces is None or "*" in allowed_spaces else frozenset(allowed_spaces)
-    refs = await hub.store.list_spaces(allowed)
+    refs = await hub._store.list_spaces(allowed)
     return tuple(_space_info(ref) for ref in refs)
 
 

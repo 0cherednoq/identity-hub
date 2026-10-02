@@ -52,7 +52,7 @@ async def _setup(
     *,
     digest_seconds: int | None = None,
 ) -> tuple[Any, Any]:
-    hub.notification_dispatcher.transport = transport
+    hub._notification_dispatcher.transport = transport
     channel = await space.notifications.create_telegram_channel(
         "Ops", bot_token=SecretStr("123456:telegram-secret"), chat_id=-100123, thread_id=12
     )
@@ -135,7 +135,7 @@ async def test_digest_accumulates_one_open_notification(
         assert rows[0].digest_key is not None and rows[0].rule_id == rule.id
         await session.execute(update(NotificationRecord).values(scheduled_at=func.now()))
 
-    assert await hub.notification_dispatcher.deliver_due() == 1
+    assert await hub._notification_dispatcher.deliver_due() == 1
     assert len(transport.sent) == 1
     assert transport.sent[0]["text"].count("identity.standing.changed") == 2
 
@@ -180,7 +180,7 @@ async def test_telegram_429_uses_retry_after(
         assert timedelta(seconds=5) <= delay <= timedelta(seconds=7)
         await session.execute(update(NotificationRecord).values(scheduled_at=func.now()))
 
-    assert await hub.notification_dispatcher.deliver_due() == 1
+    assert await hub._notification_dispatcher.deliver_due() == 1
     assert len(transport.sent) == 1
     async with sessionmaker() as session:
         notification = (await session.execute(select(NotificationRecord))).scalar_one()

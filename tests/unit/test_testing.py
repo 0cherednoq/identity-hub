@@ -43,5 +43,5 @@ async def test_plugin_fixtures_are_ready(
     identity_hub_make_identity: Callable[..., Awaitable[UUID]],
 ) -> None:
     identity_id = await identity_hub_make_identity()
-    assert isinstance(identity_hub.store, MemoryStore)
+    assert isinstance(identity_hub._store, MemoryStore)
     assert (await identity_hub_space.identities.card(identity_id)).identity.id == identity_id
