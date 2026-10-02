@@ -138,7 +138,11 @@ def verify_signature(
     now: datetime | int | float | None = None,
     tolerance: timedelta = REPLAY_WINDOW,
 ) -> bool:
-    """Проверить HMAC и окно повтора 5 минут; подходит получателям вебхука (S-9)."""
+    """Проверить HMAC и окно повтора 5 минут; подходит получателям вебхука (S-9).
+
+    `now` — текущее время получателя (`datetime` или Unix-время); по умолчанию системное.
+    В тестах с `FakeClock` передавайте `now=clock.now()`: подпись несёт время часов хаба.
+    """
     try:
         parts = [part.split("=", 1) for part in header.split(",")]
         timestamp = int(next(value for key, value in parts if key == "t"))

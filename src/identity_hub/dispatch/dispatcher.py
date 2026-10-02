@@ -130,13 +130,15 @@ class Dispatcher:
                     signal.clear()
                 while await self.run_once() >= self.batch_size and not stop.is_set():
                     pass  # полная пачка — сразу следующая
-                waiters = [asyncio.ensure_future(stop.wait())]
+                # пауза опроса идёт по часам хаба: под FakeClock её заканчивает advance()
+                waiters = [
+                    asyncio.ensure_future(stop.wait()),
+                    asyncio.ensure_future(self.hub.clock.idle(self.poll_interval)),
+                ]
                 if signal is not None:
                     waiters.append(asyncio.ensure_future(signal.wait()))
                 try:
-                    await asyncio.wait(
-                        waiters, timeout=self.poll_interval, return_when=asyncio.FIRST_COMPLETED
-                    )
+                    await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
                 finally:
                     for waiter in waiters:
                         waiter.cancel()

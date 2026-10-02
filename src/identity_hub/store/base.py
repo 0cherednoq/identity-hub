@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from identity_hub.clock import Clock
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.events import Event, EventDraft
@@ -1546,6 +1547,13 @@ class StoreTx(ABC):
 
 
 class Store(ABC):
+    def bind_clock(self, clock: Clock | None) -> Clock | None:
+        """Согласовать часы с хабом; возвращает часы, по которым должен работать хаб.
+
+        Хранилище с временем базы данных своих часов не имеет и возвращает `clock` как есть.
+        """
+        return clock
+
     @abstractmethod
     def transaction(
         self, space: SpaceRef, *, session: Any | None = None

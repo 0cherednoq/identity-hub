@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -110,7 +109,7 @@ class Doctor:
             if pending <= len(unreadable) or attempt == lock_retries:
                 break
             if not progressed and retry_delay > 0:
-                await asyncio.sleep(retry_delay)
+                await self.hub.clock.sleep(retry_delay)
         return RotationReport(
             counts=dict(counts),
             remaining=remaining,

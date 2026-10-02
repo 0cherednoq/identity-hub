@@ -125,7 +125,7 @@ async def async_main(args: argparse.Namespace) -> int:
             return 0
         while True:
             await hub.maintenance.run_due()
-            await asyncio.sleep(1)
+            await hub.clock.sleep(1)
     if args.command == "doctor":
         issues = await hub.doctor.check(fix=args.fix)
         for issue in issues:

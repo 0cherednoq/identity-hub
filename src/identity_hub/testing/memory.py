@@ -28,6 +28,7 @@ from identity_hub.errors import (
     LeaseUnavailable,
     NotFound,
     SpaceMismatch,
+    ValidationFailed,
 )
 from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
@@ -2332,11 +2333,27 @@ class MemoryStore(Store):
     """Полный Store без внешней инфраструктуры, предназначенный для тестов и локальных примеров."""
 
     def __init__(self, clock: Clock | None = None) -> None:
+        self._own_clock = clock is not None
         self.clock = clock or SystemClock()
         self._state = _MemoryState()
         self._lock = asyncio.Lock()
         self._consumer_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._listeners: defaultdict[str, set[asyncio.Event]] = defaultdict(set)
+
+    def bind_clock(self, clock: Clock | None) -> Clock:
+        """Время записей хранилища и дедлайны хаба идут по одним часам (R2-P21).
+
+        Хранилище без своих часов принимает часы хаба; хаб без часов принимает часы хранилища;
+        двое разных часов — ошибка конфигурации: под `FakeClock` одна половина жила бы в
+        управляемом времени, другая — в реальном.
+        """
+        if clock is None:
+            return self.clock
+        if self._own_clock and clock is not self.clock:
+            raise ValidationFailed("MemoryStore и IdentityHub получили разные часы: передайте один clock")
+        self.clock = clock
+        self._own_clock = True
+        return clock
 
     @asynccontextmanager
     async def transaction(self, space: SpaceRef, *, session: Any | None = None) -> AsyncIterator[MemoryTx]:

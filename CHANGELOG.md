@@ -27,6 +27,8 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `Clock.sleep()` и `Clock.idle()`: ожидание аренды, heartbeat и опрос диспетчера идут по часам
+  хаба. Под `FakeClock` `wait=` истекает, а `advance()` будит heartbeat активных аренд.
 - `hub.doctor.inactive_keys()` и поля `RotationReport.remaining`, `unreadable`,
   `unreadable_total`, `complete`.
 - `FileSecretsProvider.reload()` — перечитать файл мастер-ключей без перезапуска процесса.
@@ -52,6 +54,8 @@
   не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
   проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
   размера действуют для полей `extra` в `ih_lease_logs`.
+- `MemoryStore()` без `clock` принимает часы хаба, хаб без `clock` — часы хранилища; разные
+  часы — `ValidationFailed`. Свой `Clock` должен реализовать `sleep()` и `idle()`.
 - `space.identities.delete()` при живой аренде бросает `ValidationFailed`; `revoke=True` отзывает
   аренду и закрывает её историю в той же транзакции.
 - `lease.expired` от обслуживания несёт одинаковые поля на обоих хранилищах: `pool`, `holder`,
@@ -116,6 +120,8 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- `pool.lease(wait=...)` и `space.sync.refresh()` под `FakeClock` больше не зависают; сдвиг
+  `FakeClock` внутри аренды больше не даёт ложный `LeaseLost("heartbeat")`.
 - Чистильщик истёкших аренд отбирает аренды с открытой историей (миграция `0011`, индекс
   `ix_ih_lease_history_open_space`): раньше более 500 давно освобождённых аренд заслоняли
   брошенную, и она оставалась открытой навсегда.

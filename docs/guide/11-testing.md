@@ -27,6 +27,26 @@ asyncio_mode = "auto"
 | `identity_hub_clock` | `FakeClock`; `.advance(timedelta)` двигает время |
 | `identity_hub_store`, `identity_hub_secrets` | Хранилище и ключи |
 
+## Время в тестах
+
+Под `FakeClock` по управляемому времени идут и дедлайны, и ожидание:
+
+| Что | Как ведёт себя под `FakeClock` |
+|---|---|
+| `pool.lease(wait=30)` при пустом пуле | не зависает: время сдвигается само, через 30 «секунд» — `LeaseUnavailable` |
+| heartbeat аренды, опрос диспетчера | ждут, пока время сдвинет тест: `clock.advance(...)` или `await clock.sleep(...)` |
+| `clock.advance(45)` внутри аренды | будит heartbeat; дайте ему ход — `await asyncio.sleep(0)` — и аренда продлена |
+| `await clock.sleep(600)` внутри аренды | проходит через каждый heartbeat по порядку — удобно для долгих скачков |
+| отзыв аренды, затем `clock.advance(21)` | на ближайшем heartbeat вызывается `on_lost`, блок прерывается `LeaseLost` |
+
+`clock.advance()` синхронный: задачи, которые он разбудил, выполнятся на следующем ходу цикла
+событий. Скачок больше TTL аренды одним `advance()` аренду теряет — как у воркера, который
+столько времени не отвечал; для такого скачка используйте `await clock.sleep(...)`.
+
+`MemoryStore()` без часов работает по часам хаба. Если хранилищу и хабу переданы разные часы,
+`IdentityHub(...)` бросает `ValidationFailed`. Подпись вебхука несёт время часов хаба, поэтому
+в тесте получателя передавайте его же: `verify_signature(body, header, secret, now=clock.now())`.
+
 ## Пример
 
 ```python

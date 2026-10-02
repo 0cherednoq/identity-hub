@@ -200,13 +200,15 @@ class Lease:
         while not self._closed:
             remaining = self._deadline() - clock.monotonic()
             if failures == 0:
-                pause = min(interval, remaining)
+                # от последнего подтверждения, а не от запуска задачи: под FakeClock задача может
+                # впервые получить ход уже после сдвига времени
+                pause = min(self._last_ok + interval - clock.monotonic(), remaining)
             else:
                 # После сбоя не ждём полный интервал: следующая попытка пришлась бы на сам дедлайн
                 # и один короткий сбой БД отменял бы все аренды воркера (R1-03).
                 backoff = min(interval, HEARTBEAT_RETRY_BASE * 2 ** (failures - 1))
                 pause = min(backoff, remaining - min(HEARTBEAT_MIN_BUDGET, remaining / 2))
-            await asyncio.sleep(max(0.0, pause))
+            await clock.idle(max(0.0, pause))  # под FakeClock будит advance(), а не реальное время
             if self._closed:
                 return
             sent_at = clock.monotonic()
@@ -699,7 +701,7 @@ async def acquire(
                 with contextlib.suppress(Exception):
                     await pool._check_capacity()
             raise LeaseUnavailable(f"пул {pool.name}: нет свободного аккаунта")
-        await asyncio.sleep(min(remaining, delay * (0.5 + random.random())))
+        await clock.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)
 
 

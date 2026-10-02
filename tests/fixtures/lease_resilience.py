@@ -103,15 +103,17 @@ async def check_heartbeat_gives_up_at_deadline(hub: IdentityHub, monkeypatch: py
 
     monkeypatch.setattr(cls, "extend_lease", broken)
     loop = asyncio.get_running_loop()
-    started = loop.time()
+    marks: dict[str, float] = {}
 
     with pytest.raises(LeaseLost):
-        async with pool.lease():
+        async with pool.lease(on_lost=lambda: marks.setdefault("lost", loop.time())):
+            marks["entered"] = loop.time()
             await asyncio.sleep(10 * SCALE)
-    elapsed = loop.time() - started
 
     assert calls >= 2  # после неудачи была хотя бы одна повторная попытка
-    assert elapsed < 3 * SCALE  # потеря признана до истечения TTL в БД
+    # Потеря признана до истечения TTL в БД. Отсчёт от входа в блок до on_lost: время захвата и
+    # освобождения в БД в интервал не входит, иначе тест зависел бы от загрузки машины.
+    assert marks["lost"] - marks["entered"] < 3 * SCALE
 
 
 async def check_double_cancel_during_release_frees_lease(

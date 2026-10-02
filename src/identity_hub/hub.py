@@ -138,7 +138,8 @@ class IdentityHub:
         except ZoneInfoNotFoundError as exc:
             raise ValidationFailed(f"unknown IANA timezone: {timezone}") from exc
         self.timezone = timezone
-        self.clock: Clock = clock or SystemClock()
+        # MemoryStore без своих часов принимает часы хаба, разные часы — ValidationFailed (R2-P21)
+        self.clock: Clock = store.bind_clock(clock) or SystemClock()
         self.proxy_health = proxy_health or ProxyHealthPolicy()
         # sink ih_lease_logs (FR-12.2): подключить `logging.getLogger().addHandler(hub.lease_log_sink)`
         self.lease_log_sink = LeaseLogSink(lease_logs)
