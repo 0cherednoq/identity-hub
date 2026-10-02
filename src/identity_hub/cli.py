@@ -54,6 +54,11 @@ def _parser() -> argparse.ArgumentParser:
     rollups.add_argument("--space", help="slug пространства для --rebuild")
     rollups.add_argument("--start", help="начало диапазона ISO 8601 для --rebuild")
     rollups.add_argument("--end", help="конец диапазона ISO 8601 для --rebuild")
+    rollups.add_argument(
+        "--force",
+        action="store_true",
+        help="перестроить диапазон старше срока хранения событий: его история будет стёрта",
+    )
     rollups.add_argument("--before", help="необязательная граница ISO 8601 для --purge-minutes")
 
     snapshots = sub.add_parser("snapshots", help="создать или очистить почасовые снимки состояния")
@@ -161,6 +166,7 @@ async def async_main(args: argparse.Namespace) -> int:
                     args.space,
                     _aware_datetime(args.start),
                     _aware_datetime(args.end),
+                    force=args.force,
                 )
             )
             return 0

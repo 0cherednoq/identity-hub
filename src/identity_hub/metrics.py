@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -100,16 +101,22 @@ class CompositeMetrics:
         self.downstream.histogram(name, value, **labels)
 
 
+logger = logging.getLogger("identity_hub")
+
 _BufferKey = tuple[str, str, datetime, str, tuple[tuple[str, str], ...]]
 
 
 class RollupMetricsBuffer:
     """Non-blocking MetricsHook adapter flushed in exactly-once batches by dispatcher."""
 
-    def __init__(self, hub: IdentityHub) -> None:
+    def __init__(self, hub: IdentityHub, *, max_keys: int = 10_000, max_retries: int = 10) -> None:
         self.hub = hub
         self._pending: defaultdict[_BufferKey, float] = defaultdict(float)
         self._retries: list[tuple[UUID, dict[_BufferKey, float]]] = []
+        # Процесс без диспетчера буфер не сбрасывает: без предела он рос бы без конца (R2-F12).
+        self.max_keys = max_keys
+        self.max_retries = max_retries
+        self.dropped = 0  # сколько ключей отброшено из-за предела
 
     def counter(self, name: str, value: float = 1, **labels: str) -> None:
         self._record("add", f"telemetry.{name.removeprefix('identity_hub_')}", value, labels)
@@ -129,15 +136,54 @@ class RollupMetricsBuffer:
         dimensions = tuple(sorted((key, item) for key, item in labels.items() if key not in {"space"}))
         minute = bucket_start(self.hub.clock.now(), BucketSize.MINUTE, "UTC")
         key = (mode, metric, minute, space, dimensions)
+        if key not in self._pending and len(self._pending) >= self.max_keys and not self._make_room(minute):
+            self._overflow(space, 1)  # вся ёмкость занята текущей минутой: новое значение не принято
+            return
         if mode == "set":
             self._pending[key] = float(value)
         else:
             self._pending[key] += float(value)
 
+    def _make_room(self, minute: datetime) -> bool:
+        """Отбросить самую старую минуту целиком; `False`, если старее текущей минуты ничего нет."""
+        oldest = min(key[2] for key in self._pending)
+        if oldest >= minute:
+            return False
+        stale = [key for key in self._pending if key[2] == oldest]
+        for key in stale:
+            del self._pending[key]
+        self._overflow(stale[0][3], len(stale))
+        return True
+
+    def _overflow(self, space: str, count: int) -> None:
+        if not self.dropped:
+            logger.warning(
+                "буфер метрик переполнен (%d ключей): старые значения отбрасываются; "
+                "вызывайте hub.flush_metrics() или запустите dispatcher",
+                self.max_keys,
+            )
+        self.dropped += count
+        # напрямую во внешний хук: запись через hub.metrics вернулась бы в этот же буфер
+        downstream: MetricsHook | None = getattr(self.hub.metrics, "downstream", None)
+        if downstream is None:
+            return
+        record_metric(
+            downstream,
+            "counter",
+            "identity_hub_failures_total",
+            value=count,
+            space=space,
+            service="",
+            scope="metrics_buffer",
+            reason="overflow",
+        )
+
     async def flush(self) -> int:
         if self._pending:
             self._retries.append((uuid4(), dict(self._pending)))
             self._pending.clear()
+            while len(self._retries) > self.max_retries:  # хранилище давно недоступно
+                self.dropped += len(self._retries.pop(0)[1])
         if not self._retries:
             return 0
         spaces = {space.slug: space for space in await self.hub._store.list_spaces()}

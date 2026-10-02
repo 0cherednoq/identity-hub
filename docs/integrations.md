@@ -230,7 +230,30 @@ async with hub.dispatcher.running():
 Для независимого процесса задайте `IDENTITY_HUB_FACTORY` и запустите
 `identity-hub dispatcher`. При graceful shutdown сначала прекратите принимать
 новую работу, выйдите из активных аренд, остановите dispatcher, затем вызовите
-`await engine.dispose()`.
+`await hub.aclose()` и `await engine.dispose()`.
+
+`hub.aclose()` записывает то, что хаб держит в памяти — телеметрию операций и счётчики
+потерянных аренд, — и закрывает HTTP-клиент Telegram, если хаб создал его сам. Транспорт,
+переданный параметром `telegram_transport`, и engine закрывает вызывающий. Повторный вызов
+безопасен. То же делает контекстный менеджер, он же вызывает `start()`:
+
+```python
+async with hub:
+    async with hub.dispatcher.running():
+        await serve_application(hub)
+await engine.dispose()
+```
+
+Телеметрию операций (`telemetry.*` в rollups) записывает dispatcher. В процессе без
+dispatcher она копится в памяти: вызывайте `await hub.flush_metrics()` периодически и
+`await hub.aclose()` при остановке. Буфер ограничен 10 000 ключей — при переполнении
+отбрасываются самые старые минуты, а счётчик
+`identity_hub_failures_total{scope="metrics_buffer"}` растёт.
+
+Rollups по событиям пересчитываются только для затронутых минут; часовые и суточные корзины
+собираются из минутных. `identity-hub rollups --rebuild` перестраивает диапазон по журналу
+событий и не трогает телеметрию. Диапазон старше срока хранения событий (`Retention.events`)
+по журналу уже не восстановить — команда откажет; `--force` перестроит его, стерев историю.
 
 Пользовательская транзакция подключается явно:
 

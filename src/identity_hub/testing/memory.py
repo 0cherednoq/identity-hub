@@ -2583,12 +2583,27 @@ class MemoryStore(Store):
                     self._state.rollups[row.key] = row.value
             return True
 
+    async def event_rollup_rows(
+        self, space_id: UUID, bucket_size: BucketSize, start: datetime, end: datetime
+    ) -> list[RollupRow]:
+        async with self._lock:
+            return [
+                RollupRow(key, value)
+                for key, value in self._state.rollups.items()
+                if key.space_id == space_id
+                and key.bucket_size is bucket_size
+                and start <= key.bucket_start < end
+                and not key.metric.startswith("telemetry.")
+            ]
+
     async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int:
         async with self._lock:
             keys = [
                 key
                 for key in self._state.rollups
-                if key.space_id == space_id and start <= key.bucket_start < end
+                if key.space_id == space_id
+                and start <= key.bucket_start < end
+                and not key.metric.startswith("telemetry.")  # как в PostgreSQL: телеметрия остаётся
             ]
             for key in keys:
                 del self._state.rollups[key]

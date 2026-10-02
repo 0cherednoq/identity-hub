@@ -58,6 +58,7 @@ space = hub.space("production")         # пространство: изоляц
 | Член | Назначение |
 |---|---|
 | `hub.start()` | проверить ревизию схемы и синхронизировать реестр сервисов |
+| `hub.aclose()`, `async with hub:` | штатное завершение: записать накопленные метрики и потери аренд, закрыть HTTP-клиент, созданный хабом |
 | `hub.register_service(service)`, `hub.service(name)`, `hub.services` | реестр сервисов |
 | `hub.space(slug)`, `hub.get_space(slug)` | пространство; `get_space` не создаёт новое |
 | `hub.list_spaces()`, `hub.spaces_matrix()`, `hub.service_catalog()`, `hub.background_snapshot()` | сводные read-модели по пространствам для админок |
@@ -69,6 +70,7 @@ space = hub.space("production")         # пространство: изоляц
 | `hub.metrics` | хук метрик, заданный параметром `metrics` |
 | `hub.lease_log_sink` | обработчик `logging` для записи логов аренды в `ih_lease_logs` |
 | `hub.flush_lease_losses()` | выпустить накопленные события `worker.leases_lost` |
+| `hub.flush_metrics()` | записать накопленную телеметрию операций в rollups; нужен процессу без dispatcher |
 | `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
 | `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |

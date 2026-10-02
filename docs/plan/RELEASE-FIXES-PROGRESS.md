@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F3.10 Rollups, метрики и закрытие хаба
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: R1 (перечитывание событий, rebuild и телеметрия), M1 (рост буфера), aclose
-  - [ ] rollups: пересчёт только затронутых минутных корзин; clear_rollups не трогает telemetry; rebuild за пределами retention — отказ без force
-  - [ ] RollupMetricsBuffer: предел ключей; hub.flush_metrics()
-  - [ ] hub.aclose() и async with hub
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -50,7 +45,7 @@
 | F3.7b | Управление прокси | F3.7a | done |  | часть F3.7 (D-171) |
 | F3.8 | Импорт | F0.1 | done |  |  |
 | F3.9 | Override и верификации | F0.1 | done |  |  |
-| F3.10 | Rollups, метрики и закрытие хаба | F0.1 | in_progress |  |  |
+| F3.10 | Rollups, метрики и закрытие хаба | F0.1 | done |  |  |
 | F3.11 | CLI | F0.1 | todo |  |  |
 | F4.1 | Retention, индексы и целостность | F0.1 | todo |  |  |
 | F4.2 | Миграции: права и данные | F0.1 | todo |  |  |
@@ -68,7 +63,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 25 / 42 done
+**Итого:** 26 / 42 done
 
 ## Журнал сессий
 
@@ -99,3 +94,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F3.7b · done · proxies.replace_credentials, move, delete(unbind=) с событиями proxy.updated и proxy.deleted; Store: add_proxy_error (атомарный error_score), proxy_by_fingerprint, set_proxy_secret, delete_proxy; conformance для choose_proxy, bind_proxy, rebind_proxy; D-173; 1168 passed, admin unit 67 passed · дальше F3.8
 2026-10-02 · F3.8 · done · parse_proxy_url без сырого ValueError; предвалидация ловит любое исключение записи; run_files кладёт ошибки файла в failed; ImportRunner изолирует пространства и элементы, staged_item_failed на третьем захвате; несуществующая связь и переполненный прокси отклоняют только свою запись, max_identities — параметр run; фоновый update_session по нормализованному ref, verify_sessions для существующих; identity.imported для обновлений; причина называет поля; conformance очереди импорта; D-174; 1190 passed, admin unit 67 passed · дальше F3.9
 2026-10-02 · F3.9 · done · Override: ключ региона проверяется и получает значение по умолчанию (key: str | None); override верификации через apply_verification с согласованием verified_factors; ленивый срок действия фактора в evaluate и выборке аренды (Store.expired_factors); approve в MANUAL только из under_review; review reset_attempts; снятие verified по пробе — два наблюдения подряд; оговорка снята из limitations.md; D-175; 1204 passed, admin unit 67 passed · дальше F3.10
+2026-10-02 · F3.10 · done · rollups пересчитывают только затронутые минуты, rebuild не трогает телеметрию и требует force за пределами retention; буфер метрик ограничен; hub.aclose()/flush_metrics()/async with hub; D-176; check.sh 1212 passed, admin unit 67 passed · дальше F3.11

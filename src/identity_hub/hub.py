@@ -7,11 +7,11 @@ from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from identity_hub._space import SpaceBase
+from identity_hub._space import SpaceBase, logger
 from identity_hub.admin_audit import AdminAuditMixin
 from identity_hub.api.admin import Admin
 from identity_hub.api.analytics import Analytics
@@ -33,7 +33,7 @@ from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
 from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
 from identity_hub.doctor import Doctor
-from identity_hub.errors import NotFound, SchemaIncompatible, ValidationFailed
+from identity_hub.errors import NotFound, SchemaIncompatible, ValidationFailed, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
@@ -148,10 +148,13 @@ class IdentityHub:
         self._webhook_dispatcher = WebhookDispatcher(self, webhooks)
         self.dispatcher.add_consumer("webhooks", self._webhook_dispatcher.handle_events)
         self.dispatcher.add_pump(self._webhook_dispatcher.deliver_due)
+        self._owns_telegram_transport = telegram_transport is None
         if telegram_transport is None:
-            from identity_hub.telegram_notify import HttpTelegramTransport
+            from identity_hub import telegram_notify
 
-            telegram_transport = HttpTelegramTransport(timeout=self._webhook_dispatcher.policy.timeout)
+            telegram_transport = telegram_notify.HttpTelegramTransport(
+                timeout=self._webhook_dispatcher.policy.timeout
+            )
         self._notification_dispatcher = NotificationDispatcher(
             self, telegram_transport, policy=self._webhook_dispatcher.policy
         )
@@ -182,6 +185,7 @@ class IdentityHub:
             self.register_service(service)
         self._spaces: dict[str, SpaceRef] = {}
         self._lease_losses: Counter[tuple[str, str]] = Counter()
+        self._closed = False
         # когда пул последний раз сообщал proxy.pool.exhausted (монотонные часы, R1-12)
         self._proxy_exhausted_at: dict[tuple[str, str, str], float] = {}
 
@@ -237,6 +241,48 @@ class IdentityHub:
         if actual != [expected]:
             raise SchemaIncompatible(expected, ", ".join(actual) or None)
         await self._store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
+
+    async def flush_metrics(self) -> int:
+        """Записать накопленные метрики в rollups; возвращает число записанных значений.
+
+        В процессе с диспетчером это делает он сам. Воркеру без диспетчера стоит вызывать метод
+        периодически, иначе телеметрия остаётся в памяти (с пределом) и теряется при остановке.
+        """
+        total = 0
+        for _ in range(self._metric_rollups.max_retries + 1):
+            written = await self._metric_rollups.flush()
+            total += written
+            if not self._metric_rollups._retries:
+                break
+        return total
+
+    async def aclose(self) -> None:
+        """Штатно завершить работу хаба: сбросить буферы и закрыть созданный хабом HTTP-клиент.
+
+        Записывает накопленные метрики и события `worker.leases_lost`, закрывает транспорт
+        Telegram, если его создал хаб. Повторный вызов безопасен. Сессии БД и диспетчер,
+        запущенный через `dispatcher.running()`, закрывает вызывающий.
+        """
+        for label, step in (("метрики", self.flush_metrics), ("потери аренд", self.flush_lease_losses)):
+            try:
+                await step()
+            except Exception as exc:
+                logger.warning("закрытие хаба: %s не записаны: %s", label, describe_error(exc))
+        if self._owns_telegram_transport and not self._closed:
+            close = getattr(self._notification_dispatcher.transport, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception as exc:
+                    logger.warning("закрытие хаба: транспорт Telegram не закрыт: %s", describe_error(exc))
+        self._closed = True
+
+    async def __aenter__(self) -> Self:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        await self.aclose()
 
     # --------------------------------------------------------- пространства
 

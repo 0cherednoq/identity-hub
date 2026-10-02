@@ -27,6 +27,10 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `await hub.aclose()` и `async with hub:` — штатное завершение: запись накопленных метрик и
+  потерь аренд, закрытие HTTP-клиента Telegram, созданного хабом. `hub.flush_metrics()` — запись
+  телеметрии операций в процессе без dispatcher.
+- `identity-hub rollups --rebuild --force` — перестроить диапазон старше срока хранения событий.
 - `verifications.review(..., "reset_attempts")` — обнулить счётчик попыток фактора.
 - `imports.run(..., max_identities=3)` — ёмкость прокси, создаваемых импортом.
 - `space.proxies.replace_credentials()`, `move()`, `delete(unbind=)`; события `proxy.updated`
@@ -82,6 +86,10 @@
   и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
   нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
   сообщает о строках под неактивным ключом.
+- Rollups: `rebuild` диапазона старше `Retention.events` — `ValidationFailed` без `force=True`
+  (в CLI — `--force`); телеметрию (`telemetry.*`) перестройка больше не удаляет. Буфер метрик
+  ограничен 10 000 ключей: при переполнении отбрасываются самые старые минуты. Контракт `Store`:
+  новый `event_rollup_rows(space_id, bucket_size, start, end)`.
 - `Override`: ключ региона проверяется — для `standing`, `availability`, `lifecycle` он пуст,
   для `auth` по умолчанию `"default"`, для `verification` — объявленный фактор; иначе
   `ValidationFailed`. `key` может быть `None`.
@@ -170,6 +178,9 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- Диспетчер больше не перечитывает события целых суток на каждую пачку: пересчитываются
+  только затронутые минутные корзины. `rollups --rebuild` не стирает телеметрию операций.
+  Процесс без dispatcher не копит буфер метрик бесконечно.
 - Override верификации в `verified` теперь даёт допуск: `verified_factors` согласуется.
   `Override("standing", "typo", "banned")` больше не банит аккаунт мимо строки региона, а
   override `auth` без ключа обновляет `auth_state`.

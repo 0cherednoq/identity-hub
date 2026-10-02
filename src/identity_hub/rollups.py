@@ -168,11 +168,13 @@ def event_contributions(event: Event) -> tuple[tuple[str, tuple[tuple[str, str],
     return tuple(items)
 
 
-def _keys(event: Event, space_id: Any, timezone: str) -> tuple[tuple[RollupKey, float], ...]:
+def _keys(
+    event: Event, space_id: Any, timezone: str, sizes: tuple[BucketSize, ...] = tuple(BucketSize)
+) -> tuple[tuple[RollupKey, float], ...]:
     result: list[tuple[RollupKey, float]] = []
     service = event.service or ""
     for metric, dims, value in event_contributions(event):
-        for size in BucketSize:
+        for size in sizes:
             result.append(
                 (
                     RollupKey(
@@ -189,6 +191,26 @@ def _keys(event: Event, space_id: Any, timezone: str) -> tuple[tuple[RollupKey, 
     return tuple(result)
 
 
+def _minute_ranges(minutes: list[datetime]) -> list[tuple[datetime, datetime]]:
+    """Соседние минуты — одним диапазоном `[start, end)`: меньше запросов к журналу."""
+    ranges: list[tuple[datetime, datetime]] = []
+    for minute in minutes:
+        if ranges and ranges[-1][1] == minute:
+            ranges[-1] = (ranges[-1][0], minute + timedelta(minutes=1))
+        else:
+            ranges.append((minute, minute + timedelta(minutes=1)))
+    return ranges
+
+
+def _summed(rows: list[RollupRow], start: datetime, size: BucketSize) -> list[RollupRow]:
+    """Сложить мелкие корзины в одну крупную с началом `start`."""
+    totals: defaultdict[RollupKey, float] = defaultdict(float)
+    for row in rows:
+        key = row.key
+        totals[RollupKey(key.space_id, key.service, key.metric, key.dims, start, size)] += row.value
+    return [RollupRow(key, value) for key, value in totals.items()]
+
+
 class StatsRollups:
     """Dispatcher consumer and rebuild facade; reads never scan the event journal."""
 
@@ -197,37 +219,89 @@ class StatsRollups:
         self._last_purge: float | None = None
 
     async def handle_events(self, events: list[Event]) -> None:
+        """Пересчитать корзины, затронутые пачкой событий. Идемпотентно: значения заменяются.
+
+        Из журнала перечитываются только затронутые минуты, а не сутки: часовые корзины
+        собираются из минутных, суточные — из часовых (R2-F11). Так стоимость пачки не растёт
+        с числом событий за день. Для событий старше хранимых минутных корзин час или сутки
+        пересчитываются по журналу.
+        """
         if not events:
             return
         spaces = {space.slug: space for space in await self.hub._store.list_spaces()}
-        impacted: set[RollupKey] = set()
-        bounds: dict[str, tuple[datetime, datetime]] = {}
+        by_space: defaultdict[str, list[Event]] = defaultdict(list)
         for event in events:
-            space = spaces.get(event.space)
-            if space is None:
-                continue
-            keys = _keys(event, space.id, space.timezone)
-            impacted.update(key for key, _ in keys)
-            start = min(key.bucket_start for key, _ in keys)
-            end = max(next_bucket(key.bucket_start, key.bucket_size, space.timezone) for key, _ in keys)
-            previous = bounds.get(space.slug)
-            bounds[space.slug] = (
-                min(previous[0], start) if previous else start,
-                max(previous[1], end) if previous else end,
-            )
-        totals: defaultdict[RollupKey, float] = defaultdict(float)
-        for slug, (start, end) in bounds.items():
-            space = spaces[slug]
-            raw = await self.hub._store.rollup_source_events(slug, start, end)
-            for event in raw:
-                for key, value in _keys(event, space.id, space.timezone):
-                    if key in impacted:
-                        totals[key] += value
-        await self.hub._store.replace_rollups([RollupRow(key, totals[key]) for key in impacted])
+            if event.space in spaces:
+                by_space[event.space].append(event)
+        fresh_after = self.hub.clock.now() - self.hub.retention.rollup_minutes + timedelta(hours=1)
+        for slug, items in by_space.items():
+            await self._recompute(spaces[slug], items, fresh_after)
 
-    async def rebuild(self, space_slug: str, start: datetime, end: datetime) -> int:
+    async def _recompute(self, space: Any, events: list[Event], fresh_after: datetime) -> None:
+        store = self.hub._store
+        minutes = sorted(
+            {bucket_start(event.occurred_at, BucketSize.MINUTE, space.timezone) for event in events}
+        )
+        totals: defaultdict[RollupKey, float] = defaultdict(float)
+        for start, end in _minute_ranges(minutes):
+            for event in await store.rollup_source_events(space.slug, start, end):
+                for key, value in _keys(event, space.id, space.timezone, (BucketSize.MINUTE,)):
+                    totals[key] += value
+        await store.replace_rollups([RollupRow(key, value) for key, value in totals.items()])
+
+        hours = sorted({bucket_start(minute, BucketSize.HOUR, space.timezone) for minute in minutes})
+        rows: list[RollupRow] = []
+        for hour in hours:
+            end = hour + timedelta(hours=1)
+            if hour >= fresh_after:
+                rows += _summed(
+                    await store.event_rollup_rows(space.id, BucketSize.MINUTE, hour, end),
+                    hour,
+                    BucketSize.HOUR,
+                )
+            else:  # минутные корзины этого часа уже очищены
+                rows += await self._from_journal(space, hour, end, BucketSize.HOUR)
+        await store.replace_rollups(rows)
+
+        days = sorted({bucket_start(minute, BucketSize.DAY, space.timezone) for minute in minutes})
+        rows = []
+        for day in days:
+            end = next_bucket(day, BucketSize.DAY, space.timezone)
+            if day.minute == 0 and end.minute == 0:
+                # сутки пространства состоят из целых часов UTC
+                rows += _summed(
+                    await store.event_rollup_rows(space.id, BucketSize.HOUR, day, end), day, BucketSize.DAY
+                )
+            elif day >= fresh_after:  # смещение пояса на полчаса: собираем из минут
+                rows += _summed(
+                    await store.event_rollup_rows(space.id, BucketSize.MINUTE, day, end), day, BucketSize.DAY
+                )
+            else:
+                rows += await self._from_journal(space, day, end, BucketSize.DAY)
+        await store.replace_rollups(rows)
+
+    async def _from_journal(
+        self, space: Any, start: datetime, end: datetime, size: BucketSize
+    ) -> list[RollupRow]:
+        totals: defaultdict[RollupKey, float] = defaultdict(float)
+        for event in await self.hub._store.rollup_source_events(space.slug, start, end):
+            for key, value in _keys(event, space.id, space.timezone, (size,)):
+                totals[key] += value
+        return [RollupRow(key, value) for key, value in totals.items()]
+
+    async def rebuild(self, space_slug: str, start: datetime, end: datetime, *, force: bool = False) -> int:
+        """Перестроить корзины событий диапазона по журналу; телеметрия не затрагивается.
+
+        Диапазон, уходящий за срок хранения журнала (`Retention.events`), по журналу уже не
+        восстановить: перестройка стёрла бы историю. Такой вызов требует `force=True`.
+        """
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValidationFailed("rollup rebuild requires an aware, non-empty time range")
+        if not force and start < self.hub.clock.now() - self.hub.retention.events:
+            raise ValidationFailed(
+                "rollup rebuild: диапазон старше срока хранения событий — перестройка сотрёт историю; "
+                "передайте force=True, если это и нужно"
+            )
         spaces = {space.slug: space for space in await self.hub._store.list_spaces()}
         space = spaces.get(space_slug)
         if space is None:

@@ -4110,6 +4110,25 @@ class PgStore(Store):
                 )
             return True
 
+    async def event_rollup_rows(
+        self, space_id: UUID, bucket_size: BucketSize, start: datetime, end: datetime
+    ) -> list[RollupRow]:
+        async with self.sessionmaker() as session:
+            rows = (
+                await _execute(
+                    session,
+                    select(ROLLUPS).where(
+                        ROLLUPS.c.space_id == space_id,
+                        ROLLUPS.c.bucket_size == str(bucket_size),
+                        ROLLUPS.c.bucket_start >= start,
+                        ROLLUPS.c.bucket_start < end,
+                        ROLLUPS.c.metric.not_like("telemetry.%"),
+                    ),
+                    execution_options=self.options,
+                )
+            ).mappings()
+            return [_rollup_row(row) for row in rows]
+
     async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int:
         async with self._own() as session:
             result: Any = await _execute(
@@ -4118,6 +4137,8 @@ class PgStore(Store):
                     ROLLUPS.c.space_id == space_id,
                     ROLLUPS.c.bucket_start >= start,
                     ROLLUPS.c.bucket_start < end,
+                    # телеметрия приходит из буфера метрик, по журналу событий её не восстановить
+                    ROLLUPS.c.metric.not_like("telemetry.%"),
                 ),
                 execution_options=self.options,
             )
@@ -4164,20 +4185,7 @@ class PgStore(Store):
             stmt = stmt.where(ROLLUPS.c.dims == dict(dims))
         async with self.sessionmaker() as session:
             records = (await _execute(session, stmt, execution_options=self.options)).mappings()
-            return [
-                RollupRow(
-                    RollupKey(
-                        row["space_id"],
-                        row["service"],
-                        row["metric"],
-                        tuple(sorted(row["dims"].items())),
-                        row["bucket_start"],
-                        BucketSize(row["bucket_size"]),
-                    ),
-                    float(row["value"]),
-                )
-                for row in records
-            ]
+            return [_rollup_row(row) for row in records]
 
     async def capture_state_snapshot(self, taken_at: datetime, *, source: str) -> int:
         async with self._own() as session:
@@ -5311,3 +5319,17 @@ def _normalization_collisions(
     for identity_id, ref in [*others, *updates]:
         groups.setdefault(ref, []).append(identity_id)
     return [sorted(ids) for _ref, ids in sorted(groups.items()) if len(ids) > 1]
+
+
+def _rollup_row(row: Any) -> RollupRow:
+    return RollupRow(
+        RollupKey(
+            row["space_id"],
+            row["service"],
+            row["metric"],
+            tuple(sorted(row["dims"].items())),
+            row["bucket_start"],
+            BucketSize(row["bucket_size"]),
+        ),
+        float(row["value"]),
+    )

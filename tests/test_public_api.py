@@ -72,6 +72,7 @@ def test_unsupported_quota_reset_is_not_public() -> None:
 HUB_PUBLIC = {
     # жизненный цикл и реестр сервисов
     "start",
+    "aclose",
     "register_service",
     "service",
     "services",
@@ -91,6 +92,7 @@ HUB_PUBLIC = {
     "metrics",
     "lease_log_sink",
     "flush_lease_losses",
+    "flush_metrics",
     # настройки, заданные конструктором
     "clock",
     "retention",

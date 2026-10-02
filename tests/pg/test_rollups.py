@@ -76,6 +76,24 @@ async def test_postgres_rollups_are_idempotent_rebuildable_and_include_internal_
         end=after,
     )
     assert sum(row.value for row in rebuilt) == 1
+    # F3.10: телеметрию по журналу не восстановить — перестройка её не удаляет и не пересчитывает
+    kept = await hub._rollups.rows(
+        "tennet",
+        metric="telemetry.lease_duration_seconds.count",
+        bucket_size=BucketSize.MINUTE,
+        start=before,
+        end=after,
+    )
+    assert [row.value for row in kept] == [999]
+    for size in (BucketSize.HOUR, BucketSize.DAY):  # крупные корзины собраны из мелких и согласованы
+        wide = await hub._rollups.rows(
+            "tennet",
+            metric="leases.acquired",
+            bucket_size=size,
+            start=before - timedelta(days=2),
+            end=after + timedelta(days=2),
+        )
+        assert sum(row.value for row in wide) == 1
 
 
 async def test_thirty_day_series_reads_rollup_table_not_event_journal(

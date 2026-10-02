@@ -1670,6 +1670,12 @@ class Store(ABC):
         """Apply a buffered metric batch exactly once and return whether it was new."""
 
     @abstractmethod
+    async def event_rollup_rows(
+        self, space_id: UUID, bucket_size: BucketSize, start: datetime, end: datetime
+    ) -> list[RollupRow]:
+        """Корзины событий пространства заданного размера в `[start, end)`, без `telemetry.*`."""
+
+    @abstractmethod
     async def clear_rollups(self, space_id: UUID, start: datetime, end: datetime) -> int: ...
 
     @abstractmethod
