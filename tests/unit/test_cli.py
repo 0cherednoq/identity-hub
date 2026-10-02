@@ -21,6 +21,7 @@ pytestmark = pytest.mark.unit
         (["dispatcher", "--factory", "app:hub", "--once"], "dispatcher"),
         (["maintenance", "--factory", "app:hub", "--once"], "maintenance"),
         (["doctor", "--factory", "app:hub", "--fix"], "doctor"),
+        (["doctor", "--factory", "app:hub", "renormalize", "--service", "mail"], "doctor"),
         (["rotate-key", "--factory", "app:hub", "--batch-size", "10"], "rotate-key"),
         (
             [
@@ -88,7 +89,10 @@ def test_rollups_purge_minutes_runs(
 ) -> None:
     _PURGE_CALLS.clear()
 
-    code = main(["rollups", "--factory", f"{__name__}:memory_hub_factory", "--purge-minutes", *extra])
+    # F3.11: удаление данных требует подтверждения
+    code = main(
+        ["rollups", "--factory", f"{__name__}:memory_hub_factory", "--purge-minutes", "--yes", *extra]
+    )
 
     assert code == 0
     assert [expected] == _PURGE_CALLS

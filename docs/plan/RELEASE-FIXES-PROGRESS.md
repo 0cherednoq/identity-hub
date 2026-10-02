@@ -10,16 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F3.11 CLI
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: демоны переживают ошибку тика, ошибки фабрики без текста, --yes, doctor renormalize
-  - [ ] демоны maintenance и dispatcher: лог, backoff, процесс живёт
-  - [ ] разбор аргументов отдельно от выполнения; ошибки фабрики — код 1 и имя типа
-  - [ ] --yes для rollups --rebuild/--purge-minutes и snapshots --purge
-  - [ ] команда doctor renormalize
-  - [ ] docs/cli.md, CHANGELOG, DECISIONS
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -52,7 +46,7 @@
 | F3.8 | Импорт | F0.1 | done |  |  |
 | F3.9 | Override и верификации | F0.1 | done |  |  |
 | F3.10 | Rollups, метрики и закрытие хаба | F0.1 | done |  |  |
-| F3.11 | CLI | F0.1 | in_progress |  |  |
+| F3.11 | CLI | F0.1 | done |  |  |
 | F4.1 | Retention, индексы и целостность | F0.1 | todo |  |  |
 | F4.2 | Миграции: права и данные | F0.1 | todo |  |  |
 | F4.3 | Совместимость ревизии схемы | F0.1 | todo |  |  |
@@ -69,7 +63,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 26 / 42 done
+**Итого:** 27 / 42 done
 
 ## Журнал сессий
 
@@ -101,3 +95,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F3.8 · done · parse_proxy_url без сырого ValueError; предвалидация ловит любое исключение записи; run_files кладёт ошибки файла в failed; ImportRunner изолирует пространства и элементы, staged_item_failed на третьем захвате; несуществующая связь и переполненный прокси отклоняют только свою запись, max_identities — параметр run; фоновый update_session по нормализованному ref, verify_sessions для существующих; identity.imported для обновлений; причина называет поля; conformance очереди импорта; D-174; 1190 passed, admin unit 67 passed · дальше F3.9
 2026-10-02 · F3.9 · done · Override: ключ региона проверяется и получает значение по умолчанию (key: str | None); override верификации через apply_verification с согласованием verified_factors; ленивый срок действия фактора в evaluate и выборке аренды (Store.expired_factors); approve в MANUAL только из under_review; review reset_attempts; снятие verified по пробе — два наблюдения подряд; оговорка снята из limitations.md; D-175; 1204 passed, admin unit 67 passed · дальше F3.10
 2026-10-02 · F3.10 · done · rollups пересчитывают только затронутые минуты, rebuild не трогает телеметрию и требует force за пределами retention; буфер метрик ограничен; hub.aclose()/flush_metrics()/async with hub; D-176; check.sh 1212 passed, admin unit 67 passed · дальше F3.11
+2026-10-02 · F3.11 · done · CLI: демоны maintenance/dispatcher переживают сбой тика (backoff 1–60 с), сбой фабрики и внутренняя ошибка — код 1 с именем типа, разрушающие команды требуют --yes, doctor renormalize, предупреждение о пароле в --url (D-177); check зелёный: 1233 passed, admin unit 67 passed · дальше F4.1

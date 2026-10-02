@@ -6,16 +6,34 @@ import argparse
 import asyncio
 import importlib
 import inspect
+import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import cast
+from urllib.parse import urlsplit
 
-from identity_hub.errors import IdentityHubError, exit_code
+from identity_hub.errors import IdentityHubError, describe_error, exit_code
 from identity_hub.hub import IdentityHub
+from identity_hub.metrics import record_metric
 
 Factory = Callable[[], IdentityHub | Awaitable[IdentityHub]]
+
+logger = logging.getLogger("identity_hub")
+
+DATABASE_URL_ENV = "IDENTITY_HUB_DATABASE_URL"
+DAEMON_BACKOFF_BASE = 1.0  # пауза после первого сбоя тика, секунды; дальше удваивается
+DAEMON_BACKOFF_MAX = 60.0
+MAINTENANCE_INTERVAL = 1.0
+
+
+class _UsageError(Exception):
+    """Ошибка аргументов командной строки: код 2 и справка argparse."""
+
+
+class _FactoryError(Exception):
+    """Фабрика хаба завершилась ошибкой; текст исключения фабрики не сохраняется (R2-S18)."""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -24,7 +42,10 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     migrate = sub.add_parser("migrate", help="применить миграции Identity Hub")
-    migrate.add_argument("--url", default=os.environ.get("IDENTITY_HUB_DATABASE_URL"))
+    migrate.add_argument(
+        "--url",
+        help=f"URL базы; пароль в аргументе виден в списке процессов — надёжнее {DATABASE_URL_ENV}",
+    )
     migrate.add_argument("--db-schema")
     migrate.add_argument("--revision", default="head")
 
@@ -39,6 +60,13 @@ def _parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="проверить денормализацию и счётчики")
     _factory_argument(doctor)
     doctor.add_argument("--fix", action="store_true", help="исправить найденные расхождения")
+    doctor_sub = doctor.add_subparsers(dest="doctor_command")
+    renormalize = doctor_sub.add_parser(
+        "renormalize", help="пересчитать normalized_ref после смены normalize_ref_version сервиса"
+    )
+    _factory_argument(renormalize, inherited=True)
+    renormalize.add_argument("--service", required=True, help="имя сервиса")
+    renormalize.add_argument("--batch-size", type=int, default=1000)
 
     rotate = sub.add_parser("rotate-key", help="переобернуть DEK активным мастер-ключом")
     _factory_argument(rotate)
@@ -60,6 +88,7 @@ def _parser() -> argparse.ArgumentParser:
         help="перестроить диапазон старше срока хранения событий: его история будет стёрта",
     )
     rollups.add_argument("--before", help="необязательная граница ISO 8601 для --purge-minutes")
+    _yes_argument(rollups)
 
     snapshots = sub.add_parser("snapshots", help="создать или очистить почасовые снимки состояния")
     _factory_argument(snapshots)
@@ -71,67 +100,174 @@ def _parser() -> argparse.ArgumentParser:
     )
     snapshot_action.add_argument("--purge", action="store_true", help="удалить старые снимки")
     snapshots.add_argument("--before", help="граница ISO 8601 для --purge")
+    _yes_argument(snapshots)
     return parser
 
 
-def _factory_argument(parser: argparse.ArgumentParser) -> None:
+def _factory_argument(parser: argparse.ArgumentParser, *, inherited: bool = False) -> None:
     parser.add_argument(
         "--factory",
-        default=os.environ.get("IDENTITY_HUB_FACTORY"),
+        # у вложенной команды значение по умолчанию не должно затирать `--factory` родительской
+        default=argparse.SUPPRESS if inherited else os.environ.get("IDENTITY_HUB_FACTORY"),
         help="фабрика IdentityHub в формате package.module:callable (или IDENTITY_HUB_FACTORY)",
     )
 
 
+def _yes_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--yes", action="store_true", help="подтвердить команду, которая удаляет или перезаписывает данные"
+    )
+
+
+def _check_arguments(args: argparse.Namespace) -> None:
+    """Проверить и разобрать аргументы до подключения к базе; ошибки — только `_UsageError`."""
+    command = args.command
+    if command == "migrate":
+        if not (args.url or os.environ.get(DATABASE_URL_ENV)):
+            raise _UsageError(f"укажите --url или {DATABASE_URL_ENV}")
+        return
+    if command == "rotate-key" and args.batch_size < 1:
+        raise _UsageError("--batch-size должен быть положительным")
+    if command == "doctor" and args.doctor_command == "renormalize" and args.batch_size < 1:
+        raise _UsageError("--batch-size должен быть положительным")
+    destructive: str | None = None
+    if command == "rollups":
+        if args.rebuild:
+            if not args.space or not args.start or not args.end:
+                raise _UsageError("--rebuild требует --space, --start и --end")
+            args.start = _aware_datetime("--start", args.start)
+            args.end = _aware_datetime("--end", args.end)
+            destructive = "rollups --rebuild заменяет корзины диапазона"
+        else:
+            destructive = "rollups --purge-minutes удаляет минутные корзины"
+        args.before = _aware_datetime("--before", args.before) if args.before else None
+    if command == "snapshots":
+        args.before = _aware_datetime("--before", args.before) if args.before else None
+        if args.purge:
+            destructive = "snapshots --purge удаляет снимки состояния"
+    if destructive and not args.yes:
+        raise _UsageError(f"{destructive}; для подтверждения добавьте --yes")
+
+
 def _load_factory(spec: str | None) -> Factory:
     if not spec or ":" not in spec:
-        raise ValueError("укажите --factory package.module:callable")
+        raise _UsageError("укажите --factory package.module:callable")
     module_name, attribute = spec.split(":", 1)
-    value = getattr(importlib.import_module(module_name), attribute)
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name and (module_name == exc.name or module_name.startswith(f"{exc.name}.")):
+            raise _UsageError(f"модуль фабрики {module_name} не найден") from None
+        raise _FactoryError(f"импорт модуля фабрики: {describe_error(exc)}") from None
+    except Exception as exc:
+        # текст чужого исключения не печатается: в нём бывают URL с паролем и ключи
+        raise _FactoryError(f"импорт модуля фабрики: {describe_error(exc)}") from None
+    value = getattr(module, attribute, None)
     if not callable(value):
-        raise TypeError(f"{spec} не является callable")
+        raise _UsageError(f"{spec}: в модуле нет вызываемого объекта {attribute}")
     return cast(Factory, value)
 
 
 async def _hub(spec: str | None) -> IdentityHub:
-    value = _load_factory(spec)()
-    hub = await value if inspect.isawaitable(value) else value
+    factory = _load_factory(spec)
+    try:
+        value = factory()
+        hub = await value if inspect.isawaitable(value) else value
+    except IdentityHubError:
+        raise
+    except Exception as exc:
+        raise _FactoryError(describe_error(exc)) from None
     if not isinstance(hub, IdentityHub):
-        raise TypeError("factory должна вернуть IdentityHub")
+        raise _FactoryError("фабрика должна вернуть IdentityHub")
     await hub.start()
     return hub
 
 
+async def _daemon(
+    hub: IdentityHub, name: str, tick: Callable[[], Awaitable[object]], interval: float
+) -> None:
+    """Бесконечный цикл фонового процесса: сбой тика не завершает процесс (R2-F16).
+
+    Ошибка логируется без текста исключения, пауза перед повтором удваивается до
+    `DAEMON_BACKOFF_MAX`. Успешный тик или долгая работа до сбоя возвращают паузу к началу.
+    """
+    failures = 0
+    while True:
+        started = hub.clock.monotonic()
+        try:
+            await tick()
+        except Exception as exc:
+            if hub.clock.monotonic() - started > DAEMON_BACKOFF_MAX:
+                failures = 0  # до сбоя цикл долго работал: это новая неполадка
+            failures += 1
+            pause = min(DAEMON_BACKOFF_MAX, DAEMON_BACKOFF_BASE * 2 ** min(failures - 1, 16))
+            logger.error("%s: сбой цикла (%s), повтор через %.0f с", name, describe_error(exc), pause)
+            record_metric(
+                hub.metrics,
+                "counter",
+                "identity_hub_failures_total",
+                space="",
+                service="",
+                scope=name,
+                reason="daemon_tick",
+            )
+        else:
+            failures = 0
+            pause = interval
+        await hub.clock.sleep(pause)
+
+
+async def _migrate(args: argparse.Namespace) -> int:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from identity_hub.postgres import migrate as migrations
+
+    if args.url and _has_password(args.url):
+        print(
+            "предупреждение: пароль в --url виден в списке процессов; "
+            f"передавайте адрес базы через {DATABASE_URL_ENV}",
+            file=sys.stderr,
+        )
+    engine = create_async_engine(args.url or os.environ[DATABASE_URL_ENV])
+    try:
+        await migrations.migrate(engine, db_schema=args.db_schema, revision=args.revision)
+    finally:
+        await engine.dispose()
+    return 0
+
+
+def _has_password(url: str) -> bool:
+    try:
+        return bool(urlsplit(url).password)
+    except ValueError:
+        return False
+
+
 async def async_main(args: argparse.Namespace) -> int:
     if args.command == "migrate":
-        if not args.url:
-            raise ValueError("укажите --url или IDENTITY_HUB_DATABASE_URL")
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        from identity_hub.postgres.migrate import migrate
-
-        engine = create_async_engine(args.url)
-        try:
-            await migrate(engine, db_schema=args.db_schema, revision=args.revision)
-        finally:
-            await engine.dispose()
-        return 0
-
+        return await _migrate(args)
     hub = await _hub(args.factory)
+    try:
+        return await _run(hub, args)
+    finally:
+        await hub.aclose()
+
+
+async def _run(hub: IdentityHub, args: argparse.Namespace) -> int:
     if args.command == "dispatcher":
         if args.once:
             print(await hub.dispatcher.drain())
-        else:
-            await hub.dispatcher.run()
-        return 0
+            return 0
+        await _daemon(hub, "dispatcher", hub.dispatcher.run, 0.0)
     if args.command == "maintenance":
         if args.once:
             maintenance_report = await hub.maintenance.run_all()
             print(maintenance_report.total)
             return 0
-        while True:
-            await hub.maintenance.run_due()
-            await hub.clock.sleep(1)
+        await _daemon(hub, "maintenance", hub.maintenance.run_due, MAINTENANCE_INTERVAL)
     if args.command == "doctor":
+        if args.doctor_command == "renormalize":
+            return await _renormalize(hub, args)
         issues = await hub.doctor.check(fix=args.fix)
         for issue in issues:
             marker = "fixed" if args.fix else "issue"
@@ -143,8 +279,6 @@ async def async_main(args: argparse.Namespace) -> int:
                 print(f"issue: inactive-key {table} {key_id} {count}")
         return 1 if inactive or (issues and not args.fix) else 0
     if args.command == "rotate-key":
-        if args.batch_size < 1:
-            raise ValueError("--batch-size должен быть положительным")
         rotation_report = await hub.doctor.rotate_key(limit=args.batch_size)
         print(rotation_report.total)
         for table, keys in sorted(rotation_report.remaining.items()):
@@ -159,26 +293,28 @@ async def async_main(args: argparse.Namespace) -> int:
         return 0 if rotation_report.complete else 1
     if args.command == "rollups":
         if args.rebuild:
-            if not args.space or not args.start or not args.end:
-                raise ValueError("--rebuild требует --space, --start и --end")
-            print(
-                await hub._rollups.rebuild(
-                    args.space,
-                    _aware_datetime(args.start),
-                    _aware_datetime(args.end),
-                    force=args.force,
-                )
-            )
+            print(await hub._rollups.rebuild(args.space, args.start, args.end, force=args.force))
             return 0
-        print(await hub._rollups.purge_minutes(before=_aware_datetime(args.before) if args.before else None))
+        print(await hub._rollups.purge_minutes(before=args.before))
         return 0
     if args.command == "snapshots":
         if args.backfill_current:
             print(await hub._state_snapshots.backfill_current())
             return 0
-        print(await hub._state_snapshots.purge(before=_aware_datetime(args.before) if args.before else None))
+        print(await hub._state_snapshots.purge(before=args.before))
         return 0
-    raise ValueError("укажите команду")
+    raise _UsageError("укажите команду")
+
+
+async def _renormalize(hub: IdentityHub, args: argparse.Namespace) -> int:
+    report = await hub.doctor.renormalize(args.service, batch_size=args.batch_size)
+    print(f"updated: {report.updated}")
+    # только идентификаторы: значения ref (телефоны, email) в вывод не попадают
+    for group in report.collisions:
+        print("collision: " + " ".join(str(identity_id) for identity_id in group))
+    for identity_id in report.invalid:
+        print(f"invalid: {identity_id}")
+    return 0 if report.complete else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -192,18 +328,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         parser.error("укажите команду")
     try:
+        _check_arguments(args)
         return asyncio.run(async_main(args))
+    except _UsageError as exc:
+        # только свои сообщения о разборе аргументов: исключения из кода сюда не попадают
+        parser.error(str(exc))
     except IdentityHubError as exc:
         # код и сообщение без трассировки: сообщения ошибок не содержат секретов (S-8, IMP-13)
         print(f"error[{exc.code}]: {exc}", file=sys.stderr)
         return exit_code(exc)
-    except (TypeError, ValueError) as exc:
-        parser.error(str(exc))
+    except _FactoryError as exc:
+        print(f"error[factory_failed]: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        # текст и трассировка — только в отладочный лог: в сообщении драйвера бывают URL и SQL
+        logger.debug("identity-hub %s: необработанная ошибка", args.command, exc_info=True)
+        print(f"error[internal]: {describe_error(exc)}", file=sys.stderr)
+        return 1
     return 2
 
 
-def _aware_datetime(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _aware_datetime(option: str, value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise _UsageError(f"{option}: ожидается время в формате ISO 8601") from None
     if parsed.tzinfo is None:
-        raise ValueError("время должно содержать timezone offset")
+        raise _UsageError(f"{option}: время должно содержать timezone offset")
     return parsed
