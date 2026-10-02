@@ -49,6 +49,7 @@ from sqlalchemy.sql import Executable, Select
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
+from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import (
     AuthState,
@@ -3488,25 +3489,25 @@ class PgTx(StoreTx):
         ]
 
     async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
+        i = IDENTITIES.c
+        # Только состояния с переходом по таймеру: строка `frozen` с истёкшим `until` иначе вечно
+        # стояла бы первой в выборке и заслоняла остальные (R2-F06).
+        availability_due = and_(
+            i.availability.in_(sorted(AVAILABILITY.on_expire)), i.availability_until <= func.now()
+        )
+        standing_due = and_(i.standing.in_(sorted(STANDING.on_expire)), i.standing_until <= func.now())
+        first_due = func.least(
+            case((availability_due, i.availability_until)), case((standing_due, i.standing_until))
+        )
         rows = (
             await self.execute(
                 select(
-                    IDENTITIES.c.id,
-                    (IDENTITIES.c.availability_until <= func.now()).label("availability_due"),
-                    (IDENTITIES.c.standing_until <= func.now()).label("standing_due"),
+                    i.id,
+                    availability_due.label("availability_due"),
+                    standing_due.label("standing_due"),
                 )
-                .where(
-                    IDENTITIES.c.space_id == self.space.id,
-                    or_(
-                        IDENTITIES.c.availability_until <= func.now(),
-                        IDENTITIES.c.standing_until <= func.now(),
-                    ),
-                )
-                .order_by(
-                    func.least(IDENTITIES.c.availability_until, IDENTITIES.c.standing_until)
-                    .asc()
-                    .nulls_last()
-                )
+                .where(i.space_id == self.space.id, or_(availability_due, standing_due))
+                .order_by(first_due.asc().nulls_last(), i.id)
                 .limit(limit)
             )
         ).mappings()

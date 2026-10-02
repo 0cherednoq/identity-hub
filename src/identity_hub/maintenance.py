@@ -7,6 +7,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
+from uuid import UUID
+
+from identity_hub._space import logger
+from identity_hub.errors import describe_error
+from identity_hub.metrics import record_metric
 
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub, Retention, SpaceHandle
@@ -71,7 +76,13 @@ class Maintenance:
         for name, interval, task in groups:
             if name in self._last and now - self._last[name] < interval:
                 continue
-            result = await self._run_task(name, task)
+            try:
+                result = await self._run_task(name, task)
+            except Exception as exc:
+                # сбой одной группы не останавливает остальные; она повторится на следующем тике
+                logger.error("задача обслуживания %s не выполнена: %s", name, describe_error(exc))
+                self._failure("-", "-", name)
+                continue
             report.counts.update(result.counts)
             self._last[name] = now
         return report.total
@@ -99,14 +110,60 @@ class Maintenance:
             async with space._tx(own=True) as tx:
                 due = await tx.due_identity_timers(self.schedule.batch_size)
             for identity_id, region in due:
-                decision = await space._expire(identity_id, region)
+                try:
+                    decision = await space._expire(identity_id, region)
+                except Exception as exc:
+                    # один аккаунт не останавливает таймеры остальных (R2-F06)
+                    await self._skip(space, identity_id, f"таймер {region}", exc)
+                    continue
                 report.add("region_timers", int(decision.changed))
             batch = self.schedule.batch_size
-            report.add("verifications", await space.maintenance.expire_verifications(limit=batch))
-            report.add("challenges", await space.maintenance.expire_challenges(limit=batch))
-            report.add("logins", await space.maintenance.expire_logins(limit=batch))
+            for name, expire in (
+                ("verifications", space.maintenance.expire_verifications),
+                ("challenges", space.maintenance.expire_challenges),
+                ("logins", space.maintenance.expire_logins),
+            ):
+                try:
+                    report.add(name, await expire(limit=batch))
+                except Exception as exc:
+                    logger.error(
+                        "обслуживание %s пространства %s не выполнено: %s",
+                        name,
+                        space.slug,
+                        describe_error(exc),
+                    )
+                    self._failure(space.slug, "-", name)
         report.add("lease_loss_aggregates", await self.hub.flush_lease_losses())
         return report
+
+    async def _skip(self, space: SpaceHandle, identity_id: UUID, what: str, exc: Exception) -> None:
+        """Пропустить аккаунт в обслуживании: предупреждение и метрика."""
+        service = "-"
+        reason = "failed"
+        try:
+            async with space._tx(own=True) as tx:
+                row = await tx.get_identity(identity_id)
+            if row is not None:
+                service = row.service
+                if all(row.service != known.name for known in self.hub.services):
+                    reason = "unknown_service"  # сервис убран из кода, аккаунт остался в БД
+        except Exception:
+            pass
+        logger.warning(
+            "обслуживание: %s аккаунта %s пропущен (%s): %s", what, identity_id, reason, describe_error(exc)
+        )
+        self._failure(space.slug, service, reason)
+
+    def _failure(self, space: str, service: str, reason: str) -> None:
+        record_metric(
+            self.hub.metrics,
+            "counter",
+            "identity_hub_failures_total",
+            space=space,
+            service=service,
+            scope="maintenance",
+            reason=reason,
+        )
 
     async def _leases(self) -> MaintenanceReport:
         report = MaintenanceReport()

@@ -304,10 +304,13 @@ class VerificationsMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             due = await tx.due_regions("verification", limit)
         changed = 0
+        known = {service.name for service in self.hub.services}
         for identity_id, factor in due:
             async with self._tx(own=True) as tx:
                 identity = await tx.get_identity(identity_id)
-                if identity is None or factor not in self.hub.service(identity.service).factor_names:
+                if identity is None or identity.service not in known:
+                    continue  # сервис убран из кода: его аккаунт не останавливает остальных (R2-F06)
+                if factor not in self.hub.service(identity.service).factor_names:
                     continue  # фактор удалён из кода — игнорируется (FR-10.6)
                 decision = await apply_verification(
                     self,

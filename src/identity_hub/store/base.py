@@ -1548,7 +1548,11 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
-        """Истёкшие денормализованные standing/availability таймеры."""
+        """Истёкшие денормализованные standing/availability таймеры.
+
+        Только состояния, у которых есть переход по истечении (`RegionSpec.on_expire`): `until`
+        у `frozen` или `quarantined` — справочная дата, такая строка в очередь не попадает.
+        """
 
     @abstractmethod
     async def stuck_logins(self, limit: int) -> list[tuple[UUID, datetime]]:

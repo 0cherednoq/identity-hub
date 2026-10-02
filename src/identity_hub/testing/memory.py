@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
+from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
 from identity_hub.errors import (
@@ -508,7 +509,12 @@ class MemoryTx(StoreTx):
                 return False
         elif query.needs_auth and row.auth_state != "authenticated":
             return False
-        if row.availability != "available" and not (row.availability_until and row.availability_until <= now):
+        # истёкший `until` лениво снимается только у paused/cooling; карантин снимает команда (R2-P11)
+        if row.availability != "available" and not (
+            row.availability in AVAILABILITY.on_expire
+            and row.availability_until
+            and row.availability_until <= now
+        ):
             return False
         if not query.required_factors.issubset(row.verified_factors) or not query.tags.issubset(row.tags):
             return False
@@ -2304,9 +2310,18 @@ class MemoryTx(StoreTx):
         for row in self.state.identities.values():
             if row.space_id != self.space.id:
                 continue
-            if row.standing_until is not None and row.standing_until <= self._now:
+            # только состояния с переходом по таймеру, как в PostgreSQL (R2-F06)
+            if (
+                row.standing in STANDING.on_expire
+                and row.standing_until is not None
+                and row.standing_until <= self._now
+            ):
                 due.append((row.standing_until, row.id, "standing"))
-            if row.availability_until is not None and row.availability_until <= self._now:
+            if (
+                row.availability in AVAILABILITY.on_expire
+                and row.availability_until is not None
+                and row.availability_until <= self._now
+            ):
                 due.append((row.availability_until, row.id, "availability"))
         due.sort()
         return [(identity_id, region) for _, identity_id, region in due[:limit]]

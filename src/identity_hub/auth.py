@@ -274,12 +274,14 @@ class LoginMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             expired = await tx.expired_challenges(limit)
         count = 0
+        known = {service.name for service in self.hub.services}
         for challenge in expired:
             async with self._tx(own=True) as tx:
                 if not await tx.resolve_challenge(challenge.id):
                     continue
                 identity = await self._identity(tx, challenge.identity_id)
-                if identity.auth_state == AuthState.CHALLENGE:
+                # сервис убран из кода: вопрос закрывается, состояние аккаунта не трогаем (R2-F06)
+                if identity.auth_state == AuthState.CHALLENGE and identity.service in known:
                     await apply_region_change(
                         self,
                         tx,
@@ -312,6 +314,8 @@ class LoginMixin(SpaceBase):
                 identity = await tx.get_identity(identity_id)
                 if identity is None or identity.auth_state != AuthState.LOGGING_IN:
                     continue
+                if all(identity.service != known.name for known in self.hub.services):
+                    continue  # сервис убран из кода: аккаунт не останавливает обслуживание (R2-F06)
                 timeout = self.hub.service(identity.service).login_timeout + LOGIN_ABANDONED_GRACE
                 if since + timeout > now or await tx.current_lease(identity_id) is not None:
                     continue
