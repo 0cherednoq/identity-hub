@@ -39,11 +39,14 @@ class Imports(Namespace):
         on_batch_committed: BatchHook | None = None,
         actor: str = "import",
         run_id: UUID | None = None,
+        max_identities: int = 3,
     ) -> ImportReport:
         """Импортировать поток записей пачками по `batch_size`, каждая — своя транзакция.
 
         Повтор идемпотентен: существующие попадают в `skipped` (или обновляют сессии при
-        `on_existing="update_session"`, или падают в `failed` при `"fail"`).
+        `on_existing="update_session"`, или падают в `failed` при `"fail"`). Негодная запись —
+        в `failed` с причиной, остальные импортируются. `max_identities` — ёмкость прокси,
+        создаваемых из `ImportRecord.proxy`; запись сверх ёмкости прокси отклоняется.
         """
         return await self._space._import_many(
             service=service,
@@ -54,6 +57,7 @@ class Imports(Namespace):
             on_batch_committed=on_batch_committed,
             actor=actor,
             run_id=run_id,
+            max_identities=max_identities,
         )
 
     async def run_files(

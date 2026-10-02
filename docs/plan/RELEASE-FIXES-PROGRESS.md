@@ -10,16 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F3.8 Импорт
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: E1–E5 из t_imp.py, conformance claim/finish_import_items
-  - [ ] parse_proxy_url и предвалидация: любая ошибка записи — в failed без значения; ошибка файла или импортёра — в failed
-  - [ ] ImportRunner: изоляция прогона и пространства, элемент после 3 неудачных claim — failed
-  - [ ] несуществующая связь отклоняет только свою запись; ёмкость прокси и max_identities
-  - [ ] фоновый update_session по нормализованному ref, verify_sessions для существующих; identity.imported для обновлений; причина называет поле
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -49,7 +43,7 @@
 | F3.6 | Обслуживание и таймеры | F0.1 | done |  |  |
 | F3.7a | Здоровье прокси | F0.1 | done |  | часть F3.7 (D-171) |
 | F3.7b | Управление прокси | F3.7a | done |  | часть F3.7 (D-171) |
-| F3.8 | Импорт | F0.1 | in_progress |  |  |
+| F3.8 | Импорт | F0.1 | done |  |  |
 | F3.9 | Override и верификации | F0.1 | todo |  |  |
 | F3.10 | Rollups, метрики и закрытие хаба | F0.1 | todo |  |  |
 | F3.11 | CLI | F0.1 | todo |  |  |
@@ -69,7 +63,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 23 / 42 done
+**Итого:** 24 / 42 done
 
 ## Журнал сессий
 
@@ -98,3 +92,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F3.6 · done · due_identity_timers: только состояния с on_expire (limited, paused, cooling) на обоих хранилищах; обслуживание: try/except на аккаунт, на подзадачу пространства и на группу в run_due, аккаунт незарегистрированного сервиса пропускается с метрикой; MemoryStore лениво снимает until только у paused/cooling; D-170; 1138 passed, admin unit 67 passed · дальше F3.7
 2026-10-02 · F3.7a · done · dead перепроверяется раз в max_backoff; jitter, check_timeout, параллельный recheck_due; сбой чекера и отказ всей группы — proxy.checker.failed без учёта отказа; recheck_group; закрепление защищает от плановых перепроверок, dead и таймера региона; due_proxies(pool=) и due_identity_timers без закреплённых; D-172; 1150 passed, admin unit 67 passed · дальше F3.7b
 2026-10-02 · F3.7b · done · proxies.replace_credentials, move, delete(unbind=) с событиями proxy.updated и proxy.deleted; Store: add_proxy_error (атомарный error_score), proxy_by_fingerprint, set_proxy_secret, delete_proxy; conformance для choose_proxy, bind_proxy, rebind_proxy; D-173; 1168 passed, admin unit 67 passed · дальше F3.8
+2026-10-02 · F3.8 · done · parse_proxy_url без сырого ValueError; предвалидация ловит любое исключение записи; run_files кладёт ошибки файла в failed; ImportRunner изолирует пространства и элементы, staged_item_failed на третьем захвате; несуществующая связь и переполненный прокси отклоняют только свою запись, max_identities — параметр run; фоновый update_session по нормализованному ref, verify_sessions для существующих; identity.imported для обновлений; причина называет поля; conformance очереди импорта; D-174; 1190 passed, admin unit 67 passed · дальше F3.9

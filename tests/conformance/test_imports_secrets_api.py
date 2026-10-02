@@ -149,9 +149,14 @@ async def test_rejected_batch_report_has_no_foreign_exception_text(
     assert "пачка импорта отклонена целиком: RuntimeError" in caplog.text
 
 
-async def test_rejected_batch_report_keeps_library_error_message(space: SpaceHandle) -> None:
+async def test_missing_link_rejects_only_its_record_with_a_safe_reason(space: SpaceHandle) -> None:
+    """R2-F08: несуществующая связь отклоняет свою запись, остальные создаются; ref в причину не идёт."""
     report = await space.imports.run(
-        service="fake_tg", records=[ImportRecord(external_ref="+30", links={"recovery": "fake_tg:+404"})]
+        service="fake_tg",
+        records=[
+            ImportRecord(external_ref="+30", links={"recovery": "fake_tg:+404"}),
+            ImportRecord(external_ref="+31"),
+        ],
     )
-    (reason,) = [reason for _ref, reason in report.failed]
-    assert reason.startswith("пачка отклонена: IdentityHubError[internal_error]: ") and "не найден" in reason
+    assert len(report.created) == 1
+    assert report.failed == [("+30", "связь recovery: связанный аккаунт не найден")]

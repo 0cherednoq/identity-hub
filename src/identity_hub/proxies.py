@@ -96,19 +96,30 @@ class ParsedProxy:
 
 
 def parse_proxy_url(url: str) -> ParsedProxy:
-    parts = urlsplit(url)
-    scheme = (parts.scheme or "").lower()
+    """Разобрать URL прокси. Любая ошибка разбора — `ValidationFailed` без фрагментов URL."""
+    parsed = _split_proxy_url(url)
+    if parsed is None:  # вне except: ValueError урлсплита несёт кусок пароля и не идёт в цепочку
+        raise ValidationFailed("прокси: некорректный URL")
+    scheme, host, port, username, password = parsed
     if scheme not in SCHEMES:
-        raise ValidationFailed(f"прокси: схема {scheme!r} не поддерживается ({', '.join(sorted(SCHEMES))})")
-    if not parts.hostname or parts.port is None:
+        raise ValidationFailed(f"прокси: схема не поддерживается ({', '.join(sorted(SCHEMES))})")
+    if not host or port is None:
         raise ValidationFailed("прокси: нужны хост и порт")
-    return ParsedProxy(
-        scheme=scheme,
-        host=parts.hostname.lower(),
-        port=parts.port,
-        username=unquote(parts.username) if parts.username else None,
-        password=unquote(parts.password) if parts.password else None,
-    )
+    return ParsedProxy(scheme=scheme, host=host, port=port, username=username, password=password)
+
+
+def _split_proxy_url(url: str) -> tuple[str, str | None, int | None, str | None, str | None] | None:
+    try:
+        parts = urlsplit(url)
+        return (
+            (parts.scheme or "").lower(),
+            parts.hostname.lower() if parts.hostname else None,
+            parts.port,
+            unquote(parts.username) if parts.username else None,
+            unquote(parts.password) if parts.password else None,
+        )
+    except ValueError:
+        return None
 
 
 def fingerprint(scheme: str, host: str, port: int, username: str | None) -> str:

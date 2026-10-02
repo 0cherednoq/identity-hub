@@ -27,6 +27,7 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `imports.run(..., max_identities=3)` — ёмкость прокси, создаваемых импортом.
 - `space.proxies.replace_credentials()`, `move()`, `delete(unbind=)`; события `proxy.updated`
   и `proxy.deleted`.
 - `space.proxies.recheck_group(group, checker, actor=...)`; `ProxyHealthPolicy.jitter`,
@@ -80,6 +81,10 @@
   и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
   нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
   сообщает о строках под неактивным ключом.
+- Импорт: несуществующая связь и переполненный прокси отклоняют только свою запись; фоновый
+  `update_session` учитывает `verify_sessions` и для существующих аккаунтов (`auth → no_session`);
+  `identity.imported` пишется и для пачки из одних обновлений; `run_files` кладёт ошибку файла
+  или импортёра в `failed`; причина `ValidationFailed` схемы называет поля.
 - Контракт `Store`: новые `add_proxy_error`, `proxy_by_fingerprint`, `set_proxy_secret`,
   `delete_proxy`.
 - Прокси: `dead` автоматически перепроверяется раз в `max_backoff`; `recheck_due` проверяет
@@ -158,6 +163,11 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- Одна запись больше не роняет импорт: негодный URL прокси давал сырой `ValueError` с фрагментом
+  пароля, обрывал `imports.run` без отчёта, а в фоновом режиме навсегда блокировал очередь
+  импорта пространства и задерживал остальные пространства.
+- Фоновый импорт с `update_session` больше не показывает обновлённые записи как `failed`.
+- Импорт больше не привязывает к прокси аккаунты сверх `max_identities`.
 - Параллельные `proxies.report_failure` больше не теряют приращения `error_score`: сложение
   выполняется в хранилище одной командой.
 - Простой провайдера прокси или контрольного адреса чекера больше не переводит всю группу в

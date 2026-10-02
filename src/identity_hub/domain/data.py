@@ -97,7 +97,10 @@ def validate_model(schema: type[BaseModel], data: Mapping[str, Any] | BaseModel,
         return schema.model_validate(raw)
     except PydanticValidationError as exc:
         errors = [f"{what}.{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()]
-        raise ValidationFailed(f"{what} не соответствует схеме {schema.__name__}", errors) from None
+        # в сообщении — имена полей без значений: по нему чинят файл импорта (R2-F24)
+        fields = list(dict.fromkeys(f"{what}.{'.'.join(map(str, e['loc']))}" for e in exc.errors()))
+        shown = ", ".join(fields[:5]) + ("…" if len(fields) > 5 else "")
+        raise ValidationFailed(f"{what} не соответствует схеме {schema.__name__}: {shown}", errors) from None
 
 
 def split_profile(service: Service, profile: BaseModel) -> tuple[dict[str, Any], dict[str, Any] | None]:

@@ -23,7 +23,7 @@ from identity_hub.crypto import associated_data
 from identity_hub.crypto.envelope import DecryptionFailed
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle
-from identity_hub.errors import IdentityHubError, describe_error
+from identity_hub.errors import IdentityHubError, ValidationFailed, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
 from identity_hub.store.base import UNREADABLE_IMPORT_ITEM, ImportItemResult, NewImportItem, NewImportRun
@@ -81,6 +81,8 @@ class ImportReport:
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (external_ref, причина)
     failed: list[tuple[str, str]] = field(default_factory=list)
     hook_failed: list[list[UUID]] = field(default_factory=list)  # пачки, для которых хук упал — повторить
+    # нормализованный ref → id обновлённой identity: фоновый импорт сопоставляет исход по ref (R2-F07)
+    updated_refs: dict[str, UUID] = field(default_factory=dict, repr=False)
 
     @property
     def total(self) -> int:
@@ -106,41 +108,64 @@ class ImportingMixin(SpaceBase):
         on_batch_committed: BatchHook | None = None,
         actor: str = "import",
         run_id: UUID | None = None,
+        max_identities: int = 3,
     ) -> ImportReport:
-        """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`."""
+        """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`.
+
+        `max_identities` — ёмкость прокси, которые импорт создаёт из `ImportRecord.proxy`.
+        """
         svc = self.hub.service(service)
         mode = OnExisting(on_existing)
+        if max_identities < 1:
+            raise ValidationFailed("max_identities ≥ 1")
         report = ImportReport()
         batch: list[ImportRecord] = []
         async for record in _aiter(records):
             batch.append(record)
             if len(batch) >= batch_size:
                 await self._import_batch(
-                    svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id
+                    svc,
+                    batch,
+                    mode,
+                    verify_sessions,
+                    on_batch_committed,
+                    actor,
+                    report,
+                    run_id,
+                    max_identities,
                 )
                 batch = []
         if batch:
             await self._import_batch(
-                svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id
+                svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id, max_identities
             )
         return report
 
     async def _import_files(
         self, *, service: Service | str, paths: Iterable[str | Path], **kwargs: Any
     ) -> ImportReport:
-        """Импорт файлов импортёрами сервиса (`.session`, tdata, JSON с cookies — FR-2.6)."""
+        """Импорт файлов импортёрами сервиса (`.session`, tdata, JSON с cookies — FR-2.6).
+
+        Файл без импортёра и файл, который импортёр не смог прочитать, попадают в `failed` под
+        именем файла; остальные файлы импортируются.
+        """
         svc = self.hub.service(service)
-
-        async def records() -> AsyncIterable[ImportRecord]:
-            for raw in paths:
-                path = Path(raw)
-                importer = next((i for i in svc.importers if i.can_import(path)), None)
-                if importer is None:
-                    raise IdentityHubError(f"нет импортёра для файла {path.name}")
-                async for record in importer.read(path):
-                    yield record
-
-        return await self._import_many(service=svc, records=records(), **kwargs)
+        report = ImportReport()
+        for raw in paths:
+            path = Path(raw)
+            importer = next((i for i in svc.importers if i.can_import(path)), None)
+            if importer is None:
+                report.failed.append((path.name, "нет импортёра для файла"))
+                continue
+            try:
+                records = [record async for record in importer.read(path)]
+            except Exception as exc:
+                # текст ошибки чтения содержит путь и фрагменты файла: в отчёт — только тип
+                logger.warning("импортёр не прочитал файл %s: %s", path.name, describe_error(exc))
+                report.failed.append((path.name, describe_error(exc)))
+                continue
+            _merge(report, await self._import_many(service=svc, records=records, **kwargs))
+        return report
 
     # --------------------------------------------------------- пачка
 
@@ -232,6 +257,7 @@ class ImportingMixin(SpaceBase):
         actor: str,
         report: ImportReport,
         run_id: UUID | None,
+        max_identities: int = 3,
     ) -> None:
         from identity_hub.identities import prepare_identity
 
@@ -240,8 +266,8 @@ class ImportingMixin(SpaceBase):
         for record in batch:  # валидация и шифрование — до транзакции (FR-2.4, T-5)
             try:
                 key = svc.normalize_external_ref(record.external_ref)
-            except IdentityHubError as exc:
-                report.failed.append((record.external_ref, str(exc)))
+            except Exception as exc:
+                report.failed.append((record.external_ref, _record_error(exc)))
                 continue
             if key in seen:  # дубль считается после нормализации (IMP-08)
                 report.skipped.append((record.external_ref, "дубликат в пачке"))
@@ -272,10 +298,13 @@ class ImportingMixin(SpaceBase):
                 proxy = None
                 if record.proxy:
                     pool = svc.proxy_policy.group if svc.proxy_policy else "import"
-                    proxy = self._prepare_proxy(record.proxy, pool, None, None, None, None, None, 3, None)  # type: ignore[attr-defined]
+                    proxy = self._prepare_proxy(  # type: ignore[attr-defined]
+                        record.proxy, pool, None, None, None, None, None, max_identities, None
+                    )
                 ready.append(_Prepared(record, prepared, proxy))
-            except IdentityHubError as exc:
-                report.failed.append((record.external_ref, str(exc)))
+            except Exception as exc:
+                # любая ошибка записи — её собственный отказ: пачка и отчёт остаются целыми (R2-F05)
+                report.failed.append((record.external_ref, _record_error(exc)))
         if not ready:
             return
 
@@ -296,11 +325,27 @@ class ImportingMixin(SpaceBase):
                     )
                 inserted: dict[str, UUID] = {}
                 to_link: list[_Prepared] = []
+                unlinkable = await self._unresolved_links(tx, svc, ready, existing, by_id)
+                capacity: dict[str, list[int]] = {}  # отпечаток прокси → [ёмкость, занято]
                 for item in ready:
                     row = item.prepared.row
                     found = existing.get((svc.name, row.unique_ref))
                     if found is not None or row.id in by_id:
-                        await self._existing_record(tx, svc, item, found, mode, updated, skipped, failed)
+                        await self._existing_record(
+                            tx, svc, item, found, mode, verify_sessions, updated, skipped, failed, report
+                        )
+                        continue
+                    if row.unique_ref in unlinkable:
+                        # несуществующая связь отклоняет только свою запись (R2-F08)
+                        failed.append(
+                            (
+                                row.external_ref,
+                                f"связь {unlinkable[row.unique_ref]}: связанный аккаунт не найден",
+                            )
+                        )
+                        continue
+                    if item.proxy is not None and not await self._proxy_has_room(tx, item.proxy, capacity):
+                        failed.append((row.external_ref, "прокси: нет свободной ёмкости (max_identities)"))
                         continue
                     if not await tx.insert_identity(row):
                         failed.append((row.external_ref, "id занят другим аккаунтом"))
@@ -310,6 +355,7 @@ class ImportingMixin(SpaceBase):
                         proxy_id, _ = await tx.insert_proxy(item.proxy)
                         await tx.bind_proxy(row.id, proxy_id, None)
                         await tx.adjust_proxy_load(proxy_id, 1)
+                        capacity[item.proxy.fingerprint][1] += 1
                     for factor, state in item.record.verifications.items():
                         await self._initial_verification(tx, row.id, factor, state, actor)
                     inserted[row.unique_ref] = row.id
@@ -317,7 +363,7 @@ class ImportingMixin(SpaceBase):
                     if item.record.links:
                         to_link.append(item)
                 await self._import_links(tx, svc, to_link, inserted)
-                if created:
+                if created or updated:  # пачка из одних обновлений тоже видна в событиях (R2-F24)
                     await self._emit(
                         tx,
                         EventDraft(
@@ -354,9 +400,11 @@ class ImportingMixin(SpaceBase):
         item: _Prepared,
         found: tuple[UUID, UUID] | None,
         mode: OnExisting,
+        verify_sessions: bool,
         updated: list[UUID],
         skipped: list[tuple[str, str]],
         failed: list[tuple[str, str]],
+        report: ImportReport,
     ) -> None:
         ref = item.record.external_ref
         if found is not None and found[1] != tx.space.id:
@@ -378,6 +426,9 @@ class ImportingMixin(SpaceBase):
         from identity_hub.state import DEFAULT_SLOT, apply_region_change
 
         if DEFAULT_SLOT in item.prepared.sessions:
+            # verify_sessions: новая сессия не считается рабочей, пока её не проверит вход или проба —
+            # как у создаваемых записей (R2-F07)
+            target = AuthState.NO_SESSION if verify_sessions else AuthState.AUTHENTICATED
             await apply_region_change(
                 self,
                 tx,
@@ -385,13 +436,72 @@ class ImportingMixin(SpaceBase):
                 "auth",
                 DEFAULT_SLOT,
                 Observation(
-                    AuthState.AUTHENTICATED,
+                    target,
                     observed_at=await tx.now(),
                     source=ChangeSource.IMPORT,
                     actor="import",
                 ),
             )
         updated.append(identity_id)
+        report.updated_refs[item.prepared.row.unique_ref] = identity_id
+
+    async def _unresolved_links(
+        self,
+        tx: Any,
+        svc: Service,
+        ready: list[_Prepared],
+        existing: Mapping[tuple[str, str], tuple[UUID, UUID]],
+        by_id: Any,
+    ) -> dict[str, str]:
+        """Записи пачки, чью связь не с кем создать: `unique_ref → роль`.
+
+        Цель связи — identity в БД этого пространства или запись той же пачки, которая сама
+        будет создана. Отказ записи может лишить цели другую запись, поэтому проход повторяется.
+        """
+        pending = [
+            item
+            for item in ready
+            if item.record.links
+            and existing.get((svc.name, item.prepared.row.unique_ref)) is None
+            and item.prepared.row.id not in by_id
+        ]
+        if not pending:
+            return {}
+        wanted = {self._link_ref(svc, target) for item in pending for target in item.record.links.values()}
+        known = await tx.find_by_refs(sorted(wanted))
+        in_db = {key for key, found in known.items() if found[1] == tx.space.id}
+        creatable = {
+            item.prepared.row.unique_ref
+            for item in ready
+            if existing.get((svc.name, item.prepared.row.unique_ref)) is None
+            and item.prepared.row.id not in by_id
+        }
+        rejected: dict[str, str] = {}
+        changed = True
+        while changed:
+            changed = False
+            for item in pending:
+                ref = item.prepared.row.unique_ref
+                if ref in rejected:
+                    continue
+                for role, target in item.record.links.items():
+                    key = self._link_ref(svc, target)
+                    in_batch = key[0] == svc.name and key[1] in creatable and key[1] not in rejected
+                    if key not in in_db and not in_batch:
+                        rejected[ref] = role
+                        changed = True
+                        break
+        return rejected
+
+    async def _proxy_has_room(self, tx: Any, proxy: Any, capacity: dict[str, list[int]]) -> bool:
+        """Есть ли у прокси записи импорта свободная ёмкость (R2-F09)."""
+        state = capacity.get(proxy.fingerprint)
+        if state is None:
+            existing_id = await tx.proxy_by_fingerprint(proxy.fingerprint)
+            read = await tx.proxy_read_one(existing_id) if existing_id is not None else None
+            state = [read.max_identities, read.bound_count] if read is not None else [proxy.max_identities, 0]
+            capacity[proxy.fingerprint] = state
+        return state[1] < state[0]
 
     async def _initial_verification(
         self, tx: Any, identity_id: UUID, factor: str, state: str, actor: str
@@ -470,28 +580,67 @@ class ImportRunner:
     async def run_once(self) -> int:
         processed = 0
         for ref in await self.hub._store.maintenance_spaces():
-            handle = self.hub.space(ref.slug, ref.title, space_id=ref.id)
-            async with handle._tx(own=True) as tx:
-                runs = await tx.active_import_runs(limit=1)
-                if not runs:
-                    continue
-                run = runs[0]
-                if run.state == "cancelling":
-                    await tx.request_import_cancel(run.id)
-                    continue
-                claimed = await tx.claim_import_items(
-                    run.id,
-                    worker=self.worker,
-                    limit=self.batch_size,
-                    claim_for=self.claim_for,
-                )
-            if not claimed:
-                continue
-            results = await self._process(handle, run, claimed)
-            async with handle._tx(own=True) as tx:
-                await tx.finish_import_items(run.id, results)
-            processed += len(results)
+            try:
+                processed += await self._run_space(ref)
+            except Exception as exc:
+                # сбой одного пространства не останавливает импорт остальных (R2-F05)
+                logger.error("фоновый импорт пространства %s не выполнен: %s", ref.slug, describe_error(exc))
         return processed
+
+    async def _run_space(self, ref: Any) -> int:
+        handle = self.hub.space(ref.slug, ref.title, space_id=ref.id)
+        async with handle._tx(own=True) as tx:
+            runs = await tx.active_import_runs(limit=1)
+            if not runs:
+                return 0
+            run = runs[0]
+            if run.state == "cancelling":
+                await tx.request_import_cancel(run.id)
+                return 0
+            claimed = await tx.claim_import_items(
+                run.id,
+                worker=self.worker,
+                limit=self.batch_size,
+                claim_for=self.claim_for,
+            )
+        if not claimed:
+            return 0
+        results = await self._process_isolated(handle, run, claimed)
+        if not results:
+            return 0
+        async with handle._tx(own=True) as tx:
+            await tx.finish_import_items(run.id, results)
+        return len(results)
+
+    async def _process_isolated(
+        self, handle: ImportingMixin, run: Any, claimed: list[Any]
+    ) -> list[ImportItemResult]:
+        """Обработать пачку; при сбое — по одному элементу, чтобы один не задерживал остальные.
+
+        Элемент, обработка которого падает, остаётся захваченным и повторяется после истечения
+        захвата; на третьем захвате он помечается `failed` (`staged_item_failed`).
+        """
+        try:
+            return await self._process(handle, run, claimed)
+        except Exception as exc:
+            logger.warning("пачка фонового импорта %s не обработана: %s", run.id, describe_error(exc))
+        results: list[ImportItemResult] = []
+        for item in claimed:
+            try:
+                results.extend(await self._process(handle, run, [item]))
+            except Exception as exc:
+                if item.claim_token < MAX_ITEM_CLAIMS:
+                    continue  # повторится, когда истечёт захват
+                results.append(
+                    ImportItemResult(
+                        item.position,
+                        item.claim_token,
+                        "failed",
+                        error_code="staged_item_failed",
+                        error=describe_error(exc),  # только тип: текст бывает с данными записи
+                    )
+                )
+        return results
 
     async def _process(self, handle: ImportingMixin, run: Any, claimed: list[Any]) -> list[ImportItemResult]:
         records: list[tuple[Any, ImportRecord]] = []
@@ -554,17 +703,21 @@ class ImportRunner:
             run_id=run.id,
         )
         created = set(report.created)
-        updated = set(report.updated)
         skipped = {external_ref: reason for external_ref, reason in report.skipped}
         failed = {external_ref: reason for external_ref, reason in report.failed}
+        service = handle.hub.service(run.service)
         for item, record in pending:
             identity_id = record.id
+            # id записи сгенерирован при stage и с существующей identity не совпадает:
+            # обновление сопоставляется по нормализованному ref (R2-F07)
+            existing_id = _updated_id(report, service, record)
             if identity_id in created:
                 outcome = "created"
                 reason = None
                 code = None
-            elif identity_id in updated:
+            elif existing_id is not None:
                 outcome = "updated"
+                identity_id = existing_id
                 reason = None
                 code = None
             elif record.external_ref in skipped:
@@ -587,6 +740,31 @@ class ImportRunner:
                 )
             )
         return results
+
+
+MAX_ITEM_CLAIMS = 3
+"""На каком по счёту захвате элемент фонового импорта, обработка которого падает, помечается `failed`."""
+
+
+def _record_error(exc: Exception) -> str:
+    """Причина отказа записи для отчёта: сообщение библиотеки или только тип чужого исключения."""
+    return str(exc) if isinstance(exc, IdentityHubError) else describe_error(exc)
+
+
+def _merge(report: ImportReport, part: ImportReport) -> None:
+    report.created.extend(part.created)
+    report.updated.extend(part.updated)
+    report.skipped.extend(part.skipped)
+    report.failed.extend(part.failed)
+    report.hook_failed.extend(part.hook_failed)
+    report.updated_refs.update(part.updated_refs)
+
+
+def _updated_id(report: ImportReport, service: Service, record: ImportRecord) -> UUID | None:
+    try:
+        return report.updated_refs.get(service.normalize_external_ref(record.external_ref))
+    except Exception:
+        return None
 
 
 def _record_payload(record: ImportRecord) -> dict[str, Any]:
