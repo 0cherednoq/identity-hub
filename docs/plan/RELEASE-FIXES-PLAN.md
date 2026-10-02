@@ -351,9 +351,9 @@
 - **DoD:** тесты `S5` и `S7` из `repro/functional/t_sync.py`; conformance для
   `due_identity_timers`.
 
-### F3.7 Прокси
+### F3.7a Здоровье прокси
 
-Находки: `R2-F04`, `R2-F14`, `R2-F15`, `R2-F23`.
+Находки: `R2-F04`, `R2-F14`. Первая часть исходной `F3.7` (`D-171`).
 
 - `dead` перепроверяется автоматически раз в `max_backoff`; jitter в backoff; таймаут чекера
   (`ProxyHealthPolicy.check_timeout`); `recheck_due` с ограниченным параллелизмом.
@@ -361,11 +361,16 @@
   (событие `proxy.checker.failed`).
 - `recheck(group=…)` для массовой перепроверки.
 - Закрепление (`pin_for`) защищает от автоматических переходов, включая `dead` и таймер региона.
+- **DoD:** тесты из `repro/functional/t_p1.py`, `t_px.py` (`P1`, `P2`).
+
+### F3.7b Управление прокси
+
+Находки: `R2-F15`, `R2-F23`. Вторая часть исходной `F3.7` (`D-171`).
+
 - `proxies.delete()` (отказ при привязках, `unbind=True` — отвязать), `replace_credentials()`,
   `move(group=…)`.
 - `_report_proxy_failure`: атомарное обновление `error_score` в SQL.
-- **DoD:** тесты из `repro/functional/t_p1.py`, `t_px.py`; conformance для `choose_proxy`,
-  `bind_proxy`, `rebind_proxy`.
+- **DoD:** тесты на каждый метод; conformance для `choose_proxy`, `bind_proxy`, `rebind_proxy`.
 
 ### F3.8 Импорт
 
@@ -631,7 +636,8 @@ F0.1 → F0.2
 F0.1 → все задачи F1–F6
 F1.1 → F1.2
 F2.1 → F2.3
-F2.2, F3.2, F3.3, F3.5, F3.6, F3.7, F3.8 → F5.3
+F3.7a → F3.7b
+F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8 → F5.3
 F5.2 → F5.3
 F1.6a → F1.6b
 F1.6b, F6.2, F6.3 → F6.4
@@ -703,7 +709,7 @@ F6.4 → F6.5
 | R2-F01 | F3.4 |
 | R2-F02 | F3.5 |
 | R2-F03 | F3.3 |
-| R2-F04 | F3.7 |
+| R2-F04 | F3.7a |
 | R2-F05 | F3.8 |
 | R2-F06 | F3.6 |
 | R2-F07 | F3.8 |
@@ -713,8 +719,8 @@ F6.4 → F6.5
 | R2-F11 | F3.10 |
 | R2-F12 | F3.10 |
 | R2-F13 | F3.9 |
-| R2-F14 | F3.7 |
-| R2-F15 | F3.7 |
+| R2-F14 | F3.7a |
+| R2-F15 | F3.7b |
 | R2-F16 | F3.11 |
 | R2-F17 | F3.5 |
 | R2-F18 | F3.5 |
@@ -722,7 +728,7 @@ F6.4 → F6.5
 | R2-F20 | F3.4 |
 | R2-F21 | F3.4 |
 | R2-F22 | F3.4 |
-| R2-F23 | F3.7 |
+| R2-F23 | F3.7b |
 | R2-F24 | F3.8 |
 | R2-F25 | F3.3 |
 | R2-F26 | F5.2 |
