@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import ipaddress
 import json
 import random
 import time
@@ -19,6 +18,16 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
 from identity_hub.crypto import associated_data
+from identity_hub.dispatch.outbound import (
+    Resolver,
+    create_client,
+    host_address,
+    is_public_address,
+    mask_url,
+    masked_in_logs,
+    system_resolver,
+    url_log_masks,
+)
 from identity_hub.domain.data import validate_json_payload
 from identity_hub.enums import Severity
 from identity_hub.errors import NotFound, ValidationFailed
@@ -26,6 +35,8 @@ from identity_hub.events import Event, matches_any, severity_at_least, spec_of
 from identity_hub.store.base import NewWebhookEndpoint, WebhookDeliveryRow, WebhookEndpointRow
 
 if TYPE_CHECKING:
+    import httpx
+
     from identity_hub._space import SpaceBase
     from identity_hub.hub import IdentityHub
 
@@ -59,6 +70,9 @@ class WebhookPolicy:
     retry_jitter: float = 0.2
     claim_for: timedelta = timedelta(seconds=30)
     batch_size: int = 100
+    # Исходящий прокси задаётся только явно: HTTP_PROXY/ALL_PROXY окружения не используются.
+    # С прокси имя получателя резолвит он, поэтому закрепление проверенного адреса не действует.
+    proxy: str | None = None
 
     def retry_after(self, attempt: int) -> timedelta:
         base = min(self.retry_cap.total_seconds(), self.retry_base.total_seconds() * 2 ** (attempt - 1))
@@ -69,7 +83,7 @@ class WebhookPolicy:
 @dataclass(frozen=True, slots=True)
 class WebhookEndpoint:
     id: UUID
-    url: str
+    url: str  # `scheme://host/***`: путь и query могут содержать секрет получателя (R2-S15)
     description: str | None
     event_types: tuple[str, ...]
     filter: Mapping[str, Any]
@@ -153,14 +167,15 @@ def validate_webhook_url(url: str, *, dev_hosts: Iterable[str] = ()) -> str:
     dev = {item.casefold().rstrip(".") for item in dev_hosts}
     normalized_host = host.casefold().rstrip(".")
     if normalized_host not in dev:
-        if normalized_host == "localhost" or normalized_host.endswith((".localhost", ".local", ".internal")):
+        # литерал в любой форме, которую резолвер читает как IPv4: 2130706433, 0x7f000001, 127.1, 0177.0.0.1
+        address = host_address(normalized_host)
+        if address is not None:
+            if not is_public_address(address):
+                raise ValidationFailed("URL вебхука не может указывать на приватный или служебный адрес")
+        elif "." not in normalized_host or normalized_host.endswith((".localhost", ".local", ".internal")):
+            # имя без точки ищется в search-домене сети приложения (`metadata`, `redis`)
             raise ValidationFailed("URL вебхука не может указывать на локальный адрес")
-        try:
-            address = ipaddress.ip_address(normalized_host)
-        except ValueError:
-            address = None
-        if address is not None and not address.is_global:
-            raise ValidationFailed("URL вебхука не может указывать на приватный или служебный адрес")
+        # Остальные имена проверяются при соединении: адрес резолвится и закрепляется (PinnedBackend).
     if parsed.scheme == "https":
         return url
     if parsed.scheme == "http" and normalized_host in dev:
@@ -197,7 +212,7 @@ def _validated_filter(value: Mapping[str, Any] | None) -> dict[str, Any]:
 def _endpoint(row: WebhookEndpointRow) -> WebhookEndpoint:
     return WebhookEndpoint(
         id=row.id,
-        url=row.url,
+        url=mask_url(row.url),
         description=row.description,
         event_types=tuple(row.event_types),
         filter=dict(row.filter),
@@ -338,25 +353,25 @@ class Webhooks:
             separators=(",", ":"),
             sort_keys=True,
         ).encode()
+        dispatcher = self.space.hub.webhook_dispatcher
+        failure: str | None = None
+        response = None
         try:
-            import httpx
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeError("для вебхуков установите identity-hub[webhooks]") from exc
-        try:
-            async with httpx.AsyncClient(
-                timeout=self.space.hub.webhook_dispatcher.policy.timeout,
-                follow_redirects=False,
-            ) as client:
-                response = await client.post(
-                    row.url,
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        SIGNATURE_HEADER: make_signature(body, secrets.current),
-                    },
-                )
+            async with dispatcher.client() as client:
+                with masked_in_logs(*url_log_masks(row.url)):
+                    response = await client.post(
+                        row.url,
+                        content=body,
+                        headers={
+                            "Content-Type": "application/json",
+                            SIGNATURE_HEADER: make_signature(body, secrets.current),
+                        },
+                    )
         except Exception as exc:
-            raise ValidationFailed(f"тестовая доставка не выполнена: {type(exc).__name__}") from exc
+            failure = type(exc).__name__
+        if response is None:
+            # вне except: исключение httpx несёт полный URL и не должно остаться в цепочке
+            raise ValidationFailed(f"тестовая доставка не выполнена: {failure or 'unknown'}")
         return response.status_code
 
     async def deliveries(self, endpoint_id: UUID, *, limit: int = 100) -> list[WebhookDelivery]:
@@ -369,6 +384,21 @@ class WebhookDispatcher:
     def __init__(self, hub: IdentityHub, policy: WebhookPolicy | None = None) -> None:
         self.hub = hub
         self.policy = policy or WebhookPolicy()
+        self.resolver: Resolver = system_resolver  # подменяется в тестах
+
+    def client(self) -> httpx.AsyncClient:
+        """Клиент доставки: без переменных окружения и редиректов, с закреплением проверенного адреса."""
+        try:
+            import httpx  # noqa: F401
+        except ImportError as exc:  # pragma: no cover - окружение без extra webhooks
+            raise RuntimeError("для вебхуков установите identity-hub[webhooks]") from exc
+        return create_client(
+            timeout=self.policy.timeout,
+            proxy=self.policy.proxy,
+            pin=True,
+            resolver=self.resolver,
+            allow_hosts=self.hub.webhook_dev_hosts,
+        )
 
     async def handle_events(self, events: list[Event]) -> None:
         endpoints = await self.hub.store.enabled_webhook_endpoints()
@@ -392,11 +422,7 @@ class WebhookDispatcher:
         )
         if not attempts:
             return 0
-        try:
-            import httpx
-        except ImportError as exc:  # pragma: no cover - окружение без extra webhooks
-            raise RuntimeError("для вебхуков установите identity-hub[webhooks]") from exc
-        async with httpx.AsyncClient(timeout=self.policy.timeout, follow_redirects=False) as client:
+        async with self.client() as client:
             for attempt in attempts:
                 started = time.monotonic()
                 code: int | None = None
@@ -408,14 +434,15 @@ class WebhookDispatcher:
                         attempt.event.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
                     ).encode()
                     timestamp = int(self.hub.clock.now().timestamp())
-                    response = await client.post(
-                        attempt.url,
-                        content=body,
-                        headers={
-                            "Content-Type": "application/json",
-                            SIGNATURE_HEADER: make_signature(body, secrets, timestamp=timestamp),
-                        },
-                    )
+                    with masked_in_logs(*url_log_masks(attempt.url)):
+                        response = await client.post(
+                            attempt.url,
+                            content=body,
+                            headers={
+                                "Content-Type": "application/json",
+                                SIGNATURE_HEADER: make_signature(body, secrets, timestamp=timestamp),
+                            },
+                        )
                     code = response.status_code
                     succeeded = 200 <= code < 300
                     if not succeeded:

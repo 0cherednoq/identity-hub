@@ -79,12 +79,12 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
     identity_id = await make_identity(space)
     lease = await space.pools.define("cleanup", service="fake_tg").acquire()
     await lease.release()
-    endpoint = await space.webhooks.create(
+    await space.webhooks.create(
         url="https://hooks.example.test/maintenance",
         secret=SecretStr("maintenance-secret"),
         event_types=["pool.capacity.low"],
     )
-    respx.post(endpoint.url).mock(return_value=httpx.Response(204))
+    respx.post("https://hooks.example.test/maintenance").mock(return_value=httpx.Response(204))
     async with space._tx() as tx:
         await space._emit(tx, EventDraft("pool.capacity.low", actor="test"))
     await hub.dispatcher.drain()

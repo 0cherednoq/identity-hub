@@ -111,4 +111,4 @@ async def test_network_error_hides_token() -> None:
     assert TOKEN not in str(caught.value)
     assert TOKEN not in repr(caught.value)
     assert caught.value.__cause__ is None
-    assert caught.value.__suppress_context__
+    assert caught.value.__context__ is None  # исключение httpx с URL не остаётся в цепочке

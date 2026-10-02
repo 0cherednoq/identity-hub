@@ -27,6 +27,8 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `WebhookPolicy.proxy` — явный исходящий прокси доставки вебхуков; ошибка доставки
+  `ForbiddenTarget`, если получатель резолвится в приватный или служебный адрес.
 - `StorageError` (код `storage_error`): ошибка хранилища без SQL и параметров запроса;
   `DatabaseBusy.sqlstate`.
 - `Operation.previous_outcome` — исход прошлой попытки с тем же `key`
@@ -46,6 +48,9 @@
   не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
   проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
   размера действуют для полей `extra` в `ih_lease_logs`.
+- `WebhookEndpoint.url` — `scheme://host/***`: путь и query URL вебхука наружу не отдаются.
+  Имя получателя без точки (`redis`, `metadata`) отклоняется при создании endpoint'а.
+- HTTP-клиенты библиотеки (вебхуки, Telegram) не читают `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`.
 - `idempotency_key` аренды действует в пределах пространства и принадлежит одной команде: пулу,
   сервису и `holder`. Повтор от другого пула или `holder` — `IdempotencyConflict` (миграция `0010`).
 - Сбой записи результата после успешно выполненной операции не выходит к вызывающему:
@@ -72,6 +77,11 @@
 - Ошибки драйвера БД больше не выходят из библиотеки: lock/statement timeout, deadlock и конфликт
   сериализации дают `DatabaseBusy`, остальное — `StorageError`. `token` аренды и параметры
   запросов не попадают в тексты исключений, предупреждения heartbeat/release и отчёт импорта.
+- SSRF через вебхуки: URL с IPv4 в десятичной, шестнадцатеричной, восьмеричной и сокращённой
+  записи (`2130706433`, `0x7f000001`, `0177.0.0.1`, `127.1`) отклоняется; имя резолвится перед
+  соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
+- Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
+  `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
 ### Deprecated

@@ -326,7 +326,7 @@ async def test_public_webhook_dispatch(memory_hub: IdentityHub) -> None:
         event_types=["identity.*"],
         filter={"labels": {"farm": 3}},
     )
-    route = respx.post(endpoint.url).mock(return_value=httpx.Response(204))
+    route = respx.post("https://hooks.example.test/memory").mock(return_value=httpx.Response(204))
     await register(space, service="fake_tg", external_ref="+webhook", labels={"farm": 3})
 
     await memory_hub.dispatcher.drain()
@@ -388,7 +388,7 @@ async def test_direct_delivery_tests_do_not_touch_production_queues_or_cursors(
         secret=SecretStr("signing-probe"),
         event_types=["identity.*"],
     )
-    route = respx.post(endpoint.url).mock(return_value=httpx.Response(202))
+    route = respx.post("https://hooks.example.test/probe").mock(return_value=httpx.Response(202))
 
     await space.notifications.send_test(channel.id, "direct probe")
     response_code = await space.webhooks.send_test(endpoint.id)

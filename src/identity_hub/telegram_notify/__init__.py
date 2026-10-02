@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import SecretStr
 
 from identity_hub.dispatch.notifications import TelegramRateLimited, TelegramRejected, TelegramUnavailable
+from identity_hub.dispatch.outbound import create_client, install_log_filter, masked_in_logs
 
 if TYPE_CHECKING:
     import httpx
@@ -38,6 +39,7 @@ class HttpTelegramTransport:
     ) -> None:
         self._client = client
         self._owns_client = client is None
+        install_log_filter()  # внешний клиент тоже пишет URL с токеном в лог httpx
         self._timeout = timeout
         self._api_url = api_url.rstrip("/")
 
@@ -53,11 +55,19 @@ class HttpTelegramTransport:
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         client = self._get_client()
-        url = f"{self._api_url}/bot{bot_token.get_secret_value()}/sendMessage"
-        try:
-            response = await client.post(url, json=payload, follow_redirects=False)
-        except Exception as exc:
-            raise TelegramUnavailable(type(exc).__name__) from None
+        token = bot_token.get_secret_value()
+        url = f"{self._api_url}/bot{token}/sendMessage"
+        failure: str | None = None
+        response = None
+        # httpx пишет URL каждого запроса в лог на уровне INFO, а токен — часть URL (R2-S02)
+        with masked_in_logs((token, "***")):
+            try:
+                response = await client.post(url, json=payload, follow_redirects=False)
+            except Exception as exc:
+                failure = type(exc).__name__
+        if response is None:
+            # вне except: исключение httpx с URL и токеном не остаётся ни в __cause__, ни в __context__
+            raise TelegramUnavailable(failure or "unknown")
         if response.status_code == 200:
             return
         body = _json(response)
@@ -79,10 +89,10 @@ class HttpTelegramTransport:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             try:
-                import httpx
+                import httpx  # noqa: F401
             except ImportError as exc:  # pragma: no cover - окружение без extra telegram
                 raise RuntimeError("для Telegram установите identity-hub[telegram]") from exc
-            self._client = httpx.AsyncClient(timeout=self._timeout, follow_redirects=False)
+            self._client = create_client(timeout=self._timeout)
         return self._client
 
 

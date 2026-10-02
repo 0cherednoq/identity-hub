@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F1.5 Исходящие HTTP-запросы
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: формы адресов, закрепление IP, trust_env, токен бота и URL вебхука в логе
-  - [ ] dispatch/outbound.py: разбор хоста, PinnedBackend, create_client, маскирование логов
-  - [ ] вебхуки: validate_webhook_url, send_test и deliver_due через create_client, WebhookPolicy.proxy
-  - [ ] Telegram: trust_env=False, маскирование токена, ошибки без __context__
-  - [ ] документация и CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -31,7 +26,7 @@
 | F1.2 | Идемпотентность аренды | F1.1 | done |  |  |
 | F1.3 | Ошибки БД без параметров и `token` | F0.1 | done |  |  |
 | F1.4 | Свободный текст в истории, событиях и логах аренды | F0.1 | done |  |  |
-| F1.5 | Исходящие HTTP-запросы | F0.1 | in_progress |  |  |
+| F1.5 | Исходящие HTTP-запросы | F0.1 | done |  |  |
 | F1.6 | Секреты вне аренды, аудит и repr | F0.1 | todo |  |  |
 | F1.7 | Провайдеры ключей | F0.1 | todo |  |  |
 | F1.8 | Ротация ключей | F0.1 | todo |  |  |
@@ -66,7 +61,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 6 / 40 done
+**Итого:** 7 / 40 done
 
 ## Журнал сессий
 
@@ -78,3 +73,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F1.2 · done · ключ аренды в namespace <space>:lease с fingerprint пул+сервис+holder, FOR UPDATE на повторе, прямая сверка живой аренды; uq_ih_leases_idempotency → ix_ih_leases_idempotency (миграция 0010); I1.3 помечена done; гонки ×3 · дальше F1.3: перевод DBAPIError в PgTx.execute/PgStore._execute и на границе транзакции (DatabaseBusy для 55P03/57014/40P01/40001, новый StorageError), черновик теста — scratchpad/f13wip/test_storage_errors.py
 2026-10-02 · F1.3 · done · DBAPIError → DatabaseBusy/StorageError без SQL, параметров и цепочки исключений; heartbeat/release/импорт пишут describe_error(); D-154; 836 passed · дальше F1.4
 2026-10-02 · F1.4 · done · domain/redaction.py (sanitize_text, is_secret_key); last_error и data.error — имя типа; raw_status/code/reason/hint обрезаются и очищаются в машине регионов; scrub по главному слову имени + строки в списках + имя типа для неизвестных объектов; LeaseLogSink с лимитами и buffer_ttl; IdentityHub(redact_refs_in_events); 900 passed · дальше F1.5: черновики в scratchpad/f15wip (outbound.py с PinnedBackend, test_outbound.py)
+2026-10-02 · F1.5 · done · dispatch/outbound.py: разбор хоста во всех формах inet_aton, PinnedBackend (резолв, проверка каждого адреса, соединение с проверенным IP), create_client с trust_env=False, маскирование URL в логах httpx/httpcore; WebhookPolicy.proxy; WebhookEndpoint.url — scheme://host/***; Telegram и send_test без исключения httpx в цепочке; D-155; 956 passed · дальше F1.6
