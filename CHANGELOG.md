@@ -27,6 +27,7 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `FileSecretsProvider.reload()` — перечитать файл мастер-ключей без перезапуска процесса.
 - Событие `proxy.secret.revealed` (аудит `space.proxies.url`).
 - `WebhookPolicy.proxy` — явный исходящий прокси доставки вебхуков; ошибка доставки
   `ForbiddenTarget`, если получатель резолвится в приватный или служебный адрес.
@@ -49,6 +50,9 @@
   не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
   проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
   размера действуют для полей `extra` в `ih_lease_logs`.
+- Мастер-ключи: `key_id` — `[A-Za-z0-9_.-]{1,64}`; ключ из одинаковых байтов в
+  `IDENTITY_HUB_KEK` и файле отклоняется; BOM игнорируется; `keys()` провайдера — отображение
+  только для чтения; провайдер нельзя сериализовать `pickle`.
 - Публичный контракт `IdentityHub` зафиксирован ([карта API](docs/guide/api.md#контракт-хаба)):
   `store`, `envelope`, `import_runner`, `metric_rollups`, `rollups`, `state_snapshots`,
   `webhook_dispatcher`, `notification_dispatcher`, `metrics_reporter` стали приватными. Добавлены
@@ -95,6 +99,8 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- Ошибка формата мастер-ключа больше не печатает материал ключа (перепутанный порядок
+  `base64:key_id`) в исключении и stderr CLI.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
 ### Deprecated
