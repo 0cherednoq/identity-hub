@@ -1218,8 +1218,12 @@ class StoreTx(ABC):
         """bound_count += delta (не ниже 0) — привязка вне выбора прокси (импорт)."""
 
     @abstractmethod
-    async def due_proxies(self, limit: int) -> list[UUID]:
-        """Прокси в карантине, у которых наступил `next_check_at` (перепроверка по расписанию)."""
+    async def due_proxies(self, limit: int, *, pool: str | None = None) -> list[UUID]:
+        """Прокси, которым пора на перепроверку: `quarantined` и `dead` с наступившим `next_check_at`.
+
+        `dead` без `next_check_at` (записи до F3.7a) считаются созревшими. Закреплённые прокси
+        (`pinned_until` в будущем) не возвращаются. `pool` — только эта группа.
+        """
 
     @abstractmethod
     async def proxy_read_page(
@@ -1548,7 +1552,7 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def due_identity_timers(self, limit: int) -> list[tuple[UUID, str]]:
-        """Истёкшие денормализованные standing/availability таймеры.
+        """Истёкшие денормализованные standing/availability таймеры (закреплённый standing — нет).
 
         Только состояния, у которых есть переход по истечении (`RegionSpec.on_expire`): `until`
         у `frozen` или `quarantined` — справочная дата, такая строка в очередь не попадает.

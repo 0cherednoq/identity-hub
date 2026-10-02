@@ -110,8 +110,14 @@ async def test_health_cycle(
     assert (row.pending_observation, row.fail_streak) == (None, 1)
     await _make_due(sessionmaker)
     assert await space.proxies.recheck_due(Checker(False)) == {proxy_id: "dead"}
+    # R2-F04: dead не навсегда — ему назначена редкая перепроверка (раз в max_backoff)
+    assert await space.proxies.recheck_due(Checker(True)) == {}  # срок ещё не наступил
+    assert (await _proxy(sessionmaker)).next_check_at is not None
     await _make_due(sessionmaker)
-    assert await space.proxies.recheck_due(Checker(True)) == {}  # dead не перепроверяется по расписанию
+    assert await space.proxies.recheck_due(Checker(True)) == {
+        proxy_id: "dead"
+    }  # первая успешная — ждём подтверждения
+    assert (await _proxy(sessionmaker)).pending_observation == "alive"
 
     assert await space.proxies.recheck(proxy_id, Checker(True, True), actor="admin") == "alive"
     row = await _proxy(sessionmaker)

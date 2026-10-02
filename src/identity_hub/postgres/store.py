@@ -1523,16 +1523,24 @@ class PgTx(StoreTx):
             .values(bound_count=func.greatest(0, PROXIES.c.bound_count + delta))
         )
 
-    async def due_proxies(self, limit: int) -> list[UUID]:
+    async def due_proxies(self, limit: int, *, pool: str | None = None) -> list[UUID]:
+        p = PROXIES.c
+        conditions = [
+            p.space_id == self.space.id,
+            or_(
+                and_(p.status == ProxyStatus.QUARANTINED, p.next_check_at <= func.now()),
+                # dead возвращается на редкую автоматическую перепроверку (R2-F04)
+                and_(
+                    p.status == ProxyStatus.DEAD,
+                    or_(p.next_check_at.is_(None), p.next_check_at <= func.now()),
+                ),
+            ),
+            or_(p.pinned_until.is_(None), p.pinned_until <= func.now()),
+        ]
+        if pool is not None:
+            conditions.append(p.pool == pool)
         rows = await self.execute(
-            select(PROXIES.c.id)
-            .where(
-                PROXIES.c.space_id == self.space.id,
-                PROXIES.c.status == ProxyStatus.QUARANTINED,
-                PROXIES.c.next_check_at <= func.now(),
-            )
-            .order_by(PROXIES.c.next_check_at)
-            .limit(limit)
+            select(p.id).where(*conditions).order_by(p.next_check_at.asc().nulls_first(), p.id).limit(limit)
         )
         return list(rows.scalars())
 
@@ -3495,7 +3503,20 @@ class PgTx(StoreTx):
         availability_due = and_(
             i.availability.in_(sorted(AVAILABILITY.on_expire)), i.availability_until <= func.now()
         )
-        standing_due = and_(i.standing.in_(sorted(STANDING.on_expire)), i.standing_until <= func.now())
+        pinned = (
+            select(REGION_STATES.c.identity_id)
+            .where(
+                REGION_STATES.c.identity_id == i.id,
+                REGION_STATES.c.region == "standing",
+                REGION_STATES.c.key == "",
+                REGION_STATES.c.pinned_until > func.now(),
+            )
+            .exists()
+        )
+        # закреплённый standing таймер не трогает: строка не должна занимать очередь (R2-F14)
+        standing_due = and_(
+            i.standing.in_(sorted(STANDING.on_expire)), i.standing_until <= func.now(), ~pinned
+        )
         first_due = func.least(
             case((availability_due, i.availability_until)), case((standing_due, i.standing_until))
         )

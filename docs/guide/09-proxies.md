@@ -86,7 +86,7 @@ stateDiagram-v2
     alive --> quarantined : error_score ≥ error_threshold
     quarantined --> alive : 2 успешные проверки подряд
     quarantined --> dead : dead_after неудачных проверок
-    dead --> alive : ручная проверка (2 успеха) / override
+    dead --> alive : 2 успешные проверки подряд / override
 ```
 
 - Ошибки прокси приходят от классификатора ошибок (`Fault(Blame.PROXY)`) или напрямую:
@@ -95,6 +95,20 @@ stateDiagram-v2
   не вызывает.
 - Порог и backoff задаёт `IdentityHub(proxy_health=ProxyHealthPolicy(error_threshold=3.0,
   base_backoff=timedelta(seconds=60), max_backoff=timedelta(hours=1), dead_after=5))`.
+  К паузам добавляется случайная доля до `jitter` (20 %), чтобы прокси одной группы не
+  проверялись залпом.
+- `dead` — не навсегда: раз в `max_backoff` такой прокси снова попадает в `recheck_due` и
+  возвращается в работу после двух успешных проверок.
+- Один вызов чекера ограничен `check_timeout` (15 с); превышение — отказ прокси.
+- **Сбой чекера — не отказ прокси.** Если чекер бросил исключение или в одной группе разом
+  отказали все проверенные прокси (два и больше), библиотека считает это недоступностью
+  контрольного адреса или провайдера: счётчик неудач не растёт, прокси не уходят в `dead`,
+  перепроверка откладывается, пишется событие `proxy.checker.failed` (`pool`, `reason`:
+  `checker_error` или `all_failed`, число прокси). Полчаса простоя провайдера больше не
+  выводят из строя всю группу.
+- Закрепление (`override(..., pin_for=...)`) защищает статус от всех автоматических изменений:
+  закреплённый прокси не перепроверяется по расписанию и не уходит в `dead`. Ручные `recheck`
+  и `override` действуют.
 
 **Перепроверку запускает ваш код** — в обслуживание она не входит:
 
@@ -105,10 +119,11 @@ async def check(url: str) -> bool:
 
 async def proxy_loop(space):
     while True:
-        await space.proxies.recheck_due(check, limit=50)     # quarantined, у которых наступило время проверки
+        await space.proxies.recheck_due(check, limit=50)     # quarantined и dead, которым пора; параллельно
         await asyncio.sleep(60)
 
 await space.proxies.recheck(proxy_id, check, actor="admin")                              # в том числе dead
+await space.proxies.recheck_group("residential", check, actor="admin")                   # вся группа сразу
 await space.proxies.override(proxy_id, "alive", reason="заменили", actor="admin")       # вручную
 ```
 

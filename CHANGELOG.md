@@ -27,6 +27,8 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `space.proxies.recheck_group(group, checker, actor=...)`; `ProxyHealthPolicy.jitter`,
+  `check_timeout`, `check_concurrency`; событие `proxy.checker.failed`.
 - `Service(probe_timeout=...)` (по умолчанию 60 с) и `ReconcileReport.skipped_unavailable`.
 - `Service(login_timeout=...)` (по умолчанию 120 с) и `space.maintenance.expire_logins()`:
   `logging_in` без живой аренды возвращается в `no_session`.
@@ -76,6 +78,10 @@
   и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
   нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
   сообщает о строках под неактивным ключом.
+- Прокси: `dead` автоматически перепроверяется раз в `max_backoff`; `recheck_due` проверяет
+  параллельно; закрепление (`pin_for`) защищает от плановых перепроверок, перехода в `dead` и
+  таймера региона. Контракт `Store`: `due_proxies(limit, pool=)` отдаёт и `dead`, без
+  закреплённых.
 - Таймеры обслуживания берут только состояния с переходом по истечении (`limited`, `paused`,
   `cooling`); `until` у `frozen`, `banned` и `quarantined` — справочный. `MemoryStore` больше не
   выдаёт в аренду `quarantined` с истёкшим `until`.
@@ -148,6 +154,8 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- Простой провайдера прокси или контрольного адреса чекера больше не переводит всю группу в
+  `dead`: исключение чекера и одновременный отказ всех прокси группы отказом прокси не считаются.
 - Обслуживание больше не останавливается из-за одного аккаунта: строки с `until` без перехода
   не заслоняют очередь таймеров, аккаунт незарегистрированного сервиса пропускается с метрикой,
   сбой одной группы задач не мешает остальным.

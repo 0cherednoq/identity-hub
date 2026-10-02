@@ -201,8 +201,19 @@ class Proxies(Namespace):
         return ProxyStatus(await self._space._recheck_proxy(proxy_id, checker, actor=actor))
 
     async def recheck_due(self, checker: ProxyChecker, *, limit: int = 50) -> dict[UUID, ProxyStatus]:
-        """Перепроверить прокси в карантине, у которых наступил срок."""
+        """Перепроверить прокси, у которых наступил срок: `quarantined` и, раз в `max_backoff`, `dead`.
+
+        Проверки идут параллельно (`ProxyHealthPolicy.check_concurrency`). Закреплённые прокси
+        не трогаются. Сбой чекера и одновременный отказ всей группы отказом прокси не считаются.
+        """
         results = await self._space._recheck_proxies(checker, limit=limit)
+        return {proxy_id: ProxyStatus(status) for proxy_id, status in results.items()}
+
+    async def recheck_group(
+        self, group: str, checker: ProxyChecker, *, actor: str, limit: int = 500
+    ) -> dict[UUID, ProxyStatus]:
+        """Перепроверить сейчас все недоступные прокси группы — например, когда провайдер вернулся."""
+        results = await self._space._recheck_group(group, checker, actor=actor, limit=limit)
         return {proxy_id: ProxyStatus(status) for proxy_id, status in results.items()}
 
     async def override(

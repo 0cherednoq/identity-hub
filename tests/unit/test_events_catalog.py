@@ -29,7 +29,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_catalog_covers_spec_and_region_events() -> None:
-    assert len([s for s in CATALOG.values() if s.external]) == 40  # +proxy.secret.revealed (F1.6a)
+    assert (
+        len([s for s in CATALOG.values() if s.external]) == 41
+    )  # +proxy.secret.revealed (F1.6a), +proxy.checker.failed (F3.7a)
     for spec in (LIFECYCLE, STANDING, AUTH, AVAILABILITY, PROXY_HEALTH, VERIFICATION):
         assert spec.event_type in CATALOG
     assert "identity.state.drift" in CATALOG

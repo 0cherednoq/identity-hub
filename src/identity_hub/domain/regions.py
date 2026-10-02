@@ -428,6 +428,9 @@ def _apply_timer(spec: RegionSpec, cur: RegionState, timer: Timer, now: datetime
     target = spec.on_expire.get(cur.state)
     if target is None or cur.until is None or cur.until > now:
         return RegionDecision(Outcome.NOT_DUE, cur, cur)
+    if cur.pinned_until is not None and cur.pinned_until > now:
+        # закрепление защищает от всех автоматических изменений, включая таймер (R2-F14)
+        return RegionDecision(Outcome.PINNED, cur, cur)
     new = replace(
         cur,
         state=target,

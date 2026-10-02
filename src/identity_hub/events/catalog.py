@@ -78,6 +78,8 @@ def _specs() -> dict[str, EventSpec]:
             ("proxy.binding.changed", Severity.INFO),
             ("proxy.pool.exhausted", Severity.CRITICAL),
             ("proxy.secret.revealed", Severity.WARNING),
+            # проверка не дала ответа о прокси: упал чекер или разом отказала вся группа
+            ("proxy.checker.failed", Severity.WARNING),
         ],
         "pool": [
             ("pool.capacity.low", Severity.WARNING),

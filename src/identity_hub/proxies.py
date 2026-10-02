@@ -8,7 +8,9 @@ backoff, `dead` после предела, выход из тяжёлых сос
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import random
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -32,6 +34,7 @@ from identity_hub.errors import (
     LeaseUnavailable,
     NotFound,
     ValidationFailed,
+    describe_error,
 )
 from identity_hub.events import EventDraft
 from identity_hub.store.base import NewProxy, ProxyRow, StoreTx
@@ -58,10 +61,24 @@ class ProxyHealthPolicy:
     max_backoff: timedelta = timedelta(hours=1)
     dead_after: int = 5  # неудачных перепроверок подряд
     success_decay: float = 0.5
+    jitter: float = 0.2  # доля случайной добавки к паузе: прокси одной группы не проверяются залпом
+    check_timeout: float = 15.0  # секунд на один вызов чекера; превышение — отказ прокси
+    check_concurrency: int = 8  # одновременных проверок в recheck_due и recheck_group
 
     def backoff(self, fail_streak: int) -> timedelta:
         grown: timedelta = self.base_backoff * (2 ** min(fail_streak, 30))
         return min(grown, self.max_backoff)
+
+    def delay(self, fail_streak: int) -> timedelta:
+        """Пауза до следующей перепроверки: `backoff` со случайной добавкой до `jitter`."""
+        return self._jittered(self.backoff(fail_streak))
+
+    def dead_delay(self) -> timedelta:
+        """Как часто автоматически перепроверяется `dead`: раз в `max_backoff` (с jitter)."""
+        return self._jittered(self.max_backoff)
+
+    def _jittered(self, base: timedelta) -> timedelta:
+        return base + base * random.uniform(0, max(0.0, self.jitter))
 
 
 class ProxySecret(BaseModel):
@@ -280,12 +297,110 @@ class ProxiesMixin(SpaceBase):
                 await tx.update_proxy(proxy_id, {"error_score": score if score >= 0.01 else 0.0})
 
     async def _recheck_proxies(self, checker: ProxyChecker, *, limit: int = 50) -> dict[UUID, str]:
-        """Плановая перепроверка прокси в карантине, у которых наступил срок (обслуживание)."""
+        """Плановая перепроверка: `quarantined` и (редко) `dead`, у которых наступил срок."""
         async with self._tx(own=True) as tx:
             due = await tx.due_proxies(limit)
-        return {
-            proxy_id: await self._recheck_once(proxy_id, checker, actor="maintenance") for proxy_id in due
+        return await self._recheck_batch(due, checker, actor="maintenance", manual=False)
+
+    async def _recheck_group(
+        self, group: str, checker: ProxyChecker, *, actor: str, limit: int = 500
+    ) -> dict[UUID, str]:
+        """Массовая ручная перепроверка всех недоступных прокси группы, не дожидаясь срока."""
+        async with self._tx(own=True) as tx:
+            page = await tx.proxy_read_page(limit=limit, before=None, pool=group, status=None, capacity=None)
+        waiting = [row.id for row in page if row.status != ProxyStatus.ALIVE]
+        results = await self._recheck_batch(waiting, checker, actor=actor, manual=True)
+        # выход из карантина требует двух успешных проверок подряд — как у recheck одного прокси
+        again = [proxy_id for proxy_id in results if await self._awaits_confirmation(proxy_id)]
+        results.update(await self._recheck_batch(again, checker, actor=actor, manual=True))
+        return results
+
+    async def _awaits_confirmation(self, proxy_id: UUID) -> bool:
+        return (await self._get_proxy(proxy_id)).pending_observation == ProxyStatus.ALIVE
+
+    async def _recheck_batch(
+        self, proxy_ids: list[UUID], checker: ProxyChecker, *, actor: str, manual: bool
+    ) -> dict[UUID, str]:
+        """Проверить прокси параллельно и применить исходы.
+
+        Сбой чекера и одновременный отказ всех прокси группы не считаются отказом прокси: это
+        почти всегда недоступность контрольного адреса или провайдера целиком (R2-F04). Такие
+        прокси остаются как есть и проверяются позже; пишется событие `proxy.checker.failed`.
+        """
+        rows = [await self._get_proxy(proxy_id) for proxy_id in proxy_ids]
+        rows = [
+            row for row in rows if row.status != ProxyStatus.ALIVE and (manual or not self._is_pinned(row))
+        ]
+        if not rows:
+            return {}
+        slots = asyncio.Semaphore(max(1, self._proxy_health.check_concurrency))
+
+        async def probe(row: ProxyRow) -> bool | None:
+            async with slots:
+                return await self._check(row, checker)
+
+        outcomes = await asyncio.gather(*(probe(row) for row in rows))
+        by_group: dict[str, list[bool | None]] = {}
+        for row, outcome in zip(rows, outcomes, strict=True):
+            by_group.setdefault(row.pool, []).append(outcome)
+        # отказ всех при двух и более проверенных — подозрение на общий сбой, а не на каждый прокси
+        outage = {
+            group
+            for group, results in by_group.items()
+            if len(results) >= 2 and all(result is False for result in results)
         }
+        statuses: dict[UUID, str] = {}
+        deferred: dict[tuple[str, str], int] = {}
+        for row, outcome in zip(rows, outcomes, strict=True):
+            if outcome is None or row.pool in outage:
+                reason = "checker_error" if outcome is None else "all_failed"
+                deferred[(row.pool, reason)] = deferred.get((row.pool, reason), 0) + 1
+                statuses[row.id] = await self._defer_check(row)
+            else:
+                statuses[row.id] = await self._apply_check(row, outcome, actor=actor, manual=manual)
+        for (group, reason), count in deferred.items():
+            await self._checker_failed(group, reason, count, actor)
+        return statuses
+
+    def _is_pinned(self, row: ProxyRow) -> bool:
+        """Статус закреплён вручную. По часам хаба — быстрый отсев; точная проверка — в транзакции."""
+        return row.pinned_until is not None and row.pinned_until > self.hub.clock.now()
+
+    async def _check(self, row: ProxyRow, checker: ProxyChecker) -> bool | None:
+        """Один вызов чекера: `True`/`False` — ответ о прокси, `None` — чекер упал сам."""
+        url = self._proxy_url_of(row)
+        try:
+            return bool(await asyncio.wait_for(checker(url), timeout=self._proxy_health.check_timeout))
+        except TimeoutError:
+            return False  # прокси не ответил за отведённое время
+        except Exception as exc:
+            # без traceback: в тексте исключения сетевого клиента бывает URL с паролем прокси
+            logger.warning("чекер прокси %s упал: %s", row.id, describe_error(exc))
+            return None
+
+    async def _defer_check(self, row: ProxyRow) -> str:
+        """Отложить перепроверку, не засчитывая отказ."""
+        policy = self._proxy_health
+        async with self._tx(own=True) as tx:
+            current = await self._proxy(tx, row.id)
+            now = await tx.now()
+            pause = policy.dead_delay() if current.status == ProxyStatus.DEAD else policy.delay(0)
+            await tx.update_proxy(row.id, {"checked_at": now, "next_check_at": now + pause})
+            return current.status
+
+    async def _checker_failed(self, group: str, reason: str, count: int, actor: str) -> None:
+        try:
+            async with self._tx(own=True) as tx:
+                await self._emit(
+                    tx,
+                    EventDraft(
+                        "proxy.checker.failed",
+                        actor=actor,
+                        data={"pool": group, "reason": reason, "proxies": count},
+                    ),
+                )
+        except Exception as exc:
+            logger.warning("не удалось записать proxy.checker.failed: %s", describe_error(exc))
 
     async def _recheck_proxy(self, proxy_id: UUID, checker: ProxyChecker, *, actor: str) -> str:
         """Ручная перепроверка: до двух проверок подряд — выход из карантина или `dead` подтверждается."""
@@ -299,21 +414,23 @@ class ProxiesMixin(SpaceBase):
         self, proxy_id: UUID, checker: ProxyChecker, *, actor: str, manual: bool = False
     ) -> str:
         row = await self._get_proxy(proxy_id)
-        if row.status == ProxyStatus.ALIVE or (row.status == ProxyStatus.DEAD and not manual):
+        if row.status == ProxyStatus.ALIVE or (not manual and self._is_pinned(row)):
             return row.status
-        url = self._proxy_url_of(row)
-        try:
-            ok = bool(await checker(url))
-        except Exception:
-            logger.warning("проверка прокси %s упала", proxy_id, exc_info=True)
-            ok = False
+        outcome = await self._check(row, checker)
+        if outcome is None:
+            return await self._defer_check(row)
+        return await self._apply_check(row, outcome, actor=actor, manual=manual)
+
+    async def _apply_check(self, row: ProxyRow, ok: bool, *, actor: str, manual: bool) -> str:
         policy = self._proxy_health
         try:
             async with self._tx(own=True) as tx:
-                current = await self._proxy(tx, proxy_id)
+                current = await self._proxy(tx, row.id)
                 if current.status != row.status:
                     return current.status  # изменился параллельно
                 now = await tx.now()
+                if not manual and current.pinned_until is not None and current.pinned_until > now:
+                    return current.status  # закрепление защищает от автоматических переходов (R2-F14)
                 if ok:
                     extra: dict[str, Any] = {"checked_at": now, "next_check_at": now + policy.base_backoff}
                     decision = await self._apply(
@@ -321,27 +438,28 @@ class ProxiesMixin(SpaceBase):
                     )
                     if decision.state.state == ProxyStatus.ALIVE:
                         await tx.update_proxy(
-                            proxy_id, {"fail_streak": 0, "error_score": 0.0, "next_check_at": None}
+                            row.id, {"fail_streak": 0, "error_score": 0.0, "next_check_at": None}
                         )
                     return decision.state.state
                 streak = current.fail_streak + 1
-                extra = {
-                    "checked_at": now,
-                    "fail_streak": streak,
-                    "next_check_at": now + policy.backoff(streak),
-                }
+                extra = {"checked_at": now, "fail_streak": streak}
                 if current.status == ProxyStatus.QUARANTINED and streak >= policy.dead_after:
-                    extra["next_check_at"] = None
+                    # dead не навсегда: редкая автоматическая перепроверка вернёт ожившую группу (R2-F04)
+                    extra["next_check_at"] = now + policy.dead_delay()
                     change: Change = Command(
                         ProxyStatus.DEAD, actor=actor, reason=f"{streak} неудачных перепроверок"
                     )
                 else:
+                    pause = (
+                        policy.dead_delay() if current.status == ProxyStatus.DEAD else policy.delay(streak)
+                    )
+                    extra["next_check_at"] = now + pause
                     change = Observation(
                         current.status, observed_at=now, actor=actor
                     )  # сбросить ожидание выхода
                 return (await self._apply(tx, current, change, extra)).state.state
         except ConcurrentModification:
-            return (await self._get_proxy(proxy_id)).status
+            return (await self._get_proxy(row.id)).status
 
     async def _override_proxy(
         self,

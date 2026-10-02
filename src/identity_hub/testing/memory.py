@@ -931,16 +931,24 @@ class MemoryTx(StoreTx):
         if await self.get_proxy(proxy_id) is not None:
             self.state.proxy_load[proxy_id] = max(0, self.state.proxy_load.get(proxy_id, 0) + delta)
 
-    async def due_proxies(self, limit: int) -> list[UUID]:
+    async def due_proxies(self, limit: int, *, pool: str | None = None) -> list[UUID]:
+        def ready(row: ProxyRow) -> bool:
+            if row.status == "quarantined":
+                return row.next_check_at is not None and row.next_check_at <= self._now
+            if row.status == "dead":
+                return row.next_check_at is None or row.next_check_at <= self._now
+            return False
+
         due = [
             row
             for row in self.state.proxies.values()
             if row.space_id == self.space.id
-            and row.status == "quarantined"
-            and row.next_check_at is not None
-            and row.next_check_at <= self._now
+            and (pool is None or row.pool == pool)
+            and ready(row)
+            and (row.pinned_until is None or row.pinned_until <= self._now)
         ]
-        due.sort(key=lambda row: row.next_check_at or self._now)
+        never = datetime.min.replace(tzinfo=UTC)
+        due.sort(key=lambda row: (row.next_check_at or never, row.id))
         return [row.id for row in due[:limit]]
 
     async def proxy_read_page(
@@ -2311,10 +2319,15 @@ class MemoryTx(StoreTx):
             if row.space_id != self.space.id:
                 continue
             # только состояния с переходом по таймеру, как в PostgreSQL (R2-F06)
+            region = self.state.regions.get((row.id, "standing", ""))
+            pinned = (
+                region is not None and region.pinned_until is not None and region.pinned_until > self._now
+            )
             if (
                 row.standing in STANDING.on_expire
                 and row.standing_until is not None
                 and row.standing_until <= self._now
+                and not pinned
             ):
                 due.append((row.standing_until, row.id, "standing"))
             if (

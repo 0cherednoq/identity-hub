@@ -140,3 +140,27 @@ async def test_legacy_proxy_and_pool_names_warn(space: SpaceHandle) -> None:
     with pytest.warns(DeprecationWarning, match=r"space\.proxies\.health"):
         _ = space.proxy_health
     assert created is True and row.pool == "legacy"
+
+
+async def test_due_proxies_include_dead_and_skip_pinned(space: SpaceHandle) -> None:
+    """F3.7a: на перепроверку идут `quarantined` и `dead`; закреплённые и чужая группа — нет."""
+    from datetime import timedelta
+
+    async def make(host: str, group: str = "g") -> ProxyStatus:
+        return (await space.proxies.create(f"http://{host}:80", group=group)).id  # type: ignore[return-value]
+
+    dead, pinned, alive, other = [await make(f"10.9.0.{n}") for n in range(3)] + [await make("10.9.1.1", "x")]
+    await space.proxies.override(dead, ProxyStatus.DEAD, reason="тест", actor="op")
+    await space.proxies.override(
+        pinned, ProxyStatus.DEAD, reason="держим", actor="op", pin_for=timedelta(days=1)
+    )
+    await space.proxies.override(other, ProxyStatus.DEAD, reason="тест", actor="op")
+
+    async with space._tx(own=True) as tx:
+        everything = await tx.due_proxies(10)
+        only_group = await tx.due_proxies(10, pool="g")
+        limited = await tx.due_proxies(1, pool="x")
+
+    assert sorted(everything) == sorted([dead, other])  # alive и закреплённый не возвращаются
+    assert only_group == [dead] and limited == [other]
+    assert alive not in everything
