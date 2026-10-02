@@ -26,6 +26,23 @@ proxy = await space.proxies.get(proxy.id)                                  # б�
 - `max_identities` — сколько аккаунтов можно **закрепить** за прокси.
 - Прокси из `ImportRecord.proxy` при импорте добавляются в пул `proxy_policy.pool` сервиса.
 
+Изменить и удалить:
+
+```python
+await space.proxies.replace_credentials(proxy.id, username="user", password="new-pass", actor="ops:ivan")
+await space.proxies.move(proxy.id, group="residential-fr", actor="ops:ivan")
+await space.proxies.delete(proxy.id, actor="ops:ivan")                # с привязками — ValidationFailed
+await space.proxies.delete(proxy.id, actor="ops:ivan", unbind=True)   # отвязать аккаунты и удалить
+```
+
+- `replace_credentials` меняет только логин и пароль: адрес, статус и привязки аккаунтов
+  остаются. Если прокси с тем же адресом и новым логином уже есть — `AlreadyExists`.
+  `ensure()` с другим паролем по-прежнему возвращает существующую запись и пароль не меняет.
+- `move` переносит прокси в другую группу; уже привязанные аккаунты остаются на нём.
+- `delete` возвращает число отвязанных аккаунтов. Отвязанный аккаунт при следующей аренде
+  получит прокси по политике сервиса заново.
+- Изменения пишут события `proxy.updated` и `proxy.deleted`; в них нет логина и пароля.
+
 ## Как прокси выдаётся аккаунту
 
 Политика задаётся в сервисе или переопределяется в пуле:

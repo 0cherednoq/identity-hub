@@ -1409,6 +1409,62 @@ class PgTx(StoreTx):
             stmt = stmt.where(PROXIES.c[column].is_not_distinct_from(value))
         return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
 
+    async def add_proxy_error(self, proxy_id: UUID, weight: float) -> float | None:
+        score = (
+            await self.execute(
+                update(PROXIES)
+                .where(
+                    PROXIES.c.id == proxy_id,
+                    PROXIES.c.space_id == self.space.id,
+                    PROXIES.c.status == ProxyStatus.ALIVE,
+                )
+                # сложение в SQL: параллельные сообщения об ошибках не затирают друг друга (R2-F23)
+                .values(error_score=PROXIES.c.error_score + weight)
+                .returning(PROXIES.c.error_score)
+            )
+        ).scalar_one_or_none()
+        return float(score) if score is not None else None
+
+    async def proxy_by_fingerprint(self, fingerprint: str) -> UUID | None:
+        found: UUID | None = (
+            await self.execute(
+                select(PROXIES.c.id).where(
+                    PROXIES.c.space_id == self.space.id, PROXIES.c.fingerprint == fingerprint
+                )
+            )
+        ).scalar_one_or_none()
+        return found
+
+    async def set_proxy_secret(self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload) -> bool:
+        result = await self.execute(
+            update(PROXIES)
+            .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
+            .values(fingerprint=fingerprint, **secret.columns())
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
+        owned = (
+            await self.execute(
+                select(PROXIES.c.id)
+                .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if owned is None:
+            return None
+        unbound = list(
+            (
+                await self.execute(
+                    delete(BINDINGS)
+                    .where(BINDINGS.c.proxy_id == proxy_id, BINDINGS.c.space_id == self.space.id)
+                    .returning(BINDINGS.c.identity_id)
+                )
+            ).scalars()
+        )
+        await self.execute(delete(PROXIES).where(PROXIES.c.id == proxy_id))
+        return unbound
+
     async def get_binding(self, identity_id: UUID) -> ProxyRow | None:
         row = (
             (

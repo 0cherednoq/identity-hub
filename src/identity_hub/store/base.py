@@ -1195,6 +1195,25 @@ class StoreTx(ABC):
         """Прокси, к которому привязан аккаунт (sticky, FR-8.2)."""
 
     @abstractmethod
+    async def add_proxy_error(self, proxy_id: UUID, weight: float) -> float | None:
+        """Атомарно прибавить `weight` к `error_score` живого прокси и вернуть новое значение.
+
+        `None` — прокси нет или он не `alive`: счёт ошибок ведётся только у живых.
+        """
+
+    @abstractmethod
+    async def proxy_by_fingerprint(self, fingerprint: str) -> UUID | None:
+        """Прокси пространства с таким отпечатком адреса и логина."""
+
+    @abstractmethod
+    async def set_proxy_secret(self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload) -> bool:
+        """Заменить логин и пароль прокси (шифртекст) вместе с отпечатком."""
+
+    @abstractmethod
+    async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
+        """Удалить прокси вместе с привязками; вернуть id отвязанных аккаунтов. `None` — прокси нет."""
+
+    @abstractmethod
     async def choose_proxy(self, pool: str, max_identities: int | None, *, claim: bool) -> ProxyRow | None:
         """Наименее загруженный живой прокси пула с запасом ёмкости.
 

@@ -180,6 +180,29 @@ class Proxies(Namespace):
         created = [await self.get(proxy_id) for proxy_id, is_new in results if is_new]
         return ProxyCreateManyResult(created, [proxy_id for proxy_id, is_new in results if not is_new])
 
+    # ------------------------------------------------------------------ изменение и удаление
+
+    async def replace_credentials(
+        self, proxy_id: UUID, *, username: str | None, password: str | None, actor: str
+    ) -> Proxy:
+        """Сменить логин и пароль прокси; адрес, статус и привязки остаются. Событие `proxy.updated`."""
+        await self._space._replace_proxy_credentials(
+            proxy_id, username=username, password=password, actor=actor
+        )
+        return await self.get(proxy_id)
+
+    async def move(self, proxy_id: UUID, *, group: str, actor: str) -> Proxy:
+        """Перенести прокси в другую группу; привязки сохраняются. Событие `proxy.updated`."""
+        await self._space._move_proxy(proxy_id, group=group, actor=actor)
+        return await self.get(proxy_id)
+
+    async def delete(self, proxy_id: UUID, *, actor: str, unbind: bool = False) -> int:
+        """Удалить прокси. С привязанными identity — `ValidationFailed`; `unbind=True` отвязывает их.
+
+        Возвращает число отвязанных identity. События: `proxy.binding.changed` на каждую, `proxy.deleted`.
+        """
+        return await self._space._delete_proxy(proxy_id, actor=actor, unbind=unbind)
+
     # ------------------------------------------------------------------ здоровье и привязка
 
     async def report_failure(

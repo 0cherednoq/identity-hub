@@ -37,7 +37,7 @@ space = hub.space("production")         # пространство: изоляц
 | `space.imports` | импорт | `run`, `run_files`, `stage`, `get`, `cancel` | [Аккаунты](03-accounts.md#импорт) |
 | `space.secrets` | credentials, сессии | `describe`, `reveal`, `replace_credentials`, `replace_session` | [Аккаунты](03-accounts.md#секреты) |
 | `space.pools` | пул и аренда | `define` → `Pool.lease()` / `Pool.acquire()`; `revoke` | [Аренда](07-leases.md) |
-| `space.proxies` | прокси | `get`, `list`, `url`, `create`, `ensure`, `create_many`, `report_failure`, `report_success`, `recheck`, `recheck_due`, `override`, `rebind` | [Прокси](09-proxies.md) |
+| `space.proxies` | прокси | `get`, `list`, `url`, `create`, `ensure`, `create_many`, `replace_credentials`, `move`, `delete`, `report_failure`, `report_success`, `recheck`, `recheck_group`, `recheck_due`, `override`, `rebind` | [Прокси](09-proxies.md) |
 | `space.auth` | вход | `login`, `login_many`, `answer_challenge` | [Вход](05-login.md) |
 | `space.sync` | сверка с платформой | `refresh`, `refresh_many` | [Состояния](04-states.md#синхронизация-статусов-с-платформой) |
 | `space.verifications` | верификация | `status`, `review`, `requirements.add`, `requirements.resolve` | [Верификация](06-verification.md) |

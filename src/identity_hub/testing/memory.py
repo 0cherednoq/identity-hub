@@ -877,6 +877,38 @@ class MemoryTx(StoreTx):
         self.state.proxies[proxy_id] = replace(row, **values)
         return True
 
+    async def add_proxy_error(self, proxy_id: UUID, weight: float) -> float | None:
+        row = await self.get_proxy(proxy_id)
+        if row is None or row.status != "alive":
+            return None
+        score = row.error_score + weight
+        self.state.proxies[proxy_id] = replace(row, error_score=score)
+        return score
+
+    async def proxy_by_fingerprint(self, fingerprint: str) -> UUID | None:
+        for row in self.state.proxies.values():
+            if row.space_id == self.space.id and row.fingerprint == fingerprint:
+                return row.id
+        return None
+
+    async def set_proxy_secret(self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload) -> bool:
+        row = await self.get_proxy(proxy_id)
+        if row is None:
+            return False
+        self.state.proxies[proxy_id] = replace(row, fingerprint=fingerprint, secret=secret)
+        return True
+
+    async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
+        if await self.get_proxy(proxy_id) is None:
+            return None
+        unbound = [identity_id for identity_id, bound in self.state.bindings.items() if bound == proxy_id]
+        for identity_id in unbound:
+            del self.state.bindings[identity_id]
+            self.state.binding_times.pop(identity_id, None)
+        self.state.proxy_load.pop(proxy_id, None)
+        del self.state.proxies[proxy_id]
+        return unbound
+
     async def get_binding(self, identity_id: UUID) -> ProxyRow | None:
         proxy_id = self.state.bindings.get(identity_id)
         return await self.get_proxy(proxy_id) if proxy_id is not None and self._own(identity_id) else None

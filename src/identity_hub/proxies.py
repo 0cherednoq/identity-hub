@@ -267,12 +267,10 @@ class ProxiesMixin(SpaceBase):
         """Ошибка по вине прокси (FR-8.4): счёт ошибок; при пороге — карантин с перепроверкой."""
         policy = self._proxy_health
         async with self._tx(own=True) as tx:
+            # сложение выполняет хранилище одной командой: параллельные сообщения не теряются (R2-F23)
+            score = await tx.add_proxy_error(proxy_id, weight)
             row = await self._proxy(tx, proxy_id)
-            if row.status != ProxyStatus.ALIVE:
-                return row.status
-            score = row.error_score + weight
-            if score < policy.error_threshold:
-                await tx.update_proxy(proxy_id, {"error_score": score})
+            if score is None or score < policy.error_threshold:
                 return row.status
             now = await tx.now()
             decision = await self._apply(
@@ -480,6 +478,87 @@ class ProxiesMixin(SpaceBase):
                 extra = {"next_check_at": await tx.now() + self._proxy_health.base_backoff}
             change = machine.Override(to=str(status), reason=reason, actor=actor, pin_for=pin_for)
             return (await self._apply(tx, row, change, extra)).state.state
+
+    async def _delete_proxy(self, proxy_id: UUID, *, actor: str, unbind: bool = False) -> int:
+        """Удалить прокси; с привязанными аккаунтами — только при unbind=True.
+
+        Возвращает число отвязанных аккаунтов.
+        """
+        async with self._tx() as tx:
+            row = await self._proxy(tx, proxy_id)
+            bound = await tx.proxy_bound_identities(proxy_id)
+            if bound and not unbind:
+                raise ValidationFailed(
+                    f"к прокси привязано аккаунтов: {len(bound)}; перепривяжите их или удалите с unbind=True"
+                )
+            services = {item.identity_id: item.service for item in bound}
+            unbound = await tx.delete_proxy(proxy_id) or []
+            drafts = [
+                EventDraft(
+                    "proxy.binding.changed",
+                    actor=actor,
+                    service=services.get(identity_id),
+                    identity_id=identity_id,
+                    data={
+                        "from_proxy_id": str(proxy_id),
+                        "to_proxy_id": None,
+                        "reason": "proxy deleted",
+                        "pool": row.pool,
+                    },
+                )
+                for identity_id in unbound
+            ]
+            drafts.append(
+                EventDraft(
+                    "proxy.deleted",
+                    actor=actor,
+                    data={
+                        "proxy_id": str(proxy_id),
+                        "pool": row.pool,
+                        "host": row.host,
+                        "port": row.port,
+                        "unbound": len(unbound),
+                    },
+                )
+            )
+            await self._emit(tx, *drafts)
+            return len(unbound)
+
+    async def _replace_proxy_credentials(
+        self, proxy_id: UUID, *, username: str | None, password: str | None, actor: str
+    ) -> None:
+        """Сменить логин и пароль прокси; адрес и привязки остаются."""
+        if password and not username:
+            raise ValidationFailed("прокси: пароль без логина не задаётся")
+        secret = ProxySecret(username=username, password=SecretStr(password) if password else None)
+        payload = self.hub._envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
+        async with self._tx() as tx:
+            row = await self._proxy(tx, proxy_id)
+            new_fingerprint = fingerprint(row.scheme, row.host, row.port, username)
+            other = await tx.proxy_by_fingerprint(new_fingerprint)
+            if other is not None and other != proxy_id:
+                raise AlreadyExists("proxy", f"{row.scheme}://{row.host}:{row.port}")
+            await tx.set_proxy_secret(proxy_id, new_fingerprint, payload)
+            await self._proxy_updated(tx, row, actor, ["credentials"])
+
+    async def _move_proxy(self, proxy_id: UUID, *, group: str, actor: str) -> None:
+        """Перенести прокси в другую группу; привязки аккаунтов сохраняются."""
+        if not group or len(group) > 128:
+            raise ValidationFailed("пул прокси: от 1 до 128 символов")
+        async with self._tx() as tx:
+            row = await self._proxy(tx, proxy_id)
+            if row.pool == group:
+                return
+            await tx.update_proxy(proxy_id, {"pool": group})
+            await self._proxy_updated(tx, replace(row, pool=group), actor, ["group"], previous=row.pool)
+
+    async def _proxy_updated(
+        self, tx: StoreTx, row: ProxyRow, actor: str, fields: list[str], *, previous: str | None = None
+    ) -> None:
+        data: dict[str, Any] = {"fields": fields, "pool": row.pool, "host": row.host, "port": row.port}
+        if previous is not None:
+            data["from_pool"] = previous
+        await self._emit(tx, EventDraft("proxy.updated", actor=actor, proxy_id=row.id, data=data))
 
     async def _rebind_proxy(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
         """Move an account's sticky binding without exceeding target capacity."""
