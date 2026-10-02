@@ -428,9 +428,12 @@ class Identities(Namespace):
     async def set_note(self, identity_id: UUID, note: str | None, *, actor: str = "system") -> Identity:
         return Identity.from_row(await self._space._set_note(identity_id, note, actor=actor))
 
-    async def delete(self, identity_id: UUID, *, actor: str = "system") -> None:
-        """Физически удалить identity. Нельзя, пока на неё ссылаются связи; журнал сохраняется."""
-        await self._space._delete(identity_id, actor=actor)
+    async def delete(self, identity_id: UUID, *, actor: str = "system", revoke: bool = False) -> None:
+        """Физически удалить identity. Нельзя, пока на неё ссылаются связи; журнал сохраняется.
+
+        При живой аренде — `ValidationFailed`; `revoke=True` отзывает её в той же транзакции.
+        """
+        await self._space._delete(identity_id, actor=actor, revoke=revoke)
 
     # ------------------------------------------------------------------ состояние
 

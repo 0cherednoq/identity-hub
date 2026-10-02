@@ -549,6 +549,18 @@ class PgTx(StoreTx):
                 .where(PROXIES.c.id == bound, PROXIES.c.bound_count > 0)
                 .values(bound_count=PROXIES.c.bound_count - 1)
             )
+        # Строка ih_leases уйдёт каскадом: истёкшую, но ещё не закрытую чистильщиком аренду
+        # закрываем здесь, иначе её история осталась бы открытой навсегда (R2-D14).
+        await self.execute(
+            update(HISTORY)
+            .where(
+                HISTORY.c.lease_id == LEASES.c.lease_id,
+                LEASES.c.identity_id == identity_id,
+                LEASES.c.space_id == self.space.id,
+                HISTORY.c.released_at.is_(None),
+            )
+            .values(released_at=LEASES.c.expires_at, end_reason=LeaseEndReason.EXPIRED)
+        )
         result = await self.execute(
             delete(IDENTITIES).where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
         )
@@ -3490,12 +3502,18 @@ class PgTx(StoreTx):
         return result
 
     async def expire_leases(self, limit: int) -> int:
+        # Отбор идёт от открытой истории (частичный индекс ix_ih_lease_history_open_space):
+        # release оставляет строку ih_leases с expires_at = now(), и отбор по одному expires_at
+        # отдавал бы пачку давно закрытых аренд вместо брошенной (R2-D01).
         rows = list(
             (
                 await self.execute(
                     select(LEASES, IDENTITIES.c.service)
+                    .join(HISTORY, HISTORY.c.lease_id == LEASES.c.lease_id)
                     .join(IDENTITIES, IDENTITIES.c.id == LEASES.c.identity_id)
                     .where(
+                        HISTORY.c.space_id == self.space.id,
+                        HISTORY.c.released_at.is_(None),
                         LEASES.c.space_id == self.space.id,
                         LEASES.c.expires_at <= func.now(),
                     )
@@ -3524,7 +3542,12 @@ class PgTx(StoreTx):
                     service=row["service"],
                     identity_id=row["identity_id"],
                     lease_id=row["lease_id"],
-                    data={"pool": row["pool"], "expired_at": row["expires_at"].isoformat()},
+                    data={
+                        "pool": row["pool"],
+                        "holder": row["holder"],
+                        "fencing": row["fencing"],
+                        "expired_at": row["expires_at"].isoformat(),
+                    },
                 )
             )
         await self.emit(drafts)

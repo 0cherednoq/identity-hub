@@ -134,6 +134,8 @@ class _MemoryState:
     data: dict[tuple[UUID, str], DataRow] = field(default_factory=dict)
     leases: dict[UUID, LeaseRow] = field(default_factory=dict)
     history: dict[UUID, LeaseHistoryRow] = field(default_factory=dict)
+    # lease_id → пространство: история переживает удаление аккаунта, как ih_lease_history.space_id
+    history_spaces: dict[UUID, UUID] = field(default_factory=dict)
     quotas: dict[tuple[UUID, str, int, datetime], int] = field(default_factory=dict)
     operation_keys: dict[tuple[str, str], _IdempotencyRecord] = field(default_factory=dict)
     import_runs: dict[UUID, ImportRunRow] = field(default_factory=dict)
@@ -400,6 +402,17 @@ class MemoryTx(StoreTx):
         if self._own(identity_id) is None:
             return False
         del self.state.identities[identity_id]
+        # как каскад в PostgreSQL: строка аренды уходит, а её незакрытая история закрывается (R2-D14)
+        stale = self.state.leases.pop(identity_id, None)
+        if stale is not None:
+            history = self.state.history.get(stale.lease_id)
+            if history is not None and history.released_at is None:
+                self.state.history[stale.lease_id] = replace(
+                    history,
+                    released_at=stale.expires_at,
+                    duration=stale.expires_at - history.acquired_at,
+                    end_reason="expired",
+                )
         self.state.credentials.pop(identity_id, None)
         self.state.profile_secrets.pop(identity_id, None)
         self.state.bindings.pop(identity_id, None)
@@ -600,6 +613,7 @@ class MemoryTx(StoreTx):
         )
         if not shared:
             self.state.leases[identity.id] = lease
+        self.state.history_spaces[lease.lease_id] = self.space.id
         self.state.history[lease.lease_id] = LeaseHistoryRow(
             lease.lease_id,
             identity.id,
@@ -1589,12 +1603,12 @@ class MemoryTx(StoreTx):
     async def lease_history(
         self, identity_id: UUID, *, limit: int, before: datetime | None
     ) -> list[LeaseHistoryRow]:
-        if self._own(identity_id) is None:
-            return []
         rows = [
             row
             for row in self.state.history.values()
-            if row.identity_id == identity_id and (before is None or row.acquired_at < before)
+            if row.identity_id == identity_id
+            and self.state.history_spaces.get(row.lease_id) == self.space.id
+            and (before is None or row.acquired_at < before)
         ]
         return sorted(rows, key=lambda row: row.acquired_at, reverse=True)[:limit]
 
@@ -2302,11 +2316,16 @@ class MemoryTx(StoreTx):
                         service=identity.service,
                         identity_id=identity.id,
                         lease_id=lease.lease_id,
-                        data={"pool": lease.pool, "holder": lease.holder},
+                        data={
+                            "pool": lease.pool,
+                            "holder": lease.holder,
+                            "fencing": lease.fencing,
+                            "expired_at": lease.expires_at.isoformat(),
+                        },
                     )
                 )
         await self.emit(drafts)
-        return len(expired)
+        return len(drafts)
 
 
 class MemoryStore(Store):
@@ -2819,6 +2838,9 @@ class MemoryStore(Store):
                             item_key for item_key in self._state.import_items if item_key[0] in keys
                         ]:
                             del self._state.import_items[item_key]
+                    if name == "lease_history":
+                        for lease_id in [k for k in self._state.history_spaces if k not in collection]:
+                            del self._state.history_spaces[lease_id]
                     result[name] = len(keys)
             return result
 

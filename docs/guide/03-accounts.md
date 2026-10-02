@@ -258,6 +258,15 @@ await space.identities.delete(identity_id, actor="ops")
 связи, сначала удалите их (`links.remove`). Для обратимого вывода из работы используйте
 `retire`.
 
+Identity с живой арендой не удаляется — `ValidationFailed`: воркер продолжал бы работать с
+аккаунтом, которого уже нет. Дождитесь освобождения аренды либо передайте `revoke=True`:
+аренда отзывается в той же транзакции (событие `lease.revoked`, история закрывается), воркер
+получит `LeaseLost` на ближайшем heartbeat или обращении к секретам.
+
+```python
+await space.identities.delete(identity_id, actor="ops", revoke=True)
+```
+
 ## Секреты
 
 | Данные | Хранение |

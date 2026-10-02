@@ -712,6 +712,13 @@ class LeaseHistoryRecord(IdentityHubBase):
             "last_heartbeat_at",
             postgresql_where=text("released_at IS NULL"),
         ),
+        # чистильщик истёкших аренд идёт от открытой истории своего пространства (миграция 0011)
+        Index(
+            "ix_ih_lease_history_open_space",
+            "space_id",
+            "lease_id",
+            postgresql_where=text("released_at IS NULL"),
+        ),
     )
 
 

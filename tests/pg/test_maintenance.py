@@ -191,3 +191,43 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
         assert (
             await session.execute(select(func.count()).select_from(ProviderOperationRecord))
         ).scalar_one() == 1
+
+
+async def test_lease_sweeper_does_not_revisit_released_leases(
+    hub: IdentityHub,
+    space: SpaceHandle,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """R2-D01: при одних освобождённых арендах тик чистильщика — один SELECT, а не запрос на строку."""
+    from sqlalchemy import event
+
+    for n in range(12):
+        await make_identity(space, external_ref=f"+sweep{n}")
+    pool = space.pools.define("sweep", service="fake_tg")
+    for _ in range(12):
+        lease = await pool.acquire()
+        await lease.release()
+    async with sessionmaker() as session:
+        index = (
+            await session.execute(
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_ih_lease_history_open_space'")
+            )
+        ).scalar_one()
+    assert "space_id, lease_id" in index and "released_at IS NULL" in index
+
+    statements: list[str] = []
+
+    def record(_conn: object, _cursor: object, statement: str, *_rest: object) -> None:
+        statements.append(statement)
+
+    engine = sessionmaker.kw["bind"].sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        async with space._tx(own=True) as tx:
+            assert await tx.expire_leases(5) == 0
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    touched = [sql for sql in statements if "ih_lease" in sql]
+    assert len(touched) == 1 and touched[0].lstrip().upper().startswith("SELECT")
+    assert "released_at IS NULL" in touched[0]

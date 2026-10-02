@@ -412,14 +412,41 @@ class IdentitiesMixin(SpaceBase):
 
         return await self._mutate(identity_id, actor, mutate, need_profile=profile_changes is not None)
 
-    async def _delete(self, identity_id: UUID, *, actor: str = "system") -> None:
-        """Удалить аккаунт. Нельзя, пока на него ссылаются связи (FR-4.2); журналы переживают удаление."""
+    async def _delete(self, identity_id: UUID, *, actor: str = "system", revoke: bool = False) -> None:
+        """Удалить аккаунт. Нельзя, пока на него ссылаются связи (FR-4.2); журналы переживают удаление.
+
+        Аккаунт с живой арендой не удаляется: воркер продолжал бы работать с ним, а история аренды
+        осталась бы открытой. `revoke=True` отзывает аренду в той же транзакции.
+        """
         async with self._tx() as tx:
+            await tx.lock_identities([identity_id])  # новая аренда не появится до конца транзакции
             row = await self._identity(tx, identity_id)
             incoming = await tx.incoming_links(identity_id)
             if incoming:
                 refs = [f"{dependent} ({role})" for dependent, role in incoming]
                 raise ValidationFailed("на аккаунт ссылаются связи — сначала удалите их", refs)
+            if await tx.current_lease(identity_id) is not None:
+                if not revoke:
+                    raise ValidationFailed(
+                        "у аккаунта живая аренда — дождитесь её освобождения или удалите с revoke=True"
+                    )
+                revoked = await tx.revoke_lease(identity_id)
+                if revoked is not None:
+                    await self._emit(
+                        tx,
+                        EventDraft(
+                            "lease.revoked",
+                            actor=actor,
+                            service=row.service,
+                            identity_id=identity_id,
+                            lease_id=revoked.lease_id,
+                            data={
+                                "pool": revoked.pool,
+                                "holder": revoked.holder,
+                                "reason": "identity deleted",
+                            },
+                        ),
+                    )
             await self._emit(
                 tx,
                 EventDraft(
