@@ -280,7 +280,7 @@ report = await space.sync.refresh_many(
     not_synced_for=timedelta(hours=6),
     limit=50,
 )
-report.probed, report.skipped_busy, report.failed
+report.probed, report.skipped_busy, report.skipped_unavailable, report.failed
 ```
 
 **Библиотека не запускает сверку сама.** Вызывайте `sync.refresh_many()` периодически — например,
@@ -302,6 +302,16 @@ async def reconcile_loop(space):
   standing=frozenset(Standing), quotas=(Quota(4, timedelta(hours=1)),))}`.
 - Исходы по региону: `applied`, `unchanged`, `stale`, `unknown_status`, `pinned`, `sticky`,
   `awaiting_confirmation`, `not_probed`.
+- `refresh_many` сверяет только аккаунты в `lifecycle=ready`: `provisioning` и `retired` в
+  очередь не попадают. Аккаунты на паузе, в охлаждении и карантине попадают в
+  `report.skipped_unavailable` — проба для них не запускается и `limit` не расходуется.
+- Очередь идёт по времени последней попытки: кого ещё не пробовали — первыми. Попытка
+  отмечается при любом исходе, поэтому аккаунт со стабильно падающей пробой не занимает начало
+  очереди и не мешает остальным.
+- Один вызов пробы ограничен `Service(probe_timeout=...)` (по умолчанию 60 с). В `refresh_many`
+  превышение — запись `ProbeTimeout` в `report.failed`; `refresh` пробрасывает `TimeoutError`.
+- `ProbeResult.observed_at` и `until` должны быть с таймзоной; наивное время отклоняется с
+  `ValidationFailed` при создании результата.
 
 ### Защиты от ложных срабатываний
 

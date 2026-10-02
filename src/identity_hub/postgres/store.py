@@ -2036,13 +2036,28 @@ class PgTx(StoreTx):
             .where(
                 IDENTITIES.c.space_id == self.space.id,
                 IDENTITIES.c.service == service,
-                IDENTITIES.c.lifecycle != Lifecycle.RETIRED,
+                # provisioning и retired пробу пройти не могут и только занимали бы очередь (R2-F02)
+                IDENTITIES.c.lifecycle == Lifecycle.READY,
                 or_(synced.is_(None), synced < threshold),
             )
-            .order_by(synced.asc().nulls_first(), IDENTITIES.c.id)
+            .order_by(
+                IDENTITIES.c.probe_attempted_at.asc().nulls_first(),
+                synced.asc().nulls_first(),
+                IDENTITIES.c.id,
+            )
             .limit(limit)
         )
         return list(rows.scalars())
+
+    async def mark_probe_attempts(self, identity_ids: Sequence[UUID]) -> None:
+        if not identity_ids:
+            return
+        await self.execute(
+            update(IDENTITIES)
+            .where(IDENTITIES.c.id.in_(list(identity_ids)), IDENTITIES.c.space_id == self.space.id)
+            # clock_timestamp: попытки одной транзакции получают то же время, разных — растущее
+            .values(probe_attempted_at=func.clock_timestamp())
+        )
 
     # --------------------------------------------------------- поиск
 

@@ -27,6 +27,7 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `Service(probe_timeout=...)` (по умолчанию 60 с) и `ReconcileReport.skipped_unavailable`.
 - `Service(login_timeout=...)` (по умолчанию 120 с) и `space.maintenance.expire_logins()`:
   `logging_in` без живой аренды возвращается в `no_session`.
 - Пауза канала уведомлений после ответа 429 (`ih_notification_channels.paused_until`,
@@ -75,6 +76,10 @@
   и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
   нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
   сообщает о строках под неактивным ключом.
+- `sync.refresh_many` сверяет только `ready`-аккаунты, очередь идёт по времени последней
+  попытки (колонка `ih_identities.probe_attempted_at`, миграция `0013`); недоступные аккаунты —
+  в `skipped_unavailable`, без расхода `limit`. `ProbeResult` отклоняет время без таймзоны.
+- Контракт `Store`: новый `mark_probe_attempts(ids)`; `stale_identities` отдаёт только `ready`.
 - Вход: `auth.login` занятого аккаунта сразу бросает `LeaseUnavailable` (раньше ждал TTL);
   `logging_in → session_invalid` — допустимый переход; ответ на challenge стирается при его
   закрытии; override или команда из `challenge`/`logging_in` закрывает открытый challenge.
@@ -140,6 +145,9 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- `sync.refresh_many` больше не тратит весь лимит на `provisioning`-аккаунты и на аккаунты со
+  стабильно падающей пробой; `refresh_many(["verification"])` для сервиса без факторов не падает
+  с `IndexError`; `MemoryStore` больше не отдаёт `retired`-аккаунты на сверку.
 - Вход больше не застревает в `logging_in`: сессия не по схеме, сбой записи и отмена задачи
   возвращают `auth` в состояние до входа. Вход дольше 40 с больше не теряет сессию — аренда
   продлевается heartbeat'ом.

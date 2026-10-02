@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -18,8 +19,8 @@ from identity_hub._space import SpaceBase, logger
 from identity_hub.api._base import legacy
 from identity_hub.auth import ALL_LIFECYCLES
 from identity_hub.domain.regions import Observation, Outcome
-from identity_hub.enums import ChangeSource, Standing
-from identity_hub.errors import LeaseUnavailable, ValidationFailed
+from identity_hub.enums import Availability, ChangeSource, Standing
+from identity_hub.errors import LeaseUnavailable, ValidationFailed, describe_error
 from identity_hub.protocols import ProbeResult
 from identity_hub.service import PROBE_OPERATION, Service
 from identity_hub.state import DEFAULT_SLOT
@@ -32,12 +33,16 @@ if TYPE_CHECKING:
 __all__ = ["SYNC_POOL", "ReconcileReport", "SyncMixin"]
 
 SYNC_POOL = "identity-hub:sync"
+REFRESH_ROUNDS = 5
+"""Сколько раз `refresh_many` добирает кандидатов взамен пропущенных и неудачных."""
 
 
 @dataclass
 class ReconcileReport:
     probed: dict[UUID, dict[str, str]] = field(default_factory=dict)
     skipped_busy: list[UUID] = field(default_factory=list)
+    # на паузе, в охлаждении или карантине: пробу не запускали, лимит не потрачен
+    skipped_unavailable: list[UUID] = field(default_factory=list)
     failed: dict[UUID, str] = field(default_factory=dict)
 
 
@@ -110,27 +115,58 @@ class SyncMixin(SpaceBase):
             if svc.probes is None:
                 continue
             targets = _parse_regions(svc, region_list)
+            if not targets:  # например, `verification` для сервиса без факторов
+                continue
             region, key = targets[0]
-            async with self._tx(own=True) as tx:
-                candidates = await tx.stale_identities(
-                    svc.name, region, key, not_synced_for.total_seconds(), limit - len(report.probed)
-                )
-            for identity_id in candidates:
-                try:
-                    lease = await self._probe_pool(svc).acquire(query=self._probe_query(svc, [identity_id]))
-                except LeaseUnavailable:
-                    report.skipped_busy.append(identity_id)  # wait=False: занят воркером
-                    continue
-                try:
-                    report.probed[identity_id] = await self._probe(lease, svc, targets)
-                except Exception as exc:
-                    logger.warning("сверка аккаунта %s не удалась", identity_id, exc_info=True)
-                    report.failed[identity_id] = f"{type(exc).__name__}: {exc}"[:500]
-                finally:
-                    await lease.release()
+            seen: set[UUID] = set()
+            for _ in range(REFRESH_ROUNDS):
+                want = limit - len(report.probed)
+                if want <= 0:
+                    break
+                async with self._tx(own=True) as tx:
+                    found = await tx.stale_identities(
+                        svc.name, region, key, not_synced_for.total_seconds(), want
+                    )
+                    candidates = [identity_id for identity_id in found if identity_id not in seen]
+                    # попытка отмечается при любом исходе: следующая выборка начнётся с других
+                    await tx.mark_probe_attempts(candidates)
+                    unavailable = {
+                        identity_id
+                        for identity_id in candidates
+                        if (row := await tx.get_identity(identity_id)) is not None
+                        and row.availability != Availability.AVAILABLE
+                    }
+                if not candidates:
+                    break
+                seen.update(candidates)
+                for identity_id in candidates:
+                    if identity_id in unavailable:
+                        report.skipped_unavailable.append(identity_id)
+                        continue
+                    await self._reconcile_one(svc, identity_id, targets, report)
             if len(report.probed) >= limit:
                 break
         return report
+
+    async def _reconcile_one(
+        self, svc: Service, identity_id: UUID, targets: list[tuple[str, str]], report: ReconcileReport
+    ) -> None:
+        try:
+            lease = await self._probe_pool(svc).acquire(query=self._probe_query(svc, [identity_id]))
+        except LeaseUnavailable:
+            report.skipped_busy.append(identity_id)  # wait=False: занят воркером
+            return
+        try:
+            report.probed[identity_id] = await self._probe(lease, svc, targets)
+        except TimeoutError:
+            logger.warning("сверка аккаунта %s не уложилась в probe_timeout", identity_id)
+            report.failed[identity_id] = "ProbeTimeout"
+        except Exception as exc:
+            # без traceback: текст исключения пробы бывает с URL и токенами платформы
+            logger.warning("сверка аккаунта %s не удалась: %s", identity_id, describe_error(exc))
+            report.failed[identity_id] = f"{type(exc).__name__}: {exc}"[:500]
+        finally:
+            await lease.release()
 
     # --------------------------------------------------------- внутреннее
 
@@ -161,9 +197,10 @@ class SyncMixin(SpaceBase):
                 if method is None:
                     results[label] = "not_probed"
                     continue
-                result: ProbeResult | None = await (
-                    method(ctx, key) if region == "verification" else method(ctx)
-                )
+                async with asyncio.timeout(service.probe_timeout.total_seconds()):
+                    result: ProbeResult | None = await (
+                        method(ctx, key) if region == "verification" else method(ctx)
+                    )
                 if result is None:
                     results[label] = "not_probed"
                     continue

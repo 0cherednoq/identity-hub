@@ -315,6 +315,8 @@ class IdentityRecord(IdentityHubBase):
 
     error_score: Mapped[float] = mapped_column(Float, default=0.0)
     fencing_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # растёт с каждой арендой
+    # последняя попытка фоновой сверки при любом исходе: очередь refresh_many идёт по ней (0013)
+    probe_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     event_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # номер последнего события аккаунта
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

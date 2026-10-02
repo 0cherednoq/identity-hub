@@ -137,6 +137,9 @@ class _MemoryState:
     history: dict[UUID, LeaseHistoryRow] = field(default_factory=dict)
     # lease_id → пространство: история переживает удаление аккаунта, как ih_lease_history.space_id
     history_spaces: dict[UUID, UUID] = field(default_factory=dict)
+    # identity → (время, порядковый номер) последней попытки фоновой сверки
+    probe_attempts: dict[UUID, tuple[datetime, int]] = field(default_factory=dict)
+    next_probe_attempt: int = 1
     quotas: dict[tuple[UUID, str, int, datetime], int] = field(default_factory=dict)
     operation_keys: dict[tuple[str, str], _IdempotencyRecord] = field(default_factory=dict)
     import_runs: dict[UUID, ImportRunRow] = field(default_factory=dict)
@@ -405,6 +408,7 @@ class MemoryTx(StoreTx):
         if self._own(identity_id) is None:
             return False
         del self.state.identities[identity_id]
+        self.state.probe_attempts.pop(identity_id, None)
         # как каскад в PostgreSQL: строка аренды уходит, а её незакрытая история закрывается (R2-D14)
         stale = self.state.leases.pop(identity_id, None)
         if stale is not None:
@@ -1182,17 +1186,31 @@ class MemoryTx(StoreTx):
         self, service: str, region: str, key: str, older_than_seconds: float, limit: int
     ) -> list[UUID]:
         threshold = self._now - timedelta(seconds=older_than_seconds)
+        never = (datetime.min.replace(tzinfo=UTC), 0)
         rows = []
         for identity in self.state.identities.values():
-            if identity.space_id != self.space.id or identity.service != service:
+            if (
+                identity.space_id != self.space.id
+                or identity.service != service
+                or identity.lifecycle != "ready"  # как в PostgreSQL: provisioning и retired не кандидаты
+            ):
                 continue
             state = self.state.regions.get((identity.id, region, key))
             if state is None or state.synced_at is None or state.synced_at < threshold:
-                rows.append((state.synced_at if state else None, identity.id))
-        rows.sort(
-            key=lambda item: (item[0] is not None, item[0] or datetime.min.replace(tzinfo=UTC), item[1])
-        )
-        return [identity_id for _, identity_id in rows[:limit]]
+                attempted = self.state.probe_attempts.get(identity.id, never)
+                synced = state.synced_at if state is not None and state.synced_at is not None else never[0]
+                rows.append((attempted, synced, identity.id))
+        rows.sort()
+        return [identity_id for _, _, identity_id in rows[:limit]]
+
+    async def mark_probe_attempts(self, identity_ids: Sequence[UUID]) -> None:
+        if not identity_ids:
+            return
+        order = self.state.next_probe_attempt
+        self.state.next_probe_attempt += 1
+        for identity_id in identity_ids:
+            if self._own(identity_id) is not None:
+                self.state.probe_attempts[identity_id] = (self._now, order)
 
     @staticmethod
     def _contains(container: Any, expected: Any) -> bool:

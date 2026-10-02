@@ -167,6 +167,7 @@ class Service:
     # предел одного вызова Authenticator.login: зависший вход не держит аккаунт в logging_in
     login_timeout: timedelta = timedelta(seconds=120)
     probes: Probes | None = None
+    probe_timeout: timedelta = timedelta(seconds=60)  # предел одного вызова пробы
     error_classifier: ErrorClassifier | None = None
     lease_mode: LeaseMode = LeaseMode.EXCLUSIVE
     proxy_policy: ProxyPolicy | None = None

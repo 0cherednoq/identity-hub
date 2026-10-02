@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F3.5 Сверка с платформой
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: provisioning не съедает limit, retired исключён, недоступные — skipped_unavailable, probe_timeout, таймзона ProbeResult, сервис без факторов
-  - [ ] миграция probe_attempted_at; stale_identities: ready, порядок по последней попытке, отметка попытки
-  - [ ] refresh_many: skipped_unavailable без расхода limit; Service.probe_timeout
-  - [ ] ProbeResult: таймзона; сервис без факторов
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -44,7 +39,7 @@
 | F3.2 | Вебхуки: параллельная доставка | F0.1 | done |  |  |
 | F3.3 | Уведомления Telegram | F0.1 | done |  |  |
 | F3.4 | Вход и challenge | F0.1 | done |  |  |
-| F3.5 | Сверка с платформой | F0.1 | in_progress |  |  |
+| F3.5 | Сверка с платформой | F0.1 | done |  |  |
 | F3.6 | Обслуживание и таймеры | F0.1 | todo |  |  |
 | F3.7 | Прокси | F0.1 | todo |  |  |
 | F3.8 | Импорт | F0.1 | todo |  |  |
@@ -67,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 19 / 41 done
+**Итого:** 20 / 41 done
 
 ## Журнал сессий
 
@@ -92,3 +87,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F3.2 · done · deliver_due: endpoint'ы параллельно под WebhookPolicy.concurrency, внутри endpoint'а по очереди, окно старта внутри срока захвата, Store.release_webhook_deliveries для неотправленных; pump-ы диспетчера одновременно; finish не стирает ручную причину отключения; MemoryStore: limit после фильтра; D-166; 1079 passed, admin unit 67 passed · дальше F3.3
 2026-10-02 · F3.3 · done · 429 не расходует попытку и ставит канал на паузу (paused_until), claim не берёт каналы на паузе; дайджест частями до 4096 единиц UTF-16, обрезка одиночного сообщения; миграция 0012: уникальность (rule_id, event_ids[1]) без дайджеста и paused_until; паритет MemoryStore (sent_at, NotFound, порядок rules, limit после фильтра); шаблон без вложенных полей; UNSET для thread_id; D-167; 1105 passed, admin unit 67 passed · дальше F3.4
 2026-10-02 · F3.4 · done · вход под арендой с heartbeat; откат auth в исходное состояние под shield при сбое вне аутентификатора и при отмене; Service.login_timeout; override/команда из challenge и logging_in закрывает challenge; resolve_challenge стирает ответ; обслуживание сбрасывает брошенный logging_in (Store.stuck_logins); повторный login — LeaseUnavailable сразу; linked ждёт не дольше остатка основной аренды; оговорка снята из limitations.md; D-168; 1115 passed, admin unit 67 passed · дальше F3.5
+2026-10-02 · F3.5 · done · stale_identities: только ready, порядок по probe_attempted_at (миграция 0013), Store.mark_probe_attempts при любом исходе; refresh_many добирает кандидатов, недоступные — skipped_unavailable без расхода limit; Service.probe_timeout; ProbeResult отклоняет наивное время; сервис без факторов — пустой отчёт; D-169; 1130 passed, admin unit 67 passed · дальше F3.6

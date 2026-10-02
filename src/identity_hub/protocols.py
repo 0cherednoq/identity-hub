@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from identity_hub.errors import ValidationFailed
+
 if TYPE_CHECKING:
     from identity_hub.importing import ImportRecord
 
@@ -119,6 +121,13 @@ class ProbeResult:
     code: str | None = None
     until: datetime | None = None
     observed_at: datetime | None = None  # None — время обработки
+
+    def __post_init__(self) -> None:
+        # наивное время дало бы TypeError при сравнении со временем БД в машине регионов
+        for name in ("until", "observed_at"):
+            value = getattr(self, name)
+            if value is not None and value.tzinfo is None:
+                raise ValidationFailed(f"ProbeResult.{name} должен быть с таймзоной (например, UTC)")
 
 
 class ProbeContext(Protocol):
