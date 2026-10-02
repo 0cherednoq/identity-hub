@@ -10,10 +10,16 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** F3.7 Прокси
+- **Начата:** 2026-10-02
 - **Шаги:**
-  - [ ] —
+  - [ ] падающие тесты: простой провайдера, исключение чекера, pin_for, delete/replace_credentials/move, атомарный error_score
+  - [ ] здоровье: dead перепроверяется раз в max_backoff, jitter, check_timeout, параллельный recheck_due, recheck(group=)
+  - [ ] сбой чекера и отказ всей группы — proxy.checker.failed, не отказ прокси
+  - [ ] pin_for защищает от автоматических переходов и таймера региона
+  - [ ] proxies.delete, replace_credentials, move; атомарный error_score в SQL
+  - [ ] conformance для choose_proxy, bind_proxy, rebind_proxy; документация, CHANGELOG
+  - [ ] scripts/check.sh зелёный
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -41,7 +47,7 @@
 | F3.4 | Вход и challenge | F0.1 | done |  |  |
 | F3.5 | Сверка с платформой | F0.1 | done |  |  |
 | F3.6 | Обслуживание и таймеры | F0.1 | done |  |  |
-| F3.7 | Прокси | F0.1 | todo |  |  |
+| F3.7 | Прокси | F0.1 | in_progress |  |  |
 | F3.8 | Импорт | F0.1 | todo |  |  |
 | F3.9 | Override и верификации | F0.1 | todo |  |  |
 | F3.10 | Rollups, метрики и закрытие хаба | F0.1 | todo |  |  |
