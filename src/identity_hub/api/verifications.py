@@ -56,7 +56,7 @@ class Verifications(Namespace):
         self,
         identity_id: UUID,
         factor: str,
-        action: Literal["approve", "reject", "abandon"],
+        action: Literal["approve", "reject", "abandon", "reset_attempts"],
         *,
         actor: str,
         reason: str,

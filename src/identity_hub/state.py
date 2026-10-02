@@ -16,6 +16,7 @@ from identity_hub._space import SpaceBase, logger
 from identity_hub.api._base import legacy
 from identity_hub.domain import regions as machine
 from identity_hub.domain.regions import Change, Command, Observation, RegionDecision, RegionState, Timer
+from identity_hub.domain.verification import VERIFICATION
 from identity_hub.enums import AuthState, Lifecycle, Standing
 from identity_hub.errors import ConcurrentModification, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
@@ -35,10 +36,15 @@ COLUMN_REGIONS: dict[str, tuple[str, str | None]] = {
 
 @dataclass(frozen=True, slots=True)
 class Override:
-    """Ручная правка региона из админки (ТЗ §11): причина и автор обязательны, `pin_for` — закрепление."""
+    """Ручная правка региона из админки (ТЗ §11): причина и автор обязательны, `pin_for` — закрепление.
+
+    `key` — ключ региона: для `standing`, `availability`, `lifecycle` его нет (`None` или `""`);
+    для `auth` — слот сессии, `None` означает `"default"`; для `verification` — объявленный
+    сервисом фактор. Другое значение — `ValidationFailed`.
+    """
 
     region: str
-    key: str
+    key: str | None
     state: str
     reason: str
     actor: str
@@ -157,6 +163,21 @@ async def apply_region_change(
     raise ConcurrentModification("region", f"{identity_id}/{region}/{key}")
 
 
+def _override_key(service: Any, region: str, key: str | None) -> str:
+    """Ключ региона для override: значение по умолчанию и проверка (R1-08, R2-F10)."""
+    if region == VERIFICATION.name:
+        if not key:
+            raise ValidationFailed("override верификации: укажите фактор в key")
+        service.verification(key)  # ValidationFailed для необъявленного фактора
+        return key
+    if region == "auth":
+        return key or DEFAULT_SLOT
+    if key:
+        # опечатка в ключе меняла бы денормализованное поле мимо строки региона
+        raise ValidationFailed(f"регион {region} не имеет ключа: key должен быть пустым")
+    return ""
+
+
 def _actor(change: Change) -> str:
     return change.actor if not isinstance(change, Timer) else "timer"
 
@@ -206,7 +227,24 @@ class StateMixin(SpaceBase):
             until=override.until,
         )
         async with self._tx() as tx:
-            return await apply_region_change(self, tx, identity_id, override.region, override.key, change)
+            identity = await self._identity(tx, identity_id)
+            key = _override_key(self.hub.service(identity.service), override.region, override.key)
+            if override.region == VERIFICATION.name:
+                # через машину фактора: строка ih_verifications и verified_factors согласованы,
+                # иначе override в verified не давал бы допуска (R2-F10)
+                from identity_hub.verifications import apply_verification
+
+                decision = await apply_verification(
+                    self,
+                    tx,
+                    identity_id,
+                    key,
+                    lambda flow, status, verified, now: flow.override(status, change, now),
+                    actor=override.actor,
+                )
+                assert decision.region is not None
+                return decision.region
+            return await apply_region_change(self, tx, identity_id, override.region, key, change)
 
     async def _unpin(
         self, identity_id: UUID, region: str, key: str, *, actor: str, reason: str

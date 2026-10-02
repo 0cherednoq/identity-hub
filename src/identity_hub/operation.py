@@ -103,6 +103,7 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
             availability=identity.availability,
             availability_until=identity.availability_until,
             verified_factors=frozenset(identity.verified_factors),
+            expired_factors=frozenset(await tx.expired_factors(lease.identity_id)),
         )
         blockers = evaluate(service, kind, snapshot, await tx.now())
         if blockers:

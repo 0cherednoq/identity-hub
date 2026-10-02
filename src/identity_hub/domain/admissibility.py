@@ -30,6 +30,8 @@ class IdentitySnapshot:
     availability_until: datetime | None = None
     standing_code: str | None = None
     verified_factors: frozenset[str] = frozenset()
+    # подтверждённые факторы, чей срок действия уже вышел, а обслуживание ещё не прошло
+    expired_factors: frozenset[str] = frozenset()
 
     def is_available(self, now: datetime) -> bool:
         """Временные состояния снимаются лениво: истёкший срок = доступен (ТЗ §3.4)."""
@@ -90,7 +92,8 @@ def evaluate(
         blockers.append(Blocker("auth", identity.auth_state))
     if not identity.is_available(now):
         blockers.append(Blocker("availability", identity.availability, until=identity.availability_until))
-    have = effective_factors(identity.verified_factors, service.factor_names)
+    # срок действия проверяется сразу, а не после прогона обслуживания (R2-F13)
+    have = effective_factors(identity.verified_factors, service.factor_names) - identity.expired_factors
     missing = flt.required_factors - have
     if missing:
         blockers.append(Blocker("verification", ",".join(sorted(missing))))

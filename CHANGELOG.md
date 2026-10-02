@@ -27,6 +27,7 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `verifications.review(..., "reset_attempts")` — обнулить счётчик попыток фактора.
 - `imports.run(..., max_identities=3)` — ёмкость прокси, создаваемых импортом.
 - `space.proxies.replace_credentials()`, `move()`, `delete(unbind=)`; события `proxy.updated`
   и `proxy.deleted`.
@@ -81,6 +82,12 @@
   и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
   нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
   сообщает о строках под неактивным ключом.
+- `Override`: ключ региона проверяется — для `standing`, `availability`, `lifecycle` он пуст,
+  для `auth` по умолчанию `"default"`, для `verification` — объявленный фактор; иначе
+  `ValidationFailed`. `key` может быть `None`.
+- Верификации: `approve` в режиме `MANUAL` — только из `under_review`; снятие `verified` по
+  наблюдению требует двух наблюдений подряд; фактор с вышедшим сроком действия не даёт допуска
+  до прогона обслуживания. Контракт `Store`: новый `expired_factors(identity_id)`.
 - Импорт: несуществующая связь и переполненный прокси отклоняют только свою запись; фоновый
   `update_session` учитывает `verify_sessions` и для существующих аккаунтов (`auth → no_session`);
   `identity.imported` пишется и для пачки из одних обновлений; `run_files` кладёт ошибку файла
@@ -163,6 +170,9 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- Override верификации в `verified` теперь даёт допуск: `verified_factors` согласуется.
+  `Override("standing", "typo", "banned")` больше не банит аккаунт мимо строки региона, а
+  override `auth` без ключа обновляет `auth_state`.
 - Одна запись больше не роняет импорт: негодный URL прокси давал сырой `ValueError` с фрагментом
   пароля, обрывал `imports.run` без отчёта, а в фоновом режиме навсегда блокировал очередь
   импорта пространства и задерживал остальные пространства.

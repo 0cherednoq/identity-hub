@@ -149,7 +149,11 @@ def test_reconcile_normalizes_missing_to_revoked() -> None:
     flow = VerificationFlow(KYC)
     s = flow.start(flow.initial(T0), {"email"}, t(1), "w").status
     s = flow.approve(flow.submit(s, t(2), "w").status, t(3), "p").status
-    decision = flow.reconcile(s, Observation(V.MISSING, observed_at=t(4), source=ChangeSource.PROBE), t(4))
+    first = flow.reconcile(s, Observation(V.MISSING, observed_at=t(4), source=ChangeSource.PROBE), t(4))
+    assert first.status.state == V.VERIFIED  # R2-F13: одна проба подтверждение не снимает
+    decision = flow.reconcile(
+        first.status, Observation(V.MISSING, observed_at=t(5), source=ChangeSource.PROBE), t(5)
+    )
     assert decision.status.state == V.REVOKED
 
 

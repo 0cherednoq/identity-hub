@@ -67,7 +67,7 @@ stateDiagram-v2
     [*] --> missing
     missing --> pending : start()
     pending --> under_review : submit() [MANUAL]
-    pending --> verified : submit() [AUTO] / approve()
+    pending --> verified : submit() [AUTO]
     pending --> missing : abandon() / таймер pending_timeout
     under_review --> verified : approve()
     under_review --> rejected : reject(code)
@@ -124,6 +124,7 @@ async with pool.lease(for_operation="probe", among=[identity_id]) as lease:
 await space.verifications.review(identity_id, "kyc_id", "approve", actor="admin:ivan", reason="документы в порядке")
 await space.verifications.review(identity_id, "kyc_id", "reject", actor="admin:ivan", reason="нечитаемо", code="blurry")
 await space.verifications.review(identity_id, "kyc_id", "abandon", actor="admin:ivan", reason="клиент передумал")
+await space.verifications.review(identity_id, "kyc_id", "reset_attempts", actor="admin:ivan", reason="разрешаем ещё раз")
 
 status = await space.verifications.status(identity_id, "kyc_id")
 status.state, status.attempts, status.expires_at
@@ -137,6 +138,21 @@ status.state, status.attempts, status.expires_at
 | Под арендой | `await lease.verification("email").reconcile("verified")` |
 | Импорт | `ImportRecord(verifications={"email": "verified"})` |
 | Таймер | `valid_for`, `pending_timeout` — обслуживание в диспетчере |
+
+- **`approve` в режиме `MANUAL`** возможен только из `under_review` — после `submit()`. Иначе
+  решение человека миновало бы отправку данных платформе и счётчик попыток;
+  `TransitionNotAllowed`.
+- **После `AttemptsExhausted`** счётчик обнуляет `review(..., "reset_attempts")`; состояние
+  фактора при этом не меняется.
+- **Срок действия проверяется сразу.** Фактор с вышедшим `valid_for` перестаёт давать допуск к
+  операциям и к аренде `for_operation=...` в тот же момент, не дожидаясь обслуживания, которое
+  переведёт его в `expired`.
+- **Одна проба не снимает подтверждение.** Чтобы фактор ушёл из `verified` по наблюдению
+  платформы (`missing` → `revoked`), нужны два наблюдения подряд — как при выходе из бана.
+  Первое даёт исход `awaiting_confirmation`.
+- **Override фактора** (`Override("verification", "kyc_id", "verified", ...)`) идёт через ту же
+  машину: `verified_factors` аккаунта обновляется, допуск появляется сразу; срок действия
+  ставится по `valid_for`, если не задан `until`.
 
 Ошибки: `VerificationRequirementsNotMet` (не выполнены `requires`), `AttemptsExhausted`,
 `TransitionNotAllowed` (например, `submit` не из `pending`), `ValidationFailed` (код отказа не

@@ -262,7 +262,7 @@ class VerificationsMixin(SpaceBase):
         self,
         identity_id: UUID,
         factor: str,
-        action: Literal["approve", "reject", "abandon"],
+        action: Literal["approve", "reject", "abandon", "reset_attempts"],
         *,
         actor: str,
         reason: str,
@@ -285,6 +285,10 @@ class VerificationsMixin(SpaceBase):
                 if not code:
                     raise ValidationFailed("verification reject code is required")
                 return flow.reject(status, code, now, actor, reason)
+            if action == "reset_attempts":
+                return flow.reset_attempts(status)
+            if action != "abandon":
+                raise ValidationFailed("verification review: approve, reject, abandon или reset_attempts")
             return flow.abandon(status, now, actor, reason)
 
         async with self._tx() as tx:

@@ -518,6 +518,15 @@ class MemoryTx(StoreTx):
             return False
         if not query.required_factors.issubset(row.verified_factors) or not query.tags.issubset(row.tags):
             return False
+        # фактор с вышедшим сроком действия допуска не даёт и до прогона обслуживания (R2-F13)
+        if any(
+            (state := self.state.regions.get((row.id, "verification", factor))) is not None
+            and state.state == "verified"
+            and state.until is not None
+            and state.until <= now
+            for factor in query.required_factors
+        ):
+            return False
         if query.labels and any(row.labels.get(k) != v for k, v in query.labels.items()):
             return False
         if query.profile and any(row.profile.get(k) != v for k, v in query.profile.items()):
@@ -1227,6 +1236,19 @@ class MemoryTx(StoreTx):
         ]
         rows.sort(key=lambda item: item[2] or self._now)
         return [(identity_id, key) for identity_id, key, _ in rows[:limit]]
+
+    async def expired_factors(self, identity_id: UUID) -> list[str]:
+        if self._own(identity_id) is None:
+            return []
+        return sorted(
+            key
+            for (owner, region, key), state in self.state.regions.items()
+            if owner == identity_id
+            and region == "verification"
+            and state.state == "verified"
+            and state.until is not None
+            and state.until <= self._now
+        )
 
     async def stale_identities(
         self, service: str, region: str, key: str, older_than_seconds: float, limit: int

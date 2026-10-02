@@ -118,6 +118,8 @@ async def test_reject_attempts_and_revocation(
         await lease.verification("unknown_factor").start()
 
     email = lease.verification("email")
+    # R2-F13: одна проба не снимает подтверждение — нужны два наблюдения подряд
+    assert (await email.reconcile("missing", raw_status="EMAIL_UNCONFIRMED")).state == "verified"
     assert (await email.reconcile("missing", raw_status="EMAIL_UNCONFIRMED")).state == "revoked"  # FR-9.5
     assert await _verified(sessionmaker, identity_id) == ["phone"]
 

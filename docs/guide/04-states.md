@@ -338,10 +338,10 @@ Override(region, key, state, reason, actor, pin_for=None, code=None, until=None)
 
 | Регион | `key` | `pin_for` |
 |---|---|---|
-| `lifecycle` | `""` | запрещён |
-| `availability` | `""` | запрещён |
-| `standing` | `""` | можно |
-| `auth` | имя слота, обычно `"default"` | можно |
+| `lifecycle` | `""` или `None` | запрещён |
+| `availability` | `""` или `None` | запрещён |
+| `standing` | `""` или `None` | можно |
+| `auth` | имя слота; `None` или `""` — `"default"` | можно |
 
 Override пишет событие `identity.state.overridden` (WARNING) с автором и причиной.
 

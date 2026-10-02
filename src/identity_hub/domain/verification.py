@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from identity_hub.domain.regions import (
     Command,
     Observation,
+    Override,
     RegionDecision,
     RegionSpec,
     RegionState,
@@ -108,6 +109,8 @@ VERIFICATION = RegionSpec(
     severity={V.REJECTED: Severity.WARNING, V.REVOKED: Severity.WARNING, V.EXPIRED: Severity.WARNING},
     on_expire={V.VERIFIED: V.EXPIRED, V.PENDING: V.MISSING},
     normalize=_normalize,
+    # одна ложная проба не снимает подтверждение: выход из verified — два наблюдения подряд (R2-F13)
+    confirm_leaving=_fs(V.VERIFIED),
 )
 
 
@@ -185,6 +188,12 @@ class VerificationFlow:
     def approve(
         self, status: VerificationStatus, now: datetime, actor: str, reason: str | None = None
     ) -> VerificationDecision:
+        if self.spec.mode is VerificationMode.MANUAL and status.state != V.UNDER_REVIEW:
+            # иначе решение человека миновало бы submit: данные платформе не отправлены,
+            # попытка не засчитана (R2-F13)
+            raise TransitionNotAllowed(
+                VERIFICATION.name, status.state, V.VERIFIED, "approve только из under_review"
+            )
         region = self._command(
             status,
             Command(V.VERIFIED, actor=actor, until=self._valid_until(now), reason=reason),
@@ -216,6 +225,18 @@ class VerificationFlow:
     ) -> VerificationDecision:
         region = self._command(status, Command(V.REVOKED, actor=actor, code=code), now)
         return self._decided(status, region)
+
+    def reset_attempts(self, status: VerificationStatus) -> VerificationDecision:
+        """Обнулить счётчик попыток: штатный выход после `AttemptsExhausted`. Состояние не меняется."""
+        return VerificationDecision(status, replace(status, attempts=0), None)
+
+    def override(self, status: VerificationStatus, change: Override, now: datetime) -> VerificationDecision:
+        """Ручная правка фактора: через ту же запись, что и остальные переходы (R2-F10)."""
+        if change.to == V.VERIFIED and change.until is None:
+            change = replace(change, until=self._valid_until(now))
+        region = apply(VERIFICATION, status.region, change, now, key=self.spec.name)
+        verified_at = now if region.state.state == V.VERIFIED and status.state != V.VERIFIED else None
+        return self._decided(status, region, verified_at=verified_at)
 
     # --------------------------------------------------------- наблюдения и таймер
 

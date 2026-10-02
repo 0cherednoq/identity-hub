@@ -60,6 +60,7 @@ from identity_hub.enums import (
     Lifecycle,
     ProxyStatus,
     Severity,
+    VerificationState,
 )
 from identity_hub.errors import (
     ConcurrentModification,
@@ -744,6 +745,19 @@ class PgTx(StoreTx):
             conditions.append(i.auth_state == AuthState.AUTHENTICATED)
         if query.required_factors:
             conditions.append(i.verified_factors.contains(sorted(query.required_factors)))
+            # фактор с вышедшим сроком действия допуска не даёт и до прогона обслуживания (R2-F13)
+            expired = (
+                select(REGION_STATES.c.identity_id)
+                .where(
+                    REGION_STATES.c.identity_id == i.id,
+                    REGION_STATES.c.region == "verification",
+                    REGION_STATES.c.key.in_(sorted(query.required_factors)),
+                    REGION_STATES.c.state == VerificationState.VERIFIED,
+                    REGION_STATES.c.until <= now,
+                )
+                .exists()
+            )
+            conditions.append(~expired)
         if query.tags:
             conditions.append(i.tags.contains(sorted(query.tags)))
         if query.labels:
@@ -2084,6 +2098,19 @@ class PgTx(StoreTx):
             .limit(limit)
         )
         return [(r.identity_id, r.key) for r in rows]
+
+    async def expired_factors(self, identity_id: UUID) -> list[str]:
+        rs = REGION_STATES.c
+        rows = await self.execute(
+            select(rs.key).where(
+                rs.identity_id == identity_id,
+                rs.space_id == self.space.id,
+                rs.region == "verification",
+                rs.state == VerificationState.VERIFIED,
+                rs.until <= func.now(),
+            )
+        )
+        return sorted(rows.scalars())
 
     async def stale_identities(
         self, service: str, region: str, key: str, older_than_seconds: float, limit: int
