@@ -4326,6 +4326,26 @@ class PgStore(Store):
                 for row in rows
             ]
 
+    async def release_webhook_deliveries(
+        self, claims: Sequence[tuple[int, int]], *, retry_after: timedelta
+    ) -> int:
+        if not claims:
+            return 0
+        d = WEBHOOK_DELIVERIES.c
+        async with self._own() as session:
+            result = await _execute(
+                session,
+                update(WEBHOOK_DELIVERIES)
+                .where(
+                    tuple_(d.id, d.attempt).in_([(delivery_id, attempt) for delivery_id, attempt in claims]),
+                    d.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
+                    d.attempt > 0,
+                )
+                .values(attempt=d.attempt - 1, next_attempt_at=func.now() + retry_after),
+                execution_options=self.options,
+            )
+            return int(result.rowcount)  # type: ignore[attr-defined]
+
     async def finish_webhook_delivery(
         self,
         delivery_id: int,
@@ -4386,27 +4406,26 @@ class PgStore(Store):
                 return True
 
             streak = row.failure_streak + 1
-            disabled = streak >= max_failures
+            exhausted = streak >= max_failures
+            # endpoint, уже отключённый вручную, не отключается повторно: его причина сохраняется
+            disabled = exhausted and row.enabled
             await _execute(
                 session,
                 update(WEBHOOK_DELIVERIES)
                 .where(d.id == delivery_id)
                 .values(
                     **common,
-                    status=DeliveryStatus.DEAD if disabled else DeliveryStatus.FAILED,
+                    status=DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED,
                     next_attempt_at=func.now() + retry_after,
                 ),
                 execution_options=self.options,
             )
+            endpoint_values: dict[str, Any] = {"failure_streak": streak}
+            if disabled:
+                endpoint_values.update(enabled=False, disabled_reason="consecutive_failures")
             await _execute(
                 session,
-                update(WEBHOOK_ENDPOINTS)
-                .where(ep.id == row.endpoint_id)
-                .values(
-                    failure_streak=streak,
-                    enabled=False if disabled else row.enabled,
-                    disabled_reason="consecutive_failures" if disabled else None,
-                ),
+                update(WEBHOOK_ENDPOINTS).where(ep.id == row.endpoint_id).values(**endpoint_values),
                 execution_options=self.options,
             )
             if disabled:

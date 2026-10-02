@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -17,6 +18,7 @@ from uuid import UUID
 from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
+from identity_hub._space import logger
 from identity_hub.crypto import associated_data
 from identity_hub.dispatch.outbound import (
     Resolver,
@@ -30,9 +32,14 @@ from identity_hub.dispatch.outbound import (
 )
 from identity_hub.domain.data import validate_json_payload
 from identity_hub.enums import Severity
-from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.errors import NotFound, ValidationFailed, describe_error
 from identity_hub.events import Event, matches_any, severity_at_least, spec_of
-from identity_hub.store.base import NewWebhookEndpoint, WebhookDeliveryRow, WebhookEndpointRow
+from identity_hub.store.base import (
+    NewWebhookEndpoint,
+    WebhookAttempt,
+    WebhookDeliveryRow,
+    WebhookEndpointRow,
+)
 
 if TYPE_CHECKING:
     import httpx
@@ -70,9 +77,28 @@ class WebhookPolicy:
     retry_jitter: float = 0.2
     claim_for: timedelta = timedelta(seconds=30)
     batch_size: int = 100
+    # сколько endpoint'ов обслуживается одновременно; на один endpoint — одна доставка за раз
+    concurrency: int = 8
     # Исходящий прокси задаётся только явно: HTTP_PROXY/ALL_PROXY окружения не используются.
     # С прокси имя получателя резолвит он, поэтому закрепление проверенного адреса не действует.
     proxy: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.concurrency < 1:
+            raise ValidationFailed("WebhookPolicy.concurrency должен быть положительным")
+        if self.timeout <= 0 or self.timeout >= self.claim_for.total_seconds():
+            # запрос обязан завершиться до истечения захвата, иначе доставку возьмёт другой экземпляр
+            raise ValidationFailed("WebhookPolicy.timeout должен быть меньше claim_for")
+
+    @property
+    def start_window(self) -> float:
+        """Сколько секунд после захвата можно начинать новые запросы.
+
+        Запрос, начатый в этом окне, завершится по `timeout` и будет записан раньше, чем истечёт
+        `claim_for`; запас — десятая часть срока захвата, не больше секунды.
+        """
+        claim = self.claim_for.total_seconds()
+        return max(0.0, claim - self.timeout - min(1.0, claim / 10))
 
     def retry_after(self, attempt: int) -> timedelta:
         base = min(self.retry_cap.total_seconds(), self.retry_base.total_seconds() * 2 ** (attempt - 1))
@@ -421,50 +447,96 @@ class WebhookDispatcher:
         await self.hub._store.enqueue_webhook_deliveries(pairs)
 
     async def deliver_due(self) -> int:
+        """Доставить захваченную пачку: endpoint'ы — параллельно, внутри endpoint'а — по очереди.
+
+        Медленный получатель занимает один слот и не задерживает остальных. Новые запросы
+        начинаются только в окне `WebhookPolicy.start_window`, поэтому каждый запрос завершается
+        и записывается до истечения захвата — другой экземпляр диспетчера не доставит то же
+        событие повторно. После сетевой ошибки остальные доставки этого endpoint'а из пачки
+        не отправляются. Неотправленные доставки возвращаются в очередь без учёта попытки.
+        """
+        policy = self.policy
         attempts = await self.hub._store.claim_webhook_deliveries(
-            limit=self.policy.batch_size, claim_for=self.policy.claim_for
+            limit=policy.batch_size, claim_for=policy.claim_for
         )
         if not attempts:
             return 0
+        start_deadline = time.monotonic() + policy.start_window
+        by_endpoint: dict[UUID, list[WebhookAttempt]] = {}
+        for attempt in attempts:
+            by_endpoint.setdefault(attempt.endpoint_id, []).append(attempt)
+        slots = asyncio.Semaphore(policy.concurrency)
+        delivered = 0
+
+        async def serve(items: list[WebhookAttempt], client: httpx.AsyncClient) -> None:
+            nonlocal delivered
+            async with slots:
+                for index, attempt in enumerate(items):
+                    retry: timedelta | None = None
+                    if time.monotonic() >= start_deadline:
+                        retry = timedelta(0)  # окно закрыто: следующий круг возьмёт сразу
+                    else:
+                        delivered += 1
+                        if not await self._deliver(client, attempt):
+                            retry = policy.retry_after(1)  # получатель недоступен: не долбим его
+                            index += 1
+                    if retry is not None:
+                        rest = [(item.delivery_id, item.attempt) for item in items[index:]]
+                        await self.hub._store.release_webhook_deliveries(rest, retry_after=retry)
+                        return
+
         async with self.client() as client:
-            for attempt in attempts:
-                started = time.monotonic()
-                code: int | None = None
-                error: str | None = None
-                succeeded = False
-                try:
-                    secrets = self._active_secrets(attempt.endpoint_id, attempt.secret)
-                    body = json.dumps(
-                        attempt.event.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
-                    ).encode()
-                    timestamp = int(self.hub.clock.now().timestamp())
-                    with masked_in_logs(*url_log_masks(attempt.url)):
-                        response = await client.post(
-                            attempt.url,
-                            content=body,
-                            headers={
-                                "Content-Type": "application/json",
-                                SIGNATURE_HEADER: make_signature(body, secrets, timestamp=timestamp),
-                            },
-                        )
-                    code = response.status_code
-                    succeeded = 200 <= code < 300
-                    if not succeeded:
-                        error = f"HTTP {code}"
-                except Exception as exc:  # ошибка сети становится записью доставки, диспетчер живёт дальше
-                    error = type(exc).__name__
-                elapsed_ms = max(0, round((time.monotonic() - started) * 1000))
-                await self.hub._store.finish_webhook_delivery(
-                    attempt.delivery_id,
-                    attempt.attempt,
-                    succeeded=succeeded,
-                    response_code=code,
-                    response_ms=elapsed_ms,
-                    error=error,
-                    retry_after=self.policy.retry_after(attempt.attempt),
-                    max_failures=self.policy.max_failures,
+            results = await asyncio.gather(
+                *(serve(items, client) for items in by_endpoint.values()), return_exceptions=True
+            )
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+            if isinstance(result, Exception):
+                logger.warning("доставка вебхуков endpoint'а прервана: %s", describe_error(result))
+        return delivered
+
+    async def _deliver(self, client: httpx.AsyncClient, attempt: WebhookAttempt) -> bool:
+        """Одна доставка с записью результата. `False` — получатель не ответил (сеть, таймаут)."""
+        started = time.monotonic()
+        code: int | None = None
+        error: str | None = None
+        succeeded = False
+        reachable = True
+        try:
+            secrets = self._active_secrets(attempt.endpoint_id, attempt.secret)
+            body = json.dumps(
+                attempt.event.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ).encode()
+            timestamp = int(self.hub.clock.now().timestamp())
+            with masked_in_logs(*url_log_masks(attempt.url)):
+                response = await client.post(
+                    attempt.url,
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        SIGNATURE_HEADER: make_signature(body, secrets, timestamp=timestamp),
+                    },
                 )
-        return len(attempts)
+            code = response.status_code
+            succeeded = 200 <= code < 300
+            if not succeeded:
+                error = f"HTTP {code}"
+        except Exception as exc:  # ошибка сети становится записью доставки, диспетчер живёт дальше
+            error = type(exc).__name__
+            reachable = False
+        elapsed_ms = max(0, round((time.monotonic() - started) * 1000))
+        await self.hub._store.finish_webhook_delivery(
+            attempt.delivery_id,
+            attempt.attempt,
+            succeeded=succeeded,
+            response_code=code,
+            response_ms=elapsed_ms,
+            error=error,
+            retry_after=self.policy.retry_after(attempt.attempt),
+            max_failures=self.policy.max_failures,
+        )
+        return reachable
 
     def _active_secrets(self, endpoint_id: UUID, payload: Any) -> list[SecretStr]:
         secrets = self.hub._envelope.open_model(

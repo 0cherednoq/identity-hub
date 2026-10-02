@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F3.2 Вебхуки: параллельная доставка
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: медленный endpoint не задерживает остальных, нет повторной доставки при истечении claim, claim отключённого endpoint, причина отключения
-  - [ ] deliver_due: параллельно с WebhookPolicy.concurrency, одна доставка на endpoint, бюджет времени меньше claim_for
-  - [ ] claim_webhook_deliveries и finish_webhook_delivery: паритет MemoryStore и PgStore
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -40,7 +36,7 @@
 | F2.3 | Часы и ожидание | F2.1 | done |  |  |
 | F2.4 | Потерянные обновления identity | F0.1 | done |  |  |
 | F3.1 | Диспетчер: изоляция сбойного события | F0.1 | done |  |  |
-| F3.2 | Вебхуки: параллельная доставка | F0.1 | in_progress |  |  |
+| F3.2 | Вебхуки: параллельная доставка | F0.1 | done |  |  |
 | F3.3 | Уведомления Telegram | F0.1 | todo |  |  |
 | F3.4 | Вход и challenge | F0.1 | todo |  |  |
 | F3.5 | Сверка с платформой | F0.1 | todo |  |  |
@@ -66,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 16 / 41 done
+**Итого:** 17 / 41 done
 
 ## Журнал сессий
 
@@ -88,3 +84,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F2.3 · done · Clock.sleep (пауза вызывающего) и Clock.idle (фоновое ожидание); FakeClock.sleep идёт по пробуждениям, advance будит heartbeat; acquire, heartbeat, диспетчер, rotate_key и CLI на часах хаба; Store.bind_clock: MemoryStore принимает часы хаба, разные часы — ValidationFailed; heartbeat считает паузу от последнего подтверждения; тест дедлайна heartbeat больше не зависит от времени захвата в БД; D-163; 1049 passed, наборы аренды ×3, admin unit 67 passed · дальше F2.4
 2026-10-02 · F2.4 · done · lock_identities до чтения в _mutate, requirements.add/resolve и apply_verification; conformance-тест: 20 параллельных add_tags, слияний меток и требований сохраняют всё; lock-order.md дополнен; D-164; 1057 passed · фаза F2 закрыта, дальше F3.1
 2026-10-02 · F3.1 · done · колбэки subscribe: курсор по одному событию через возвращаемое значение обработчика process_events, max_attempts (5), журнальное dispatcher.event.skipped и метрика; изоляция пакетных потребителей и pump-ов закреплена тестом; гарантии доставки и влияние долгой транзакции в 10-events.md; D-165; 1065 passed, admin unit 67 passed · дальше F3.2
+2026-10-02 · F3.2 · done · deliver_due: endpoint'ы параллельно под WebhookPolicy.concurrency, внутри endpoint'а по очереди, окно старта внутри срока захвата, Store.release_webhook_deliveries для неотправленных; pump-ы диспетчера одновременно; finish не стирает ручную причину отключения; MemoryStore: limit после фильтра; D-166; 1079 passed, admin unit 67 passed · дальше F3.3

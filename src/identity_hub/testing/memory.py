@@ -2612,21 +2612,25 @@ class MemoryStore(Store):
     async def claim_webhook_deliveries(self, *, limit: int, claim_for: timedelta) -> list[WebhookAttempt]:
         async with self._lock:
             now = self.clock.now()
+            events = {event.event_id: event for event, _, _ in self._state.events}
+            endpoints = self._state.webhook_endpoints
+            # фильтр отключённых endpoint — до limit: их доставки не заслоняют живые (R2-P17)
             rows = sorted(
                 [
                     row
                     for row in self._state.webhook_deliveries.values()
-                    if row.status in {"pending", "failed"} and row.next_attempt_at <= now
+                    if row.status in {"pending", "failed"}
+                    and row.next_attempt_at <= now
+                    and row.endpoint_id in endpoints
+                    and endpoints[row.endpoint_id].enabled
+                    and row.event_id in events
                 ],
                 key=lambda row: (row.next_attempt_at, row.id),
             )[:limit]
             attempts: list[WebhookAttempt] = []
-            events = {event.event_id: event for event, _, _ in self._state.events}
             for row in rows:
-                endpoint = self._state.webhook_endpoints.get(row.endpoint_id)
-                event = events.get(row.event_id)
-                if endpoint is None or event is None or not endpoint.enabled:
-                    continue
+                endpoint = endpoints[row.endpoint_id]
+                event = events[row.event_id]
                 attempt = row.attempt + 1
                 self._state.webhook_deliveries[row.id] = replace(
                     row, attempt=attempt, next_attempt_at=now + claim_for
@@ -2635,6 +2639,27 @@ class MemoryStore(Store):
                     WebhookAttempt(row.id, attempt, endpoint.id, endpoint.url, endpoint.secret, event)
                 )
             return attempts
+
+    async def release_webhook_deliveries(
+        self, claims: Sequence[tuple[int, int]], *, retry_after: timedelta
+    ) -> int:
+        async with self._lock:
+            now = self.clock.now()
+            released = 0
+            for delivery_id, attempt in claims:
+                row = self._state.webhook_deliveries.get(delivery_id)
+                if (
+                    row is None
+                    or row.status not in {"pending", "failed"}
+                    or row.attempt != attempt
+                    or attempt < 1
+                ):
+                    continue
+                self._state.webhook_deliveries[delivery_id] = replace(
+                    row, attempt=attempt - 1, next_attempt_at=now + retry_after
+                )
+                released += 1
+            return released
 
     async def finish_webhook_delivery(
         self,
@@ -2655,16 +2680,18 @@ class MemoryStore(Store):
             now = self.clock.now()
             endpoint = self._state.webhook_endpoints[row.endpoint_id]
             failure_streak = 0 if succeeded else endpoint.failure_streak + 1
-            disabled = not succeeded and failure_streak >= max_failures
+            exhausted = not succeeded and failure_streak >= max_failures
+            # endpoint, уже отключённый вручную, не отключается повторно: его причина сохраняется
+            disabled = exhausted and endpoint.enabled
             self._state.webhook_endpoints[endpoint.id] = replace(
                 endpoint,
                 enabled=endpoint.enabled and not disabled,
-                disabled_reason="consecutive_failures" if disabled else None,
+                disabled_reason="consecutive_failures" if disabled else endpoint.disabled_reason,
                 failure_streak=failure_streak,
             )
             self._state.webhook_deliveries[delivery_id] = replace(
                 row,
-                status="succeeded" if succeeded else ("dead" if disabled else "failed"),
+                status="succeeded" if succeeded else ("dead" if exhausted else "failed"),
                 next_attempt_at=now + retry_after,
                 response_code=response_code,
                 response_ms=response_ms,

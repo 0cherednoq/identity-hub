@@ -198,11 +198,18 @@ class Dispatcher:
             else:
                 self._runtime[consumer.name] = ConsumerRuntime(attempted_at, self.hub.clock.now(), False)
             total += handled or 0
-        for pump in self._pumps:
-            try:
-                total += await pump()
-            except Exception:
-                logger.exception("обработчик due-очереди упал; элементы будут повторены")
+        # pump-ы независимы и идут одновременно: медленная доставка вебхуков не задерживает
+        # уведомления, импорт и обслуживание (R1-05)
+        results = await asyncio.gather(*(pump() for pump in self._pumps), return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(
+                    "обработчик due-очереди упал; элементы будут повторены: %s", describe_error(result)
+                )
+            elif isinstance(result, BaseException):
+                raise result
+            else:
+                total += result
         return total
 
     async def drain(self, *, max_rounds: int = 1000) -> int:

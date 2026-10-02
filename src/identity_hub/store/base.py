@@ -1672,6 +1672,17 @@ class Store(ABC):
         """Коротко зарезервировать due-доставки; сетевой I/O выполняется после коммита."""
 
     @abstractmethod
+    async def release_webhook_deliveries(
+        self, claims: Sequence[tuple[int, int]], *, retry_after: timedelta
+    ) -> int:
+        """Вернуть захваченные, но не отправленные доставки: `(delivery_id, attempt)` захвата.
+
+        Попытка не засчитывается (`attempt − 1`), следующая — через `retry_after`. Доставка, у
+        которой номер попытки уже другой или статус не `pending`/`failed`, не трогается.
+        Возвращает число возвращённых доставок.
+        """
+
+    @abstractmethod
     async def finish_webhook_delivery(
         self,
         delivery_id: int,
