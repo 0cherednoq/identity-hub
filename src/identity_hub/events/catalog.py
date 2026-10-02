@@ -77,6 +77,7 @@ def _specs() -> dict[str, EventSpec]:
             ("proxy.status.changed", Severity.INFO),
             ("proxy.binding.changed", Severity.INFO),
             ("proxy.pool.exhausted", Severity.CRITICAL),
+            ("proxy.secret.revealed", Severity.WARNING),
         ],
         "pool": [
             ("pool.capacity.low", Severity.WARNING),

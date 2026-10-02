@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -19,7 +19,7 @@ from uuid import UUID
 from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
-from identity_hub._space import SpaceBase, logger
+from identity_hub._space import SpaceBase, logger, require_actor_and_reason
 from identity_hub.api._base import legacy, warn_deprecated
 from identity_hub.crypto import associated_data
 from identity_hub.domain import regions as machine
@@ -75,7 +75,7 @@ class ParsedProxy:
     host: str
     port: int
     username: str | None
-    password: str | None
+    password: str | None = field(repr=False)
 
 
 def parse_proxy_url(url: str) -> ParsedProxy:
@@ -200,9 +200,20 @@ class ProxiesMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             return await self._proxy(tx, proxy_id)
 
-    async def _proxy_url(self, proxy_id: UUID) -> str:
-        """URL с расшифрованными логином и паролем — только для аренды и проверок, не для админки."""
-        return self._proxy_url_of(await self._get_proxy(proxy_id))
+    async def _proxy_url(self, proxy_id: UUID, *, actor: str, reason: str) -> str:
+        """URL с расшифрованными логином и паролем вне аренды.
+
+        Событие аудита пишется в той же транзакции, что и чтение (S-7): без записи нет и раскрытия.
+        """
+        actor, reason = require_actor_and_reason(actor, reason, "раскрытие URL прокси")
+        async with self._tx(own=True) as tx:
+            row = await self._proxy(tx, proxy_id)
+            url = self._proxy_url_of(row)
+            await self._emit(
+                tx,
+                EventDraft("proxy.secret.revealed", actor=actor, proxy_id=row.id, data={"reason": reason}),
+            )
+        return url
 
     def _proxy_url_of(self, row: ProxyRow) -> str:
         secret = self.hub.envelope.open_model(ProxySecret, row.secret, associated_data("ih_proxies", row.id))

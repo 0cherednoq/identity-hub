@@ -25,7 +25,7 @@ async def test_rotate_key_upgrades_legacy_credentials(
     async with space._tx(own=True) as tx:
         await tx.put_credentials(identity.id, legacy)
 
-    revealed = await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin")
+    revealed = await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin", reason="тест")
     assert revealed["password"] == "legacy-pass"
 
     hub.envelope = Envelope(StaticSecretsProvider(TEST_KEYS, "k2"))

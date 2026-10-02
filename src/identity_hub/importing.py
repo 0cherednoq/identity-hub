@@ -55,14 +55,15 @@ class ImportRecord:
     external_ref: str
     id: UUID | None = None
     attributes: Mapping[str, Any] = field(default_factory=dict)
-    profile: Mapping[str, Any] = field(default_factory=dict)
+    profile: Mapping[str, Any] = field(default_factory=dict, repr=False)
     labels: Mapping[str, str | int | float | bool] = field(default_factory=dict)
     tags: frozenset[str] = frozenset()
     note: str | None = None
-    credentials: Mapping[str, Any] | None = None
-    sessions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    # секреты не попадают в repr: запись импорта печатают в логах и трассировках (R2-S14)
+    credentials: Mapping[str, Any] | None = field(default=None, repr=False)
+    sessions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict, repr=False)
     links: Mapping[str, str] = field(default_factory=dict)
-    proxy: str | None = None
+    proxy: str | None = field(default=None, repr=False)
     verifications: Mapping[str, str] = field(default_factory=dict)
 
 

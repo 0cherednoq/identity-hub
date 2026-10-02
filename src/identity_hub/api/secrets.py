@@ -66,9 +66,12 @@ class Secrets(Namespace):
         return await self._space._access_card(identity_id)
 
     async def reveal(
-        self, identity_id: UUID, secret: SecretRef | str, *, actor: str, reason: str | None = None
+        self, identity_id: UUID, secret: SecretRef | str, *, actor: str, reason: str
     ) -> dict[str, Any]:
-        """Раскрыть секрет; событие `identity.secret.revealed` пишется в той же транзакции."""
+        """Раскрыть секрет; событие `identity.secret.revealed` пишется в той же транзакции.
+
+        `actor` и `reason` обязательны и непусты: раскрытие без автора и причины не аудируется.
+        """
         return await self._space._reveal_secret(
             identity_id, str(SecretRef.parse(secret)), actor=actor, reason=reason
         )

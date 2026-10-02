@@ -57,7 +57,7 @@ flowchart LR
 | Состояния | `identity.standing.changed`, `auth.changed`, `availability.changed`, `verification.changed`, `tier.reached/lost`, `state.overridden`, `state.drift` | Реакция на баны, разлогины, карантин |
 | Вход | `identity.login.succeeded/failed`, `identity.challenge.opened/answered/expired` | Показать оператору, что нужен SMS-код |
 | Секреты | `identity.credentials.updated`, `session.updated`, `secret.revealed` | Аудит |
-| Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.pool.exhausted` | Мониторинг прокси |
+| Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.pool.exhausted`, `proxy.secret.revealed` | Мониторинг прокси, аудит |
 | Пулы | `pool.capacity.low/empty`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка аккаунтов, проблемы воркеров |
 
 События аренд и операций (`lease.*`, `operation.*`) — журнальные: они видны в

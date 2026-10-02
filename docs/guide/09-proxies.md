@@ -44,8 +44,13 @@ TELEGRAM = Service(
 )
 
 async with pool.lease() as lease:
-    client = make_client(proxy=lease.proxy)       # URL с логином и паролем — не логировать
+    proxy_url = lease.proxy.reveal() if lease.proxy else None   # строка с логином и паролем — не логировать
+    client = make_client(proxy=proxy_url)
 ```
+
+`lease.proxy` — `SecretValue`: в `repr`, `str` и f-строках пароль не виден. Вне аренды URL выдаёт
+`await space.proxies.url(proxy_id, actor="ops:ivan", reason="проверка канала")`; раскрытие пишет
+событие `proxy.secret.revealed` в той же транзакции, `actor` и `reason` обязательны.
 
 ```mermaid
 flowchart TD

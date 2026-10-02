@@ -118,7 +118,7 @@ report.succeeded, report.challenged, report.failed
 ```python
 async with pool.lease(for_operation="read_channel") as lease:
     session = await lease.session()             # расшифрованная модель или None
-    client = make_client(session, proxy=lease.proxy)
+    client = make_client(session, proxy=lease.proxy.reveal() if lease.proxy else None)
     ...
     await lease.save_session(session.model_copy(update={"dc_id": client.dc_id}))
 ```
@@ -136,7 +136,7 @@ async with pool.lease(for_operation="read_channel") as lease:
 # no_session-аккаунт не пройдёт обычный пул (он требует authenticated),
 # поэтому берём его под служебной операцией probe (needs_auth=False)
 async with pool.lease(for_operation="probe", among=[identity_id]) as lease:
-    session = await my_login(await lease.credentials(), proxy=lease.proxy)
+    session = await my_login(await lease.credentials(), proxy=lease.proxy.reveal() if lease.proxy else None)
     await lease.save_session(session)
     await lease.mark_authenticated()          # auth → authenticated
 ```

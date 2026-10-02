@@ -19,7 +19,7 @@ parsers = space.pools.define("parsers", service=TELEGRAM, tags=["parser"])
 
 async def parse(channel: str):
     async with parsers.lease(for_operation="read_channel", wait=60) as lease:
-        client = make_client(await lease.session(), proxy=lease.proxy)
+        client = make_client(await lease.session(), proxy=lease.proxy.reveal() if lease.proxy else None)
         async with lease.operation("read_channel", key=f"read:{channel}:{hour_bucket()}"):
             return await client.read_history(channel)
 ```

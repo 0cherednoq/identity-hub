@@ -51,7 +51,7 @@ class _ProbeContext:
 
     @property
     def proxy_url(self) -> str | None:
-        return self._lease.proxy
+        return self._lease._proxy_url()
 
     async def credentials(self) -> BaseModel | None:
         return await self._lease.credentials()

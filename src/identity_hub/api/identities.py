@@ -142,11 +142,11 @@ class IdentityCreate:
     service: str | Service
     external_ref: str
     id: UUID | None = None
-    credentials: SchemaInput | None = None
-    session: SchemaInput | None = None
-    sessions: Mapping[str, SchemaInput] = field(default_factory=dict)
+    credentials: SchemaInput | None = field(default=None, repr=False)
+    session: SchemaInput | None = field(default=None, repr=False)
+    sessions: Mapping[str, SchemaInput] = field(default_factory=dict, repr=False)
     attributes: SchemaInput | None = None
-    profile: SchemaInput | None = None
+    profile: SchemaInput | None = field(default=None, repr=False)
     labels: Mapping[str, Any] = field(default_factory=dict)
     tags: Collection[str] = ()
     note: str | None = None

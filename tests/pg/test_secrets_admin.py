@@ -31,11 +31,13 @@ async def test_update_and_reveal_with_audit(
     await space.secrets.replace_session(r.identity_id, {"auth_key": "K2"}, actor="admin", slot="default")
     creds = await space.secrets.reveal(r.identity_id, "credentials", actor="evgeny", reason="поддержка")
     assert creds == {"phone": "+1", "password": "new"}
-    assert (await space.secrets.reveal(r.identity_id, "session", actor="evgeny"))["auth_key"] == "K2"
+    assert (await space.secrets.reveal(r.identity_id, "session", actor="evgeny", reason="тест"))[
+        "auth_key"
+    ] == "K2"
     with pytest.raises(NotFound):
-        await space.secrets.reveal(r.identity_id, "session:backup", actor="evgeny")
+        await space.secrets.reveal(r.identity_id, "session:backup", actor="evgeny", reason="тест")
     with pytest.raises(ValidationFailed):
-        await space.secrets.reveal(r.identity_id, "token", actor="evgeny")
+        await space.secrets.reveal(r.identity_id, "token", actor="evgeny", reason="тест")
 
     async with sessionmaker() as s:
         events = list((await s.execute(select(EventRecord).order_by(EventRecord.id))).scalars())

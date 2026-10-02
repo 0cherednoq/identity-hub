@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
-from identity_hub.crypto import associated_data
+from identity_hub.crypto import SecretValue, associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.redaction import sanitize_text
@@ -30,6 +30,7 @@ from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionSt
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseLost,
+    LeaseOwnershipLost,
     LeaseUnavailable,
     StaleFencing,
     ValidationFailed,
@@ -125,8 +126,13 @@ class Lease:
         return self._row.proxy_id
 
     @property
-    def proxy(self) -> str | None:
-        """URL прокси аренды с логином и паролем (для клиента платформы; не логировать)."""
+    def proxy(self) -> SecretValue | None:
+        """URL прокси аренды с логином и паролем: строка для клиента платформы — `lease.proxy.reveal()`."""
+        url = self._proxy_url()
+        return SecretValue(url) if url is not None else None
+
+    def _proxy_url(self) -> str | None:
+        self.check()
         if self.proxy_info is None:
             return None
         return self.pool.space._proxy_url_of(self.proxy_info)  # type: ignore[attr-defined, no-any-return]
@@ -140,7 +146,9 @@ class Lease:
         return LeaseContext(self.lease_id, self.identity_id, self.service, self.pool.name, self.holder)
 
     def check(self) -> None:
-        """Бросить LeaseLost, если аренда потеряна (для участков без await)."""
+        """Бросить LeaseLost, если аренда потеряна или уже освобождена (для участков без await)."""
+        if self._released:
+            raise LeaseLost(self.lease_id, self._lost or "released")
         if self._deadline_passed() and self._lost is None:
             self._lost = "heartbeat"
         if self._lost is not None:
@@ -303,6 +311,7 @@ class Lease:
         """Расшифрованные credentials — только под арендой (FR-5.2)."""
         self.check()
         async with self.pool.space._tx(own=True) as tx:
+            await self._check_ownership(tx)
             payload = await tx.get_credentials(self.identity_id)
         if payload is None:
             return None
@@ -313,6 +322,7 @@ class Lease:
         """Расшифрованная действующая сессия слота или None."""
         self.check()
         async with self.pool.space._tx(own=True) as tx:
+            await self._check_ownership(tx)
             found = await tx.get_session(self.identity_id, slot)
         if found is None or found[1] != SessionStatus.VALID:
             return None
@@ -363,6 +373,11 @@ class Lease:
                 Command(AuthState.AUTHENTICATED, actor=self.holder),
                 lease_id=self.lease_id,
             )
+
+    async def _check_ownership(self, tx: StoreTx) -> None:
+        """Чтение секрета: аккаунт не отозван и не перешёл другому воркеру (без блокировки; fence — I2.3)."""
+        if await tx.current_fencing(self.identity_id) != self.fencing:
+            raise LeaseOwnershipLost(self.lease_id, "fencing")
 
     async def _check_fencing(self, tx: StoreTx) -> None:
         current = await tx.current_fencing(self.identity_id, lock=True)

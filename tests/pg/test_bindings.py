@@ -55,7 +55,7 @@ async def test_sticky_binding_least_loaded_and_capacity(
     assert await _events(sessionmaker, "proxy.pool.exhausted")
 
     lease = leases[0]
-    assert lease.proxy is not None and lease.proxy.startswith("socks5://u:p@10.0.0.")
+    assert lease.proxy is not None and str(lease.proxy.reveal()).startswith("socks5://u:p@10.0.0.")
     await lease.release()
     again = await pool.acquire(among=[lease.identity_id])
     assert again.proxy_id == lease.proxy_id  # sticky: тот же прокси
@@ -111,7 +111,7 @@ async def test_non_sticky_does_not_bind(
     await add_proxy(space, "http://10.0.0.1:80", pool="res")
     await make_identity(space, service="tg_free")
     lease = await space.pools.define("p", service="tg_free").acquire()
-    assert lease.proxy == "http://10.0.0.1:80"
+    assert lease.proxy is not None and lease.proxy.reveal() == "http://10.0.0.1:80"
     assert await _bindings(sessionmaker) == {}
 
 

@@ -29,10 +29,11 @@ pytestmark = pytest.mark.unit
 
 
 def test_catalog_covers_spec_and_region_events() -> None:
-    assert len([s for s in CATALOG.values() if s.external]) == 39
+    assert len([s for s in CATALOG.values() if s.external]) == 40  # +proxy.secret.revealed (F1.6a)
     for spec in (LIFECYCLE, STANDING, AUTH, AVAILABILITY, PROXY_HEALTH, VERIFICATION):
         assert spec.event_type in CATALOG
     assert "identity.state.drift" in CATALOG
+    assert CATALOG["proxy.secret.revealed"].group == "proxy"
     assert CATALOG["identity.session.updated"].external
     assert CATALOG["identity.tier.reached"].group == "regions"
     assert CATALOG["identity.tier.lost"].group == "regions"

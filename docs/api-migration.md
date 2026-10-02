@@ -33,7 +33,7 @@
 - `space.add_proxy(url, pool=)` → `proxies.ensure(url, group=)` → `(Proxy, created)`;
   `space.add_proxies` → `proxies.create_many(..., on_conflict=)` → `created`/`skipped`.
 - `space.import_run` → `imports.get`: вместо `None` — `NotFound`.
-- `space.proxy_url_of(row)` → `await proxies.url(proxy_id)`.
+- `space.proxy_url_of(row)` → `await proxies.url(proxy_id, actor=..., reason=...)` (раскрытие аудируется).
 - `space.run_login` возвращает `LoginOutcome`; сравнение со строками прежнее.
 
 Термин: публичные имена используют `identity` (аккаунт во внешнем сервисе), не `account`.
@@ -87,7 +87,7 @@
 | `space.proxy_detail` | `space.admin.proxy_detail` | I8.8a |  |
 | `space.proxy_health` | `space.proxies.health` | I8.6 | Политика здоровья прокси хаба |
 | `space.proxy_overview` | `space.admin.proxy_overview` | I8.8a |  |
-| `space.proxy_url_of` | `space.proxies.url` | I8.6 | Теперь `await space.proxies.url(proxy_id)`; URL с паролем — не для логов |
+| `space.proxy_url_of` | `space.proxies.url` | I8.6 | Теперь `await space.proxies.url(proxy_id, actor=..., reason=...)`; URL с паролем — не для логов |
 | `space.rebind_proxy` | `space.proxies.rebind` | I8.6 |  |
 | `space.recheck_proxies` | `space.proxies.recheck_due` | I8.6 | Прокси, у которых наступил срок перепроверки |
 | `space.recheck_proxy` | `space.proxies.recheck` | I8.6 |  |

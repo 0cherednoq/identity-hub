@@ -100,7 +100,7 @@ class _LoginContext:
 
     @property
     def proxy_url(self) -> str | None:
-        return self._lease.proxy
+        return self._lease._proxy_url()
 
     @property
     def challenge_answer(self) -> str | None:

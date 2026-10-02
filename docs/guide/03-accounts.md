@@ -277,10 +277,15 @@ async with pool.lease() as lease:
 card = await space.secrets.describe(identity_id)        # есть ли credentials, какие слоты сессий
 from identity_hub import SecretRef
 data = await space.secrets.reveal(identity_id, SecretRef.CREDENTIALS, actor="admin:ivan", reason="миграция")
-data = await space.secrets.reveal(identity_id, SecretRef.session("web"), actor="admin:ivan")
+data = await space.secrets.reveal(identity_id, SecretRef.session("web"), actor="admin:ivan", reason="миграция")
 ```
 
-Каждое раскрытие пишет событие `identity.secret.revealed` в той же транзакции.
+Каждое раскрытие пишет событие `identity.secret.revealed` в той же транзакции. `actor` и `reason`
+обязательны и непусты: без автора и причины секрет не раскрывается.
+
+Объект аренды отдаёт секреты, только пока аренда действует. После `release()`, выхода из
+`async with`, потери или отзыва аренды, а также когда аккаунт уже взял другой воркер,
+`lease.credentials()`, `lease.session()`, `lease.save_session()` и `lease.proxy` бросают `LeaseLost`.
 
 ## Связи между аккаунтами
 

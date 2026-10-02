@@ -27,6 +27,7 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- Событие `proxy.secret.revealed` (аудит `space.proxies.url`).
 - `WebhookPolicy.proxy` — явный исходящий прокси доставки вебхуков; ошибка доставки
   `ForbiddenTarget`, если получатель резолвится в приватный или служебный адрес.
 - `StorageError` (код `storage_error`): ошибка хранилища без SQL и параметров запроса;
@@ -48,6 +49,14 @@
   не вырезаются; `api_key`, `authorization`, `jwt`, `otp`, `passphrase`, `proxy` — вырезаются),
   проверяет строки в списках и заменяет объект неизвестного типа его именем. Те же правила и лимит
   размера действуют для полей `extra` в `ih_lease_logs`.
+- `Lease.proxy` возвращает `SecretValue`; строка URL — `lease.proxy.reveal()`. `LoginContext.proxy_url`
+  и `ProbeContext.proxy_url` остаются строкой.
+- `space.proxies.url(proxy_id, *, actor, reason)` и `space.secrets.reveal(..., actor, reason)`:
+  автор и причина обязательны и непусты.
+- `lease.check()`, `credentials()`, `session()`, `save_session()` и `lease.proxy` после освобождения
+  аренды бросают `LeaseLost`; чтение секретов сверяет fencing и замечает отзыв до heartbeat.
+- `repr` `ImportRecord`, `ParsedProxy` и `LeaseRow` не содержит credentials, сессий, URL и пароля
+  прокси, `token` аренды.
 - `WebhookEndpoint.url` — `scheme://host/***`: путь и query URL вебхука наружу не отдаются.
   Имя получателя без точки (`redis`, `metadata`) отклоняется при создании endpoint'а.
 - HTTP-клиенты библиотеки (вебхуки, Telegram) не читают `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`.

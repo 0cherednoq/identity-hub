@@ -78,8 +78,8 @@ async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
     assert "old-pass" not in repr(card) and "k1" not in repr(card)
 
     creds = await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin", reason="проверка")
-    web = await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin")
-    legacy_string = await space.secrets.reveal(identity.id, "session:web", actor="admin")
+    web = await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin", reason="тест")
+    legacy_string = await space.secrets.reveal(identity.id, "session:web", actor="admin", reason="тест")
     assert creds["password"] == "old-pass"
     assert web == legacy_string and web["auth_key"] == "k2"
 
@@ -87,8 +87,10 @@ async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
         identity.id, {"phone": "+40", "password": "new-pass"}, actor="admin"
     )
     await space.secrets.replace_session(identity.id, {"auth_key": "k3"}, actor="admin", slot="web")
-    assert (await space.secrets.reveal(identity.id, "credentials", actor="admin"))["password"] == "new-pass"
-    assert (await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin"))[
+    assert (await space.secrets.reveal(identity.id, "credentials", actor="admin", reason="тест"))[
+        "password"
+    ] == "new-pass"
+    assert (await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin", reason="тест"))[
         "auth_key"
     ] == "k3"
     # каждое раскрытие и замена — событие identity: аудит не теряется
@@ -98,9 +100,9 @@ async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
 async def test_reveal_missing_and_unknown(space: SpaceHandle) -> None:
     identity = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+50"))
     with pytest.raises(NotFound):
-        await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin")
+        await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin", reason="тест")
     with pytest.raises(ValidationFailed):
-        await space.secrets.reveal(identity.id, "password", actor="admin")
+        await space.secrets.reveal(identity.id, "password", actor="admin", reason="тест")
     with pytest.raises(ValidationFailed):
         SecretRef.evidence("")
 
@@ -124,7 +126,7 @@ async def test_legacy_import_and_secret_names_warn(space: SpaceHandle) -> None:
         )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        await space.reveal_secret(identity_id, "credentials", actor="admin")
+        await space.reveal_secret(identity_id, "credentials", actor="admin", reason="тест")
     assert len(caught) == 1 and "zz-secret-99" not in str(caught[0].message)
 
 

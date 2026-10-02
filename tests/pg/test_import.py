@@ -86,7 +86,7 @@ async def test_verify_sessions_and_update_session(
     assert len(report.updated) == 1
     identity = await _identity(sessionmaker, "+1")
     assert identity.auth_state == "authenticated"
-    assert (await space.secrets.reveal(identity.id, "session", actor="t"))["auth_key"] == "new"
+    assert (await space.secrets.reveal(identity.id, "session", actor="t", reason="тест"))["auth_key"] == "new"
     failing = await space.imports.run(service="fake_tg", records=[rec("+1")], on_existing="fail")
     assert failing.failed == [("+1", "уже существует")]
 

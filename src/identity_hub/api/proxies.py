@@ -112,9 +112,12 @@ class Proxies(Namespace):
         """Политика здоровья прокси хаба: пороги ошибок, backoff перепроверки."""
         return self._space._proxy_health
 
-    async def url(self, proxy_id: UUID) -> str:
-        """URL с логином и паролем — только для своего сетевого клиента, не для логов и UI."""
-        return await self._space._proxy_url(proxy_id)
+    async def url(self, proxy_id: UUID, *, actor: str, reason: str) -> str:
+        """URL с логином и паролем — только для своего сетевого клиента, не для логов и UI.
+
+        Раскрытие аудируется: событие `proxy.secret.revealed` пишется в той же транзакции.
+        """
+        return await self._space._proxy_url(proxy_id, actor=actor, reason=reason)
 
     # ------------------------------------------------------------------ создание
 

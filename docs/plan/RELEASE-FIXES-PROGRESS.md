@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F1.6a падающие тесты: секреты после release/revoke/перехвата, аудит proxies.url, reveal без actor/reason, repr
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Lease: check() после release, сверка fencing при чтении, Lease.proxy — SecretValue
-  - [ ] proxies.url с actor/reason и событием proxy.secret.revealed; secrets.reveal требует reason
-  - [ ] repr ImportRecord, LeaseRow, ParsedProxy, IdentityCreate
-  - [ ] документация, README, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -31,7 +27,7 @@
 | F1.3 | Ошибки БД без параметров и `token` | F0.1 | done |  |  |
 | F1.4 | Свободный текст в истории, событиях и логах аренды | F0.1 | done |  |  |
 | F1.5 | Исходящие HTTP-запросы | F0.1 | done |  |  |
-| F1.6a | Секреты вне аренды, аудит и repr | F0.1 | in_progress |  | часть F1.6 (D-156) |
+| F1.6a | Секреты вне аренды, аудит и repr | F0.1 | done |  | часть F1.6 (D-156) |
 | F1.6b | Публичная поверхность хаба | F1.6a | todo |  | часть F1.6 (D-156) |
 | F1.7 | Провайдеры ключей | F0.1 | todo |  |  |
 | F1.8 | Ротация ключей | F0.1 | todo |  |  |
@@ -66,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 7 / 41 done
+**Итого:** 8 / 41 done
 
 ## Журнал сессий
 
@@ -79,3 +75,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F1.3 · done · DBAPIError → DatabaseBusy/StorageError без SQL, параметров и цепочки исключений; heartbeat/release/импорт пишут describe_error(); D-154; 836 passed · дальше F1.4
 2026-10-02 · F1.4 · done · domain/redaction.py (sanitize_text, is_secret_key); last_error и data.error — имя типа; raw_status/code/reason/hint обрезаются и очищаются в машине регионов; scrub по главному слову имени + строки в списках + имя типа для неизвестных объектов; LeaseLogSink с лимитами и buffer_ttl; IdentityHub(redact_refs_in_events); 900 passed · дальше F1.5: черновики в scratchpad/f15wip (outbound.py с PinnedBackend, test_outbound.py)
 2026-10-02 · F1.5 · done · dispatch/outbound.py: разбор хоста во всех формах inet_aton, PinnedBackend (резолв, проверка каждого адреса, соединение с проверенным IP), create_client с trust_env=False, маскирование URL в логах httpx/httpcore; WebhookPolicy.proxy; WebhookEndpoint.url — scheme://host/***; Telegram и send_test без исключения httpx в цепочке; D-155; 956 passed · дальше F1.6
+2026-10-02 · F1.6a · done · Lease.check() бросает LeaseLost после освобождения; credentials()/session() сверяют fencing в транзакции чтения (отзыв и перехват видны до heartbeat, LeaseOwnershipLost); Lease.proxy — SecretValue; proxies.url(actor, reason) с событием proxy.secret.revealed; secrets.reveal требует непустые actor и reason; repr ImportRecord/LeaseRow/ParsedProxy/IdentityCreate без секретов; 983 passed, admin unit 67 passed · дальше F1.6b: приватные store/envelope и служебные объекты хаба (≈250 обращений в src, admin, tests), публичный контракт в docs/guide/api.md, tests/test_public_api.py

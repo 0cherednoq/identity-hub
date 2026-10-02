@@ -11,7 +11,7 @@ from uuid import UUID
 
 from identity_hub.domain.data import validate_json_payload
 from identity_hub.domain.redaction import REDACTED
-from identity_hub.errors import NotFound
+from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import EventDraft, scrub
 from identity_hub.store.base import IdentityRow, SpaceRef, StoreTx
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from identity_hub.dispatch.webhooks import Webhooks
     from identity_hub.hub import IdentityHub
 
-__all__ = ["SpaceBase", "logger"]
+__all__ = ["SpaceBase", "logger", "require_actor_and_reason"]
 
 logger = logging.getLogger("identity_hub")
 
@@ -34,6 +34,15 @@ def _without_refs(data: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: (REDACTED if key in _REF_FIELDS and value is not None else value) for key, value in data.items()
     }
+
+
+def require_actor_and_reason(actor: object, reason: object, action: str) -> tuple[str, str]:
+    """Автор и причина аудируемой команды без краевых пробелов; пустые — `ValidationFailed`."""
+    if not isinstance(actor, str) or not actor.strip():
+        raise ValidationFailed(f"{action} требует автора")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValidationFailed(f"{action} требует причины")
+    return actor.strip(), reason.strip()
 
 
 class SpaceBase:

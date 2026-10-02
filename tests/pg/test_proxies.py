@@ -71,8 +71,10 @@ async def test_add_dedup_and_secret(
     row = await _proxy_row(sessionmaker, proxy_id)
     assert (row.host, row.port, row.scheme, row.status) == ("1.2.3.4", 1080, "socks5", "alive")
     assert b"secret" not in row.ciphertext
-    assert await space.proxies.url(proxy_id) == "socks5://user:secret@1.2.3.4:1080"
-    assert await space.proxies.url(many.created[0].id) == "http://5.6.7.8:3128"
+    assert (
+        await space.proxies.url(proxy_id, actor="ops", reason="тест") == "socks5://user:secret@1.2.3.4:1080"
+    )
+    assert await space.proxies.url(many.created[0].id, actor="ops", reason="тест") == "http://5.6.7.8:3128"
 
 
 async def _proxy_row(sm: async_sessionmaker[AsyncSession], proxy_id: Any) -> Any:

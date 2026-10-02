@@ -82,7 +82,7 @@ async def worker(space):
         try:
             async with pool.lease(for_operation="send_message", wait=30, on_lost=client.disconnect) as lease:
                 session = await lease.session()
-                client = make_client(session, proxy=lease.proxy)
+                client = make_client(session, proxy=lease.proxy.reveal() if lease.proxy else None)
                 async with lease.operation("send_message", key=f"send:{job.id}") as op:
                     if not op.duplicate:
                         await client.send(job.chat, job.text)
@@ -151,10 +151,10 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 | `lease.identity_id`, `lease.identity` | id и снимок аккаунта без секретов |
 | `await lease.credentials()`, `await lease.session(slot)` | расшифрованные секреты |
 | `await lease.save_session(...)`, `await lease.mark_authenticated()` | запись с проверкой fencing |
-| `lease.proxy` | URL прокси **с логином и паролем** — не логируйте |
+| `lease.proxy` | `SecretValue` с URL прокси; строка **с логином и паролем** — `lease.proxy.reveal()`, не логируйте |
 | `lease.operation(kind, key=...)` | операция на платформе, см. [лимиты](08-limits.md) |
 | `lease.verification(factor)` | процесс верификации |
-| `lease.lost`, `lease.check()` | состояние аренды |
+| `lease.lost`, `lease.check()` | состояние аренды; `check()` бросает `LeaseLost` и после освобождения |
 | `lease.context` | контекст для логов (`lease_id`, `identity_id`, `pool`) |
 
 В логах поля аренды подставляются автоматически: `LeaseContextFilter` для `logging` и
@@ -163,7 +163,7 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 Если подключён `hub.lease_log_sink`, записи уровня `WARNING` и выше сохраняются в
 `ih_lease_logs`. Сообщение и поля `extra` очищаются так же, как данные событий, а размер
 ограничен (`LeaseLogPolicy.max_field_chars`, `max_entry_bytes`). Всё равно не логируйте
-`lease.proxy` и секреты: обычные обработчики логов их не вырезают.
+`lease.proxy.reveal()` и секреты: обычные обработчики логов их не вырезают.
 
 ## Разделяемый режим (SHARED)
 

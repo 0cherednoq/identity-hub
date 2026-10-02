@@ -13,7 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from identity_hub._space import SpaceBase
+from identity_hub._space import SpaceBase, require_actor_and_reason
 from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data, reveal
 from identity_hub.domain.data import validate_model
@@ -85,14 +85,13 @@ class SecretsAdminMixin(SpaceBase):
             )
 
     async def _reveal_secret(
-        self, identity_id: UUID, field: str, *, actor: str, reason: str | None = None
+        self, identity_id: UUID, field: str, *, actor: str, reason: str
     ) -> dict[str, Any]:
         """Раскрыть секрет для админки: `credentials`, `session[:slot]`, `profile`, `evidence:<factor>`.
 
         Событие аудита пишется в той же транзакции, что и чтение (S-7): без записи нет и раскрытия.
         """
-        if not actor:
-            raise ValidationFailed("раскрытие секрета требует автора")
+        actor, reason = require_actor_and_reason(actor, reason, "раскрытие секрета")
         kind, _, key = field.partition(":")
         envelope = self.hub.envelope
         async with self._tx(own=True) as tx:

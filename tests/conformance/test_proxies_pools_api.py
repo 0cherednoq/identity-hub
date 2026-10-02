@@ -28,7 +28,9 @@ async def test_create_get_ensure_and_conflict(space: SpaceHandle) -> None:
     assert proxy.status is ProxyStatus.ALIVE
     assert "pw-777" not in repr(proxy)
     assert (await space.proxies.get(proxy.id)).id == proxy.id
-    assert await space.proxies.url(proxy.id) == "socks5://user:pw-777@10.0.0.1:1080"
+    assert (
+        await space.proxies.url(proxy.id, actor="ops", reason="тест") == "socks5://user:pw-777@10.0.0.1:1080"
+    )
 
     again, created = await space.proxies.ensure("socks5://user:pw-777@10.0.0.1:1080", group="res")
     assert created is False and again.id == proxy.id

@@ -362,7 +362,7 @@ class LeaseRow:
     """Живая аренда (ih_leases) или, в shared-режиме, только строка истории."""
 
     lease_id: UUID
-    token: UUID
+    token: UUID = field(repr=False)  # приватный: в repr и логах не появляется (FR-6.4)
     identity_id: UUID
     fencing: int
     pool: str
