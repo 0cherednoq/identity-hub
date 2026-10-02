@@ -61,6 +61,23 @@ __all__ = ["Lease", "OnLost", "acquire", "lease_scope"]
 OnLost = Callable[[], Any]
 """Колбэк потери аренды: синхронный или async (например, `client.disconnect`)."""
 
+HEARTBEAT_RETRY_BASE = 0.5
+"""Пауза перед первым повтором неудачного heartbeat, секунды; дальше удваивается."""
+HEARTBEAT_MIN_BUDGET = 1.0
+"""Время, которое повтор heartbeat оставляет самой попытке, если дедлайн это позволяет."""
+RELEASE_TIMEOUT = 10.0
+"""Сколько освобождение аренды ждёт записи в БД, даже если владеющую задачу отменяют."""
+PROXY_EXHAUSTED_INTERVAL = 60.0
+"""Не чаще одного события `proxy.pool.exhausted` на пул в процессе за этот интервал, секунды."""
+
+
+def _end_reason(reason: LeaseEndReason | str) -> LeaseEndReason:
+    try:
+        return LeaseEndReason(reason)
+    except ValueError:
+        allowed = ", ".join(item.value for item in LeaseEndReason)
+        raise ValidationFailed(f"причина завершения аренды — одно из: {allowed}") from None
+
 
 class Lease:
     """Эксклюзивная аренда аккаунта.
@@ -147,7 +164,7 @@ class Lease:
 
     def check(self) -> None:
         """Бросить LeaseLost, если аренда потеряна или уже освобождена (для участков без await)."""
-        if self._released:
+        if self._closed:  # release() вызван: работать под арендой нельзя, даже если запись не прошла
             raise LeaseLost(self.lease_id, self._lost or "released")
         if self._deadline_passed() and self._lost is None:
             self._lost = "heartbeat"
@@ -179,25 +196,37 @@ class Lease:
     async def _heartbeat_loop(self) -> None:
         clock = self.pool.space.hub.clock
         interval = self.pool.timing.heartbeat.total_seconds()
+        failures = 0
         while not self._closed:
-            await asyncio.sleep(max(0.0, min(interval, self._deadline() - clock.monotonic())))
+            remaining = self._deadline() - clock.monotonic()
+            if failures == 0:
+                pause = min(interval, remaining)
+            else:
+                # После сбоя не ждём полный интервал: следующая попытка пришлась бы на сам дедлайн
+                # и один короткий сбой БД отменял бы все аренды воркера (R1-03).
+                backoff = min(interval, HEARTBEAT_RETRY_BASE * 2 ** (failures - 1))
+                pause = min(backoff, remaining - min(HEARTBEAT_MIN_BUDGET, remaining / 2))
+            await asyncio.sleep(max(0.0, pause))
             if self._closed:
                 return
             sent_at = clock.monotonic()
             confirmed = False
             try:
-                budget = max(0.001, self._deadline() - sent_at)
-                expires_at = await asyncio.wait_for(self._extend(), timeout=budget)
+                # одна попытка не забирает весь остаток: зависший запрос оставляет время на повтор
+                budget = min(self._deadline() - sent_at, max(interval, HEARTBEAT_MIN_BUDGET))
+                expires_at = await asyncio.wait_for(self._extend(), timeout=max(0.001, budget))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 # без traceback и текста: в ошибке БД бывают параметры запроса с token аренды (S-8)
                 logger.warning("heartbeat аренды %s не прошёл: %s", self.lease_id, describe_error(exc))
+                failures += 1
             else:
                 if expires_at is None:
                     await self._mark_lost("revoked")  # аренды с нашим token больше нет
                     return
                 confirmed = True
+                failures = 0
                 self._last_ok = sent_at
                 self._row = replace(self._row, expires_at=expires_at)
             if not confirmed and self._deadline_passed():
@@ -389,32 +418,31 @@ class Lease:
     async def release(
         self, reason: LeaseEndReason | str = LeaseEndReason.RELEASED, error: str | None = None
     ) -> None:
-        """Освободить аренду (повтор — no-op). Обычно вызывается выходом из `async with pool.lease()`."""
+        """Освободить аренду. Обычно вызывается выходом из `async with pool.lease()`.
+
+        `reason` — `LeaseEndReason` или его строковое значение; другая строка — `ValidationFailed`,
+        аренда при этом не тронута. Запись идёт под `asyncio.shield` с таймаутом
+        `RELEASE_TIMEOUT`: отмена вызывающей задачи (в том числе повторная) не прерывает её и
+        пробрасывается после завершения. Если запись не удалась, в лог пишется предупреждение,
+        а повторный вызов пробует снова; после успеха повтор — no-op.
+        """
+        end = _end_reason(reason)
+        self._closed = True  # с этого момента check() бросает LeaseLost
+        if self._released:
+            return
+        task = asyncio.ensure_future(self._release(end, error))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():  # запись ограничена RELEASE_TIMEOUT, ждём её при любой отмене
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.shield(task)
+            raise
+
+    async def _release(self, end: LeaseEndReason, error: str | None) -> None:
         await self._stop_heartbeat()
         if self._released:
             return
-        self._released = True
-        metric_reason = str(reason)
-        record_metric(
-            self.pool.space.hub.metrics,
-            "histogram",
-            "identity_hub_lease_duration_seconds",
-            max(0.0, self.pool.space.hub.clock.monotonic() - self._started_at),
-            space=self.pool.space.slug,
-            service=self.service,
-            pool=self.pool.name,
-            reason=metric_reason,
-        )
-        if LeaseEndReason(reason) is not LeaseEndReason.RELEASED:
-            record_metric(
-                self.pool.space.hub.metrics,
-                "counter",
-                "identity_hub_failures_total",
-                space=self.pool.space.slug,
-                service=self.service,
-                scope="lease",
-                reason=metric_reason,
-            )
         await self._flush_logs(final=True)
         counters, self._counters = self._counters, LeaseCounters.empty()
         if error is not None:
@@ -423,10 +451,10 @@ class Lease:
             LeaseEndReason.RELEASED: "lease.released",
             LeaseEndReason.FAILED: "lease.failed",
             LeaseEndReason.LOST: "lease.lost",
-        }.get(LeaseEndReason(reason), "lease.released")
+        }.get(end, "lease.released")
         try:
-            async with self.pool.space._tx(own=True) as tx:
-                closed = await tx.release_lease(self._row, str(reason), counters, shared=self.pool.shared)
+            async with asyncio.timeout(RELEASE_TIMEOUT), self.pool.space._tx(own=True) as tx:
+                closed = await tx.release_lease(self._row, str(end), counters, shared=self.pool.shared)
                 if closed:
                     await self.pool.space._emit(
                         tx,
@@ -438,13 +466,37 @@ class Lease:
                             lease_id=self.lease_id,
                             data={
                                 "pool": self.pool.name,
-                                "reason": str(reason),
+                                "reason": str(end),
                                 "error": counters.last_error,
                             },
                         ),
                     )
         except Exception as exc:
+            self._merge_back(counters)  # повторный release() допишет счётчики
             logger.warning("не удалось освободить аренду %s: %s", self.lease_id, describe_error(exc))
+            return
+        self._released = True  # только после успешной записи: иначе повтор был бы no-op (R1-14)
+        hub = self.pool.space.hub
+        record_metric(
+            hub.metrics,
+            "histogram",
+            "identity_hub_lease_duration_seconds",
+            max(0.0, hub.clock.monotonic() - self._started_at),
+            space=self.pool.space.slug,
+            service=self.service,
+            pool=self.pool.name,
+            reason=str(end),
+        )
+        if end is not LeaseEndReason.RELEASED:
+            record_metric(
+                hub.metrics,
+                "counter",
+                "identity_hub_failures_total",
+                space=self.pool.space.slug,
+                service=self.service,
+                scope="lease",
+                reason=str(end),
+            )
 
 
 @contextlib.asynccontextmanager
@@ -529,6 +581,7 @@ async def acquire(
     wait_seconds = wait.total_seconds() if isinstance(wait, timedelta) else float(wait or 0)
     deadline = clock.monotonic() + wait_seconds
     delay = 0.05
+    exhausted_reported = False
     while True:
         try:
             async with space._tx(own=True) as tx:
@@ -607,7 +660,9 @@ async def acquire(
             query = replace(query, exclude=query.exclude | {skip.identity_id})
             continue
         except _PoolExhausted:
-            await _pool_exhausted(pool)
+            if not exhausted_reported:  # одно событие на вызов, а не на каждую итерацию ожидания
+                exhausted_reported = True
+                await _pool_exhausted(pool)
         remaining = deadline - clock.monotonic()
         if remaining <= 0:
             elapsed = max(0.0, clock.monotonic() - started)
@@ -712,6 +767,14 @@ async def _resolve_proxy(
 async def _pool_exhausted(pool: Pool) -> None:
     policy = pool.proxy_policy
     assert policy is not None
+    hub = pool.space.hub
+    # событие внешнее и critical: каждый ждущий воркер не должен слать его в вебхуки и Telegram
+    key = (pool.space.slug, pool.name, policy.group)
+    now = hub.clock.monotonic()
+    last = hub._proxy_exhausted_at.get(key)
+    if last is not None and now - last < PROXY_EXHAUSTED_INTERVAL:
+        return
+    hub._proxy_exhausted_at[key] = now
     try:
         async with pool.space._tx(own=True) as tx:
             await pool.space._emit(

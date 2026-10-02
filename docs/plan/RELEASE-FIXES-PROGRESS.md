@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F2.1 Heartbeat и освобождение аренды
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: один неудачный heartbeat, двойная отмена при release, release(reason=строка), частота proxy.pool.exhausted
-  - [ ] heartbeat: повтор с backoff в пределах дедлайна
-  - [ ] release: shield с таймаутом, _released после успешной записи, проверка reason
-  - [ ] proxy.pool.exhausted: одно событие на acquire и не чаще раза в минуту на пул
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный, наборы аренды ×3
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -36,7 +31,7 @@
 | F1.6b | Публичная поверхность хаба | F1.6a | done |  | часть F1.6 (D-156) |
 | F1.7 | Провайдеры ключей | F0.1 | done |  |  |
 | F1.8 | Ротация ключей | F0.1 | done |  |  |
-| F2.1 | Heartbeat и освобождение аренды | F0.1 | in_progress |  |  |
+| F2.1 | Heartbeat и освобождение аренды | F0.1 | done |  |  |
 | F2.2 | Чистильщик аренд и удаление аккаунта | F0.1 | todo |  |  |
 | F2.3 | Часы и ожидание | F2.1 | todo |  |  |
 | F2.4 | Потерянные обновления identity | F0.1 | todo |  |  |
@@ -67,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 11 / 41 done
+**Итого:** 12 / 41 done
 
 ## Журнал сессий
 
@@ -84,3 +79,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F1.6b · done · store, envelope, import_runner, metric_rollups, rollups, state_snapshots, webhook_dispatcher, notification_dispatcher, metrics_reporter хаба — приватные; публичные hub.sessionmaker и hub.webhook_policy; admin без PgStore и hub.store; контракт хаба в docs/guide/api.md и тест поверхности; D-158; 984 passed, admin unit 67 passed · дальше F1.7
 2026-10-02 · F1.7 · done · parse_keys: ошибки по номеру записи без ключа и key_id, BOM, алфавит и длина key_id, отказ ключу из одинаковых байтов; keys() только для чтения, запрет pickle; FileSecretsProvider.reload() с сохранением прежних ключей при ошибке; порядок ротации в docs/cli.md; D-159; 1005 passed · дальше F1.8
 2026-10-02 · F1.8 · done · Store.rotate_key постраничный по наборам с курсором (включая ih_import_items), inactive_key_usage; Doctor.rotate_key проходит до конца с повторами для заблокированных строк, отчёт remaining/unreadable/complete; Doctor.inactive_keys; CLI rotate-key и doctor печатают остаток, код 1; импорт с нерасшифрованными элементами — failed, элементы сохраняются; D-160; 1017 passed · дальше F2.1 (фаза аренды)
+2026-10-02 · F2.1 · done · heartbeat повторяется с backoff 0,5 с ×2 в пределах дедлайна; release под shield с таймаутом 10 с, _released после успешной записи, повтор возможен, reason проверяется первым; proxy.pool.exhausted — одно на acquire и раз в минуту на пул; общие сценарии tests/fixtures/lease_resilience.py на MemoryStore и PostgreSQL; D-161; 1030 passed, наборы аренды ×3 · дальше F2.2

@@ -181,6 +181,8 @@ class IdentityHub:
             self.register_service(service)
         self._spaces: dict[str, SpaceRef] = {}
         self._lease_losses: Counter[tuple[str, str]] = Counter()
+        # когда пул последний раз сообщал proxy.pool.exhausted (монотонные часы, R1-12)
+        self._proxy_exhausted_at: dict[tuple[str, str, str], float] = {}
 
     # --------------------------------------------------------- сервисы
 
