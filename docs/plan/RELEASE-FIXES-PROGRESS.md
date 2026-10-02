@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F2.4 Потерянные обновления identity
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающий pg-тест: 20 параллельных add_tags и 20 слияний меток
-  - [ ] блокировка identity в read-modify-write по порядку lock-order.md (PgStore и MemoryStore)
-  - [ ] документация, CHANGELOG
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -37,7 +34,7 @@
 | F2.1 | Heartbeat и освобождение аренды | F0.1 | done |  |  |
 | F2.2 | Чистильщик аренд и удаление аккаунта | F0.1 | done |  |  |
 | F2.3 | Часы и ожидание | F2.1 | done |  |  |
-| F2.4 | Потерянные обновления identity | F0.1 | in_progress |  |  |
+| F2.4 | Потерянные обновления identity | F0.1 | done |  |  |
 | F3.1 | Диспетчер: изоляция сбойного события | F0.1 | todo |  |  |
 | F3.2 | Вебхуки: параллельная доставка | F0.1 | todo |  |  |
 | F3.3 | Уведомления Telegram | F0.1 | todo |  |  |
@@ -65,7 +62,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 14 / 41 done
+**Итого:** 15 / 41 done
 
 ## Журнал сессий
 
@@ -85,3 +82,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F2.1 · done · heartbeat повторяется с backoff 0,5 с ×2 в пределах дедлайна; release под shield с таймаутом 10 с, _released после успешной записи, повтор возможен, reason проверяется первым; proxy.pool.exhausted — одно на acquire и раз в минуту на пул; общие сценарии tests/fixtures/lease_resilience.py на MemoryStore и PostgreSQL; D-161; 1030 passed, наборы аренды ×3 · дальше F2.2
 2026-10-02 · F2.2 · done · expire_leases отбирает аренды с открытой историей (миграция 0011, индекс ix_ih_lease_history_open_space); lease.expired с едиными полями pool/holder/fencing/expired_at; identities.delete при живой аренде — ValidationFailed, revoke=True отзывает в той же транзакции; удаление закрывает историю истёкшей аренды; MemoryStore хранит пространство истории; D-162; 1039 passed, наборы аренды ×3 · дальше F2.3
 2026-10-02 · F2.3 · done · Clock.sleep (пауза вызывающего) и Clock.idle (фоновое ожидание); FakeClock.sleep идёт по пробуждениям, advance будит heartbeat; acquire, heartbeat, диспетчер, rotate_key и CLI на часах хаба; Store.bind_clock: MemoryStore принимает часы хаба, разные часы — ValidationFailed; heartbeat считает паузу от последнего подтверждения; тест дедлайна heartbeat больше не зависит от времени захвата в БД; D-163; 1049 passed, наборы аренды ×3, admin unit 67 passed · дальше F2.4
+2026-10-02 · F2.4 · done · lock_identities до чтения в _mutate, requirements.add/resolve и apply_verification; conformance-тест: 20 параллельных add_tags, слияний меток и требований сохраняют всё; lock-order.md дополнен; D-164; 1057 passed · фаза F2 закрыта, дальше F3.1

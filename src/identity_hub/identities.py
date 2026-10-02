@@ -477,6 +477,9 @@ class IdentitiesMixin(SpaceBase):
         need_profile: bool = False,
     ) -> IdentityRow:
         async with self._tx() as tx:
+            # Чтение, слияние в Python и запись — под блокировкой строки: иначе параллельные
+            # add_tags и слияния меток затирают друг друга (R2-D02).
+            await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
             profile = dict(row.profile)
             if need_profile:

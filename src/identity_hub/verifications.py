@@ -55,6 +55,9 @@ async def apply_verification(
 ) -> VerificationDecision:
     """Шаг машины фактора; регион, ih_verifications, verified_factors и события — в `tx`."""
     now = await tx.now()
+    # verified_factors пересчитывается из прочитанной строки: два фактора параллельно не должны
+    # затирать друг друга (R2-D02)
+    await tx.lock_identities([identity_id])
     for _ in range(MAX_RETRIES):
         identity = await space._identity(tx, identity_id)
         service = space.hub.service(identity.service)
@@ -330,6 +333,7 @@ class RequirementsMixin(SpaceBase):
         self, identity_id: UUID, code: str, *, deadline: datetime | None = None, actor: str = "platform"
     ) -> bool:
         async with self._tx(own=True) as tx:
+            await tx.lock_identities([identity_id])  # список требований читается и пишется целиком
             row = await self._identity(tx, identity_id)
             if any(r.get("code") == code for r in row.requirements):
                 return False
@@ -349,6 +353,7 @@ class RequirementsMixin(SpaceBase):
         # Resolution is an operator command and must join a caller transaction
         # (the admin command gateway holds the identity revision lock there).
         async with self._tx() as tx:
+            await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
             rest = [r for r in row.requirements if r.get("code") != code]
             if len(rest) == len(row.requirements):

@@ -43,6 +43,9 @@
 | Импорт `update_session` | обновляемые identity пачки | `lock_identities`, по `id` |
 | `create_many` | уникальные индексы новых строк | по `(service, external_ref)` |
 | Команды админки с `expected_revision` | `ih_identities` (`lock_identity_revision`) | одна строка |
+| Изменение тегов, меток, профиля, атрибутов, заметки (`identities.update`, `add_tags`, …) | `ih_identities`, до чтения строки | `lock_identities`, одна строка |
+| `verifications.requirements.add/resolve`, шаг верификации | `ih_identities`, до чтения строки | `lock_identities`, одна строка |
+| Удаление identity | `ih_identities`, затем `ih_leases` | п. 1 → п. 5 |
 | Перепривязка прокси | identity, затем прокси | п. 1 → п. 4 |
 | Диспетчер, вебхуки, уведомления | строки очередей, `SKIP LOCKED` | без аккаунтов |
 | Истечение аренд | `ih_leases`, `SKIP LOCKED` | без аккаунтов |
