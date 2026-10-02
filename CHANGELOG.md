@@ -27,6 +27,7 @@
 
 - `IdentityHub(redact_refs_in_events=True)`: `external_ref` и `labels` не попадают в события и
   вебхуки. `LeaseLogPolicy.max_field_chars`, `max_entry_bytes`, `buffer_ttl`.
+- `hub.events.subscribe(..., max_attempts=5)` и журнальное событие `dispatcher.event.skipped`.
 - `Clock.sleep()` и `Clock.idle()`: ожидание аренды, heartbeat и опрос диспетчера идут по часам
   хаба. Под `FakeClock` `wait=` истекает, а `advance()` будит heartbeat активных аренд.
 - `hub.doctor.inactive_keys()` и поля `RotationReport.remaining`, `unreadable`,
@@ -69,6 +70,8 @@
   и переоборачивает незавершённые фоновые импорты. CLI `rotate-key` печатает остаток и
   нечитаемые строки и возвращает 1, если под прежним ключом что-то осталось; `doctor`
   сообщает о строках под неактивным ключом.
+- Контракт `Store`: обработчик `process_events` может вернуть число обработанных событий —
+  курсор встаёт за последним из них.
 - Контракт `Store`: `rotate_key(envelope, table=, limit=, after=)` → `RotationBatch`,
   новый `inactive_key_usage(active)`.
 - Мастер-ключи: `key_id` — `[A-Za-z0-9_.-]{1,64}`; ключ из одинаковых байтов в
@@ -120,6 +123,9 @@
   соединением, каждый адрес проверяется, соединение идёт с проверенным IP (DNS rebinding).
 - Токен бота Telegram и путь URL вебхука больше не попадают в лог `httpx`; у
   `TelegramUnavailable` и ошибки `webhooks.send_test` нет исключения `httpx` в цепочке.
+- «Ядовитое» событие больше не останавливает подписчика навсегда: курсор колбэка сдвигается
+  по одному событию, обработанные события не повторяются, после лимита попыток событие
+  пропускается с записью в журнал.
 - Параллельные изменения одной identity (`add_tags`, слияние меток и профиля, заметка,
   требования, `verified_factors`) больше не затирают друг друга: строка блокируется до чтения.
 - `pool.lease(wait=...)` и `space.sync.refresh()` под `FakeClock` больше не зависают; сдвиг

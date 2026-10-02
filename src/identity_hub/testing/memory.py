@@ -2413,7 +2413,7 @@ class MemoryStore(Store):
     async def process_events(
         self,
         consumer: str,
-        handler: Callable[[list[Event]], Awaitable[None]],
+        handler: Callable[[list[Event]], Awaitable[int | None]],
         *,
         limit: int,
         external_only: bool = True,
@@ -2431,10 +2431,15 @@ class MemoryStore(Store):
                 ][:limit]
             if not events:
                 return 0
-            await handler(events)
+            done = await handler(events)
+            handled = len(events) if done is None else max(0, min(done, len(events)))
+            if handled == 0:
+                return 0
             async with self._lock:
-                self._state.cursors[consumer] = max(self._state.cursors.get(consumer, 0), events[-1].id)
-            return len(events)
+                self._state.cursors[consumer] = max(
+                    self._state.cursors.get(consumer, 0), events[handled - 1].id
+                )
+            return handled
 
     async def rollup_source_events(self, space_slug: str, start: datetime, end: datetime) -> list[Event]:
         async with self._lock:

@@ -1595,7 +1595,7 @@ class Store(ABC):
     async def process_events(
         self,
         consumer: str,
-        handler: Callable[[list[Event]], Awaitable[None]],
+        handler: Callable[[list[Event]], Awaitable[int | None]],
         *,
         limit: int,
         external_only: bool = True,
@@ -1605,6 +1605,9 @@ class Store(ABC):
         Строка курсора блокируется `FOR UPDATE SKIP LOCKED` на время пачки (None — занята другим
         экземпляром). Читаются события по `(tx_id, id)` строго после курсора и ниже горизонта
         `pg_snapshot_xmin`. Курсор продвигается только если `handler` завершился без ошибки.
+        `handler` может вернуть число обработанных событий с начала пачки: курсор встаёт за
+        последним из них, остальные придут снова; `None` — обработана вся пачка. Возвращается
+        число событий, за которые продвинут курсор.
         """
 
     @abstractmethod

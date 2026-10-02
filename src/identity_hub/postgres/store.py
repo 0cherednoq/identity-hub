@@ -3825,7 +3825,7 @@ class PgStore(Store):
     async def process_events(
         self,
         consumer: str,
-        handler: Callable[[list[Event]], Awaitable[None]],
+        handler: Callable[[list[Event]], Awaitable[int | None]],
         *,
         limit: int,
         external_only: bool = True,
@@ -3871,8 +3871,11 @@ class PgStore(Store):
             if not rows:
                 return 0
             events = [_event(r) for r in rows]
-            await handler(events)
-            last_id = rows[-1]["id"]
+            done = await handler(events)
+            handled = len(events) if done is None else max(0, min(done, len(events)))
+            if handled == 0:
+                return 0
+            last_id = rows[handled - 1]["id"]
             await _execute(
                 session,
                 update(CURSORS)
@@ -3884,7 +3887,7 @@ class PgStore(Store):
                 ),
                 execution_options=opts,
             )
-            return len(events)
+            return handled
 
     async def rollup_source_events(self, space_slug: str, start: datetime, end: datetime) -> list[Event]:
         async with self.sessionmaker() as session:

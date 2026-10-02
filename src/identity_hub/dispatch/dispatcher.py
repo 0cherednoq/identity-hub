@@ -2,7 +2,13 @@
 
 Читает журнал ih_events по курсору каждого потребителя и раздаёт события: Python-колбэкам,
 вебхукам (P8.3), уведомлениям (P8.4). Будится `LISTEN/NOTIFY`; без него — опрос с интервалом.
-Доставка at-least-once: курсор продвигается только после успешной обработки пачки.
+Доставка at-least-once: курсор продвигается только после успешной обработки.
+
+Колбэки `subscribe` получают события по одному: курсор встаёт перед событием, на котором колбэк
+упал, обработанные до него не повторяются. После `max_attempts` неудач событие пропускается с
+журнальной записью `dispatcher.event.skipped` — одно «ядовитое» событие не останавливает
+подписчика навсегда. Пакетные потребители (вебхуки, уведомления, rollups) и pump-ы изолированы
+друг от друга: сбой одного не мешает остальным.
 """
 
 from __future__ import annotations
@@ -15,7 +21,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from identity_hub._space import logger
-from identity_hub.events import Event, matches_any
+from identity_hub.errors import describe_error
+from identity_hub.events import Event, EventDraft, matches_any
+from identity_hub.metrics import record_metric
 from identity_hub.store.base import NOTIFY_CHANNEL
 
 if TYPE_CHECKING:
@@ -24,7 +32,10 @@ if TYPE_CHECKING:
 __all__ = ["BatchHandler", "Consumer", "Dispatcher", "EventCallback"]
 
 EventCallback = Callable[[Event], Awaitable[None]]
-BatchHandler = Callable[[list[Event]], Awaitable[None]]
+BatchHandler = Callable[[list[Event]], Awaitable[int | None]]
+"""Обработчик пачки. Может вернуть число обработанных событий с начала пачки (`None` — все)."""
+
+DEFAULT_MAX_ATTEMPTS = 5
 
 
 @dataclass
@@ -49,6 +60,10 @@ class Dispatcher:
         self._consumers: dict[str, Consumer] = {}
         self._runtime: dict[str, ConsumerRuntime] = {}
         self._pumps: list[Callable[[], Awaitable[int]]] = []
+        # потребитель → (id события, число неудач): счётчик живёт в процессе и сбрасывается
+        # при успехе, пропуске или перезапуске
+        self._failures: dict[str, tuple[int, int]] = {}
+        self._stalled: set[str] = set()
 
     # --------------------------------------------------------- регистрация
 
@@ -62,16 +77,94 @@ class Dispatcher:
         """Добавить обработчик due-очереди, запускаемый даже без новых событий."""
         self._pumps.append(handler)
 
-    def subscribe(self, name: str, callback: EventCallback, *, types: Iterable[str] | None = None) -> None:
-        """Python-колбэк на события после коммита (FR-13.5); `types` — типы или маски (`pool.capacity.*`)."""
+    def subscribe(
+        self,
+        name: str,
+        callback: EventCallback,
+        *,
+        types: Iterable[str] | None = None,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    ) -> None:
+        """Python-колбэк на события после коммита (FR-13.5); `types` — типы или маски (`pool.capacity.*`).
+
+        Событие, на котором колбэк бросил исключение, приходит снова на следующем круге; события
+        до него не повторяются. После `max_attempts` неудач подряд оно пропускается: в журнал
+        пишется `dispatcher.event.skipped`, подписчик получает следующие события.
+        """
+        if max_attempts < 1:
+            raise ValueError("max_attempts должен быть положительным")
         patterns = frozenset(types) if types is not None else frozenset({"*"})
+        consumer = f"callbacks:{name}"
 
-        async def handle(events: list[Event]) -> None:
-            for event in events:
-                if matches_any(patterns, event.type):
+        async def handle(events: list[Event]) -> int:
+            self._stalled.discard(consumer)
+            for index, event in enumerate(events):
+                if not matches_any(patterns, event.type):
+                    continue
+                try:
                     await callback(event)
+                except Exception as exc:
+                    failed_id, count = self._failures.get(consumer, (event.id, 0))
+                    count = count + 1 if failed_id == event.id else 1
+                    if count < max_attempts or not await self._skip(consumer, event, count, exc):
+                        self._failures[consumer] = (event.id, count)
+                        self._stalled.add(consumer)
+                        logger.warning(
+                            "подписчик %s не обработал событие %s (%s), попытка %d из %d",
+                            name,
+                            event.event_id,
+                            describe_error(exc),
+                            count,
+                            max_attempts,
+                        )
+                        return index  # курсор встаёт перед сбойным событием
+                self._failures.pop(consumer, None)
+            return len(events)
 
-        self.add_consumer(f"callbacks:{name}", handle)
+        self.add_consumer(consumer, handle)
+
+    async def _skip(self, consumer: str, event: Event, attempts: int, exc: Exception) -> bool:
+        """Записать пропуск события; `False` — запись не удалась, событие остаётся на повтор."""
+        space = self.hub.space(event.space)
+        try:
+            async with space._tx(own=True) as tx:
+                await space._emit(
+                    tx,
+                    EventDraft(
+                        "dispatcher.event.skipped",
+                        actor="dispatcher",
+                        service=event.service,
+                        data={
+                            "consumer": consumer,
+                            "event_id": str(event.event_id),
+                            "type": event.type,
+                            "attempts": attempts,
+                            "error": type(exc).__name__,  # только имя типа: текст бывает с секретами
+                        },
+                    ),
+                )
+        except Exception as failure:
+            logger.warning(
+                "не удалось записать пропуск события %s: %s", event.event_id, describe_error(failure)
+            )
+            return False
+        logger.error(
+            "подписчик %s: событие %s (%s) пропущено после %d попыток",
+            consumer,
+            event.event_id,
+            event.type,
+            attempts,
+        )
+        record_metric(
+            self.hub.metrics,
+            "counter",
+            "identity_hub_failures_total",
+            space=event.space,
+            service=event.service or "",
+            scope="subscriber",
+            reason="skipped",
+        )
+        return True
 
     @property
     def consumers(self) -> tuple[str, ...]:
@@ -100,7 +193,10 @@ class Dispatcher:
                 self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)
                 logger.exception("потребитель %s упал; пачка будет повторена", consumer.name)
                 continue
-            self._runtime[consumer.name] = ConsumerRuntime(attempted_at, self.hub.clock.now(), False)
+            if consumer.name in self._stalled:  # колбэк упал: событие придёт снова
+                self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)
+            else:
+                self._runtime[consumer.name] = ConsumerRuntime(attempted_at, self.hub.clock.now(), False)
             total += handled or 0
         for pump in self._pumps:
             try:

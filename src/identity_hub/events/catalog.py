@@ -104,6 +104,8 @@ def _specs() -> dict[str, EventSpec]:
         "operation.succeeded",
         "operation.failed",
         "session.saved",
+        # колбэк подписчика не справился с событием за max_attempts попыток, событие пропущено
+        "dispatcher.event.skipped",
     ]
     specs = {t: EventSpec(t, group, True, sev) for group, items in groups.items() for t, sev in items}
     specs |= {t: EventSpec(t, "journal", external=False) for t in journal}
