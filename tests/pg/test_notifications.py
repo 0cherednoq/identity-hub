@@ -175,13 +175,22 @@ async def test_telegram_429_uses_retry_after(
 
     async with sessionmaker() as session, session.begin():
         notification = (await session.execute(select(NotificationRecord))).scalar_one()
-        assert notification.status == "failed" and notification.attempt == 1
+        # R2-F03: 429 попыткой не считается, канал на паузе до retry_after
+        assert notification.status == "failed" and notification.attempt == 0
         delay = (await session.execute(select(NotificationRecord.scheduled_at - func.now()))).scalar_one()
         assert timedelta(seconds=5) <= delay <= timedelta(seconds=7)
+        pause = (
+            await session.execute(select(NotificationChannelRecord.paused_until - func.now()))
+        ).scalar_one()
+        assert timedelta(seconds=5) <= pause <= timedelta(seconds=7)
         await session.execute(update(NotificationRecord).values(scheduled_at=func.now()))
+
+    assert await hub._notification_dispatcher.deliver_due() == 0  # пауза канала ещё не истекла
+    async with sessionmaker() as session, session.begin():
+        await session.execute(update(NotificationChannelRecord).values(paused_until=func.now()))
 
     assert await hub._notification_dispatcher.deliver_due() == 1
     assert len(transport.sent) == 1
     async with sessionmaker() as session:
         notification = (await session.execute(select(NotificationRecord))).scalar_one()
-    assert notification.status == "succeeded" and notification.attempt == 2
+    assert notification.status == "succeeded" and notification.attempt == 1

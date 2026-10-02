@@ -1135,6 +1135,8 @@ class NotificationChannelRecord(EncryptedPayloadMixin, IdentityHubBase):
     config: Mapped[dict[str, Any]] = mapped_column(JSONB)  # {"chat_id": -100..., "thread_id": 12}
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # пауза после 429: до этого момента уведомления канала не захватываются (миграция 0012)
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (CheckConstraint("kind IN ('telegram')", name="kind_valid"),)
 
@@ -1197,5 +1199,13 @@ class NotificationRecord(IdentityHubBase):
             "ix_ih_notifications_due",
             "scheduled_at",
             postgresql_where=text("status IN ('pending', 'failed')"),
+        ),
+        # без дайджеста: одно уведомление на (правило, событие) — повтор пачки не даёт дубль (0012)
+        Index(
+            "uq_ih_notifications_rule_event",
+            "rule_id",
+            text("(event_ids[1])"),
+            unique=True,
+            postgresql_where=text("digest_key IS NULL"),
         ),
     )

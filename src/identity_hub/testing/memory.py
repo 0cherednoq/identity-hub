@@ -162,6 +162,8 @@ class _MemoryState:
     )
     notification_rules: dict[UUID, NotificationRuleRow] = field(default_factory=dict)
     notification_rule_spaces: dict[UUID, UUID] = field(default_factory=dict)
+    # канал → конец паузы после 429 (ih_notification_channels.paused_until)
+    channel_pauses: dict[UUID, datetime] = field(default_factory=dict)
     notifications: dict[int, dict[str, Any]] = field(default_factory=dict)
     next_event_id: int = 1
     next_webhook_delivery_id: int = 1
@@ -1968,7 +1970,7 @@ class MemoryTx(StoreTx):
     async def insert_notification_rule(self, row: NewNotificationRule) -> NotificationRuleRow:
         item = self.state.notification_channels.get(row.channel_id)
         if item is None or item[2] != self.space.id:
-            raise KeyError(row.channel_id)
+            raise NotFound("notification channel", row.channel_id)
         rule = NotificationRuleRow(
             row.id,
             row.channel_id,
@@ -2742,25 +2744,29 @@ class MemoryStore(Store):
     async def enqueue_notifications(self, items: Sequence[NotificationEnqueue]) -> int:
         async with self._lock:
             inserted = 0
-            existing = {(row["rule_id"], row["event_ids"][0]) for row in self._state.notifications.values()}
+            # как в PostgreSQL: без дайджеста — уникальность (правило, событие); в дайджесте —
+            # событие не добавляется дважды в открытое окно
+            existing = {
+                (row["rule_id"], row["event_ids"][0])
+                for row in self._state.notifications.values()
+                if row["digest_key"] is None
+            }
             for item in items:
                 key = (item.rule_id, item.event_id)
-                if key in existing:
+                if item.digest_key is None and key in existing:
                     continue
                 if item.digest_key is not None:
                     digest = next(
                         (
                             row
                             for row in self._state.notifications.values()
-                            if row["rule_id"] == item.rule_id
-                            and row["digest_key"] == item.digest_key
-                            and row["status"] == "pending"
+                            if row["digest_key"] == item.digest_key and row["status"] == "pending"
                         ),
                         None,
                     )
                     if digest is not None:
-                        digest["event_ids"].append(item.event_id)
-                        existing.add(key)
+                        if item.event_id not in digest["event_ids"]:
+                            digest["event_ids"].append(item.event_id)
                         inserted += 1
                         continue
                 notification_id = self._state.next_notification_id
@@ -2783,21 +2789,35 @@ class MemoryStore(Store):
     async def claim_notifications(self, *, limit: int, claim_for: timedelta) -> list[NotificationAttempt]:
         async with self._lock:
             now = self.clock.now()
+
+            def claimable(row: dict[str, Any]) -> bool:
+                rule = self._state.notification_rules.get(row["rule_id"])
+                channel_item = self._state.notification_channels.get(row["channel_id"])
+                paused_until = self._state.channel_pauses.get(row["channel_id"])
+                return (
+                    rule is not None
+                    and channel_item is not None
+                    and rule.enabled
+                    and channel_item[0].enabled
+                    and (paused_until is None or paused_until <= now)
+                )
+
+            # фильтр отключённых и приостановленных каналов — до limit, как в PostgreSQL
             due = sorted(
                 [
                     row
                     for row in self._state.notifications.values()
-                    if row["status"] in {"pending", "failed"} and row["scheduled_at"] <= now
+                    if row["status"] in {"pending", "failed"}
+                    and row["scheduled_at"] <= now
+                    and claimable(row)
                 ],
                 key=lambda row: (row["scheduled_at"], row["id"]),
             )[:limit]
             events = {event.event_id: event for event, _, _ in self._state.events}
             attempts = []
             for row in due:
-                rule = self._state.notification_rules.get(row["rule_id"])
-                channel_item = self._state.notification_channels.get(row["channel_id"])
-                if rule is None or channel_item is None or not rule.enabled or not channel_item[0].enabled:
-                    continue
+                rule = self._state.notification_rules[row["rule_id"]]
+                channel_item = self._state.notification_channels[row["channel_id"]]
                 row["status"] = "failed"
                 row["attempt"] += 1
                 row["scheduled_at"] = now + claim_for
@@ -2825,14 +2845,27 @@ class MemoryStore(Store):
         error: str | None,
         retry_after: timedelta,
         max_attempts: int,
+        pause_channel: timedelta | None = None,
     ) -> bool:
         async with self._lock:
             row = self._state.notifications.get(notification_id)
             if row is None or row["status"] not in {"pending", "failed"} or row["attempt"] != attempt:
                 return False
-            row["status"] = "succeeded" if succeeded else ("dead" if attempt >= max_attempts else "failed")
-            row["scheduled_at"] = self.clock.now() + retry_after
-            row["error"] = error
+            now = self.clock.now()
+            if succeeded:
+                row.update(status="succeeded", sent_at=now, error=None)
+            elif pause_channel is not None:
+                # 429: попытка не засчитывается, канал ждёт до конца паузы (R2-F03)
+                row.update(attempt=attempt - 1, scheduled_at=now + pause_channel, error=error)
+                until = now + pause_channel
+                current = self._state.channel_pauses.get(row["channel_id"])
+                self._state.channel_pauses[row["channel_id"]] = max(current, until) if current else until
+            else:
+                row.update(
+                    status="dead" if attempt >= max_attempts else "failed",
+                    scheduled_at=now + retry_after,
+                    error=error,
+                )
             return True
 
     async def maintenance_spaces(self) -> list[SpaceRef]:

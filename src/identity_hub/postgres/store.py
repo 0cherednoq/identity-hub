@@ -3014,7 +3014,8 @@ class PgTx(StoreTx):
             await self.execute(
                 select(NOTIFICATION_RULES)
                 .where(NOTIFICATION_RULES.c.space_id == self.space.id)
-                .order_by(NOTIFICATION_RULES.c.updated_at, NOTIFICATION_RULES.c.id)
+                # по имени: порядок не меняется от правки правила и совпадает с MemoryStore
+                .order_by(NOTIFICATION_RULES.c.name, NOTIFICATION_RULES.c.id)
             )
         ).mappings()
         return [_notification_rule_row(row) for row in rows]
@@ -4516,6 +4517,9 @@ class PgStore(Store):
                         ),
                         set_={"event_ids": event_ids},
                     )
+                else:
+                    # повтор пачки потребителем: уведомление по этому правилу и событию уже есть
+                    stmt = stmt.on_conflict_do_nothing()
                 result = await _execute(session, stmt, execution_options=self.options)
                 total += int(result.rowcount or 0)  # type: ignore[attr-defined]
         return total
@@ -4535,6 +4539,7 @@ class PgStore(Store):
                             n.scheduled_at <= func.now(),
                             r.enabled.is_(True),
                             c.enabled.is_(True),
+                            or_(c.paused_until.is_(None), c.paused_until <= func.now()),
                         )
                         .order_by(n.scheduled_at, n.id)
                         .limit(limit)
@@ -4619,13 +4624,16 @@ class PgStore(Store):
         error: str | None,
         retry_after: timedelta,
         max_attempts: int,
+        pause_channel: timedelta | None = None,
     ) -> bool:
         n = NOTIFICATIONS.c
         async with self._own() as session:
             row = (
                 await _execute(
                     session,
-                    select(n.attempt, n.status).where(n.id == notification_id).with_for_update(),
+                    select(n.attempt, n.status, n.channel_id)
+                    .where(n.id == notification_id)
+                    .with_for_update(),
                     execution_options=self.options,
                 )
             ).one_or_none()
@@ -4638,6 +4646,25 @@ class PgStore(Store):
             values: dict[str, Any]
             if succeeded:
                 values = {"status": DeliveryStatus.SUCCEEDED, "sent_at": func.now(), "error": None}
+            elif pause_channel is not None:
+                # 429: попытка не засчитывается, канал ждёт до конца паузы (R2-F03)
+                values = {
+                    "attempt": n.attempt - 1,
+                    "scheduled_at": func.now() + pause_channel,
+                    "error": error[:2000] if error else None,
+                }
+                c = NOTIFICATION_CHANNELS.c
+                await _execute(
+                    session,
+                    update(NOTIFICATION_CHANNELS)
+                    .where(c.id == row.channel_id)
+                    .values(
+                        paused_until=func.greatest(
+                            func.coalesce(c.paused_until, func.now()), func.now() + pause_channel
+                        )
+                    ),
+                    execution_options=self.options,
+                )
             else:
                 values = {
                     "status": DeliveryStatus.DEAD if attempt >= max_attempts else DeliveryStatus.FAILED,

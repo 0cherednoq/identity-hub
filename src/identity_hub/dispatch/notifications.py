@@ -17,6 +17,7 @@ from identity_hub.domain.data import validate_json_payload
 from identity_hub.enums import Severity
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import Event, matches_any, severity_at_least, spec_of
+from identity_hub.identities import UNSET, _Unset
 from identity_hub.store.base import (
     NewNotificationChannel,
     NewNotificationRule,
@@ -40,6 +41,10 @@ __all__ = [
     "TelegramTransport",
     "TelegramUnavailable",
 ]
+
+
+TELEGRAM_MESSAGE_LIMIT = 4096
+"""Предел длины сообщения Bot API; считается в единицах UTF-16."""
 
 
 class TelegramTransport(Protocol):
@@ -160,11 +165,14 @@ def _validate_template(template: str | None) -> str | None:
         raise ValidationFailed("шаблон уведомления должен содержать от 1 до 4096 символов")
     allowed = {"type", "severity", "service", "actor", "link", "identity_id", "occurred_at"}
     try:
-        fields = [name for _, name, _, _ in Formatter().parse(template) if name is not None]
+        parsed = [(name, spec or "") for _, name, spec, _ in Formatter().parse(template) if name is not None]
     except ValueError as exc:
         raise ValidationFailed("ошибка шаблона уведомления") from exc
-    if any(name not in allowed for name in fields):
+    if any(name not in allowed for name, _ in parsed):
         raise ValidationFailed("шаблон уведомления содержит неизвестное или небезопасное поле")
+    # format-spec подставляется отдельно: `{type:{data}}` вывел бы поле в обход проверки имён
+    if any("{" in spec or "}" in spec for _, spec in parsed):
+        raise ValidationFailed("шаблон уведомления: вложенные поля в формате не поддерживаются")
     return template
 
 
@@ -212,9 +220,10 @@ class Notifications:
         title: str | None = None,
         bot_token: SecretStr | None = None,
         chat_id: int | str | None = None,
-        thread_id: int | None = None,
+        thread_id: int | _Unset | None = UNSET,
         enabled: bool | None = None,
     ) -> None:
+        """Изменить канал. `thread_id=None` сбрасывает тему; пропущенный аргумент оставляет её."""
         values: dict[str, Any] = {}
         if title is not None:
             values["title"] = title
@@ -224,10 +233,10 @@ class Notifications:
         current = next((item for item in channels if item.id == channel_id), None)
         if current is None:
             raise NotFound("notification channel", channel_id)
-        if chat_id is not None or thread_id is not None:
+        if chat_id is not None or not isinstance(thread_id, _Unset):
             values["config"] = {
                 "chat_id": current.chat_id if chat_id is None else chat_id,
-                "thread_id": current.thread_id if thread_id is None else thread_id,
+                "thread_id": current.thread_id if isinstance(thread_id, _Unset) else thread_id,
             }
         secret = None
         if bot_token is not None:
@@ -354,6 +363,8 @@ class NotificationDispatcher:
         self.hub = hub
         self.transport = transport
         self.policy = policy
+        # уведомление → сколько частей дайджеста уже ушло: повтор после 429 не шлёт их снова
+        self._sent_parts: dict[int, int] = {}
 
     async def handle_events(self, events: list[Event]) -> None:
         targets = await self.hub._store.enabled_notification_targets()
@@ -389,43 +400,53 @@ class NotificationDispatcher:
         attempts = await self.hub._store.claim_notifications(
             limit=self.policy.batch_size, claim_for=self.policy.claim_for
         )
+        paused: dict[UUID, timedelta] = {}  # каналы, ответившие 429 в этой пачке
         for attempt in attempts:
             retry_after = self.policy.retry_after(attempt.attempt)
             succeeded = False
             error: str | None = None
             max_attempts = self.policy.max_failures
-            try:
-                token = self.hub._envelope.open_model(
-                    _TelegramSecret,
-                    attempt.channel_secret,
-                    associated_data("ih_notification_channels", attempt.channel_id),
-                ).bot_token
-                config = attempt.channel_config
-                await self.transport.send_message(
-                    token,
-                    config["chat_id"],
-                    _render(attempt.events, attempt.template, self.hub.admin_base_url),
-                    thread_id=config.get("thread_id"),
-                )
-                succeeded = True
-            except TelegramRateLimited as exc:
-                retry_after = timedelta(seconds=exc.retry_after)
-                error = "TelegramRateLimited"
-            except TelegramRejected as exc:
-                # постоянная ошибка: сразу в dead, без исчерпания ретраев
-                max_attempts = attempt.attempt
-                error = f"TelegramRejected: {exc}"
-            except TelegramUnavailable as exc:
-                error = f"TelegramUnavailable: {exc}"
-            except Exception as exc:
-                error = type(exc).__name__
+            pause = paused.get(attempt.channel_id)
+            if pause is not None:
+                error = "TelegramRateLimited"  # канал на паузе: запрос не отправляем
+            else:
+                try:
+                    token = self.hub._envelope.open_model(
+                        _TelegramSecret,
+                        attempt.channel_secret,
+                        associated_data("ih_notification_channels", attempt.channel_id),
+                    ).bot_token
+                    config = attempt.channel_config
+                    messages = _render_messages(attempt.events, attempt.template, self.hub.admin_base_url)
+                    sent = self._sent_parts.get(attempt.notification_id, 0)
+                    for index in range(sent, len(messages)):
+                        await self.transport.send_message(
+                            token, config["chat_id"], messages[index], thread_id=config.get("thread_id")
+                        )
+                        self._sent_parts[attempt.notification_id] = index + 1
+                    succeeded = True
+                except TelegramRateLimited as exc:
+                    # 429 — не ошибка доставки: попытка не расходуется, канал ждёт retry_after
+                    pause = paused[attempt.channel_id] = timedelta(seconds=max(1.0, exc.retry_after))
+                    error = "TelegramRateLimited"
+                except TelegramRejected as exc:
+                    # постоянная ошибка: сразу в dead, без исчерпания ретраев
+                    max_attempts = attempt.attempt
+                    error = f"TelegramRejected: {exc}"
+                except TelegramUnavailable as exc:
+                    error = f"TelegramUnavailable: {exc}"
+                except Exception as exc:
+                    error = type(exc).__name__
+            if succeeded or (pause is None and attempt.attempt >= max_attempts):
+                self._sent_parts.pop(attempt.notification_id, None)
             await self.hub._store.finish_notification(
                 attempt.notification_id,
                 attempt.attempt,
                 succeeded=succeeded,
                 error=error,
-                retry_after=retry_after,
+                retry_after=pause or retry_after,
                 max_attempts=max_attempts,
+                pause_channel=pause,
             )
         return len(attempts)
 
@@ -455,9 +476,53 @@ def _matches_target(target: NotificationTargetRow, event: Event, labels: Mapping
     return True
 
 
+def _units(text: str) -> int:
+    """Длина в единицах UTF-16 — так лимит считает Bot API."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _fit(text: str) -> str:
+    """Обрезать сообщение до лимита Bot API, пометив обрезку многоточием."""
+    if _units(text) <= TELEGRAM_MESSAGE_LIMIT:
+        return text
+    kept: list[str] = []
+    used = 1  # место под «…»
+    for char in text:
+        size = 2 if ord(char) > 0xFFFF else 1
+        if used + size > TELEGRAM_MESSAGE_LIMIT:
+            break
+        kept.append(char)
+        used += size
+    return "".join(kept) + "…"
+
+
+def _render_messages(
+    events: tuple[Event, ...], template: str | None, admin_base_url: str | None
+) -> list[str]:
+    """Тексты для отправки: одно событие — одно сообщение, дайджест — частями до лимита Bot API."""
+    lines = [_fit(_render_event(event, template, admin_base_url)) for event in events]
+    if len(lines) <= 1:
+        return lines
+    messages: list[str] = []
+    header = f"Сводка Identity Hub ({len(lines)}):"
+    current = header
+    for line in lines:
+        candidate = f"{current}\n\n{line}"
+        if _units(candidate) <= TELEGRAM_MESSAGE_LIMIT:
+            current = candidate
+        elif current == header:  # событие почти во весь лимит: заголовок не шлём отдельным сообщением
+            current = _fit(candidate)
+        else:
+            messages.append(current)
+            current = line
+    messages.append(current)
+    return messages
+
+
 def _render(events: tuple[Event, ...], template: str | None, admin_base_url: str | None) -> str:
-    lines = [_render_event(event, template, admin_base_url) for event in events]
-    return lines[0] if len(lines) == 1 else f"Сводка Identity Hub ({len(lines)}):\n\n" + "\n\n".join(lines)
+    """Текст первого сообщения (совместимость для вызывающих, которым нужен один текст)."""
+    messages = _render_messages(events, template, admin_base_url)
+    return messages[0] if messages else ""
 
 
 def _render_event(event: Event, template: str | None, admin_base_url: str | None) -> str:
