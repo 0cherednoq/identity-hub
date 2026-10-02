@@ -206,6 +206,30 @@ SNAPSHOT_COVERAGE = cast(Table, StateSnapshotCoverageRecord.__table__)
 SPACES = cast(Table, SpaceRecord.__table__)
 WEBHOOK_ENDPOINTS = cast(Table, WebhookEndpointRecord.__table__)
 WEBHOOK_DELIVERIES = cast(Table, WebhookDeliveryRecord.__table__)
+_OPEN_DELIVERY = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+# результат попытки принимается и у доставки, поставленной на паузу после захвата
+_FINISHABLE_DELIVERY = (*_OPEN_DELIVERY, DeliveryStatus.PAUSED)
+
+
+def _pause_deliveries(endpoint_id: UUID) -> Any:
+    """Очередь отключённого endpoint'а уходит из частичного индекса claim (R2-D15)."""
+    d = WEBHOOK_DELIVERIES.c
+    return (
+        update(WEBHOOK_DELIVERIES)
+        .where(d.endpoint_id == endpoint_id, d.status.in_(_OPEN_DELIVERY))
+        .values(status=DeliveryStatus.PAUSED)
+    )
+
+
+def _resume_deliveries(endpoint_id: UUID) -> Any:
+    d = WEBHOOK_DELIVERIES.c
+    return (
+        update(WEBHOOK_DELIVERIES)
+        .where(d.endpoint_id == endpoint_id, d.status == DeliveryStatus.PAUSED)
+        .values(status=DeliveryStatus.PENDING, next_attempt_at=func.now())
+    )
+
+
 NOTIFICATION_CHANNELS = cast(Table, NotificationChannelRecord.__table__)
 NOTIFICATION_RULES = cast(Table, NotificationRuleRecord.__table__)
 NOTIFICATIONS = cast(Table, NotificationRecord.__table__)
@@ -2436,13 +2460,14 @@ class PgTx(StoreTx):
     async def overview_snapshot(self) -> OverviewSnapshot:
         i = IDENTITIES.c
         now = await self.now()
-        live_lease = (
-            select(literal(1)).where(LEASES.c.identity_id == i.id, LEASES.c.expires_at > now).exists()
+        # некоррелированные подзапросы: множество считается один раз, а не на каждую строку (R2-D15)
+        live_lease = i.id.in_(
+            select(LEASES.c.identity_id).where(LEASES.c.space_id == self.space.id, LEASES.c.expires_at > now)
         )
-        open_challenge = (
-            select(literal(1))
-            .where(CHALLENGES.c.identity_id == i.id, CHALLENGES.c.resolved_at.is_(None))
-            .exists()
+        open_challenge = i.id.in_(
+            select(CHALLENGES.c.identity_id).where(
+                CHALLENGES.c.space_id == self.space.id, CHALLENGES.c.resolved_at.is_(None)
+            )
         )
         currently_available = or_(
             i.availability == Availability.AVAILABLE,
@@ -2904,7 +2929,10 @@ class PgTx(StoreTx):
             )
             .values(**values)
         )
-        return bool(result.rowcount)  # type: ignore[attr-defined]
+        if not result.rowcount:  # type: ignore[attr-defined]
+            return False
+        await self.execute(_resume_deliveries(endpoint_id) if enabled else _pause_deliveries(endpoint_id))
+        return True
 
     async def retry_webhook_delivery(self, delivery_id: int) -> bool:
         row = (
@@ -2941,6 +2969,7 @@ class PgTx(StoreTx):
             .where(WEBHOOK_ENDPOINTS.c.id == row.endpoint_id)
             .values(enabled=True, disabled_reason=None, failure_streak=0)
         )
+        await self.execute(_resume_deliveries(row.endpoint_id))
         return True
 
     async def webhook_deliveries(self, endpoint_id: UUID, limit: int) -> list[WebhookDeliveryRow]:
@@ -4490,7 +4519,7 @@ class PgStore(Store):
                 update(WEBHOOK_DELIVERIES)
                 .where(
                     tuple_(d.id, d.attempt).in_([(delivery_id, attempt) for delivery_id, attempt in claims]),
-                    d.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
+                    d.status.in_(_FINISHABLE_DELIVERY),
                     d.attempt > 0,
                 )
                 .values(attempt=d.attempt - 1, next_attempt_at=func.now() + retry_after),
@@ -4531,11 +4560,7 @@ class PgStore(Store):
                     execution_options=self.options,
                 )
             ).one_or_none()
-            if (
-                row is None
-                or row.attempt != attempt
-                or row.status not in (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
-            ):
+            if row is None or row.attempt != attempt or row.status not in _FINISHABLE_DELIVERY:
                 return False
             common = {
                 "response_code": response_code,
@@ -4561,15 +4586,17 @@ class PgStore(Store):
             exhausted = streak >= max_failures
             # endpoint, уже отключённый вручную, не отключается повторно: его причина сохраняется
             disabled = exhausted and row.enabled
+            if exhausted:
+                status = DeliveryStatus.DEAD
+            elif row.status == DeliveryStatus.PAUSED:
+                status = DeliveryStatus.PAUSED  # endpoint отключён: повтор — после включения
+            else:
+                status = DeliveryStatus.FAILED
             await _execute(
                 session,
                 update(WEBHOOK_DELIVERIES)
                 .where(d.id == delivery_id)
-                .values(
-                    **common,
-                    status=DeliveryStatus.DEAD if exhausted else DeliveryStatus.FAILED,
-                    next_attempt_at=func.now() + retry_after,
-                ),
+                .values(**common, status=status, next_attempt_at=func.now() + retry_after),
                 execution_options=self.options,
             )
             endpoint_values: dict[str, Any] = {"failure_streak": streak}
@@ -4581,6 +4608,7 @@ class PgStore(Store):
                 execution_options=self.options,
             )
             if disabled:
+                await _execute(session, _pause_deliveries(row.endpoint_id), execution_options=self.options)
                 await _execute(
                     session,
                     insert(EVENTS).values(

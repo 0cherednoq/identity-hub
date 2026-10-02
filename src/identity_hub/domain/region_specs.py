@@ -126,9 +126,11 @@ DELIVERY = RegionSpec(
     synced=False,
     event_type="delivery.status.changed",
     transitions={
-        DeliveryStatus.PENDING: _fs(DeliveryStatus.SUCCEEDED, DeliveryStatus.FAILED),
-        DeliveryStatus.FAILED: _fs(DeliveryStatus.PENDING, DeliveryStatus.DEAD),
+        DeliveryStatus.PENDING: _fs(DeliveryStatus.SUCCEEDED, DeliveryStatus.FAILED, DeliveryStatus.PAUSED),
+        DeliveryStatus.FAILED: _fs(DeliveryStatus.PENDING, DeliveryStatus.DEAD, DeliveryStatus.PAUSED),
         DeliveryStatus.DEAD: _fs(DeliveryStatus.PENDING),
+        # результат попытки, начатой до отключения endpoint'а, ещё может прийти
+        DeliveryStatus.PAUSED: _fs(DeliveryStatus.PENDING, DeliveryStatus.SUCCEEDED, DeliveryStatus.DEAD),
         DeliveryStatus.SUCCEEDED: _fs(),
     },
 )

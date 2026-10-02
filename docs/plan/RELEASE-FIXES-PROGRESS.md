@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F4.1a Индексы и целостность схемы
-- **Начата:** 2026-10-02
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: дрейф с compare_server_default, у каждого FK есть индекс, новые FK и CHECK, EXPLAIN фоновых запросов
-  - [ ] Падающие conformance-тесты: paused при отключении endpoint и возврат при включении
-  - [ ] Модели и миграция 0014 (индексы, FK, CHECK, server_default, статус paused, перенос данных)
-  - [ ] PgStore и MemoryStore: paused/resume, постановка доставок только для существующих событий
-  - [ ] Документация, CHANGELOG, решение D-179
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -52,7 +47,7 @@
 | F3.9 | Override и верификации | F0.1 | done |  |  |
 | F3.10 | Rollups, метрики и закрытие хаба | F0.1 | done |  |  |
 | F3.11 | CLI | F0.1 | done |  |  |
-| F4.1a | Индексы и целостность схемы | F0.1 | in_progress |  | часть F4.1 (D-178) |
+| F4.1a | Индексы и целостность схемы | F0.1 | done |  | часть F4.1 (D-178) |
 | F4.1b | Retention | F4.1a | todo |  | часть F4.1 (D-178) |
 | F4.2 | Миграции: права и данные | F0.1 | todo |  |  |
 | F4.3 | Совместимость ревизии схемы | F0.1 | todo |  |  |
@@ -69,7 +64,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 27 / 43 done
+**Итого:** 28 / 43 done
 
 ## Журнал сессий
 
@@ -102,3 +97,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-02 · F3.9 · done · Override: ключ региона проверяется и получает значение по умолчанию (key: str | None); override верификации через apply_verification с согласованием verified_factors; ленивый срок действия фактора в evaluate и выборке аренды (Store.expired_factors); approve в MANUAL только из under_review; review reset_attempts; снятие verified по пробе — два наблюдения подряд; оговорка снята из limitations.md; D-175; 1204 passed, admin unit 67 passed · дальше F3.10
 2026-10-02 · F3.10 · done · rollups пересчитывают только затронутые минуты, rebuild не трогает телеметрию и требует force за пределами retention; буфер метрик ограничен; hub.aclose()/flush_metrics()/async with hub; D-176; check.sh 1212 passed, admin unit 67 passed · дальше F3.11
 2026-10-02 · F3.11 · done · CLI: демоны maintenance/dispatcher переживают сбой тика (backoff 1–60 с), сбой фабрики и внутренняя ошибка — код 1 с именем типа, разрушающие команды требуют --yes, doctor renormalize, предупреждение о пароле в --url (D-177); check зелёный: 1233 passed, admin unit 67 passed · дальше F4.1
+2026-10-02 · F4.1a · done · миграция 0014: индексы под due_regions и очередь сверки, индексы под FK (тест «у каждого FK есть индекс»), FK notifications.channel_id и verifications.via_identity_id, CHECK на числа прокси, статус доставки paused при отключении endpoint (оба хранилища), server_default выровнен и сравнивается в тесте дрейфа; overview_snapshot без коррелированных EXISTS; замер на 300 000: stale_identities 0,01 с, overview 0,4–0,9 с (D-178, D-179); check зелёный: 1258 passed, admin unit 67 passed · дальше F4.1b: retention пачками в отдельных транзакциях, чистка ih_stats_metric_batches, закрытых challenges, корзин 1h/1d, доставок удалённых событий, индексы под предикаты чистки (миграция 0015)

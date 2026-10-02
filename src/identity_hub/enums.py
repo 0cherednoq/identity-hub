@@ -109,3 +109,4 @@ class DeliveryStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"  # попытка неудачна, будет повтор
     DEAD = "dead"  # попытки исчерпаны
+    PAUSED = "paused"  # endpoint отключён: доставка ждёт его включения (только вебхуки)

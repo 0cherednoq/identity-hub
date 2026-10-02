@@ -126,3 +126,62 @@ async def test_released_deliveries_return_without_counting_the_attempt(
     )
     assert later == 1
     assert await store.claim_webhook_deliveries(limit=10, claim_for=CLAIM) == []  # отложена на 5 минут
+
+
+async def _statuses(space: SpaceHandle, endpoint_id: UUID) -> list[str]:
+    return sorted(row.status for row in await space.webhooks.deliveries(endpoint_id))
+
+
+async def test_disabling_endpoint_pauses_its_queue(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    """R2-D15: очередь отключённого endpoint'а уходит из выборки claim и возвращается при включении."""
+    endpoint_id = await _endpoint(space, "paused-queue")
+    await _enqueue(hub_under_test, space, 3)
+    store = hub_under_test._store
+    (first,) = await store.claim_webhook_deliveries(limit=1, claim_for=CLAIM)
+    assert await _finish(hub_under_test, first, succeeded=False)
+    assert await _statuses(space, endpoint_id) == ["failed", "pending", "pending"]
+
+    await space.webhooks.set_enabled(endpoint_id, False, reason="maintenance")
+
+    assert await _statuses(space, endpoint_id) == ["paused", "paused", "paused"]
+    assert await store.claim_webhook_deliveries(limit=10, claim_for=CLAIM) == []
+
+    await space.webhooks.set_enabled(endpoint_id, True)
+
+    assert await _statuses(space, endpoint_id) == ["pending", "pending", "pending"]
+    assert len(await store.claim_webhook_deliveries(limit=10, claim_for=CLAIM)) == 3
+
+
+async def test_automatic_disable_pauses_remaining_queue(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    """Endpoint отключён по серии отказов: остальные доставки ждут в `paused`, retry их возвращает."""
+    endpoint_id = await _endpoint(space, "auto-paused")
+    await _enqueue(hub_under_test, space, 3)
+    store = hub_under_test._store
+    (first,) = await store.claim_webhook_deliveries(limit=1, claim_for=CLAIM)
+
+    assert await _finish(hub_under_test, first, succeeded=False, max_failures=1)
+
+    assert await _statuses(space, endpoint_id) == ["dead", "paused", "paused"]
+
+    await space.webhooks.retry(first.delivery_id)
+
+    assert (await _row(space, endpoint_id)).enabled is True
+    assert await _statuses(space, endpoint_id) == ["pending", "pending", "pending"]
+    assert len(await store.claim_webhook_deliveries(limit=10, claim_for=CLAIM)) == 3
+
+
+async def test_result_of_delivery_paused_in_flight_is_recorded(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    """Неудача доставки, начатой до отключения, записывается, но доставка остаётся на паузе."""
+    endpoint_id = await _endpoint(space, "in-flight")
+    await _enqueue(hub_under_test, space, 1)
+    (claimed,) = await hub_under_test._store.claim_webhook_deliveries(limit=10, claim_for=CLAIM)
+    await space.webhooks.set_enabled(endpoint_id, False, reason="maintenance")
+
+    assert await _finish(hub_under_test, claimed, succeeded=False) is True
+
+    (delivery,) = await space.webhooks.deliveries(endpoint_id)
+    assert (delivery.status, delivery.response_code) == ("paused", 500)

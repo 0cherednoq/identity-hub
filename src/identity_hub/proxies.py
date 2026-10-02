@@ -103,7 +103,7 @@ def parse_proxy_url(url: str) -> ParsedProxy:
     scheme, host, port, username, password = parsed
     if scheme not in SCHEMES:
         raise ValidationFailed(f"прокси: схема не поддерживается ({', '.join(sorted(SCHEMES))})")
-    if not host or port is None:
+    if not host or not port:  # порт 0 urlsplit принимает, но подключиться к нему нельзя
         raise ValidationFailed("прокси: нужны хост и порт")
     return ParsedProxy(scheme=scheme, host=host, port=port, username=username, password=password)
 

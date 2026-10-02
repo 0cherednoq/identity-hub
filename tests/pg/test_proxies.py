@@ -18,6 +18,12 @@ from tests.fixtures.api import add_proxy
 pytestmark = pytest.mark.pg
 
 
+def test_port_zero_is_not_a_proxy_port() -> None:
+    """F4.1a: порт 0 отклоняется разбором URL, а не ограничением БД."""
+    with pytest.raises(ValidationFailed):
+        parse_proxy_url("socks5://proxy.example.test:0")
+
+
 class Checker:
     def __init__(self, *results: bool) -> None:
         self.results = list(results)

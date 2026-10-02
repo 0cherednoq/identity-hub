@@ -215,6 +215,19 @@ def _merge_counters(row: LeaseHistoryRow, counters: LeaseCounters) -> dict[str, 
     }
 
 
+def _pause_deliveries(state: Any, endpoint_id: UUID) -> None:
+    """Очередь отключённого endpoint'а ждёт его включения в статусе `paused`."""
+    for delivery_id, row in list(state.webhook_deliveries.items()):
+        if row.endpoint_id == endpoint_id and row.status in {"pending", "failed"}:
+            state.webhook_deliveries[delivery_id] = replace(row, status="paused")
+
+
+def _resume_deliveries(state: Any, endpoint_id: UUID, now: datetime) -> None:
+    for delivery_id, row in list(state.webhook_deliveries.items()):
+        if row.endpoint_id == endpoint_id and row.status == "paused":
+            state.webhook_deliveries[delivery_id] = replace(row, status="pending", next_attempt_at=now)
+
+
 class MemoryTx(StoreTx):
     """Транзакция MemoryStore. Экземпляр живёт только внутри context manager."""
 
@@ -432,6 +445,9 @@ class MemoryTx(StoreTx):
             del self.state.data[data_key]
         for verification_key in [item for item in self.state.verifications if item[0] == identity_id]:
             del self.state.verifications[verification_key]
+        for verification_key, verification in list(self.state.verifications.items()):
+            if verification.via_identity_id == identity_id:  # как FK ... ON DELETE SET NULL
+                self.state.verifications[verification_key] = replace(verification, via_identity_id=None)
         for key, target in list(self.state.links.items()):
             if key[0] == identity_id or target == identity_id:
                 del self.state.links[key]
@@ -1942,6 +1958,10 @@ class MemoryTx(StoreTx):
             disabled_reason=None if enabled else reason,
             failure_streak=0 if enabled else row.failure_streak,
         )
+        if enabled:
+            _resume_deliveries(self.state, endpoint_id, self._now)
+        else:
+            _pause_deliveries(self.state, endpoint_id)
         return True
 
     async def retry_webhook_delivery(self, delivery_id: int) -> bool:
@@ -1962,6 +1982,7 @@ class MemoryTx(StoreTx):
         self.state.webhook_endpoints[endpoint.id] = replace(
             endpoint, enabled=True, disabled_reason=None, failure_streak=0
         )
+        _resume_deliveries(self.state, endpoint.id, self._now)
         return True
 
     async def webhook_deliveries(self, endpoint_id: UUID, limit: int) -> list[WebhookDeliveryRow]:
@@ -2781,7 +2802,7 @@ class MemoryStore(Store):
                 row = self._state.webhook_deliveries.get(delivery_id)
                 if (
                     row is None
-                    or row.status not in {"pending", "failed"}
+                    or row.status not in {"pending", "failed", "paused"}
                     or row.attempt != attempt
                     or attempt < 1
                 ):
@@ -2806,7 +2827,7 @@ class MemoryStore(Store):
     ) -> bool:
         async with self._lock:
             row = self._state.webhook_deliveries.get(delivery_id)
-            if row is None or row.status not in {"pending", "failed"} or row.attempt != attempt:
+            if row is None or row.status not in {"pending", "failed", "paused"} or row.attempt != attempt:
                 return False
             now = self.clock.now()
             endpoint = self._state.webhook_endpoints[row.endpoint_id]
@@ -2820,9 +2841,15 @@ class MemoryStore(Store):
                 disabled_reason="consecutive_failures" if disabled else endpoint.disabled_reason,
                 failure_streak=failure_streak,
             )
+            if succeeded:
+                status = "succeeded"
+            elif exhausted:
+                status = "dead"
+            else:  # endpoint отключён после захвата: повтор — после включения
+                status = "paused" if row.status == "paused" else "failed"
             self._state.webhook_deliveries[delivery_id] = replace(
                 row,
-                status="succeeded" if succeeded else ("dead" if exhausted else "failed"),
+                status=status,
                 next_attempt_at=now + retry_after,
                 response_code=response_code,
                 response_ms=response_ms,
@@ -2830,6 +2857,7 @@ class MemoryStore(Store):
                 delivered_at=now if succeeded else None,
             )
             if disabled:
+                _pause_deliveries(self._state, endpoint.id)
                 space = next(item for item in self._state.spaces.values() if item.id == endpoint.space_id)
                 event = Event(
                     self._state.next_event_id,

@@ -379,6 +379,15 @@ class IdentityRecord(IdentityHubBase):
             "standing_until",
             postgresql_where=text("standing_until IS NOT NULL"),
         ),
+        # очередь фоновой сверки: кого не пробовали дольше всех (миграция 0014)
+        Index(
+            "ix_ih_identities_probe_queue",
+            "space_id",
+            "service",
+            text("probe_attempted_at NULLS FIRST"),
+            "id",
+            postgresql_where=text("lifecycle = 'ready'"),
+        ),
     )
 
 
@@ -442,6 +451,14 @@ class RegionStateRecord(IdentityHubBase):
         Index("ix_ih_region_states_synced", "region", "synced_at"),
         Index(
             "ix_ih_region_states_pinned", "pinned_until", postgresql_where=text("pinned_until IS NOT NULL")
+        ),
+        # снятие временных состояний: только строки со сроком (миграция 0014)
+        Index(
+            "ix_ih_region_states_due",
+            "space_id",
+            "region",
+            "until",
+            postgresql_where=text("until IS NOT NULL"),
         ),
     )
 
@@ -524,7 +541,8 @@ class VerificationRecord(IdentityHubBase):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    via_identity_id: Mapped[UUID | None]  # чем подтверждено: связанная почта или номер
+    # чем подтверждено: связанная почта или номер; подтверждающий аккаунт удалён — ссылка обнуляется
+    via_identity_id: Mapped[UUID | None] = mapped_column(ForeignKey("ih_identities.id", ondelete="SET NULL"))
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # не секретное
 
     # секретные доказательства (номер документа и т.п.), если сервис их объявил
@@ -539,6 +557,11 @@ class VerificationRecord(IdentityHubBase):
             "ix_ih_verifications_expires_at",
             "expires_at",
             postgresql_where=text("expires_at IS NOT NULL"),
+        ),
+        Index(
+            "ix_ih_verifications_via_identity",
+            "via_identity_id",
+            postgresql_where=text("via_identity_id IS NOT NULL"),
         ),
     )
 
@@ -622,6 +645,8 @@ class ChallengeRecord(IdentityHubBase):
             unique=True,
             postgresql_where=text("resolved_at IS NULL"),
         ),
+        # все вопросы аккаунта, включая закрытые: каскад при удалении аккаунта (миграция 0014)
+        Index("ix_ih_challenges_identity", "identity_id", "created_at"),
     )
 
 
@@ -886,6 +911,9 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
         UniqueConstraint("space_id", "fingerprint", name="uq_ih_proxies_space_fingerprint"),
         UniqueConstraint("id", "space_id", name="uq_ih_proxies_id_space"),
         _enum_check("status", ProxyStatus),
+        CheckConstraint("bound_count >= 0", name="bound_count_nonnegative"),
+        CheckConstraint("max_identities >= 1", name="max_identities_positive"),
+        CheckConstraint("port BETWEEN 1 AND 65535", name="port_valid"),
         Index("ix_ih_proxies_pick", "space_id", "pool", "status"),
         Index("ix_ih_proxies_host", "host", postgresql_using="gin", postgresql_ops={"host": "gin_trgm_ops"}),
     )
@@ -974,12 +1002,12 @@ class StatsRollupRecord(IdentityHubBase):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
-    service: Mapped[str] = mapped_column(String(64), default="")
+    service: Mapped[str] = mapped_column(String(64), default="", server_default=text("''"))
     metric: Mapped[str] = mapped_column(String(128))
     dims: Mapped[dict[str, str]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     bucket_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     bucket_size: Mapped[str] = mapped_column(String(2))
-    value: Mapped[float] = mapped_column(Float, default=0)
+    value: Mapped[float] = mapped_column(Float, default=0, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -1028,7 +1056,7 @@ class StateSnapshotCoverageRecord(IdentityHubBase):
     taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     source: Mapped[str] = mapped_column(String(16))
-    complete: Mapped[bool] = mapped_column(default=True)
+    complete: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
 
 
 class StateSnapshotRecord(IdentityHubBase):
@@ -1091,7 +1119,10 @@ class WebhookEndpointRecord(EncryptedPayloadMixin, IdentityHubBase):
     failure_streak: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (_enum_check("min_severity", Severity),)
+    __table_args__ = (
+        _enum_check("min_severity", Severity),
+        Index("ix_ih_webhook_endpoints_space_id", "space_id"),
+    )
 
 
 class WebhookDeliveryRecord(IdentityHubBase):
@@ -1140,7 +1171,10 @@ class NotificationChannelRecord(EncryptedPayloadMixin, IdentityHubBase):
     # пауза после 429: до этого момента уведомления канала не захватываются (миграция 0012)
     paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (CheckConstraint("kind IN ('telegram')", name="kind_valid"),)
+    __table_args__ = (
+        CheckConstraint("kind IN ('telegram')", name="kind_valid"),
+        Index("ix_ih_notification_channels_space_id", "space_id"),
+    )
 
 
 class NotificationRuleRecord(IdentityHubBase):
@@ -1168,7 +1202,8 @@ class NotificationRuleRecord(IdentityHubBase):
     __table_args__ = (
         _enum_check("min_severity", Severity),
         CheckConstraint("digest_seconds IS NULL OR digest_seconds BETWEEN 10 AND 86400", name="digest_range"),
-        Index("ix_ih_notification_rules_space", "space_id", postgresql_where=text("enabled")),
+        Index("ix_ih_notification_rules_space", "space_id"),
+        Index("ix_ih_notification_rules_channel_id", "channel_id"),
     )
 
 
@@ -1179,7 +1214,7 @@ class NotificationRecord(IdentityHubBase):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     rule_id: Mapped[UUID] = mapped_column(ForeignKey("ih_notification_rules.id", ondelete="CASCADE"))
-    channel_id: Mapped[UUID]
+    channel_id: Mapped[UUID] = mapped_column(ForeignKey("ih_notification_channels.id", ondelete="CASCADE"))
     digest_key: Mapped[str | None] = mapped_column(String(128))  # rule_id + начало окна
     event_ids: Mapped[list[UUID]] = mapped_column(ARRAY(PGUUID(as_uuid=True)))
     status: Mapped[str] = mapped_column(String(16), default=DeliveryStatus.PENDING)
@@ -1189,7 +1224,10 @@ class NotificationRecord(IdentityHubBase):
     error: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
-        _enum_check("status", DeliveryStatus),
+        # `paused` бывает только у доставок вебхуков: канал уведомлений ставится на паузу целиком
+        CheckConstraint("status IN ('pending', 'succeeded', 'failed', 'dead')", name="status_valid"),
+        Index("ix_ih_notifications_rule_id", "rule_id"),
+        Index("ix_ih_notifications_channel_id", "channel_id"),
         # одно открытое окно дайджеста на правило
         Index(
             "uq_ih_notifications_open_digest",
