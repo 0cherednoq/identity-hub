@@ -3961,6 +3961,11 @@ class PgStore(Store):
 
     # --------------------------------------------------------- реестр и пространства
 
+    async def current_time(self) -> datetime:
+        async with self.sessionmaker() as session:
+            value: datetime = (await _execute(session, select(func.now()))).scalar_one()
+        return value
+
     async def schema_revisions(self) -> tuple[str, list[str]]:
         version = Table(VERSION_TABLE, MetaData(), Column("version_num", String(32)))
         async with self.sessionmaker() as session:

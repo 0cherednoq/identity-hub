@@ -15,7 +15,9 @@ from identity_hub.postgres import store as pg_store
 pytestmark = pytest.mark.pg
 
 
-async def _seed(db: AsyncEngine, space: SpaceHandle, count: int, *, requirements: bool) -> None:
+async def _seed(
+    db: AsyncEngine, space: SpaceHandle, count: int, *, requirements: bool, regions: bool = True
+) -> None:
     ref = await space.ref()
     value = """'[{"code": "phone_verification"}]'""" if requirements else "'[]'"
     async with db.begin() as conn:
@@ -28,6 +30,8 @@ async def _seed(db: AsyncEngine, space: SpaceHandle, count: int, *, requirements
             ),
             {"space": ref.id, "n": count},
         )
+        if not regions:
+            return
         await conn.execute(
             text(
                 "INSERT INTO ih_region_states (identity_id, region, key, space_id, state, change_source, "
@@ -40,7 +44,9 @@ async def test_human_queue_opens_with_40000_accounts_needing_attention(
     hub: IdentityHub, space: SpaceHandle, db: AsyncEngine
 ) -> None:
     """R2-D06: список id не упирается в предел 32 767 параметров запроса asyncpg."""
-    await _seed(db, space, 40_000, requirements=True)
+    # строки регионов не нужны: запрос регионов всё равно получает все 40 000 id. Их массовая
+    # вставка на долгоживущем соединении пула в полном прогоне шла до двух минут (F4.6)
+    await _seed(db, space, 40_000, requirements=True, regions=False)
 
     page = await space.admin.human_queue(limit=20)
 

@@ -233,7 +233,7 @@ class StatsRollups:
         for event in events:
             if event.space in spaces:
                 by_space[event.space].append(event)
-        now = self.hub.clock.now()
+        now = await self.hub._store.current_time()  # как и чистка корзин — по времени хранилища
         fresh_after = now - self.hub.retention.rollup_minutes + timedelta(hours=1)
         # сутки с запасом: часовые корзины суток либо все на месте, либо сутки считаются по журналу
         hours_after = now - self.hub.retention.rollup_hours + timedelta(days=2)
@@ -302,7 +302,7 @@ class StatsRollups:
         """
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValidationFailed("rollup rebuild requires an aware, non-empty time range")
-        if not force and start < self.hub.clock.now() - self.hub.retention.events:
+        if not force and start < await self.hub._store.current_time() - self.hub.retention.events:
             raise ValidationFailed(
                 "rollup rebuild: диапазон старше срока хранения событий — перестройка сотрёт историю; "
                 "передайте force=True, если это и нужно"
@@ -328,7 +328,7 @@ class StatsRollups:
         return len(rows)
 
     async def purge_minutes(self, *, before: datetime | None = None) -> int:
-        cutoff = before or (self.hub.clock.now() - self.hub.retention.rollup_minutes)
+        cutoff = before or (await self.hub._store.current_time() - self.hub.retention.rollup_minutes)
         return await self.hub._store.purge_minute_rollups(cutoff)
 
     async def run_due(self) -> int:

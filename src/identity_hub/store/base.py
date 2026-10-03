@@ -1614,6 +1614,10 @@ class Store(ABC):
         Фактических несколько — разветвлённая история; пусто — схема не создана.
         """
 
+    @abstractmethod
+    async def current_time(self) -> datetime:
+        """Текущее время хранилища: по нему считаются границы сроков хранения и корзины (R2-D20)."""
+
     def compatible_revisions(self, expected: str) -> frozenset[str]:
         """Ревизии схемы, на которых работает код библиотеки; по умолчанию — только ожидаемая."""
         return frozenset({expected})

@@ -54,10 +54,17 @@ async def test_create_in_other_space_conflicts(hub_under_test: IdentityHub, spac
     await space.identities.create(_spec("+3"))
     other = hub_under_test.space(f"o-{uuid4().hex[:8]}")
 
-    with pytest.raises(AlreadyExists):
+    with pytest.raises(AlreadyExists) as exc:
         await other.identities.ensure(_spec("+3"))
-    with pytest.raises(AlreadyExists):
+    # R2-D19: id аккаунта чужого пространства наружу не отдаётся
+    assert exc.value.existing_id is None and exc.value.context.get("existing_id") is None
+    for call in (other.identities.create, other.identities.ensure):
+        with pytest.raises(AlreadyExists) as exc:
+            await call(_spec("+3"))
+        assert exc.value.existing_id is None
+    with pytest.raises(AlreadyExists) as exc:
         await other.identities.create_many([_spec("+3")], on_conflict="skip")
+    assert exc.value.existing_id is None
 
 
 async def test_session_and_default_slot_together_rejected(space: SpaceHandle) -> None:

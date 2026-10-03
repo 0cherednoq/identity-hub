@@ -46,7 +46,7 @@ class StateSnapshots:
         self._last_hour: datetime | None = None
 
     async def capture(self, *, at: datetime | None = None, source: str = "scheduled") -> int:
-        taken_at = snapshot_hour(at or self.hub.clock.now())
+        taken_at = snapshot_hour(at or await self.hub._store.current_time())
         return await self.hub._store.capture_state_snapshot(taken_at, source=source)
 
     async def backfill_current(self, *, at: datetime | None = None) -> int:
@@ -59,11 +59,11 @@ class StateSnapshots:
         return await self.hub._store.read_state_snapshots(space_slug, start, end)
 
     async def purge(self, *, before: datetime | None = None) -> int:
-        cutoff = before or (self.hub.clock.now() - self.hub.retention.state_snapshots)
+        cutoff = before or (await self.hub._store.current_time() - self.hub.retention.state_snapshots)
         return await self.hub._store.purge_state_snapshots(cutoff)
 
     async def run_due(self) -> int:
-        hour = snapshot_hour(self.hub.clock.now())
+        hour = snapshot_hour(await self.hub._store.current_time())
         if self._last_hour == hour:
             return 0
         captured = await self.capture(at=hour)

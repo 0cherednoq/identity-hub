@@ -5,8 +5,9 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID, uuid4
 
@@ -180,7 +181,13 @@ class RollupMetricsBuffer:
 
     async def flush(self) -> int:
         if self._pending:
-            self._retries.append((uuid4(), dict(self._pending)))
+            # минуты копятся по часам процесса; в пачку они попадают сдвинутыми на разницу с
+            # часами хранилища — как и корзины событий, считаемые по времени базы (R2-D20)
+            skew = await self.hub._store.current_time() - self.hub.clock.now()
+            # время записи внутри минуты неизвестно: сдвиг — разница часов, округлённая до минут,
+            # чтобы обычное расхождение в доли секунды не переносило значения в соседнюю минуту
+            offset = timedelta(minutes=round(skew / timedelta(minutes=1)))
+            self._retries.append((uuid4(), _shift_minutes(self._pending, offset)))
             self._pending.clear()
             while len(self._retries) > self.max_retries:  # хранилище давно недоступно
                 self.dropped += len(self._retries.pop(0)[1])
@@ -207,6 +214,15 @@ class RollupMetricsBuffer:
         await self.hub._store.apply_metric_rollup_batch(batch_id, deltas)
         self._retries.pop(0)
         return len(deltas)
+
+
+def _shift_minutes(pending: Mapping[_BufferKey, float], offset: timedelta) -> dict[_BufferKey, float]:
+    """Перенести минуты ключей на `offset`; совпавшие ключи складываются (`add`) или заменяются (`set`)."""
+    shifted: defaultdict[_BufferKey, float] = defaultdict(float)
+    for (mode, metric, minute, space, labels), value in pending.items():
+        key = (mode, metric, bucket_start(minute + offset, BucketSize.MINUTE, "UTC"), space, labels)
+        shifted[key] = value if mode == "set" else shifted[key] + value
+    return dict(shifted)
 
 
 def record_metric(hook: MetricsHook, kind: str, name: str, value: float = 1, **labels: str) -> None:

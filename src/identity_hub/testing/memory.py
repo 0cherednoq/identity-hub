@@ -2509,6 +2509,9 @@ class MemoryStore(Store):
                     for event in self._listeners.get("ih_events", ()):
                         event.set()
 
+    async def current_time(self) -> datetime:
+        return self.clock.now()
+
     async def schema_revisions(self) -> tuple[str, list[str]]:
         """MemoryStore всегда совместим: схема живёт в коде."""
         return MEMORY_SCHEMA_REVISION, [MEMORY_SCHEMA_REVISION]

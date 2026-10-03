@@ -239,7 +239,8 @@ class IdentitiesMixin(SpaceBase):
             return None
         found_id, found_space = found
         if found_space != tx.space.id:
-            raise AlreadyExists("identity", f"{row.service}:{row.external_ref}", found_id)
+            # id чужого пространства наружу не отдаётся: это утечка между пространствами (R2-D19)
+            raise AlreadyExists("identity", f"{row.service}:{row.external_ref}")
         return RegisterResult(found_id, created=False)
 
     async def _write_children_command(self, tx: Any, prepared: PreparedIdentity) -> None:

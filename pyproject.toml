@@ -27,7 +27,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.30",
     "cryptography>=42",
     "tzdata>=2025.2; platform_system == 'Windows'",
-    "uuid-utils>=0.9; python_version < '3.14'",
+    "uuid-utils>=1.0; python_version < '3.14'",  # проверенная версия; монотонность даёт new_id()
 ]
 
 [project.optional-dependencies]
