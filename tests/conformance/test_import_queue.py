@@ -18,7 +18,10 @@ CLAIM = timedelta(minutes=5)
 
 async def _stage(space: SpaceHandle, count: int) -> UUID:
     return await space.imports.stage(
-        service="fake_tg", records=[ImportRecord(f"+{n}") for n in range(count)], source="queue.csv"
+        service="fake_tg",
+        records=[ImportRecord(f"+{n}") for n in range(count)],
+        source="queue.csv",
+        actor="test",
     )
 
 

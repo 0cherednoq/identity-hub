@@ -135,7 +135,7 @@ async def test_capacity_released_on_rebind_and_delete(
             return {p.id: p.bound_count for p in (await s.execute(select(ProxyRecord))).scalars()}
 
     assert await counts() == {first.proxy_id: 0, second.proxy_id: 1}
-    await space.identities.delete(identity_id)
+    await space.identities.delete(identity_id, actor="test")
     assert await counts() == {first.proxy_id: 0, second.proxy_id: 0}
 
 

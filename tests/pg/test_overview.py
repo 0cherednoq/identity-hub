@@ -31,7 +31,9 @@ async def test_overview_matches_sql_oracle_and_keeps_authorization_before_aggreg
     )
     async with space._tx(own=True) as tx:
         deadline = await tx.now() + timedelta(hours=6)
-    await space.verifications.requirements.add(registered.identity_id, "identity_document", deadline=deadline)
+    await space.verifications.requirements.add(
+        registered.identity_id, "identity_document", deadline=deadline, actor="test"
+    )
     lease = await space.pools.define("workers", service="fake_exchange", capacity_low=1).acquire()
     email = lease.verification("email")
     await email.start()

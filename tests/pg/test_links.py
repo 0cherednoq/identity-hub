@@ -22,10 +22,10 @@ async def test_link_unlink_and_views(space: SpaceHandle) -> None:
     mail = await _reg(space, "m@x", "fake_exchange")
     phone = await _reg(space, "+100")
     tg = await _reg(space, "+1")
-    await space.links.add(tg, "recovery_email", mail)
-    await space.links.add(tg, "registered_phone", phone)
+    await space.links.add(tg, "recovery_email", mail, actor="test")
+    await space.links.add(tg, "registered_phone", phone, actor="test")
     with pytest.raises(AlreadyExists):
-        await space.links.add(tg, "recovery_email", phone)
+        await space.links.add(tg, "recovery_email", phone, actor="test")
 
     links = await space.links.of(tg)
     assert [(link.role, link.identity_id) for link in links.outgoing] == [
@@ -44,8 +44,8 @@ async def test_link_unlink_and_views(space: SpaceHandle) -> None:
     assert summary[tg].outgoing == 2 and summary[tg].roles == ["recovery_email", "registered_phone"]
     assert summary[mail].incoming == 1 and summary[mail].outgoing == 0
 
-    assert await space.links.remove(tg, "recovery_email")
-    assert not await space.links.remove(tg, "recovery_email")
+    assert await space.links.remove(tg, "recovery_email", actor="test")
+    assert not await space.links.remove(tg, "recovery_email", actor="test")
     assert (await space.admin.link_summary([mail]))[mail].incoming == 0
 
 
@@ -53,11 +53,11 @@ async def test_link_validation(hub: IdentityHub, space: SpaceHandle) -> None:
     a = await _reg(space, "+1")
     foreign = await _reg(hub.space("other", create=True), "+2")
     with pytest.raises(ValidationFailed):
-        await space.links.add(a, "x", a)
+        await space.links.add(a, "x", a, actor="test")
     with pytest.raises(NotFound):
-        await space.links.add(a, "x", foreign)
+        await space.links.add(a, "x", foreign, actor="test")
     with pytest.raises(NotFound):
-        await space.links.add(foreign, "x", a)
+        await space.links.add(foreign, "x", a, actor="test")
 
 
 async def test_impact_transitive(space: SpaceHandle) -> None:
@@ -66,10 +66,10 @@ async def test_impact_transitive(space: SpaceHandle) -> None:
     insta = await _reg(space, "insta")
     tiktok = await _reg(space, "tiktok")
     tg = await _reg(space, "+1")
-    await space.links.add(insta, "recovery_email", gmail)
-    await space.links.add(tiktok, "login_via", insta)
-    await space.links.add(tg, "recovery_email", gmail)
-    await space.links.add(gmail, "recovery_phone", tiktok)
+    await space.links.add(insta, "recovery_email", gmail, actor="test")
+    await space.links.add(tiktok, "login_via", insta, actor="test")
+    await space.links.add(tg, "recovery_email", gmail, actor="test")
+    await space.links.add(gmail, "recovery_phone", tiktok, actor="test")
 
     impact = await space.links.impact(gmail)
     assert [(i.identity_id, i.depth) for i in impact][:2] in (

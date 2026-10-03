@@ -9,8 +9,9 @@ from identity_hub.api.identities import (
     OnConflict,
     Page,
 )
-from identity_hub.api.proxies import Proxy, ProxyCreateManyResult
+from identity_hub.api.proxies import Proxy, ProxyCreateManyResult, RecheckReport
 from identity_hub.api.secrets import SecretRef
+from identity_hub.api.sync import RefreshResult
 from identity_hub.auth import LoginOutcome, LoginReport
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
@@ -185,8 +186,10 @@ __all__ = [
     "ProxyStatus",
     "Quota",
     "QuotaExhausted",
+    "RecheckReport",
     "ReconcileReport",
     "RecordingMetrics",
+    "RefreshResult",
     "Retention",
     "RevisionConflict",
     "SchemaIncompatible",

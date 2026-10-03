@@ -114,7 +114,7 @@ async def test_classifier_text_is_sanitized_in_events_and_card(
 
 async def test_refs_stay_in_events_by_default(space: SpaceHandle) -> None:
     await space.identities.create(
-        IdentityCreate(service="fake_tg", external_ref="+79990001122", labels={"owner": "ivan"})
+        IdentityCreate(service="fake_tg", external_ref="+79990001122", labels={"owner": "ivan"}), actor="test"
     )
     (registered,) = await _events(space, "identity.registered")
     assert registered["external_ref"] == "+79990001122"
@@ -127,7 +127,7 @@ async def test_redact_refs_in_events_hides_personal_data(
     """R2-S17 (D-152): по настройке хаба `external_ref` и `labels` во внешние события не идут."""
     hub_under_test.redact_refs_in_events = True
     identity = await space.identities.create(
-        IdentityCreate(service="fake_tg", external_ref="+79990001122", labels={"owner": "ivan"})
+        IdentityCreate(service="fake_tg", external_ref="+79990001122", labels={"owner": "ivan"}), actor="test"
     )
     await space.identities.delete(identity.id, actor="admin")
 

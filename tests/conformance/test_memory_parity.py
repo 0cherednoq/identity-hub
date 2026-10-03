@@ -60,7 +60,9 @@ def space(hub: IdentityHub) -> SpaceHandle:
 async def _account(space: SpaceHandle, ref: str, service: str = "fake_tg", **fields: object) -> UUID:
     fields.setdefault("lifecycle", Lifecycle.READY)
     fields.setdefault("auth", AuthState.AUTHENTICATED)
-    identity = await space.identities.create(IdentityCreate(service=service, external_ref=ref, **fields))
+    identity = await space.identities.create(
+        IdentityCreate(service=service, external_ref=ref, **fields), actor="test"
+    )
     return identity.id
 
 
@@ -87,7 +89,8 @@ async def test_verification_evidence_is_readable_after_submit(space: SpaceHandle
             lifecycle=Lifecycle.READY,
             credentials={"email": "t@x", "password": "p"},
             session={"cookies": {"sid": "1"}},
-        )
+        ),
+        actor="test",
     )
     lease = await space.pools.define("ex", service="fake_exchange").acquire(among=[identity.id])
     try:
@@ -145,8 +148,8 @@ async def test_links_order_and_dates(space: SpaceHandle) -> None:
 
     b, c = await _account(space, "+5"), await _account(space, "+6")
     a = await _account(space, "+4")
-    await space.links.add(a, "zz", b)
-    await space.links.add(a, "aa", c)
+    await space.links.add(a, "zz", b, actor="test")
+    await space.links.add(a, "aa", c, actor="test")
     outgoing = (await space.links.of(a)).outgoing
     assert [link.role for link in outgoing] == ["aa", "zz"]
     created = (await space.identities.get(c)).created_at

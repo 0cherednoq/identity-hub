@@ -26,7 +26,7 @@ def _spec(ref: str, **kwargs: object) -> IdentityCreate:
 
 async def test_create_returns_identity_and_rejects_duplicate(space: SpaceHandle) -> None:
     identity = await space.identities.create(
-        _spec("+1", session={"auth_key": "k"}, lifecycle=Lifecycle.READY, tags=["a"])
+        _spec("+1", session={"auth_key": "k"}, lifecycle=Lifecycle.READY, tags=["a"]), actor="test"
     )
 
     assert identity.external_ref == "+1"
@@ -35,15 +35,15 @@ async def test_create_returns_identity_and_rejects_duplicate(space: SpaceHandle)
     assert identity.tags == frozenset({"a"})
 
     with pytest.raises(AlreadyExists) as exc:
-        await space.identities.create(_spec("+1"))
+        await space.identities.create(_spec("+1"), actor="test")
     assert exc.value.existing_id == identity.id
     with pytest.raises(AlreadyExists):
-        await space.identities.create(_spec("+other", id=identity.id))
+        await space.identities.create(_spec("+other", id=identity.id), actor="test")
 
 
 async def test_ensure_returns_existing_without_changes(space: SpaceHandle) -> None:
-    first, created = await space.identities.ensure(_spec("+2", note="первая"))
-    again, created_again = await space.identities.ensure(_spec("+2", note="вторая"))
+    first, created = await space.identities.ensure(_spec("+2", note="первая"), actor="test")
+    again, created_again = await space.identities.ensure(_spec("+2", note="вторая"), actor="test")
 
     assert created is True and created_again is False
     assert again.id == first.id
@@ -51,26 +51,26 @@ async def test_ensure_returns_existing_without_changes(space: SpaceHandle) -> No
 
 
 async def test_create_in_other_space_conflicts(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
-    await space.identities.create(_spec("+3"))
+    await space.identities.create(_spec("+3"), actor="test")
     other = hub_under_test.space(f"o-{uuid4().hex[:8]}", create=True)
 
     with pytest.raises(AlreadyExists) as exc:
-        await other.identities.ensure(_spec("+3"))
+        await other.identities.ensure(_spec("+3"), actor="test")
     # R2-D19: id аккаунта чужого пространства наружу не отдаётся
     assert exc.value.existing_id is None and exc.value.context.get("existing_id") is None
     for call in (other.identities.create, other.identities.ensure):
         with pytest.raises(AlreadyExists) as exc:
-            await call(_spec("+3"))
+            await call(_spec("+3"), actor="test")
         assert exc.value.existing_id is None
     with pytest.raises(AlreadyExists) as exc:
-        await other.identities.create_many([_spec("+3")], on_conflict="skip")
+        await other.identities.create_many([_spec("+3")], on_conflict="skip", actor="test")
     assert exc.value.existing_id is None
 
 
 async def test_session_and_default_slot_together_rejected(space: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed):
         await space.identities.create(
-            _spec("+4", session={"auth_key": "a"}, sessions={"default": {"auth_key": "b"}})
+            _spec("+4", session={"auth_key": "a"}, sessions={"default": {"auth_key": "b"}}), actor="test"
         )
 
 
@@ -82,7 +82,7 @@ async def test_create_many_creates_in_input_order_with_links(space: SpaceHandle)
         _spec("+m", tags=["x"]),
     ]
 
-    result = await space.identities.create_many(specs)
+    result = await space.identities.create_many(specs, actor="test")
 
     assert [i.external_ref for i in result.created] == ["+z", "+a", "+m"]
     assert result.skipped == []
@@ -95,7 +95,7 @@ async def test_create_many_is_atomic_on_invalid_record(space: SpaceHandle) -> No
     specs = [_spec("+ok"), _spec("", note="пустой ref"), _spec("+bad", lifecycle="nope")]
 
     with pytest.raises(ValidationFailed) as exc:
-        await space.identities.create_many(specs)
+        await space.identities.create_many(specs, actor="test")
 
     message = str(exc.value)
     assert "[1]" in message and "[2]" in message
@@ -104,23 +104,27 @@ async def test_create_many_is_atomic_on_invalid_record(space: SpaceHandle) -> No
 
 async def test_create_many_rejects_duplicates_in_batch(space: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed, match="повтор"):
-        await space.identities.create_many([_spec("+d"), _spec("+d")])
+        await space.identities.create_many([_spec("+d"), _spec("+d")], actor="test")
     assert await space.identities.count() == 0
 
 
 async def test_create_many_fail_on_existing_creates_nothing(space: SpaceHandle) -> None:
-    await space.identities.create(_spec("+e1"))
+    await space.identities.create(_spec("+e1"), actor="test")
 
     with pytest.raises(AlreadyExists, match=r"fake_tg:\+e1"):
-        await space.identities.create_many([_spec("+new"), _spec("+e1")], on_conflict=OnConflict.FAIL)
+        await space.identities.create_many(
+            [_spec("+new"), _spec("+e1")], on_conflict=OnConflict.FAIL, actor="test"
+        )
 
     assert await space.identities.find(service="fake_tg", external_ref="+new") is None
 
 
 async def test_create_many_skip_reports_existing(space: SpaceHandle) -> None:
-    existing = await space.identities.create(_spec("+s1"))
+    existing = await space.identities.create(_spec("+s1"), actor="test")
 
-    result = await space.identities.create_many([_spec("+s1"), _spec("+s2")], on_conflict="skip")
+    result = await space.identities.create_many(
+        [_spec("+s1"), _spec("+s2")], on_conflict="skip", actor="test"
+    )
 
     assert [i.external_ref for i in result.created] == ["+s2"]
     assert [(r.id, r.external_ref) for r in result.skipped] == [(existing.id, "+s1")]
@@ -128,8 +132,8 @@ async def test_create_many_skip_reports_existing(space: SpaceHandle) -> None:
 
 async def test_create_many_limit(space: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed, match="1000"):
-        await space.identities.create_many(_spec(f"+{n}") for n in range(1001))
-    assert (await space.identities.create_many([])).created == []
+        await space.identities.create_many((_spec(f"+{n}") for n in range(1001)), actor="test")
+    assert (await space.identities.create_many([], actor="test")).created == []
 
 
 async def test_register_alias_keeps_result_and_warns(space: SpaceHandle) -> None:

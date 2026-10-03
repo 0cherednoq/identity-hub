@@ -75,7 +75,7 @@ async def test_health_reports(space: SpaceHandle) -> None:
 
     status = ProxyStatus.ALIVE
     for _ in range(int(threshold) + 2):
-        status = await space.proxies.report_failure(proxy.id)
+        status = await space.proxies.report_failure(proxy.id, actor="test")
     assert status is ProxyStatus.QUARANTINED
     await space.proxies.report_success(proxy.id)
 
@@ -83,7 +83,7 @@ async def test_health_reports(space: SpaceHandle) -> None:
         return True
 
     assert await space.proxies.recheck(proxy.id, healthy, actor="admin") is ProxyStatus.ALIVE
-    assert await space.proxies.recheck_due(healthy) == {}
+    assert (await space.proxies.recheck_due(healthy)).statuses == {}
     with pytest.raises(NotFound):
         await space.proxies.get(uuid4())
 
@@ -96,7 +96,8 @@ async def test_pools_define_lease_capacity_revoke(space: SpaceHandle) -> None:
             lifecycle=Lifecycle.READY,
             auth=AuthState.AUTHENTICATED,
             tags=["parser"],
-        )
+        ),
+        actor="test",
     )
     pool = space.pools.define("parsers", service="fake_tg", tags=["parser"])
 

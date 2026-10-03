@@ -85,7 +85,7 @@ async def test_bad_proxy_url_fails_one_record_and_keeps_the_report() -> None:
         ImportRecord("a4"),
     ]
 
-    report = await space.imports.run(service=svc, records=records, batch_size=2)
+    report = await space.imports.run(service=svc, records=records, batch_size=2, actor="test")
 
     assert len(report.created) == 3 and [ref for ref, _ in report.failed] == ["a3"]
     assert "abc" not in report.failed[0][1]
@@ -106,7 +106,9 @@ async def test_unexpected_error_in_one_record_does_not_abort_the_batch(
 
     object.__setattr__(svc, "normalize_ref", broken)
 
-    report = await space.imports.run(service=svc, records=[ImportRecord("ok"), ImportRecord("boom")])
+    report = await space.imports.run(
+        service=svc, records=[ImportRecord("ok"), ImportRecord("boom")], actor="test"
+    )
 
     assert len(report.created) == 1
     assert report.failed == [("boom", "RuntimeError")]  # текст чужого исключения в отчёт не идёт
@@ -116,9 +118,9 @@ async def test_staged_poison_record_does_not_block_the_queue() -> None:
     """E4: прогон с негодной записью завершается; следующий прогон пространства обрабатывается."""
     hub, _clock, space, svc = await _hub()
     bad = await space.imports.stage(
-        service=svc, records=[ImportRecord("d1", proxy="http://h:abc")], source="bad"
+        service=svc, records=[ImportRecord("d1", proxy="http://h:abc")], source="bad", actor="test"
     )
-    good = await space.imports.stage(service=svc, records=[ImportRecord("d2")], source="good")
+    good = await space.imports.stage(service=svc, records=[ImportRecord("d2")], source="good", actor="test")
 
     await hub.dispatcher.drain()
 
@@ -134,9 +136,9 @@ async def test_item_is_failed_after_three_claims_and_other_spaces_proceed(
     hub, clock, space, svc = await _hub()
     other = hub.space("zz-other", "Other", create=True)
     poisoned = await space.imports.stage(
-        service=svc, records=[ImportRecord("p1"), ImportRecord("p2")], source="x"
+        service=svc, records=[ImportRecord("p1"), ImportRecord("p2")], source="x", actor="test"
     )
-    healthy = await other.imports.stage(service=svc, records=[ImportRecord("h1")], source="y")
+    healthy = await other.imports.stage(service=svc, records=[ImportRecord("h1")], source="y", actor="test")
     original = type(space)._import_many
 
     async def flaky(self: Any, **kwargs: Any) -> Any:
@@ -167,7 +169,7 @@ async def test_missing_link_rejects_only_its_record() -> None:
     records.append(ImportRecord("b6", links={"backup": "b0"}))  # связь с записью той же пачки
     records.append(ImportRecord("b7", links={"chain": "b5"}))  # цель сама отклонена
 
-    report = await space.imports.run(service=svc, records=records)
+    report = await space.imports.run(service=svc, records=records, actor="test")
 
     assert len(report.created) == 6
     assert sorted(ref for ref, _ in report.failed) == ["b5", "b7"]
@@ -182,7 +184,7 @@ async def test_import_respects_proxy_capacity() -> None:
     _, _clock, space, svc = await _hub(proxy_policy=ProxyPolicy(group="g"))
     records = [ImportRecord(f"r{n}", proxy="http://u:p@10.0.0.1:80") for n in range(5)]
 
-    report = await space.imports.run(service=svc, records=records, max_identities=2)
+    report = await space.imports.run(service=svc, records=records, max_identities=2, actor="test")
 
     assert len(report.created) == 2 and len(report.failed) == 3
     assert all("ёмкост" in reason for _, reason in report.failed)
@@ -190,7 +192,10 @@ async def test_import_respects_proxy_capacity() -> None:
     assert (proxy.max_identities, proxy.bound_count) == (2, 2)
 
     again = await space.imports.run(
-        service=svc, records=[ImportRecord("late", proxy="http://u:p@10.0.0.1:80")], max_identities=2
+        service=svc,
+        records=[ImportRecord("late", proxy="http://u:p@10.0.0.1:80")],
+        max_identities=2,
+        actor="test",
     )
     assert again.created == [] and len(again.failed) == 1  # прокси уже заполнен прошлым импортом
 
@@ -208,6 +213,7 @@ async def test_staged_update_session_reports_updated_and_honours_verify_sessions
         source="f.csv",
         on_existing="update_session",
         verify_sessions=True,
+        actor="test",
     )
 
     await hub.dispatcher.drain()
@@ -229,6 +235,7 @@ async def test_update_session_without_verify_marks_authenticated() -> None:
         service=svc,
         records=[ImportRecord(" c1 ", sessions={"default": {"auth_key": "new"}})],
         on_existing="update_session",
+        actor="test",
     )
 
     assert report.updated == [identity_id] and report.failed == []
@@ -248,6 +255,7 @@ async def test_rejection_reason_names_the_field_without_the_value() -> None:
             ),
             ImportRecord("x2", credentials={"phone": 1}),
         ],
+        actor="test",
     )
 
     reasons = dict(report.failed)
@@ -259,6 +267,7 @@ async def test_rejection_reason_names_the_field_without_the_value() -> None:
         service=svc,
         records=[ImportRecord("+79990001133", credentials={"phone": ["Sup3rSecret"]})],
         source="s",
+        actor="test",
     )
     await hub.dispatcher.drain()
     run = await space.imports.get(run_id)
@@ -282,7 +291,7 @@ async def test_file_and_importer_errors_go_to_failed() -> None:
     _, _clock, space, svc = await _hub(importers=(Importer(),))
 
     report = await space.imports.run_files(
-        service=svc, paths=["one.ok", "broken.bad", "unknown.txt", "two.ok"]
+        service=svc, paths=["one.ok", "broken.bad", "unknown.txt", "two.ok"], actor="test"
     )
 
     assert len(report.created) == 2

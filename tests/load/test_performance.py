@@ -108,7 +108,7 @@ async def test_import_10k_under_60_seconds(hub: IdentityHub) -> None:
     records = [ImportRecord(f"import-{index:06d}") for index in range(10_000)]
     started = time.perf_counter()
     report = await hub.space("load-import", create=True).imports.run(
-        service="fake_tg", records=records, batch_size=2_000
+        service="fake_tg", records=records, batch_size=2_000, actor="test"
     )
     elapsed = time.perf_counter() - started
     print(f"LOAD import count={report.total} elapsed={elapsed:.3f}s")

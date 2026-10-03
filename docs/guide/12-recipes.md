@@ -58,7 +58,7 @@ senders = space.pools.define(
 ввести SMS-код и только потом пустить в работу.
 
 ```python
-report = await space.imports.run(service=TELEGRAM, records=read_supplier_csv(path))
+report = await space.imports.run(service=TELEGRAM, records=read_supplier_csv(path), actor="operator")
 # все в provisioning, auth = no_session
 
 async def onboarding_tick(space):          # запускать по расписанию, например раз в минуту
@@ -74,7 +74,7 @@ async def onboarding_tick(space):          # запускать по распи�
 `data.save`) и выводите безнадёжные аккаунты через `identities.retire`.
 
 Оператор получает Telegram-уведомление о `identity.challenge.opened`, вводит код в вашем UI,
-тот вызывает `space.auth.answer_challenge(challenge_id, code)`. Подписчик на
+тот вызывает `space.auth.answer_challenge(challenge_id, code, actor="operator")`. Подписчик на
 `identity.login.succeeded` переводит аккаунт в `ready`.
 
 ## Фоновая синхронизация статусов
@@ -121,10 +121,10 @@ async with traders.lease(for_operation="withdraw") as lease:     # выдаст 
 ```python
 mail = await space.identities.create(
     IdentityCreate(service=MAIL, external_ref="box@example.com", credentials=..., lifecycle=Lifecycle.READY)
-)
+, actor="operator")
 tg = await space.identities.create(
     IdentityCreate(service=TELEGRAM, external_ref="+1...", links={"recovery_email": mail.id})
-)
+, actor="operator")
 
 class TgAuthenticator:
     async def login(self, ctx):
@@ -153,6 +153,6 @@ globex = await hub.spaces.ensure("globex", "Globex")
 ```python
 async with sessions() as db, db.begin():
     db.add(Order(...))
-    await space.using(db).identities.create(IdentityCreate(service=TELEGRAM, external_ref=phone, ...))
+    await space.using(db).identities.create(IdentityCreate(service=TELEGRAM, external_ref=phone, ...), actor="operator")
 # откат транзакции откатит и аккаунт с событием
 ```

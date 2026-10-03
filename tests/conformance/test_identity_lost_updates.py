@@ -50,7 +50,10 @@ async def test_parallel_requirements_keep_every_code(space: SpaceHandle) -> None
 
     added = await asyncio.wait_for(
         asyncio.gather(
-            *(space.verifications.requirements.add(reg.identity_id, f"code-{n}") for n in range(WRITERS))
+            *(
+                space.verifications.requirements.add(reg.identity_id, f"code-{n}", actor="test")
+                for n in range(WRITERS)
+            )
         ),
         timeout=60,
     )

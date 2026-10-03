@@ -37,7 +37,7 @@ class Auth(Namespace):
         challenge_id: UUID,
         answer: str,
         *,
-        actor: str = "admin",
+        actor: str,
         expected_identity_id: UUID | None = None,
     ) -> LoginOutcome:
         """Ответ человека (код из SMS и т.п.): сохраняется зашифрованным, вход продолжается сразу."""

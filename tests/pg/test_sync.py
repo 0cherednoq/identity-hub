@@ -81,7 +81,7 @@ async def test_resync_applies_observations(
 ) -> None:
     identity_id = await _reg(space, "+1")
     probes.standing_result = ProbeResult(state=None, code="spam_restricted", raw_status="SPAM")
-    result = await space.sync.refresh(identity_id)
+    result = (await space.sync.refresh(identity_id)).outcomes
     assert result == {"auth": "unchanged", "standing": "applied"}
     row = await _row(sessionmaker, identity_id)
     assert (row.standing, row.standing_code) == ("limited", "spam_restricted")
@@ -99,7 +99,7 @@ async def test_unknown_status_and_pinned_drift(
 ) -> None:
     identity_id = await _reg(space, "+1")
     probes.standing_result = ProbeResult(state=None, raw_status="WEIRD")
-    assert (await space.sync.refresh(identity_id, ["standing"]))["standing"] == "unknown_status"
+    assert (await space.sync.refresh(identity_id, ["standing"])).outcomes["standing"] == "unknown_status"
     assert (await _row(sessionmaker, identity_id)).standing == "good"
 
     await space.identities.override(
@@ -107,7 +107,7 @@ async def test_unknown_status_and_pinned_drift(
         Override("standing", "", "good", reason="проверено", actor="admin", pin_for=timedelta(hours=1)),
     )
     probes.standing_result = ProbeResult(state="banned", raw_status="BANNED")
-    assert (await space.sync.refresh(identity_id, ["standing"]))["standing"] == "pinned"
+    assert (await space.sync.refresh(identity_id, ["standing"])).outcomes["standing"] == "pinned"
     assert (await _row(sessionmaker, identity_id)).standing == "good"
     async with sessionmaker() as s:
         types = list((await s.execute(select(EventRecord.type))).scalars())

@@ -323,7 +323,7 @@ Rollups по событиям пересчитываются только для
 
 ```python
 async with sessions() as db_session, db_session.begin():
-    await hub.space("production").using(db_session).identities.create(IdentityCreate(...))
+    await hub.space("production").using(db_session).identities.create(IdentityCreate(...), actor="operator")
     # пространство "production" создано заранее: hub.spaces.ensure("production", "Production")
     await application_repository.save(db_session, ...)
 ```

@@ -95,7 +95,7 @@ async def test_account_search_equal_timestamps_and_structured_filter(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     ids = await _seed(space)
-    await space.verifications.requirements.add(ids["+380501"], "captcha")
+    await space.verifications.requirements.add(ids["+380501"], "captcha", actor="test")
     ref = await space.ref()
     async with sessionmaker() as session, session.begin():
         await session.execute(

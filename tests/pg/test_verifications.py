@@ -143,13 +143,13 @@ async def test_resume_and_pending_expiry(
 
 async def test_requirements(space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     identity_id, _ = await _exchange(space)
-    assert await space.verifications.requirements.add(identity_id, "phone_verification")
-    assert not await space.verifications.requirements.add(identity_id, "phone_verification")
+    assert await space.verifications.requirements.add(identity_id, "phone_verification", actor="test")
+    assert not await space.verifications.requirements.add(identity_id, "phone_verification", actor="test")
     async with sessionmaker() as s:
         reqs: Any = (await s.execute(select(IdentityRecord.requirements))).scalar_one()
     assert [r["code"] for r in reqs] == ["phone_verification"]
-    assert await space.verifications.requirements.resolve(identity_id, "phone_verification")
-    assert not await space.verifications.requirements.resolve(identity_id, "phone_verification")
+    assert await space.verifications.requirements.resolve(identity_id, "phone_verification", actor="test")
+    assert not await space.verifications.requirements.resolve(identity_id, "phone_verification", actor="test")
     async with sessionmaker() as s:
         types = list((await s.execute(select(EventRecord.type))).scalars())
     assert "identity.requirement.added" in types and "identity.requirement.resolved" in types

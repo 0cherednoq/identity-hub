@@ -276,8 +276,8 @@ class TgProbes:
 
 ```python
 # один аккаунт — например, после жалобы или из админки
-outcome = await space.sync.refresh(identity_id, regions=("auth", "standing"))
-# {'auth': 'unchanged', 'standing': 'applied'}
+result = await space.sync.refresh(identity_id, regions=("auth", "standing"))
+result.outcomes  # {'auth': 'unchanged', 'standing': 'applied'}
 
 # фоновая сверка: аккаунты, не сверявшиеся дольше not_synced_for
 report = await space.sync.refresh_many(

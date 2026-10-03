@@ -26,8 +26,8 @@ async def test_run_reports_and_resolves_links_by_ref(space: SpaceHandle) -> None
         ImportRecord(external_ref="+11", sessions={"default": {"auth_key": "k"}}),
     ]
 
-    report = await space.imports.run(service="fake_tg", records=records)
-    again = await space.imports.run(service="fake_tg", records=records)
+    report = await space.imports.run(service="fake_tg", records=records, actor="test")
+    again = await space.imports.run(service="fake_tg", records=records, actor="test")
 
     assert len(report.created) == 2 and report.failed == []
     assert [ref for ref, _ in again.skipped] == ["+10", "+11"]
@@ -45,6 +45,7 @@ async def test_run_partial_failure_keeps_valid_records(space: SpaceHandle) -> No
             ImportRecord(external_ref="+20"),
             ImportRecord(external_ref="+21", profile={"birthday": "x"}),
         ],
+        actor="test",
     )
     assert len(report.created) == 1
     assert [ref for ref, _ in report.failed] == ["+21"]
@@ -52,7 +53,7 @@ async def test_run_partial_failure_keeps_valid_records(space: SpaceHandle) -> No
 
 async def test_stage_get_and_cancel(space: SpaceHandle) -> None:
     run_id = await space.imports.stage(
-        service="fake_tg", records=[ImportRecord(external_ref="+30")], source="upload.csv"
+        service="fake_tg", records=[ImportRecord(external_ref="+30")], source="upload.csv", actor="test"
     )
 
     info = await space.imports.get(run_id)
@@ -69,7 +70,8 @@ async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
             external_ref="+40",
             credentials={"phone": "+40", "password": "old-pass"},
             sessions={"default": {"auth_key": "k1"}, "web": {"auth_key": "k2"}},
-        )
+        ),
+        actor="test",
     )
 
     card = await space.secrets.describe(identity.id)
@@ -98,7 +100,9 @@ async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
 
 
 async def test_reveal_missing_and_unknown(space: SpaceHandle) -> None:
-    identity = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+50"))
+    identity = await space.identities.create(
+        IdentityCreate(service="fake_tg", external_ref="+50"), actor="test"
+    )
     with pytest.raises(NotFound):
         await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor="admin", reason="тест")
     with pytest.raises(ValidationFailed):
@@ -140,7 +144,7 @@ async def test_rejected_batch_report_has_no_foreign_exception_text(
 
     monkeypatch.setattr(type(space), "_import_links", broken)
     report = await space.imports.run(
-        service="fake_tg", records=[ImportRecord(external_ref="+20", links={"recovery": "+21"})]
+        service="fake_tg", records=[ImportRecord(external_ref="+20", links={"recovery": "+21"})], actor="test"
     )
 
     assert report.created == []
@@ -157,6 +161,7 @@ async def test_missing_link_rejects_only_its_record_with_a_safe_reason(space: Sp
             ImportRecord(external_ref="+30", links={"recovery": "fake_tg:+404"}),
             ImportRecord(external_ref="+31"),
         ],
+        actor="test",
     )
     assert len(report.created) == 1
     assert report.failed == [("+30", "связь recovery: связанный аккаунт не найден")]

@@ -121,9 +121,9 @@ identity = await space.identities.create(IdentityCreate(
     service=TELEGRAM, external_ref="+12025550123",
     credentials={"phone": "+12025550123"}, session={"auth_key": "..."},
     tags=["parser"], lifecycle=Lifecycle.READY,
-))
-identity, created = await space.identities.ensure(IdentityCreate(...))   # get-or-create
-result = await space.identities.create_many([...], on_conflict="skip")   # атомарно, до 1000
+), actor="operator")
+identity, created = await space.identities.ensure(IdentityCreate(...), actor="operator")   # get-or-create
+result = await space.identities.create_many([...], on_conflict="skip", actor="operator")   # атомарно, до 1000
 
 identity = await space.identities.get(identity_id)
 identity = await space.identities.get_by_ref("telegram", "+12025550123")
@@ -131,9 +131,9 @@ page = await space.identities.list(IdentityFilter(service="telegram", standing="
 page = await space.identities.search("tag:parser farm:eu-1")
 card = await space.identities.card(identity_id)        # состояние, квоты, аренда, blockers
 
-await space.identities.update(identity_id, profile={"city": "Berlin"}, labels={"farm": "eu-2"})
-await space.identities.add_tags(identity_id, ["vip"])
-await space.identities.delete(identity_id)
+await space.identities.update(identity_id, profile={"city": "Berlin"}, labels={"farm": "eu-2"}, actor="operator")
+await space.identities.add_tags(identity_id, ["vip"], actor="operator")
+await space.identities.delete(identity_id, actor="operator")
 ```
 
 ### Состояние identity
@@ -192,15 +192,15 @@ await space.proxies.recheck_due(checker)
 
 ```python
 outcome = await space.auth.login(identity_id)             # LoginOutcome.SUCCEEDED / CHALLENGED / FAILED
-await space.auth.answer_challenge(challenge_id, "12345")
+await space.auth.answer_challenge(challenge_id, "12345", actor="operator")
 
 await space.verifications.review(identity_id, "kyc_id", "approve", actor="admin", reason="ok")
 
-await space.links.add(tg_id, "recovery_email", mail_id)
+await space.links.add(tg_id, "recovery_email", mail_id, actor="operator")
 record = await space.data.load(identity_id, "farm.warmup", Warmup)
 
 creds = await space.secrets.reveal(identity_id, SecretRef.CREDENTIALS, actor="admin", reason="...")
-report = await space.imports.run(service=TELEGRAM, records=records)
+report = await space.imports.run(service=TELEGRAM, records=records, actor="operator")
 ```
 
 ## Переход со старых имён

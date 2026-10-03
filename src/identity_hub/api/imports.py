@@ -37,7 +37,7 @@ class Imports(Namespace):
         on_existing: OnExisting | str = OnExisting.SKIP,
         verify_sessions: bool = False,
         on_batch_committed: BatchHook | None = None,
-        actor: str = "import",
+        actor: str,
         run_id: UUID | None = None,
         max_identities: int = 3,
     ) -> ImportReport:
@@ -69,7 +69,7 @@ class Imports(Namespace):
         on_existing: OnExisting | str = OnExisting.SKIP,
         verify_sessions: bool = False,
         on_batch_committed: BatchHook | None = None,
-        actor: str = "import",
+        actor: str,
         run_id: UUID | None = None,
         max_identities: int = 3,
     ) -> ImportReport:
@@ -95,7 +95,7 @@ class Imports(Namespace):
         on_existing: OnExisting | str = OnExisting.SKIP,
         verify_sessions: bool = False,
         labels: Mapping[str, str | int | float | bool] | None = None,
-        actor: str = "import",
+        actor: str,
         run_id: UUID | None = None,
     ) -> UUID:
         """Сохранить импорт до 10 000 записей зашифрованным; обработает диспетчер. Возвращает id прогона."""

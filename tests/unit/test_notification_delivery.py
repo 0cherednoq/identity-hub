@@ -73,7 +73,7 @@ async def _banned(
         created_by="op",
     )
     created = await space.identities.create_many(
-        [IdentityCreate(service="fake_tg", external_ref=f"+{n}") for n in range(count)]
+        [IdentityCreate(service="fake_tg", external_ref=f"+{n}") for n in range(count)], actor="test"
     )
     for identity in created.created:
         await space.identities.override(

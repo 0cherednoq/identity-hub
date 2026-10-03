@@ -23,7 +23,7 @@ class Registered:
 
 
 async def register(space: SpaceHandle, *, actor: str = "system", **fields: Any) -> Registered:
-    """`space.identities.ensure(IdentityCreate(**fields))`: get-or-create без изменения существующего."""
+    """`space.identities.ensure(IdentityCreate(**fields), actor=actor)`: get-or-create без изменений."""
     identity, created = await space.identities.ensure(IdentityCreate(**fields), actor=actor)
     return Registered(identity.id, created)
 

@@ -132,7 +132,10 @@ async def test_parallel_failure_reports_are_all_counted(
     proxy_id = await _proxy(space, "10.0.4.1")
 
     await asyncio.wait_for(
-        asyncio.gather(*(space.proxies.report_failure(proxy_id, weight=1.0) for _ in range(20))), timeout=60
+        asyncio.gather(
+            *(space.proxies.report_failure(proxy_id, weight=1.0, actor="test") for _ in range(20))
+        ),
+        timeout=60,
     )
 
     assert (await space.proxies.get(proxy_id)).error_score == 20.0
@@ -144,7 +147,7 @@ async def test_threshold_still_quarantines_and_stops_counting(
     hub_under_test.proxy_health = ProxyHealthPolicy(error_threshold=3)
     proxy_id = await _proxy(space, "10.0.5.1")
 
-    statuses = [await space.proxies.report_failure(proxy_id) for _ in range(5)]
+    statuses = [await space.proxies.report_failure(proxy_id, actor="test") for _ in range(5)]
 
     assert [str(s) for s in statuses] == ["alive", "alive", "quarantined", "quarantined", "quarantined"]
     assert (await space.proxies.get(proxy_id)).error_score == 3.0  # в карантине счёт не растёт

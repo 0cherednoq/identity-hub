@@ -82,6 +82,7 @@ async def test_staged_import_survives_rotation_and_old_key_removal(
         records=[
             ImportRecord(f"+st{n}", credentials={"phone": f"+st{n}", "password": "x"}) for n in range(3)
         ],
+        actor="test",
     )
     _use_keys(hub_under_test, TEST_KEYS, "k2")
     assert await hub_under_test.doctor.inactive_keys() == {"import_items": {"k1": 3}}
@@ -104,6 +105,7 @@ async def test_import_with_undecryptable_item_fails_and_keeps_the_item(
         service="fake_tg",
         source="upload.csv",
         records=[ImportRecord("+a", credentials={"phone": "+a"}), ImportRecord("+b")],
+        actor="test",
     )
     _use_keys(hub_under_test, {"k2": TEST_KEYS["k2"]}, "k2")  # ключ убран без ротации
 

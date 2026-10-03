@@ -314,14 +314,14 @@ class Identities(Namespace):
 
     # ------------------------------------------------------------------ создание
 
-    async def create(self, spec: IdentityCreate, *, actor: str = "system") -> Identity:
+    async def create(self, spec: IdentityCreate, *, actor: str) -> Identity:
         """Создать identity; если такой id или `(service, external_ref)` уже есть — `AlreadyExists`."""
         svc, prepared = self._prepare(spec)
         async with self._space._tx() as tx:
             await self._space._create_one(tx, svc, prepared, actor=actor, fail_existing=True)
             return await self._read(tx, prepared.row.id)
 
-    async def ensure(self, spec: IdentityCreate, *, actor: str = "system") -> tuple[Identity, bool]:
+    async def ensure(self, spec: IdentityCreate, *, actor: str) -> tuple[Identity, bool]:
         """Вернуть существующую identity без изменений (`False`) или создать её (`True`).
 
         Identity с тем же ref в другом пространстве — `AlreadyExists`.
@@ -336,7 +336,7 @@ class Identities(Namespace):
         specs: Iterable[IdentityCreate],
         *,
         on_conflict: OnConflict | str = OnConflict.FAIL,
-        actor: str = "system",
+        actor: str,
     ) -> CreateManyResult:
         """Атомарно создать до 1000 identity одной транзакцией.
 
@@ -386,7 +386,7 @@ class Identities(Namespace):
         profile: SchemaInput | None = None,
         labels: Mapping[str, Any] | None = None,
         note: str | _Unset | None = UNSET,
-        actor: str = "system",
+        actor: str,
     ) -> Identity:
         """Частичное изменение одной транзакцией и одним событием `identity.updated`.
 
@@ -396,39 +396,33 @@ class Identities(Namespace):
         row = await self._space._update(identity_id, profile=profile, labels=labels, note=note, actor=actor)
         return Identity.from_row(row)
 
-    async def replace_profile(
-        self, identity_id: UUID, profile: SchemaInput, *, actor: str = "system"
-    ) -> Identity:
+    async def replace_profile(self, identity_id: UUID, profile: SchemaInput, *, actor: str) -> Identity:
         """Заменить профиль целиком (валидация схемой сервиса)."""
         return Identity.from_row(
             await self._space._update_profile(identity_id, profile, replace=True, actor=actor)
         )
 
-    async def replace_attributes(
-        self, identity_id: UUID, attributes: SchemaInput, *, actor: str = "system"
-    ) -> Identity:
+    async def replace_attributes(self, identity_id: UUID, attributes: SchemaInput, *, actor: str) -> Identity:
         """Заменить технические атрибуты целиком (валидация схемой сервиса)."""
         return Identity.from_row(await self._space._set_attributes(identity_id, attributes, actor=actor))
 
-    async def replace_labels(
-        self, identity_id: UUID, labels: Mapping[str, Any], *, actor: str = "system"
-    ) -> Identity:
+    async def replace_labels(self, identity_id: UUID, labels: Mapping[str, Any], *, actor: str) -> Identity:
         """Заменить метки целиком; для слияния — `update(labels=...)`."""
         return Identity.from_row(await self._space._set_labels(identity_id, labels, actor=actor))
 
-    async def add_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> Identity:
+    async def add_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str) -> Identity:
         return Identity.from_row(await self._space._add_tags(identity_id, tags, actor=actor))
 
-    async def remove_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> Identity:
+    async def remove_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str) -> Identity:
         return Identity.from_row(await self._space._remove_tags(identity_id, tags, actor=actor))
 
-    async def set_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system") -> Identity:
+    async def set_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str) -> Identity:
         return Identity.from_row(await self._space._set_tags(identity_id, tags, actor=actor))
 
-    async def set_note(self, identity_id: UUID, note: str | None, *, actor: str = "system") -> Identity:
+    async def set_note(self, identity_id: UUID, note: str | None, *, actor: str) -> Identity:
         return Identity.from_row(await self._space._set_note(identity_id, note, actor=actor))
 
-    async def delete(self, identity_id: UUID, *, actor: str = "system", revoke: bool = False) -> None:
+    async def delete(self, identity_id: UUID, *, actor: str, revoke: bool = False) -> None:
         """Физически удалить identity. Нельзя, пока на неё ссылаются связи; журнал сохраняется.
 
         При живой аренде — `ValidationFailed`; `revoke=True` отзывает её в той же транзакции.

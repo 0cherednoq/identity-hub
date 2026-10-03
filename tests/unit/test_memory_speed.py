@@ -34,7 +34,7 @@ async def _hub(count: int) -> tuple[IdentityHub, object]:
         for n in range(count)
     ]
     for start in range(0, count, 500):
-        await space.identities.create_many(specs[start : start + 500])
+        await space.identities.create_many(specs[start : start + 500], actor="test")
     return hub, space
 
 

@@ -18,7 +18,7 @@ async def test_rotate_key_upgrades_legacy_credentials(
     hub: IdentityHub, space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     identity = await space.identities.create(
-        IdentityCreate(service="fake_tg", external_ref="+aad", credentials={"phone": "+aad"})
+        IdentityCreate(service="fake_tg", external_ref="+aad", credentials={"phone": "+aad"}), actor="test"
     )
     aad = associated_data("ih_credentials", identity.id)
     legacy = hub._envelope.seal(b'{"phone":"+aad","password":"legacy-pass"}', aad.legacy)

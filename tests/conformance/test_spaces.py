@@ -18,7 +18,7 @@ pytestmark = pytest.mark.conformance
 
 async def test_typo_in_slug_is_not_found(hub_under_test: IdentityHub) -> None:
     production = await hub_under_test.spaces.create("production", "Production")
-    await production.identities.create(IdentityCreate(service="fake_tg", external_ref="+1"))
+    await production.identities.create(IdentityCreate(service="fake_tg", external_ref="+1"), actor="test")
 
     typo = hub_under_test.space("prodution")
 
@@ -46,6 +46,6 @@ async def test_space_with_create_keeps_lazy_creation(hub_under_test: IdentityHub
     slug = _slug()
     space = hub_under_test.space(slug, "Лениво", create=True)
 
-    await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+2"))
+    await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+2"), actor="test")
 
     assert (await hub_under_test.spaces.get(slug)).slug == slug

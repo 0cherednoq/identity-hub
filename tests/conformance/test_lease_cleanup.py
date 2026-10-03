@@ -61,7 +61,8 @@ async def test_abandoned_lease_is_closed_in_one_tick_behind_many_released(
                 service="fake_tg", external_ref=f"+{n}", lifecycle="ready", session={"auth_key": "k"}
             )
             for n in range(RELEASED + 1)
-        ]
+        ],
+        actor="test",
     )
     hub_under_test.maintenance.schedule = MaintenanceSchedule(batch_size=BATCH)
     pool = space.pools.define("work", service="fake_tg", holder="worker-1")

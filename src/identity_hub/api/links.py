@@ -25,15 +25,13 @@ class IdentityLinks(Namespace):
         role: str,
         linked_identity_id: UUID,
         *,
-        actor: str = "system",
+        actor: str,
         reason: str | None = None,
     ) -> None:
         """Добавить связь; на пару (identity, role) — одна связь, повтор — `AlreadyExists`."""
         await self._space._link(identity_id, role, linked_identity_id, actor=actor, reason=reason)
 
-    async def remove(
-        self, identity_id: UUID, role: str, *, actor: str = "system", reason: str | None = None
-    ) -> bool:
+    async def remove(self, identity_id: UUID, role: str, *, actor: str, reason: str | None = None) -> bool:
         """Удалить связь; `False` — её не было."""
         return await self._space._unlink(identity_id, role, actor=actor, reason=reason)
 

@@ -92,15 +92,15 @@ async def test_delete_restricted_by_links(
         space, service="fake_tg", external_ref="+1", links={"recovery_email": mail.identity_id}
     )
     with pytest.raises(ValidationFailed):
-        await space.identities.delete(mail.identity_id)
+        await space.identities.delete(mail.identity_id, actor="test")
     await space.identities.delete(tg.identity_id, actor="admin")
-    await space.identities.delete(mail.identity_id)
+    await space.identities.delete(mail.identity_id, actor="test")
     async with sessionmaker() as s:
         assert (await s.execute(select(func.count()).select_from(IdentityRecord))).scalar_one() == 0
     deleted = [e for e in await _events(sessionmaker) if e.type == "identity.deleted"]
     assert {e.identity_id for e in deleted} == {tg.identity_id, mail.identity_id}  # журнал пережил удаление
     with pytest.raises(NotFound):
-        await space.identities.delete(mail.identity_id)
+        await space.identities.delete(mail.identity_id, actor="test")
 
 
 class Farm(BaseModel):

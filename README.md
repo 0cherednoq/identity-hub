@@ -113,7 +113,7 @@ uv run pytest
            lifecycle=Lifecycle.READY,
            auth=AuthState.AUTHENTICATED,
        )
-   )
+   , actor="operator")
 
    parsers = space.pools.define("parsers", service=TELEGRAM, tags=["parser"])
    async with parsers.lease(for_operation="read_channel") as lease:

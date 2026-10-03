@@ -123,7 +123,7 @@ flowchart LR
 ```python
 from identity_hub import LoginOutcome
 
-identity = await space.identities.create(IdentityCreate(service=TELEGRAM, external_ref=phone, credentials=creds))
+identity = await space.identities.create(IdentityCreate(service=TELEGRAM, external_ref=phone, credentials=creds), actor="operator")
 outcome = await space.auth.login(identity.id)            # LoginOutcome: SUCCEEDED / CHALLENGED / FAILED
 if outcome is LoginOutcome.SUCCEEDED:
     await space.identities.activate(identity.id, actor="onboarding")
@@ -198,7 +198,7 @@ report = await space.imports.run(
     records=records,                 # список, генератор или async-генератор
     batch_size=500,
     on_existing=OnExisting.SKIP,     # SKIP | UPDATE_SESSION | FAIL
-)
+, actor="operator")
 report.created, report.updated, report.skipped, report.failed   # списки id / (ref, причина)
 ```
 
@@ -233,7 +233,7 @@ report.created, report.updated, report.skipped, report.failed   # списки i
   Прогоны пространств независимы: сбой одного не задерживает остальные. Запись, обработка
   которой падает с непредвиденной ошибкой, повторяется после истечения захвата и на третьей
   попытке помечается `failed` (`staged_item_failed`); прогон при этом доходит до конца.
-- `space.imports.run_files(service=..., paths=[...])` — читает файлы вашими `FileImporter`
+- `space.imports.run_files(service=..., paths=[...], actor="operator")` — читает файлы вашими `FileImporter`
   из `Service.importers` (`can_import(path)`, `read(path)` → `ImportRecord`). Готовых
   импортёров `.session`/tdata в библиотеке нет. Файл без импортёра и файл, который импортёр не
   смог прочитать, попадают в `report.failed` под именем файла; остальные файлы импортируются.
@@ -334,10 +334,10 @@ data = await space.secrets.reveal(identity_id, SecretRef.session("web"), actor="
 привязан к телефону.
 
 ```python
-await space.links.add(tg_id, "recovery_email", mail_id)      # одна связь на роль
+await space.links.add(tg_id, "recovery_email", mail_id, actor="operator")      # одна связь на роль
 links = await space.links.of(tg_id)                           # outgoing / incoming
 impact = await space.links.impact(mail_id)                    # кого затронет потеря почты
-await space.links.remove(tg_id, "recovery_email")
+await space.links.remove(tg_id, "recovery_email", actor="operator")
 ```
 
 Внутри `Authenticator.login` связанный аккаунт доступен через `await ctx.linked("recovery_email")`

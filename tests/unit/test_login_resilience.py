@@ -165,8 +165,8 @@ async def test_override_closes_open_challenge_and_login_starts_over() -> None:
     new = UUID(str((await space.identities.card(identity_id)).open_challenge["id"]))  # type: ignore[index]
     assert new != old
     with pytest.raises(ValidationFailed):
-        await space.auth.answer_challenge(old, "1")
-    assert await space.auth.answer_challenge(new, "1") is LoginOutcome.SUCCEEDED
+        await space.auth.answer_challenge(old, "1", actor="test")
+    assert await space.auth.answer_challenge(new, "1", actor="test") is LoginOutcome.SUCCEEDED
     assert await _auth(space, identity_id) == "authenticated"
 
 
@@ -230,7 +230,7 @@ async def test_closed_challenge_does_not_keep_the_answer() -> None:
     await space.auth.login(identity_id)
     challenge_id = UUID(str((await space.identities.card(identity_id)).open_challenge["id"]))  # type: ignore[index]
 
-    assert await space.auth.answer_challenge(challenge_id, "123456") is LoginOutcome.SUCCEEDED
+    assert await space.auth.answer_challenge(challenge_id, "123456", actor="test") is LoginOutcome.SUCCEEDED
 
     async with space._tx(own=True) as tx:
         row = await tx.get_challenge(challenge_id)

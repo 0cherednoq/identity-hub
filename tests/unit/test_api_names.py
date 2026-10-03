@@ -43,7 +43,7 @@ def test_identity_create_uses_auth_like_identity_and_filter() -> None:
 async def test_created_identity_gets_requested_auth() -> None:
     space = await _space()
     identity = await space.identities.create(  # type: ignore[attr-defined]
-        IdentityCreate(service="svc", external_ref="+1", auth="no_session")
+        IdentityCreate(service="svc", external_ref="+1", auth="no_session"), actor="test"
     )
     assert identity.auth == "no_session"
 
@@ -86,3 +86,51 @@ async def test_webhooks_and_notifications_are_cached_namespaces() -> None:
     assert space.webhooks is space.webhooks  # type: ignore[attr-defined]
     assert space.notifications is space.notifications  # type: ignore[attr-defined]
     assert isinstance(space.webhooks, Namespace) and isinstance(space.notifications, Namespace)  # type: ignore[attr-defined]
+
+
+def _namespace_methods() -> list[tuple[str, object]]:
+    import importlib
+    import pkgutil
+
+    import identity_hub.api as api
+    from identity_hub.dispatch.notifications import Notifications
+    from identity_hub.dispatch.webhooks import Webhooks
+
+    classes = {Webhooks, Notifications}
+    for module in pkgutil.iter_modules(api.__path__):
+        loaded = importlib.import_module(f"identity_hub.api.{module.name}")
+        classes |= {
+            item
+            for item in vars(loaded).values()
+            if inspect.isclass(item) and issubclass(item, Namespace) and item.__module__ == loaded.__name__
+        }
+    return [
+        (f"{cls.__name__}.{name}", function)
+        for cls in sorted(classes, key=lambda item: item.__name__)
+        for name, function in sorted(vars(cls).items())
+        if not name.startswith("_") and inspect.iscoroutinefunction(function)
+    ]
+
+
+def test_actor_is_required_keyword_everywhere() -> None:
+    """R1-23: где метод принимает `actor`, он обязателен и передаётся по имени — без молчаливых "system"."""
+    optional = [
+        name
+        for name, function in _namespace_methods()
+        if (actor := inspect.signature(function).parameters.get("actor")) is not None  # type: ignore[arg-type]
+        and (actor.default is not inspect.Parameter.empty or actor.kind is not inspect.Parameter.KEYWORD_ONLY)
+    ]
+    assert optional == []
+
+
+async def test_refresh_and_recheck_return_dto() -> None:
+    """R1-26: результаты — DTO, как у остальных методов."""
+    from identity_hub import RecheckReport, RefreshResult
+
+    assert inspect.signature(Imports.run).return_annotation == "ImportReport"
+    from identity_hub.api.proxies import Proxies
+    from identity_hub.api.sync import Sync
+
+    assert inspect.signature(Sync.refresh).return_annotation == "RefreshResult"
+    assert inspect.signature(Proxies.recheck_due).return_annotation == "RecheckReport"
+    assert RefreshResult.__dataclass_params__.frozen and RecheckReport.__dataclass_params__.frozen  # type: ignore[attr-defined]

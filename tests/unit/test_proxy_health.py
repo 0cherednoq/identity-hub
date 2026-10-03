@@ -38,7 +38,7 @@ async def _quarantined(space: SpaceHandle, count: int, group: str = "g") -> list
     for n in range(count):
         proxy, _ = await space.proxies.ensure(f"http://u:p@10.0.{len(group)}.{n}:80", group=group)
         for _ in range(3):
-            await space.proxies.report_failure(proxy.id)
+            await space.proxies.report_failure(proxy.id, actor="test")
         ids.append(proxy.id)
     return ids
 
@@ -96,7 +96,7 @@ async def test_single_failing_proxy_still_goes_dead_and_is_rechecked_later() -> 
     assert await _events(space, "proxy.checker.failed") == []
 
     clock.advance(timedelta(minutes=5))
-    assert await space.proxies.recheck_due(up) == {}  # dead ждёт max_backoff (1 час)
+    assert (await space.proxies.recheck_due(up)).statuses == {}  # dead ждёт max_backoff (1 час)
     for _ in range(3):
         clock.advance(timedelta(minutes=61))
         await space.proxies.recheck_due(up)
@@ -130,7 +130,7 @@ async def test_checker_timeout_counts_as_proxy_failure() -> None:
         return True
 
     clock.advance(timedelta(minutes=10))
-    result = await asyncio.wait_for(space.proxies.recheck_due(hangs), timeout=5)
+    result = (await asyncio.wait_for(space.proxies.recheck_due(hangs), timeout=5)).statuses
 
     assert result == {proxy_id: ProxyStatus.DEAD}
 
@@ -149,7 +149,7 @@ async def test_recheck_due_runs_checks_in_parallel_with_a_limit() -> None:
         return True
 
     clock.advance(timedelta(minutes=10))
-    result = await space.proxies.recheck_due(slow)
+    result = (await space.proxies.recheck_due(slow)).statuses
 
     assert set(result) == set(ids) and peak == 3
 
@@ -162,7 +162,7 @@ async def test_recheck_group_revives_dead_proxies_without_waiting() -> None:
     for proxy_id in ids[:2]:
         await space.proxies.override(proxy_id, "dead", reason="провайдер лёг", actor="op")
 
-    result = await space.proxies.recheck_group("g", up, actor="op")
+    result = (await space.proxies.recheck_group("g", up, actor="op")).statuses
 
     assert result == dict.fromkeys(ids, ProxyStatus.ALIVE)
     assert await _statuses(space, other) == ["quarantined"]  # другая группа не тронута
@@ -184,7 +184,7 @@ async def test_pinned_proxy_is_not_changed_by_scheduled_rechecks() -> None:
 
     for _ in range(8):
         clock.advance(timedelta(hours=1))
-        assert await space.proxies.recheck_due(counting_down) == {}
+        assert (await space.proxies.recheck_due(counting_down)).statuses == {}
 
     pinned = await space.proxies.get(proxy.id)
     assert (str(pinned.status), calls) == ("quarantined", 0)

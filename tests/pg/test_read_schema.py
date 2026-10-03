@@ -102,7 +102,7 @@ async def _seed(hub: IdentityHub, farm: Table, engine: AsyncEngine) -> dict[str,
                 service="fake_tg", external_ref=f"{space.slug}{ref}", session={"auth_key": "k"},
                 lifecycle=Lifecycle.READY,
             )
-        )  # fmt: skip
+        , actor="test")  # fmt: skip
         ids[ref] = identity.id
         async with engine.begin() as conn:
             await conn.execute(farm.insert().values(identity_id=identity.id, energy=energy))
@@ -162,7 +162,7 @@ async def test_read_tables_expose_state_without_secrets(hub: IdentityHub, db: As
             service="fake_tg", external_ref="+700", session={"auth_key": "k"},
             credentials={"phone": "+700", "password": "secret-pass"}, lifecycle=Lifecycle.READY,
         )
-    )  # fmt: skip
+    , actor="test")  # fmt: skip
     await space.proxies.create("socks5://user:proxy-pass@9.9.9.9:1080", group="res")
     async with space.pools.define("p", service="fake_tg").lease(), db.connect() as conn:
         lease = (await conn.execute(select(hub.read.leases))).mappings().one()

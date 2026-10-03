@@ -145,7 +145,8 @@ async def test_proxy_url_requires_actor_and_reason(space: SpaceHandle, actor: st
 async def test_secret_reveal_requires_actor_and_reason(space: SpaceHandle, actor: str, reason: str) -> None:
     """R2-S10: `reason=None` и `actor=' '` больше не дают раскрыть секрет."""
     identity = await space.identities.create(
-        IdentityCreate(service="fake_tg", external_ref="+3", credentials={"phone": "+3", "password": "PW"})
+        IdentityCreate(service="fake_tg", external_ref="+3", credentials={"phone": "+3", "password": "PW"}),
+        actor="test",
     )
     with pytest.raises(ValidationFailed):
         await space.secrets.reveal(identity.id, SecretRef.CREDENTIALS, actor=actor, reason=reason)

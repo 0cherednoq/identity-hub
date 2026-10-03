@@ -107,7 +107,7 @@ stateDiagram-v2
 ```
 
 - Ошибки прокси приходят от классификатора ошибок (`Fault(Blame.PROXY)`) или напрямую:
-  `await space.proxies.report_failure(proxy_id, weight=1.0)`.
+  `await space.proxies.report_failure(proxy_id, weight=1.0, actor="operator")`.
 - Успехи уменьшают счёт: `await space.proxies.report_success(proxy_id)` — библиотека сама его
   не вызывает.
 - Порог и backoff задаёт `IdentityHub(proxy_health=ProxyHealthPolicy(error_threshold=3.0,

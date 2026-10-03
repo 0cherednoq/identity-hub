@@ -21,7 +21,9 @@ pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
 
 
 async def _new(space: SpaceHandle, ref: str, **kwargs: Any) -> Any:
-    return await space.identities.create(IdentityCreate(service="fake_tg", external_ref=ref, **kwargs))
+    return await space.identities.create(
+        IdentityCreate(service="fake_tg", external_ref=ref, **kwargs), actor="test"
+    )
 
 
 async def test_update_merges_in_one_event(space: SpaceHandle) -> None:
@@ -30,7 +32,7 @@ async def test_update_merges_in_one_event(space: SpaceHandle) -> None:
     )
 
     updated = await space.identities.update(
-        created.id, profile={"country": "UA"}, labels={"b": None, "c": "x"}, note="заметка"
+        created.id, profile={"country": "UA"}, labels={"b": None, "c": "x"}, note="заметка", actor="test"
     )
 
     assert updated.profile["country"] == "UA"
@@ -43,8 +45,8 @@ async def test_update_merges_in_one_event(space: SpaceHandle) -> None:
 async def test_update_without_changes_writes_no_event(space: SpaceHandle) -> None:
     created = await _new(space, "+2", labels={"a": 1}, note="n")
 
-    same = await space.identities.update(created.id, labels={"a": 1}, note="n")
-    untouched = await space.identities.update(created.id)
+    same = await space.identities.update(created.id, labels={"a": 1}, note="n", actor="test")
+    untouched = await space.identities.update(created.id, actor="test")
 
     assert same.revision == untouched.revision == created.revision
 
@@ -52,8 +54,8 @@ async def test_update_without_changes_writes_no_event(space: SpaceHandle) -> Non
 async def test_update_note_none_clears_but_unset_keeps(space: SpaceHandle) -> None:
     created = await _new(space, "+3", note="старая")
 
-    kept = await space.identities.update(created.id, labels={"x": 1})
-    cleared = await space.identities.update(created.id, note=None)
+    kept = await space.identities.update(created.id, labels={"x": 1}, actor="test")
+    cleared = await space.identities.update(created.id, note=None, actor="test")
 
     assert kept.note == "старая"
     assert cleared.note is None
@@ -62,15 +64,15 @@ async def test_update_note_none_clears_but_unset_keeps(space: SpaceHandle) -> No
 async def test_update_profile_validated_by_schema(space: SpaceHandle) -> None:
     created = await _new(space, "+4")
     with pytest.raises(ValidationFailed):
-        await space.identities.update(created.id, profile={"birthday": "не дата"})
+        await space.identities.update(created.id, profile={"birthday": "не дата"}, actor="test")
 
 
 async def test_replace_parts(space: SpaceHandle) -> None:
     created = await _new(space, "+5", profile={"country": "DE", "first_name": "Olena"}, labels={"a": 1})
 
-    profile = await space.identities.replace_profile(created.id, {"country": "PL"})
-    labels = await space.identities.replace_labels(created.id, {"z": True})
-    attributes = await space.identities.replace_attributes(created.id, {"device": "Pixel"})
+    profile = await space.identities.replace_profile(created.id, {"country": "PL"}, actor="test")
+    labels = await space.identities.replace_labels(created.id, {"z": True}, actor="test")
+    attributes = await space.identities.replace_attributes(created.id, {"device": "Pixel"}, actor="test")
 
     assert profile.profile.get("first_name") is None and profile.profile["country"] == "PL"
     assert labels.labels == {"z": True}
@@ -80,15 +82,15 @@ async def test_replace_parts(space: SpaceHandle) -> None:
 async def test_tags_note_and_delete(space: SpaceHandle) -> None:
     created = await _new(space, "+6", tags=["a"])
 
-    assert (await space.identities.add_tags(created.id, ["b"])).tags == {"a", "b"}
-    assert (await space.identities.remove_tags(created.id, ["a"])).tags == {"b"}
-    assert (await space.identities.set_tags(created.id, ["c", "d"])).tags == {"c", "d"}
-    assert (await space.identities.set_note(created.id, "n")).note == "n"
+    assert (await space.identities.add_tags(created.id, ["b"], actor="test")).tags == {"a", "b"}
+    assert (await space.identities.remove_tags(created.id, ["a"], actor="test")).tags == {"b"}
+    assert (await space.identities.set_tags(created.id, ["c", "d"], actor="test")).tags == {"c", "d"}
+    assert (await space.identities.set_note(created.id, "n", actor="test")).note == "n"
 
-    await space.identities.delete(created.id)
+    await space.identities.delete(created.id, actor="test")
     assert await space.identities.find(created.id) is None
     with pytest.raises(NotFound):
-        await space.identities.delete(created.id)
+        await space.identities.delete(created.id, actor="test")
 
 
 async def test_activate_retire_and_back(space: SpaceHandle) -> None:

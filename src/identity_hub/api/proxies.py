@@ -22,7 +22,7 @@ from identity_hub.store.base import ProxyReadRow, ProxyRow
 if TYPE_CHECKING:
     from identity_hub.proxies import ProxyChecker, ProxyHealthPolicy
 
-__all__ = ["Proxies", "Proxy", "ProxyCreateManyResult"]
+__all__ = ["Proxies", "Proxy", "ProxyCreateManyResult", "RecheckReport"]
 
 MAX_PROXY_PAGE = 200
 
@@ -62,6 +62,13 @@ class Proxy:
             created_at=row.created_at,
             bound_count=row.bound_count if isinstance(row, ProxyReadRow) else None,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RecheckReport:
+    """Итог `proxies.recheck_due`: новый статус каждого перепроверенного прокси."""
+
+    statuses: dict[UUID, ProxyStatus]
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +215,7 @@ class Proxies(Namespace):
     # ------------------------------------------------------------------ здоровье и привязка
 
     async def report_failure(
-        self, proxy_id: UUID, *, weight: float = 1.0, actor: str = "worker", raw_status: str | None = None
+        self, proxy_id: UUID, *, weight: float = 1.0, actor: str, raw_status: str | None = None
     ) -> ProxyStatus:
         """Сетевая ошибка через прокси; при превышении порога — карантин."""
         return ProxyStatus(
@@ -225,21 +232,21 @@ class Proxies(Namespace):
         """Ручная перепроверка: до двух проверок подряд для выхода из карантина."""
         return ProxyStatus(await self._space._recheck_proxy(proxy_id, checker, actor=actor))
 
-    async def recheck_due(self, checker: ProxyChecker, *, limit: int = 50) -> dict[UUID, ProxyStatus]:
+    async def recheck_due(self, checker: ProxyChecker, *, limit: int = 50) -> RecheckReport:
         """Перепроверить прокси, у которых наступил срок: `quarantined` и, раз в `max_backoff`, `dead`.
 
         Проверки идут параллельно (`ProxyHealthPolicy.check_concurrency`). Закреплённые прокси
         не трогаются. Сбой чекера и одновременный отказ всей группы отказом прокси не считаются.
         """
         results = await self._space._recheck_proxies(checker, limit=limit)
-        return {proxy_id: ProxyStatus(status) for proxy_id, status in results.items()}
+        return RecheckReport({proxy_id: ProxyStatus(status) for proxy_id, status in results.items()})
 
     async def recheck_group(
         self, group: str, checker: ProxyChecker, *, actor: str, limit: int = 500
-    ) -> dict[UUID, ProxyStatus]:
+    ) -> RecheckReport:
         """Перепроверить сейчас все недоступные прокси группы — например, когда провайдер вернулся."""
         results = await self._space._recheck_group(group, checker, actor=actor, limit=limit)
-        return {proxy_id: ProxyStatus(status) for proxy_id, status in results.items()}
+        return RecheckReport({proxy_id: ProxyStatus(status) for proxy_id, status in results.items()})
 
     async def override(
         self,

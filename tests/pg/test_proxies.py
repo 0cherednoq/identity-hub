@@ -94,33 +94,36 @@ async def test_health_cycle(
     hub.proxy_health = ProxyHealthPolicy(error_threshold=2, base_backoff=timedelta(seconds=10), dead_after=2)
     proxy_id, _ = await add_proxy(space, "http://u:p@9.9.9.9:8080", pool="dc")
 
-    assert await space.proxies.report_failure(proxy_id) == "alive"
-    assert await space.proxies.report_failure(proxy_id, raw_status="CONNECT_TIMEOUT") == "quarantined"
+    assert await space.proxies.report_failure(proxy_id, actor="test") == "alive"
+    assert (
+        await space.proxies.report_failure(proxy_id, raw_status="CONNECT_TIMEOUT", actor="test")
+        == "quarantined"
+    )
     row = await _proxy(sessionmaker)
     assert row.next_check_at is not None and row.fail_streak == 0
 
-    assert await space.proxies.recheck_due(Checker(True)) == {}  # срок ещё не наступил
+    assert (await space.proxies.recheck_due(Checker(True))).statuses == {}  # срок ещё не наступил
     await _make_due(sessionmaker)
     checker = Checker(True)
-    assert await space.proxies.recheck_due(checker) == {
+    assert (await space.proxies.recheck_due(checker)).statuses == {
         proxy_id: "quarantined"
     }  # первая успешная — ждём подтверждения
     assert checker.urls == ["http://u:p@9.9.9.9:8080"]
     assert (await _proxy(sessionmaker)).pending_observation == "alive"
 
     await _make_due(sessionmaker)
-    assert await space.proxies.recheck_due(Checker(False)) == {
+    assert (await space.proxies.recheck_due(Checker(False))).statuses == {
         proxy_id: "quarantined"
     }  # неудача сбрасывает ожидание
     row = await _proxy(sessionmaker)
     assert (row.pending_observation, row.fail_streak) == (None, 1)
     await _make_due(sessionmaker)
-    assert await space.proxies.recheck_due(Checker(False)) == {proxy_id: "dead"}
+    assert (await space.proxies.recheck_due(Checker(False))).statuses == {proxy_id: "dead"}
     # R2-F04: dead не навсегда — ему назначена редкая перепроверка (раз в max_backoff)
-    assert await space.proxies.recheck_due(Checker(True)) == {}  # срок ещё не наступил
+    assert (await space.proxies.recheck_due(Checker(True))).statuses == {}  # срок ещё не наступил
     assert (await _proxy(sessionmaker)).next_check_at is not None
     await _make_due(sessionmaker)
-    assert await space.proxies.recheck_due(Checker(True)) == {
+    assert (await space.proxies.recheck_due(Checker(True))).statuses == {
         proxy_id: "dead"
     }  # первая успешная — ждём подтверждения
     assert (await _proxy(sessionmaker)).pending_observation == "alive"
@@ -146,7 +149,7 @@ async def test_override_and_success_decay(
     space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     proxy_id, _ = await add_proxy(space, "http://1.1.1.1:80", pool="dc")
-    await space.proxies.report_failure(proxy_id)
+    await space.proxies.report_failure(proxy_id, actor="test")
     await space.proxies.report_success(proxy_id)
     assert (await _proxy(sessionmaker)).error_score == 0.5
     assert await space.proxies.override(proxy_id, "dead", reason="провайдер закрыт", actor="admin") == "dead"

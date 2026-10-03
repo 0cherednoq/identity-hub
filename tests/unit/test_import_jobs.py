@@ -63,6 +63,7 @@ async def test_expired_claim_is_resumed_without_duplicate(import_hub: IdentityHu
         service="fake_tg",
         source="resume.csv",
         records=[ImportRecord(external_ref="+200", credentials={"phone": "+200"})],
+        actor="test",
     )
     runner = ImportRunner(import_hub, batch_size=1, claim_for=timedelta(minutes=5))
     async with space._tx(own=True) as tx:
@@ -93,6 +94,7 @@ async def test_cancel_waits_for_claimed_batch_boundary(import_hub: IdentityHub) 
         service="fake_tg",
         source="cancel.jsonl",
         records=[ImportRecord(external_ref="+300"), ImportRecord(external_ref="+301")],
+        actor="test",
     )
     async with space._tx(own=True) as tx:
         claimed = await tx.claim_import_items(

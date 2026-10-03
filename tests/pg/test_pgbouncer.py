@@ -64,7 +64,9 @@ async def test_documented_recipe_survives_concurrent_operations(space: SpaceHand
     """R2-D04: по рецепту из docs/integrations.md 60 операций через PgBouncer проходят без ошибок."""
 
     async def one(n: int) -> None:
-        await space.identities.ensure(IdentityCreate(service="fake_tg", external_ref=f"pgb-{n % 5}"))
+        await space.identities.ensure(
+            IdentityCreate(service="fake_tg", external_ref=f"pgb-{n % 5}"), actor="test"
+        )
         await space.identities.search("pgb")
 
     for _ in range(3):

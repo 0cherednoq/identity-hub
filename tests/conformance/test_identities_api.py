@@ -26,7 +26,9 @@ pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
 
 
 async def _add(space: SpaceHandle, ref: str, **kwargs: Any) -> UUID:
-    identity = await space.identities.create(IdentityCreate(service="fake_tg", external_ref=ref, **kwargs))
+    identity = await space.identities.create(
+        IdentityCreate(service="fake_tg", external_ref=ref, **kwargs), actor="test"
+    )
     return identity.id
 
 

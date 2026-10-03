@@ -91,7 +91,7 @@ async def test_onboarding_on_new_names(login_space: SpaceHandle) -> None:
     """Сценарий онбординга из руководства: create → login → challenge → activate → refresh."""
     space = login_space
     identity = await space.identities.create(
-        IdentityCreate(service="tg_login", external_ref="+100", credentials={"phone": "+100"})
+        IdentityCreate(service="tg_login", external_ref="+100", credentials={"phone": "+100"}), actor="test"
     )
     assert identity.lifecycle is Lifecycle.PROVISIONING
 
@@ -108,7 +108,7 @@ async def test_onboarding_on_new_names(login_space: SpaceHandle) -> None:
     assert outcome is LoginOutcome.SUCCEEDED
 
     await space.identities.activate(identity.id, actor="onboarding")
-    outcomes = await space.sync.refresh(identity.id)
+    outcomes = (await space.sync.refresh(identity.id)).outcomes
     assert set(outcomes) == {"auth", "standing"} and "not_probed" not in outcomes.values()
     ready = await space.identities.get(identity.id)
     assert ready.lifecycle is Lifecycle.READY and ready.auth == "authenticated"
@@ -118,7 +118,7 @@ async def test_onboarding_on_new_names(login_space: SpaceHandle) -> None:
 async def test_login_many_reports_each_outcome(login_space: SpaceHandle) -> None:
     space = login_space
     for ref in ("+110", "broken-111"):
-        await space.identities.create(IdentityCreate(service="tg_login", external_ref=ref))
+        await space.identities.create(IdentityCreate(service="tg_login", external_ref=ref), actor="test")
 
     report = await space.auth.login_many(service="tg_login", limit=10)
 
@@ -136,7 +136,8 @@ async def test_refresh_many_applies_platform_ban(login_space: SpaceHandle) -> No
             external_ref="+120",
             sessions={"default": {"auth_key": "k"}},
             lifecycle=Lifecycle.READY,
-        )
+        ),
+        actor="test",
     )
     PROBES.codes[identity.id] = "banned"
 
@@ -147,8 +148,8 @@ async def test_refresh_many_applies_platform_ban(login_space: SpaceHandle) -> No
 
 
 async def test_links_add_of_impact_remove(space: SpaceHandle) -> None:
-    mail = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+130"))
-    main = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+131"))
+    mail = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+130"), actor="test")
+    main = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+131"), actor="test")
 
     await space.links.add(main.id, "recovery", mail.id, actor="ops")
     links = await space.links.of(main.id)
@@ -162,7 +163,9 @@ async def test_links_add_of_impact_remove(space: SpaceHandle) -> None:
 
 
 async def test_data_load_save_with_version(space: SpaceHandle) -> None:
-    identity = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+140"))
+    identity = await space.identities.create(
+        IdentityCreate(service="fake_tg", external_ref="+140"), actor="test"
+    )
 
     assert await space.data.load(identity.id, "farm.warmup", Warmup) is None
     version = await space.data.save(identity.id, "farm.warmup", Warmup(day=1), expected_version=None)
@@ -181,6 +184,7 @@ async def test_verifications_status_review_requirements(space: SpaceHandle) -> N
                 verifications={"email": "verified", "phone": "verified", "kyc_id": "under_review"},
             )
         ],
+        actor="test",
     )
     identity_id = report.created[0]
 
@@ -192,16 +196,20 @@ async def test_verifications_status_review_requirements(space: SpaceHandle) -> N
     assert "kyc_id" in (await space.identities.get(identity_id)).verified_factors
 
     requirements = space.verifications.requirements
-    assert await requirements.add(identity_id, "selfie") is True
-    assert await requirements.add(identity_id, "selfie") is False
+    assert await requirements.add(identity_id, "selfie", actor="platform") is True
+    assert await requirements.add(identity_id, "selfie", actor="platform") is False
     assert await requirements.resolve(identity_id, "selfie", actor="admin", reason="загружено") is True
-    assert await requirements.resolve(identity_id, "selfie") is False
+    assert await requirements.resolve(identity_id, "selfie", actor="platform") is False
 
 
 async def test_legacy_names_warn_and_match_new(login_space: SpaceHandle) -> None:
     space = login_space
-    first = await space.identities.create(IdentityCreate(service="tg_login", external_ref="+160"))
-    second = await space.identities.create(IdentityCreate(service="fake_tg", external_ref="+161"))
+    first = await space.identities.create(
+        IdentityCreate(service="tg_login", external_ref="+160"), actor="test"
+    )
+    second = await space.identities.create(
+        IdentityCreate(service="fake_tg", external_ref="+161"), actor="test"
+    )
 
     with pytest.warns(DeprecationWarning, match=r"space\.auth\.login"):
         outcome = await space.run_login(first.id)

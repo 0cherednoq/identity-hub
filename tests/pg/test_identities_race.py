@@ -21,8 +21,8 @@ async def test_overlapping_create_many_skip_without_deadlock(space: SpaceHandle)
 
     results = await asyncio.wait_for(
         asyncio.gather(
-            space.identities.create_many(forward, on_conflict="skip"),
-            space.identities.create_many(backward, on_conflict="skip"),
+            space.identities.create_many(forward, on_conflict="skip", actor="test"),
+            space.identities.create_many(backward, on_conflict="skip", actor="test"),
         ),
         timeout=30,
     )
@@ -40,8 +40,8 @@ async def test_overlapping_create_many_fail_keeps_one_batch(space: SpaceHandle) 
 
     outcomes = await asyncio.wait_for(
         asyncio.gather(
-            space.identities.create_many(left),
-            space.identities.create_many(right),
+            space.identities.create_many(left, actor="test"),
+            space.identities.create_many(right, actor="test"),
             return_exceptions=True,
         ),
         timeout=30,

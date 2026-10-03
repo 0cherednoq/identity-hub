@@ -60,6 +60,14 @@
 
 ### Changed
 
+- **Несовместимо:** `actor` — обязательный именованный параметр во всех методах неймспейсов,
+  которые записывают, кто выполнил действие: `identities.create/ensure/create_many/update/delete`,
+  работа с тегами, профилем, атрибутами, метками и заметкой, `links.add/remove`,
+  `imports.run/run_files/stage`, `proxies.report_failure`, `verifications.requirements.add/resolve`,
+  `auth.answer_challenge`. Молчаливых `"system"`, `"platform"`, `"worker"` больше нет.
+- **Несовместимо:** `sync.refresh` возвращает `RefreshResult` (`outcomes` — исход по региону),
+  `proxies.recheck_due` и `proxies.recheck_group` — `RecheckReport` (`statuses` — новый статус
+  каждого прокси).
 - **Несовместимо:** `IdentityCreate.auth` вместо `auth_state` — как в `Identity` и `IdentityFilter`.
 - `LeaseUnavailable` отображается в HTTP 503 (временная недоступность) вместо 404; необязательный
   `retry_after` попадает в `context`.

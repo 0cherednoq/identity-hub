@@ -34,7 +34,8 @@ async def test_admin_read_models(space: SpaceHandle) -> None:
     identity = await space.identities.create(
         IdentityCreate(
             service="fake_tg", external_ref="+10", lifecycle=Lifecycle.READY, tags=frozenset({"a"})
-        )
+        ),
+        actor="test",
     )
 
     overview = await space.admin.overview()

@@ -113,7 +113,7 @@ async def test_challenge_flow(
     assert b"h1" not in challenge.context_ciphertext
 
     assert (
-        await space.auth.answer_challenge(challenge.id, "000") == "challenged"
+        await space.auth.answer_challenge(challenge.id, "000", actor="test") == "challenged"
     )  # неверный код — новый вопрос
     async with sessionmaker() as s:
         challenges = list(
@@ -124,9 +124,9 @@ async def test_challenge_flow(
     assert challenges[0].answered_at is not None
     assert challenges[0].answer_ciphertext is None and challenges[0].answer_nonce is None
     with pytest.raises(ValidationFailed):
-        await space.auth.answer_challenge(challenges[0].id, "12345")
+        await space.auth.answer_challenge(challenges[0].id, "12345", actor="test")
 
-    assert await space.auth.answer_challenge(challenges[1].id, "12345") == "succeeded"
+    assert await space.auth.answer_challenge(challenges[1].id, "12345", actor="test") == "succeeded"
     assert await _auth_state(sessionmaker, identity_id) == "authenticated"
     types = await _types(sessionmaker)
     assert types.count("identity.challenge.opened") == 2
@@ -143,7 +143,9 @@ async def test_challenge_expiry(
     async with sessionmaker() as s, s.begin():
         await s.execute(update(ChallengeRecord).values(expires_at=text("now() - interval '1 second'")))
     with pytest.raises(ValidationFailed, match="истёк"):
-        await space.auth.answer_challenge(await _open_challenge_id(sessionmaker, identity_id), "12345")
+        await space.auth.answer_challenge(
+            await _open_challenge_id(sessionmaker, identity_id), "12345", actor="test"
+        )
     assert await space.maintenance.expire_challenges() == 1
     assert await _auth_state(sessionmaker, identity_id) == "no_session"
     assert "identity.challenge.expired" in await _types(sessionmaker)

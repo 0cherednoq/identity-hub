@@ -93,8 +93,8 @@ async def test_public_register_mutate_search_and_lease(memory_hub: IdentityHub) 
         labels={"farm": 3},
         tags=["parser"],
     )
-    await space.identities.update(registered.identity_id, labels={"level": 2})
-    await space.identities.set_note(registered.identity_id, "Проверить в пятницу")
+    await space.identities.update(registered.identity_id, labels={"level": 2}, actor="test")
+    await space.identities.set_note(registered.identity_id, "Проверить в пятницу", actor="test")
 
     page = await space.identities.search("service:fake_tg olena")
     assert [row.id for row in page.items] == [registered.identity_id]
@@ -257,7 +257,7 @@ async def test_account_search_filters_and_equal_timestamp_keyset(memory_hub: Ide
             tags=["selected"] if index == 0 else [],
         )
         ids.append(result.identity_id)
-    await space.verifications.requirements.add(ids[0], "captcha")
+    await space.verifications.requirements.add(ids[0], "captcha", actor="test")
 
     eligible = await space.admin.identity_page(options=AccountSearchOptions(eligible=True))
     assert len(eligible.items) == 4
@@ -488,7 +488,7 @@ async def test_human_queue_prioritizes_and_isolates_secret_free_attention(
 
     requirement_id = await exchange("requirement@example.test")
     await space.verifications.requirements.add(
-        requirement_id, "identity_document", deadline=now + timedelta(hours=2)
+        requirement_id, "identity_document", deadline=now + timedelta(hours=2), actor="test"
     )
 
     manual_id = await exchange("manual@example.test")
@@ -533,7 +533,7 @@ async def test_human_queue_prioritizes_and_isolates_secret_free_attention(
         credentials={"phone": "foreign"},
         lifecycle="ready",
     )
-    await other.verifications.requirements.add(foreign.identity_id, "must-not-leak")
+    await other.verifications.requirements.add(foreign.identity_id, "must-not-leak", actor="test")
 
     first = await space.admin.human_queue(limit=2)
     second = await space.admin.human_queue(limit=20, after=first.next_cursor)

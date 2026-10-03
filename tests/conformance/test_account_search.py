@@ -58,7 +58,7 @@ def space(hub: IdentityHub) -> SpaceHandle:
 
 async def _add(space: SpaceHandle, ref: str, **profile: Any) -> UUID:
     identity = await space.identities.create(
-        IdentityCreate(service="game", external_ref=ref, profile=profile)
+        IdentityCreate(service="game", external_ref=ref, profile=profile), actor="test"
     )
     return identity.id
 

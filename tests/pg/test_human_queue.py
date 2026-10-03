@@ -50,7 +50,7 @@ async def test_postgres_human_queue_is_scoped_and_never_reads_challenge_context(
         credentials={"email": "foreign@x", "password": "foreign-password"},
         lifecycle="ready",
     )
-    await foreign.verifications.requirements.add(foreign_identity.identity_id, "must-not-leak")
+    await foreign.verifications.requirements.add(foreign_identity.identity_id, "must-not-leak", actor="test")
 
     queue = await space.admin.human_queue()
 

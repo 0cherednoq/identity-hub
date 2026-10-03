@@ -176,10 +176,12 @@ async def test_oversized_create_rejected_before_transaction(
 ) -> None:
     with pytest.raises(ValidationFailed):
         await space_without_tx.identities.create(
-            IdentityCreate(service=identity_hub_service, external_ref="+1", **spec)
+            IdentityCreate(service=identity_hub_service, external_ref="+1", **spec), actor="test"
         )
 
 
 async def test_oversized_update_rejected_before_transaction(space_without_tx: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed):
-        await space_without_tx.identities.update(uuid4(), labels={f"k{n}": "v" * 256 for n in range(300)})
+        await space_without_tx.identities.update(
+            uuid4(), labels={f"k{n}": "v" * 256 for n in range(300)}, actor="test"
+        )

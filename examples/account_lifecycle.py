@@ -146,13 +146,16 @@ async def run_walkthrough() -> WalkthroughResult:
 
     # 1. Онбординг: регистрация → вход с SMS-кодом → ready
     reg = await space.identities.create(
-        IdentityCreate(service=SERVICE, external_ref="+10000000001", credentials={"phone": "+10000000001"})
+        IdentityCreate(service=SERVICE, external_ref="+10000000001", credentials={"phone": "+10000000001"}),
+        actor="example",
     )
     result.record("registered", (await space.identities.card(reg.id)).identity.lifecycle)
     result.record("login", await space.auth.login(reg.id))
     challenge = (await space.identities.card(reg.id)).open_challenge
     assert challenge is not None
-    result.record("answer", await space.auth.answer_challenge(UUID(challenge["id"]), PLATFORM.sms_code))
+    result.record(
+        "answer", await space.auth.answer_challenge(UUID(challenge["id"]), PLATFORM.sms_code, actor="example")
+    )
     await space.identities.set_lifecycle(reg.id, Lifecycle.READY, actor="onboarding")
     PLATFORM.statuses[str(reg.id)] = "OK"
 
@@ -193,7 +196,7 @@ async def run_walkthrough() -> WalkthroughResult:
         reg.id, Override("standing", "", Standing.BANNED, reason="жалоба", actor="admin")
     )
     outcome = await space.sync.refresh(reg.id, regions=("standing",))
-    result.record("resync_banned", outcome["standing"])
+    result.record("resync_banned", outcome.outcomes["standing"])
     await space.identities.restore_standing(reg.id, actor="admin", reason="проверено")
 
     # 6. Бан на платформе обнаружен фоновой сверкой

@@ -367,7 +367,7 @@ async def resync_account_command(
     data: ResyncAccountCommand,
 ) -> ResourceEnvelope[AccountCommandResponse]:
     async def apply(scope: CommandScope) -> ResourceEnvelope[AccountCommandResponse]:
-        outcomes = await scope.handle.sync.refresh(identity_id, data.regions)
+        outcomes = (await scope.handle.sync.refresh(identity_id, data.regions)).outcomes
         return ResourceEnvelope(
             data=AccountCommandResponse(
                 action="resync",

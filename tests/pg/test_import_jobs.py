@@ -59,6 +59,7 @@ async def test_postgres_expired_claim_resumes_without_duplicate_identity(
         service="fake_tg",
         source="resume.jsonl",
         records=[ImportRecord(external_ref=external_ref, credentials={"phone": external_ref})],
+        actor="test",
     )
     runner = ImportRunner(hub, batch_size=1, claim_for=timedelta(minutes=5))
     async with space._tx(own=True) as tx:

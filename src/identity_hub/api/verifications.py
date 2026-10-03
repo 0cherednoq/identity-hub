@@ -26,14 +26,12 @@ class Requirements(Namespace):
     __slots__ = ()
 
     async def add(
-        self, identity_id: UUID, code: str, *, deadline: datetime | None = None, actor: str = "platform"
+        self, identity_id: UUID, code: str, *, deadline: datetime | None = None, actor: str
     ) -> bool:
         """Добавить требование; `False` — такое уже есть."""
         return await self._space._add_requirement(identity_id, code, deadline=deadline, actor=actor)
 
-    async def resolve(
-        self, identity_id: UUID, code: str, *, actor: str = "platform", reason: str | None = None
-    ) -> bool:
+    async def resolve(self, identity_id: UUID, code: str, *, actor: str, reason: str | None = None) -> bool:
         """Снять требование; `False` — его не было."""
         return await self._space._resolve_requirement(identity_id, code, actor=actor, reason=reason)
 

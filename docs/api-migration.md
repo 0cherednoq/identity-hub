@@ -20,7 +20,7 @@
 
 Особые случаи:
 
-- `space.register(**поля)` → `space.identities.ensure(IdentityCreate(**поля))` — возвращает
+- `space.register(**поля)` → `space.identities.ensure(IdentityCreate(**поля), actor="operator")` — возвращает
   `(Identity, created)`; `actor` передаётся вторым аргументом, `identity.id` вместо
   `result.identity_id`. Если повтор не нужен — `identities.create` (`AlreadyExists`).
 - `space.search` → `identities.search`: результат `Page[Identity]`, `count=False` по
@@ -135,12 +135,12 @@
 | `space.identities.get_by_ref(service, ref)` | I8.2 | `Identity` или `NotFound` |
 | `space.identities.list(IdentityFilter(...))` | I8.2 | страница по структурированному фильтру |
 | `space.identities.count(IdentityFilter(...))` | I8.2 | число identity по фильтру |
-| `space.identities.create(IdentityCreate(...))` | I8.3 | создаёт; существующая — `AlreadyExists` |
-| `space.identities.ensure(IdentityCreate(...))` | I8.3 | `(Identity, created)`; существующая не меняется |
-| `space.identities.create_many([...], on_conflict=)` | I8.3 | атомарно до 1000 штук, `fail` или `skip` |
+| `space.identities.create(IdentityCreate(...), actor="operator")` | I8.3 | создаёт; существующая — `AlreadyExists` |
+| `space.identities.ensure(IdentityCreate(...), actor="operator")` | I8.3 | `(Identity, created)`; существующая не меняется |
+| `space.identities.create_many([...], on_conflict=, actor="operator")` | I8.3 | атомарно до 1000 штук, `fail` или `skip` |
 | `space.identities.activate(id, actor=)` | I8.4 | перевести в работу (`lifecycle → ready`), пара к `retire` |
-| `space.identities.update(id, labels=, note=)` | I8.4 | слияние меток и замена заметки одной транзакцией и одним событием |
-| `space.identities.replace_profile(id, ...)` | I8.4 | полная замена профиля (бывш. `update_profile(replace=True)`) |
+| `space.identities.update(id, labels=, note=, actor="operator")` | I8.4 | слияние меток и замена заметки одной транзакцией и одним событием |
+| `space.identities.replace_profile(id, ..., actor="operator")` | I8.4 | полная замена профиля (бывш. `update_profile(replace=True)`) |
 | `SecretRef.CREDENTIALS / SecretRef.session(slot) / SecretRef.PROFILE / SecretRef.evidence(factor)` | I8.5 | типизированная ссылка на секрет для `secrets.reveal` |
 | `space.proxies.create(url, group=)` | I8.6 | добавить; тот же адрес — `AlreadyExists` |
 | `space.proxies.list(group=, status=)` | I8.6 | страница прокси с `bound_count` |

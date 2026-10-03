@@ -20,18 +20,25 @@ def _sessions(refs: list[str], key: str) -> list[ImportRecord]:
 
 async def test_reverse_order_no_deadlock(space: SpaceHandle) -> None:
     """Два импорта обновляют сессии одних и тех же identity в противоположном порядке."""
-    await space.identities.create_many([IdentityCreate(service="fake_tg", external_ref=ref) for ref in REFS])
+    await space.identities.create_many(
+        [IdentityCreate(service="fake_tg", external_ref=ref) for ref in REFS], actor="test"
+    )
 
     reports: list[ImportReport] = await asyncio.wait_for(
         asyncio.gather(
             space.imports.run(
-                service="fake_tg", records=_sessions(REFS, "a"), on_existing="update_session", batch_size=100
+                service="fake_tg",
+                records=_sessions(REFS, "a"),
+                on_existing="update_session",
+                batch_size=100,
+                actor="test",
             ),
             space.imports.run(
                 service="fake_tg",
                 records=_sessions(list(reversed(REFS)), "b"),
                 on_existing="update_session",
                 batch_size=100,
+                actor="test",
             ),
         ),
         timeout=60,
@@ -45,7 +52,7 @@ async def test_reverse_order_no_deadlock(space: SpaceHandle) -> None:
 async def test_lock_identities_orders_by_uuid(space: SpaceHandle) -> None:
     """Явная блокировка набора identity в двух транзакциях с разным входным порядком."""
     created = await space.identities.create_many(
-        [IdentityCreate(service="fake_tg", external_ref=f"+6{n:02d}") for n in range(20)]
+        [IdentityCreate(service="fake_tg", external_ref=f"+6{n:02d}") for n in range(20)], actor="test"
     )
     ids = [identity.id for identity in created.created]
 
