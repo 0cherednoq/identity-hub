@@ -188,6 +188,20 @@ uv run pytest examples/test_memory_hub.py
 [`identity-hub-requirements.md`](identity-hub-requirements.md), история
 реализации — [`docs/plan/PLAN.md`](docs/plan/PLAN.md).
 
+## In English
+
+Identity Hub is an async Python library (3.12+, PostgreSQL 16) for managing a fleet of external
+accounts: their states, exclusive leases with heartbeat and fencing, rate limits, proxies,
+encrypted sessions and an event stream. It does not talk to the platforms itself — your code
+makes the network calls, the library decides which account may be used and records the outcome.
+
+- **Install:** `uv add "identity-hub[postgres,alembic]"`, then `identity-hub migrate` against
+  your database.
+- **Status:** alpha (`1.0.0aN`). The public API may still change between alpha releases;
+  every breaking change is marked in `CHANGELOG.md`.
+- **Language:** documentation, error messages and logs are in Russian. Identifiers, error codes,
+  event types and field names are English and stable for programmatic use.
+
 ## Лицензия
 
 [MIT](LICENSE). Код поставляется «как есть», без каких-либо гарантий.

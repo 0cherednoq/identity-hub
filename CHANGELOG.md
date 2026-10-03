@@ -8,6 +8,9 @@
 
 ### Added
 
+- Раздел «Что входит в публичный контракт» и таблица значений по умолчанию в
+  [«Карте API»](docs/guide/api.md) (тест сверяет таблицу с кодом); краткий раздел README на
+  английском: назначение, установка, статус альфа, язык документации.
 - `SecretValue`: секрет со скрытым `repr`/`str`, без JSON и pickle; scrubber событий его отвергает.
 - Ресурсные неймспейсы пространства (`space.identities`, `space.imports`, `space.secrets`,
   `space.proxies`, `space.pools`, `space.auth`, `space.sync`, `space.links`, `space.data`,

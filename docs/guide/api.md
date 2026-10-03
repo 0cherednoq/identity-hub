@@ -77,6 +77,59 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |
 | `hub.strict_events`, `hub.redact_refs_in_events` | режимы очистки событий |
 
+## Что входит в публичный контракт
+
+Версия `1.0.0aN` — альфа: контракт ниже может меняться между альфа-выпусками, каждое
+несовместимое изменение отмечается в CHANGELOG пометкой **Несовместимо**. Контракт — это:
+
+| Часть | Где описано |
+|---|---|
+| Имена из корневого `identity_hub.__all__` (классы, DTO, перечисления, ошибки, протоколы адаптеров) | эта страница, [Сервисы](02-services.md) |
+| Неймспейсы пространства (`space.identities`, `space.pools`, …), `space.using`, `space.ref` и члены `IdentityHub` из раздела «Контракт хаба» | эта страница |
+| Типы событий и их поля `data` | [События](10-events.md) |
+| Коды ошибок `IdentityHubError.code`, `context`, `http_status()` и `exit_code()` | модуль `identity_hub.errors`, коды выхода — [CLI](../cli.md#диагностика-cli) |
+| Read-схема `hub.read` и её версия `READ_SCHEMA_VERSION` | [Интеграции](../integrations.md#read-схема-join-с-таблицами-приложения) |
+| Формат шифртекста в БД (envelope AES-256-GCM, AAD) и ротация ключей | [Секреты](03-accounts.md#секреты), [`rotate-key`](../cli.md#rotate-key) |
+| Команды и коды выхода CLI `identity-hub` | [CLI](../cli.md) |
+| Совместимость кода и схемы БД (`SCHEMA_COMPATIBLE`) | [Обновление без простоя](../integrations.md#обновление-без-простоя) |
+
+Всё остальное внутреннее и меняется без предупреждения: модули и имена с `_`, подмодули, не
+реэкспортированные из корня, таблицы `ih_*` (кроме read-схемы), тексты сообщений и логов.
+Контракт `Store` (`identity_hub.store`) и `StoreConformanceSuite` — внутренние и нестабильные
+до 1.0: своё хранилище писать можно, но его придётся обновлять вместе с библиотекой.
+
+Сообщения ошибок, логи и документация — на русском; идентификаторы, коды ошибок, типы событий
+и поля — на английском, их можно разбирать программно.
+
+## Значения по умолчанию
+
+| Параметр | По умолчанию | Что задаёт |
+|---|---|---|
+| `LeaseTiming.ttl` | 1 мин | срок аренды без heartbeat |
+| `LeaseTiming.heartbeat` | 20 с | период продления аренды (не больше TTL/3) |
+| `LeaseTiming.safety_margin` | 20 с | запас до истечения, после которого клиент считает аренду потерянной |
+| `Service.login_timeout` | 2 мин | предел одного вызова `Authenticator.login` |
+| `Service.probe_timeout` | 1 мин | предел одного вызова пробы |
+| `LoginChallenge.expires_in` | 1 ч | срок вопроса платформы, если `expires_in` не задан |
+| `ProxyHealthPolicy.error_threshold` | 3.0 | счёт ошибок прокси до карантина |
+| `ProxyHealthPolicy.check_timeout` | 15 с | предел одной проверки прокси |
+| `ProxyHealthPolicy.max_backoff` | 1 ч | наибольшая пауза между перепроверками |
+| `WebhookPolicy.timeout` | 10 с | предел одного HTTP-запроса вебхука |
+| `WebhookPolicy.max_failures` | 10 | неудач подряд до отключения endpoint |
+| `LeaseLogPolicy.max_per_lease` | 200 | записей лога на одну аренду |
+| `MaintenanceSchedule.normalize_seconds` | 1 мин | период таймеров состояний |
+| `Retention.events` | 180 дн | хранение событий |
+| `Retention.lease_history` | 90 дн | хранение истории аренд |
+| `Retention.operation_keys` | 7 дн | хранение ключей идемпотентности операций |
+| `identities.create_many` | 1000 | записей в одном атомарном вызове |
+| `imports.stage` | 10000 | записей в одном фоновом импорте |
+| `limit` | 500 | наибольшая страница `identities.list`/`search` (прокси — 200) |
+| `data.save` | 64 КиБ | JSON записи данных приложения |
+| `MAX_SECRET_BYTES` | 512 КиБ | открытый текст одного секрета |
+| `MAX_ENVELOPE_BYTES` | 1 МиБ | шифртекст одного секрета |
+
+Остальные сроки хранения — поля `Retention`.
+
 ## Конвенция глаголов
 
 | Метод | Что делает |
