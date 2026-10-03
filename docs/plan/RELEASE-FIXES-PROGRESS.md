@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** F5.1 pytest-плагин и фабрики
+- **Начата:** 2026-10-03
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: плагин через pytester в strict и auto, без pytest-asyncio, among=select в памяти, предикат among, два event loop, фабрики
+  - [ ] Плагин: pytest_asyncio.fixture и понятная ошибка без pytest-asyncio
+  - [ ] among: ValidationFailed для подзапроса в MemoryStore, предикат от Identity; ленивая блокировка MemoryStore
+  - [ ] Фабрики: authenticated=False с session — ошибка, TestingModel extra=forbid, докстринги
+  - [ ] Руководство 11-testing, CHANGELOG, решение D-188
+  - [ ] scripts/check.sh зелёный
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -55,7 +60,7 @@
 | F4.4b | Админ-чтение на объёме | F4.4a | done |  | часть F4.4 (D-183) |
 | F4.5 | PgBouncer | F0.1 | done |  |  |
 | F4.6 | Мелкие расхождения хранилища | F0.1 | done |  |  |
-| F5.1 | pytest-плагин и фабрики | F0.1 | todo |  |  |
+| F5.1 | pytest-плагин и фабрики | F0.1 | in_progress |  |  |
 | F5.2 | Паритет `MemoryStore` | F0.1 | todo |  |  |
 | F5.3 | Conformance и раздел о своём Store | F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8, F5.2 | todo |  |  |
 | F6.1 | Пространства | F0.1 | todo |  |  |
