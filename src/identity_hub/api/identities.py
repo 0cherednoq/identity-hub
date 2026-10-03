@@ -127,7 +127,7 @@ class Page[T]:
 
     items: list[T]
     next_cursor: str | None
-    total: int | None = None  # только при count=True; значение > 1000 означает «1000+»
+    total: int | None = None  # только при count=True; точно до `COUNT_CAP`, больше — не считается
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -152,7 +152,7 @@ class IdentityCreate:
     note: str | None = None
     links: Mapping[str, UUID] = field(default_factory=dict)
     lifecycle: Lifecycle | str = Lifecycle.PROVISIONING
-    auth_state: AuthState | str | None = None
+    auth: AuthState | str | None = None  # None — по наличию сессии
 
     def __repr__(self) -> str:  # секреты не попадают в repr
         return f"IdentityCreate(service={self.service_name!r}, external_ref={self.external_ref!r})"
@@ -487,7 +487,7 @@ class Identities(Namespace):
             note=spec.note,
             links=spec.links,
             lifecycle=spec.lifecycle,
-            auth_state=spec.auth_state,
+            auth_state=spec.auth,
         )
         return svc, prepared
 

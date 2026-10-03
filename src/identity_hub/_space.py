@@ -6,7 +6,8 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Self
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import UUID
 
 from identity_hub.domain.data import validate_json_payload
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 
     from identity_hub.dispatch.notifications import Notifications
     from identity_hub.dispatch.webhooks import Webhooks
-    from identity_hub.hub import IdentityHub
+    from identity_hub.hub import IdentityHub, SpaceHandle
 
 __all__ = ["SpaceBase", "logger", "require_actor_and_reason"]
 
@@ -78,19 +79,19 @@ class SpaceBase:
         """Строка пространства; без `create=True` несуществующее пространство — `NotFound` (R1-07)."""
         return await self.hub._space_ref(self.slug, self._title, self._space_id, create=self._create)
 
-    @property
+    @cached_property
     def webhooks(self) -> Webhooks:
         """Управление исходящими webhook endpoint'ами пространства (FR-14)."""
         from identity_hub.dispatch.webhooks import Webhooks
 
-        return Webhooks(self)
+        return Webhooks(cast("SpaceHandle", self))
 
-    @property
+    @cached_property
     def notifications(self) -> Notifications:
         """Управление Telegram-каналами и правилами пространства (FR-15)."""
         from identity_hub.dispatch.notifications import Notifications
 
-        return Notifications(self)
+        return Notifications(cast("SpaceHandle", self))
 
     @asynccontextmanager
     async def _tx(self, *, own: bool = False) -> AsyncIterator[StoreTx]:

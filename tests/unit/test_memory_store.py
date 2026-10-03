@@ -222,7 +222,7 @@ async def test_overview_handles_empty_single_large_and_allowed_spaces(memory_hub
         service="fake_tg",
         external_ref="single",
         lifecycle="ready",
-        auth_state="authenticated",
+        auth="authenticated",
     )
     large = memory_hub.space("large", "Large", create=True)
     for index in range(250):
@@ -231,7 +231,7 @@ async def test_overview_handles_empty_single_large_and_allowed_spaces(memory_hub
             service="fake_tg",
             external_ref=f"large-{index:04d}",
             lifecycle="ready" if index % 5 else "provisioning",
-            auth_state="authenticated",
+            auth="authenticated",
         )
 
     matrix = await memory_hub.spaces_matrix({"empty", "single", "large"})
@@ -253,7 +253,7 @@ async def test_account_search_filters_and_equal_timestamp_keyset(memory_hub: Ide
             service="fake_tg",
             external_ref=f"account-{index}",
             lifecycle="ready" if index != 4 else "provisioning",
-            auth_state="authenticated",
+            auth="authenticated",
             tags=["selected"] if index == 0 else [],
         )
         ids.append(result.identity_id)

@@ -111,7 +111,7 @@ uv run pytest
            session={"auth_key": "secret-session"},
            tags=["parser"],
            lifecycle=Lifecycle.READY,
-           auth_state=AuthState.AUTHENTICATED,
+           auth=AuthState.AUTHENTICATED,
        )
    )
 

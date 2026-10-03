@@ -107,7 +107,7 @@ async def make_identity(
             note=note,
             links=links or {},
             lifecycle=lifecycle,
-            auth_state=auth_state,
+            auth=auth_state,
         ),
         actor=actor,
     )

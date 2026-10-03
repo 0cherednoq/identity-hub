@@ -94,7 +94,7 @@ async def test_pools_define_lease_capacity_revoke(space: SpaceHandle) -> None:
             service="fake_tg",
             external_ref="+p1",
             lifecycle=Lifecycle.READY,
-            auth_state=AuthState.AUTHENTICATED,
+            auth=AuthState.AUTHENTICATED,
             tags=["parser"],
         )
     )

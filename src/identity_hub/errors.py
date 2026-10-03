@@ -212,9 +212,18 @@ class QuotaExhausted(IdentityHubError):
 
 
 class LeaseUnavailable(IdentityHubError):
-    """Нет свободного аккаунта под условия аренды (с учётом wait)."""
+    """Нет свободного аккаунта под условия аренды (с учётом wait) — временная недоступность.
+
+    `retry_after` — через сколько секунд имеет смысл повторить, если это известно; HTTP-слой
+    отдаёт его в заголовке `Retry-After` вместе со статусом 503.
+    """
 
     code = "no_resource_available"
+    context_fields = ("retry_after",)
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        self.retry_after = retry_after
+        super().__init__(message)
 
 
 class LeaseLost(IdentityHubError):
@@ -349,7 +358,7 @@ class SecretConfigurationError(IdentityHubError):
 _HTTP_STATUS: dict[str, int] = {
     "validation_error": 422,
     "not_found": 404,
-    "no_resource_available": 404,
+    "no_resource_available": 503,
     "already_exists": 409,
     "space_mismatch": 409,
     "invalid_transition": 409,

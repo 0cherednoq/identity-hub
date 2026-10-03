@@ -246,7 +246,7 @@ async def test_utilization_heatmap_uses_space_timezone() -> None:
         credentials={"email": "lease@example.test", "password": "test"},
         session={"cookies": {"sid": "test"}},
         lifecycle="ready",
-        auth_state="authenticated",
+        auth="authenticated",
     )
     start = hub.clock.now()
     lease = await space.pools.define("analytics", service=FAKE_EXCHANGE).acquire(

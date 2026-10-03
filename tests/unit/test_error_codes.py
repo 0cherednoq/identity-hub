@@ -92,7 +92,7 @@ def test_every_code_has_http_status() -> None:
     [
         (ValidationFailed("x"), 422, 2),
         (NotFound("identity", uuid4()), 404, 2),
-        (identity_hub.LeaseUnavailable("нет"), 404, 1),
+        (identity_hub.LeaseUnavailable("нет"), 503, 1),  # F6.2a (R1-27): временная недоступность
         (RevisionConflict("identity", 1, 2, 3), 409, 1),
         (LeaseRevoked(uuid4(), "admin"), 409, 1),
         (QuotaExhausted("send", 60), 429, 1),

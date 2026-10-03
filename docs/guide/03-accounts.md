@@ -102,7 +102,7 @@ identity, created = await space.identities.ensure(spec, actor="importer")  # get
   сначала логинят и проверяют, потом вводят в работу `activate`. Если он готов сразу,
   передайте `lifecycle=Lifecycle.READY`.
 - **`auth`** становится `authenticated`, если передана сессия, иначе `no_session`; явно —
-  `auth_state=`.
+  `auth=`.
 - Данные проверяются схемами сервиса и шифруются **до** обращения к базе. Секреты не попадают
   в `repr(spec)`.
 - Несколько сессий: `sessions={"default": {...}, "web": {...}}`. Связи при создании:

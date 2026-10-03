@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -20,6 +20,12 @@ from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.service import LeaseMode, Pacing, ProxyDownPolicy, ProxyPolicy, Service
 from identity_hub.store.base import CandidateQuery, IdentityRow
+
+if TYPE_CHECKING:
+    from sqlalchemy import Select
+
+    from identity_hub.api.identities import Identity
+
 
 if TYPE_CHECKING:
     from identity_hub._space import SpaceBase
@@ -88,7 +94,8 @@ class Pool:
         tags: Iterable[str] = (),
         labels: Mapping[str, Any] | None = None,
         profile: Mapping[str, Any] | None = None,
-        among: Any = None,
+        # список id, подзапрос read-схемы (только PostgreSQL) или предикат от Identity (F5.1)
+        among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
     ) -> CandidateQuery:
         """Фильтры пула + фильтры вызова; `for_operation` компилирует правило операции в выборку."""
@@ -125,7 +132,8 @@ class Pool:
         tags: Iterable[str] = (),
         labels: Mapping[str, Any] | None = None,
         profile: Mapping[str, Any] | None = None,
-        among: Any = None,
+        # список id, подзапрос read-схемы (только PostgreSQL) или предикат от Identity (F5.1)
+        among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,
@@ -160,7 +168,8 @@ class Pool:
         tags: Iterable[str] = (),
         labels: Mapping[str, Any] | None = None,
         profile: Mapping[str, Any] | None = None,
-        among: Any = None,
+        # список id, подзапрос read-схемы (только PostgreSQL) или предикат от Identity (F5.1)
+        among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,

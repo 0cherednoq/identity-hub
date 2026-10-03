@@ -60,6 +60,13 @@
 
 ### Changed
 
+- **Несовместимо:** `IdentityCreate.auth` вместо `auth_state` — как в `Identity` и `IdentityFilter`.
+- `LeaseUnavailable` отображается в HTTP 503 (временная недоступность) вместо 404; необязательный
+  `retry_after` попадает в `context`.
+- `proxies.create_many(on_conflict=...)` принимает `OnConflict`; `imports.run_files` — явные
+  параметры, как у `imports.run`, вместо `**options`; `among` в пулах типизирован:
+  `Select | Iterable[UUID] | Callable[[Identity], bool]`.
+- `space.webhooks` и `space.notifications` — неймспейсы, как остальные: один объект на пространство.
 - **Несовместимо:** `hub.space(slug)` больше не создаёт пространство. Если его нет, первая
   операция даёт `NotFound` — опечатка в slug не превращается в пустое пространство. Создание —
   `hub.spaces.create(slug, title)` (уже есть — `AlreadyExists`), `hub.spaces.ensure(slug, title)`

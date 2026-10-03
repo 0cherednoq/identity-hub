@@ -100,7 +100,7 @@ async def run_example() -> ExampleResult:
             session=TelegramSession(auth_key=SecretStr("test-session")),
             tags=["parser"],
             lifecycle=Lifecycle.READY,
-            auth_state=AuthState.AUTHENTICATED,
+            auth=AuthState.AUTHENTICATED,
         ),
         actor="telegram-example",
     )

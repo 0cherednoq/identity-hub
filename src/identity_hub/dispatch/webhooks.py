@@ -19,6 +19,7 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
 from identity_hub._space import logger
+from identity_hub.api._base import Namespace
 from identity_hub.crypto import associated_data
 from identity_hub.dispatch.outbound import (
     Resolver,
@@ -44,8 +45,7 @@ from identity_hub.store.base import (
 if TYPE_CHECKING:
     import httpx
 
-    from identity_hub._space import SpaceBase
-    from identity_hub.hub import IdentityHub
+    from identity_hub.hub import IdentityHub, SpaceHandle
 
 __all__ = [
     "WebhookDelivery",
@@ -258,11 +258,14 @@ def _delivery(row: WebhookDeliveryRow) -> WebhookDelivery:
     return WebhookDelivery(**{name: getattr(row, name) for name in WebhookDelivery.__dataclass_fields__})
 
 
-class Webhooks:
+class Webhooks(Namespace):
     """Управление endpoint'ами одного пространства (слой `SpaceHandle.Webhooks`)."""
 
-    def __init__(self, space: SpaceBase) -> None:
-        self.space = space
+    __slots__ = ()
+
+    @property
+    def space(self) -> SpaceHandle:
+        return self._space
 
     async def create(
         self,

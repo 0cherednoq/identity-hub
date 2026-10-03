@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable, Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub.api._base import Namespace
@@ -61,10 +61,30 @@ class Imports(Namespace):
         )
 
     async def run_files(
-        self, *, service: Service | str, paths: Iterable[str | Path], **options: Any
+        self,
+        *,
+        service: Service | str,
+        paths: Iterable[str | Path],
+        batch_size: int = 500,
+        on_existing: OnExisting | str = OnExisting.SKIP,
+        verify_sessions: bool = False,
+        on_batch_committed: BatchHook | None = None,
+        actor: str = "import",
+        run_id: UUID | None = None,
+        max_identities: int = 3,
     ) -> ImportReport:
-        """Прочитать файлы импортёрами `Service.importers` и импортировать; `options` — как у `run`."""
-        return await self._space._import_files(service=service, paths=paths, **options)
+        """Прочитать файлы импортёрами `Service.importers` и импортировать; параметры — как у `run`."""
+        return await self._space._import_files(
+            service=service,
+            paths=paths,
+            batch_size=batch_size,
+            on_existing=on_existing,
+            verify_sessions=verify_sessions,
+            on_batch_committed=on_batch_committed,
+            actor=actor,
+            run_id=run_id,
+            max_identities=max_identities,
+        )
 
     async def stage(
         self,

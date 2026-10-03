@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
+from identity_hub.api._base import Namespace
 from identity_hub.crypto import associated_data
 from identity_hub.domain.data import validate_json_payload
 from identity_hub.enums import Severity
@@ -28,8 +29,7 @@ from identity_hub.store.base import (
 )
 
 if TYPE_CHECKING:
-    from identity_hub._space import SpaceBase
-    from identity_hub.hub import IdentityHub
+    from identity_hub.hub import IdentityHub, SpaceHandle
 
 __all__ = [
     "NotificationChannel",
@@ -176,11 +176,14 @@ def _validate_template(template: str | None) -> str | None:
     return template
 
 
-class Notifications:
+class Notifications(Namespace):
     """CRUD каналов и правил одного пространства."""
 
-    def __init__(self, space: SpaceBase) -> None:
-        self.space = space
+    __slots__ = ()
+
+    @property
+    def space(self) -> SpaceHandle:
+        return self._space
 
     async def create_telegram_channel(
         self,

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub.api._base import Namespace
-from identity_hub.api.identities import Page
+from identity_hub.api.identities import OnConflict, Page
 from identity_hub.enums import ProxyStatus
 from identity_hub.errors import ValidationFailed
 from identity_hub.read.search import decode_cursor, encode_cursor
@@ -167,16 +167,18 @@ class Proxies(Namespace):
         *,
         group: str,
         max_identities: int = 3,
-        on_conflict: str = "fail",
+        on_conflict: OnConflict | str = OnConflict.FAIL,
     ) -> ProxyCreateManyResult:
-        """Атомарно добавить прокси одной транзакцией; `on_conflict` — `"fail"` или `"skip"`."""
-        if on_conflict not in {"fail", "skip"}:
-            raise ValidationFailed("on_conflict: fail или skip")
+        """Атомарно добавить прокси одной транзакцией; `on_conflict` — `OnConflict.FAIL` или `SKIP`."""
+        try:
+            on_conflict = OnConflict(on_conflict)
+        except ValueError:
+            raise ValidationFailed("on_conflict: fail или skip") from None
         rows = [
             self._space._prepare_proxy(url, group, None, None, None, None, None, max_identities, None)
             for url in urls
         ]
-        results = await self._space._insert_proxies(rows, fail_existing=on_conflict == "fail")
+        results = await self._space._insert_proxies(rows, fail_existing=on_conflict is OnConflict.FAIL)
         created = [await self.get(proxy_id) for proxy_id, is_new in results if is_new]
         return ProxyCreateManyResult(created, [proxy_id for proxy_id, is_new in results if not is_new])
 

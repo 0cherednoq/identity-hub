@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F6.2a Имена и типы API
-- **Начата:** 2026-10-03
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: IdentityCreate.auth, OnConflict у прокси, параметры run_files, 503 для LeaseUnavailable, кэшируемые неймспейсы
-  - [ ] IdentityCreate.auth, proxies.create_many(OnConflict), run_files и тип among
-  - [ ] LeaseUnavailable → 503 с подсказкой, Page.total, cached_property для webhooks и notifications
-  - [ ] Тесты, админка, руководство и примеры на новых именах; CHANGELOG, решение D-197
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -65,14 +61,14 @@
 | F5.3a | Набор StoreConformanceSuite | F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8, F5.2b | done |  | часть F5.3 (D-192) |
 | F5.3b | Покрытие методов Store | F5.3a | done |  | часть F5.3 (D-192) |
 | F6.1 | Пространства | F0.1 | done |  |  |
-| F6.2a | Имена и типы API | F0.1 | in_progress |  | часть F6.2 (D-196) |
+| F6.2a | Имена и типы API | F0.1 | done |  | часть F6.2 (D-196) |
 | F6.2b | actor и результаты-DTO | F6.2a | todo |  | часть F6.2 (D-196) |
 | F6.3 | Адаптеры | F0.1 | todo |  |  |
 | F6.4 | Удаление устаревших алиасов | F1.6b, F6.2b, F6.3 | todo |  |  |
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 41 / 47 done
+**Итого:** 42 / 47 done
 
 ## Журнал сессий
 
@@ -119,3 +115,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-03 · F5.3a · done · StoreConformanceSuite: шесть новых сценариев и полный откат; восемь сломанных Store через pytester — набор ловит все (прежний пропускал 6 из 8), исправный MemoryStore проходит; контракт Store помечен внутренним и нестабильным до 1.0 (D-193); check зелёный: 1383 passed, 2 skipped, admin unit 67 passed · дальше F5.3b
 2026-10-03 · F5.3b · done · инструментированный прогон: 15 методов без вызова на MemoryStore и 7 на PostgreSQL, все используются кодом; общие тесты на них (20 прогонов); плагин tests/store_coverage.py (IH_STORE_COVERAGE=1) делает полный прогон неуспешным при методе без вызова, в CI включён для check на 3.14 (actionlint чисто, в CI ещё не запускался) (D-194); check с IH_STORE_COVERAGE=1 зелёный: 1404 passed, 2 skipped — все 159 методов вызваны на обоих бэкендах (на частичном прогоне плагин падает, проверено), admin unit 67 passed · дальше F6.1
 2026-10-03 · F6.1 · done · hub.space(slug) без create — NotFound для несуществующего пространства (опечатка не создаёт пустое), hub.spaces.create/ensure/get, create=True сохраняет ленивое создание; фикстуры, тесты, админка, примеры, README и руководство переведены (106 вызовов); оба примера проходят (D-195); check зелёный: 1410 passed, 2 skipped, admin unit 67 passed · дальше F6.2
+2026-10-03 · F6.2a · done · IdentityCreate.auth вместо auth_state, proxies.create_many(OnConflict), run_files с явными параметрами, among типизирован, LeaseUnavailable → 503 с retry_after в context, Page.total по COUNT_CAP, webhooks/notifications — кэшируемые Namespace; тесты, админка, README и примеры переведены (D-197); check зелёный: 1417 passed, 2 skipped, admin unit 67 passed, примеры проходят · дальше F6.2b

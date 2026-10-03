@@ -59,7 +59,7 @@ def space(hub: IdentityHub) -> SpaceHandle:
 
 async def _account(space: SpaceHandle, ref: str, service: str = "fake_tg", **fields: object) -> UUID:
     fields.setdefault("lifecycle", Lifecycle.READY)
-    fields.setdefault("auth_state", AuthState.AUTHENTICATED)
+    fields.setdefault("auth", AuthState.AUTHENTICATED)
     identity = await space.identities.create(IdentityCreate(service=service, external_ref=ref, **fields))
     return identity.id
 
