@@ -81,9 +81,6 @@ class Authenticator:
             raise LoginChallenge("sms_code", "Неверный код", {"hash": "h1"})
         return Session(auth_key=SecretStr(f"key-{ctx.external_ref}"))
 
-    async def refresh(self, credentials: BaseModel | None, session: BaseModel) -> BaseModel | None:
-        return None
-
 
 class Probes:
     async def auth(self, ctx: Any) -> ProbeResult | None:

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, Lifecycle, Standing
 from identity_hub.errors import LeaseUnavailable, NotFound, ValidationFailed, describe_error
 from identity_hub.events import EventDraft
-from identity_hub.protocols import LoginChallenge
+from identity_hub.protocols import Authenticator, LoginChallenge
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, ChallengeRow
@@ -361,7 +361,8 @@ class LoginMixin(SpaceBase):
             entered = True
             try:
                 async with asyncio.timeout(svc.login_timeout.total_seconds()):
-                    session = await svc.authenticator.login(ctx)
+                    # функция входа приведена к объекту протокола в Service.__post_init__
+                    session = await cast(Authenticator, svc.authenticator).login(ctx)
             except LoginChallenge as asked:
                 if challenge is not None:
                     await self._resolve(challenge.id)

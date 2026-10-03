@@ -12,11 +12,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from identity_hub._space import logger
 from identity_hub.domain.admissibility import IdentitySnapshot, evaluate
@@ -27,7 +28,7 @@ from identity_hub.enums import AuthState, Availability, ChangeSource, SessionSta
 from identity_hub.errors import OperationNotAllowed, StaleFencing, TransitionNotAllowed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
-from identity_hub.protocols import Blame, Fault
+from identity_hub.protocols import Blame, ErrorClassifier, Fault
 from identity_hub.quotas import charge
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import StoreTx
@@ -202,13 +203,26 @@ def _observe_operation(lease: Lease, kind: str, started: float, status: str) -> 
     )
 
 
+def classify_error(classifier: ErrorClassifier, exc: BaseException, *, kind: str) -> Fault | None:
+    """Вызвать классификатор; вид операции передаётся, если `classify` принимает `kind` (R2-F27)."""
+    method = classifier.classify
+    try:
+        parameters = list(inspect.signature(method).parameters.values())
+    except (TypeError, ValueError):
+        parameters = []
+    if any(item.name == "kind" or item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters):
+        return method(exc, kind=kind)  # type: ignore[call-arg]
+    return method(exc)
+
+
 async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
     """Классификатор определяет вину и порождает наблюдение (FR-7.3); сбой обработки не маскирует ошибку."""
     service = lease.pool.service
     fault: Fault | None = None
     if service.error_classifier is not None:
         try:
-            fault = service.error_classifier.classify(exc)
+            # словарь приведён к классификатору в Service.__post_init__
+            fault = classify_error(cast(ErrorClassifier, service.error_classifier), exc, kind=op.kind)
         except Exception:
             logger.exception("ErrorClassifier сервиса %s упал", service.name)
     fault = fault or Fault(Blame.REQUEST)

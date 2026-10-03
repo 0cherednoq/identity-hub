@@ -83,9 +83,9 @@ from identity_hub.operation import Operation
 from identity_hub.pool import LeaseTiming, Pool
 from identity_hub.protocols import (
     Authenticator,
+    AuthProbe,
     Blame,
     ErrorClassifier,
-    EventConsumer,
     Fault,
     FileImporter,
     LinkedIdentity,
@@ -95,6 +95,9 @@ from identity_hub.protocols import (
     ProbeResult,
     Probes,
     SecretsProvider,
+    SessionRefresher,
+    StandingProbe,
+    VerificationProbe,
 )
 from identity_hub.proxies import ProxyHealthPolicy
 from identity_hub.service import (
@@ -115,6 +118,7 @@ __version__ = "1.0.0a1"
 __all__ = [
     "AlreadyExists",
     "AttemptsExhausted",
+    "AuthProbe",
     "AuthState",
     "Authenticator",
     "Availability",
@@ -130,7 +134,6 @@ __all__ = [
     "EnvSecretsProvider",
     "ErrorClassifier",
     "Event",
-    "EventConsumer",
     "Fault",
     "FileImporter",
     "FileSecretsProvider",
@@ -198,12 +201,14 @@ __all__ = [
     "SecretValue",
     "SecretsProvider",
     "Service",
+    "SessionRefresher",
     "SessionStatus",
     "Severity",
     "SpaceHandle",
     "SpaceMismatch",
     "StaleFencing",
     "Standing",
+    "StandingProbe",
     "StaticSecretsProvider",
     "StorageError",
     "SystemClock",
@@ -215,6 +220,7 @@ __all__ = [
     "ValidationFailed",
     "Verification",
     "VerificationMode",
+    "VerificationProbe",
     "VerificationRequirementsNotMet",
     "VerificationSpec",
     "VerificationState",

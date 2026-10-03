@@ -112,9 +112,6 @@ class TgAuthenticator:
     async def login(self, ctx):             # вход; вернуть сессию или бросить LoginChallenge
         ...
 
-    async def refresh(self, credentials, session):
-        return None                          # в 1.0.0a1 библиотека не вызывает
-
 
 class TgProbes:
     async def auth(self, ctx):               # жива ли сессия
@@ -139,6 +136,17 @@ TELEGRAM = Service(
     standing_codes={"USER_DEACTIVATED": "banned", "PEER_FLOOD": "limited"},
 )
 ```
+
+Требования к адаптерам проверяются при объявлении `Service` — ошибка сразу, а не на первом входе:
+
+- `authenticator` — объект с `async def login(ctx)` или сама функция `async def login(ctx)`;
+  `refresh` не нужен (необязательный протокол `SessionRefresher` библиотека пока не вызывает);
+- `probes` — объект с любым подмножеством `async def auth/standing/verification`: регион без пробы
+  не сверяется;
+- `error_classifier` — объект с `classify(exc)` или словарь `{TimeoutError: Fault(Blame.PROXY)}`
+  (подходящий тип ищется по MRO исключения); если `classify` принимает именованный `kind`, туда
+  приходит вид операции;
+- `importers` — объекты с `can_import(path)` и async-генератором `read(path)`.
 
 Подробно: [вход](05-login.md), [пробы](04-states.md#синхронизация-статусов-с-платформой),
 [классификатор ошибок](08-limits.md#классификатор-ошибок).

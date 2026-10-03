@@ -60,6 +60,14 @@
 
 ### Changed
 
+- Адаптеры сервиса проверяются при объявлении `Service`: метод на месте, `async def`, у
+  `FileImporter.read` — async-генератор; сообщение называет адаптер и нужную сигнатуру.
+  `Authenticator` требует только `login` (`refresh` — необязательный `SessionRefresher`);
+  `probes` — любое подмножество `auth`/`standing`/`verification` (`AuthProbe`, `StandingProbe`,
+  `VerificationProbe`). `Service(authenticator=login_fn)` и
+  `Service(error_classifier={TimeoutError: Fault(...)})`; классификатор получает вид операции,
+  если `classify` принимает `kind`. Протокол `EventConsumer` удалён: `subscribe` принимает
+  `Callable[[Event], Awaitable[None]]`.
 - **Несовместимо:** `actor` — обязательный именованный параметр во всех методах неймспейсов,
   которые записывают, кто выполнил действие: `identities.create/ensure/create_many/update/delete`,
   работа с тегами, профилем, атрибутами, метками и заметкой, `links.add/remove`,

@@ -7,9 +7,10 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -22,7 +23,18 @@ from identity_hub.domain.regions import Normalizer, RegionSpec
 from identity_hub.domain.verification import VERIFICATION, VerificationSpec, VerificationTier
 from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
-from identity_hub.protocols import Authenticator, ErrorClassifier, FileImporter, Probes
+from identity_hub.protocols import (
+    Authenticator,
+    AuthProbe,
+    ErrorClassifier,
+    Fault,
+    FileImporter,
+    LoginContext,
+    StandingProbe,
+    VerificationProbe,
+    _FunctionAuthenticator,
+    _MappingClassifier,
+)
 
 __all__ = [
     "PROBE_OPERATION",
@@ -163,12 +175,14 @@ class Service:
     verifications: tuple[VerificationSpec, ...] = ()
     tiers: tuple[VerificationTier, ...] = ()
     normalizers: Mapping[str, Normalizer] = field(default_factory=dict)
-    authenticator: Authenticator | None = None
+    # объект с `async def login(ctx)` или сама функция входа (R2-F27)
+    authenticator: Authenticator | Callable[[LoginContext], Awaitable[BaseModel]] | None = None
     # предел одного вызова Authenticator.login: зависший вход не держит аккаунт в logging_in
     login_timeout: timedelta = timedelta(seconds=120)
-    probes: Probes | None = None
+    probes: AuthProbe | StandingProbe | VerificationProbe | None = None  # любое подмножество проб
     probe_timeout: timedelta = timedelta(seconds=60)  # предел одного вызова пробы
-    error_classifier: ErrorClassifier | None = None
+    # объект с `classify(exc)` или словарь «тип исключения → Fault»
+    error_classifier: ErrorClassifier | Mapping[type[BaseException], Fault] | None = None
     lease_mode: LeaseMode = LeaseMode.EXCLUSIVE
     proxy_policy: ProxyPolicy | None = None
     profile_encrypted: bool = False  # D-003
@@ -181,6 +195,12 @@ class Service:
 
     def __post_init__(self) -> None:
         errors = self._validate()
+        if not errors:
+            # функциональные формы адаптеров приводятся к объектам протоколов (R2-F27)
+            if self.authenticator is not None and not hasattr(self.authenticator, "login"):
+                object.__setattr__(self, "authenticator", _FunctionAuthenticator(self.authenticator))
+            if isinstance(self.error_classifier, Mapping):
+                object.__setattr__(self, "error_classifier", _MappingClassifier(self.error_classifier))
         if errors:
             raise ValidationFailed(f"сервис {self.name!r} объявлен некорректно", errors)
         if PROBE_OPERATION not in self.operations:
@@ -303,7 +323,64 @@ class Service:
                 errors.append(f"normalizers: неизвестный регион {region!r}")
             elif region in REGIONS and not REGIONS[region].synced:
                 errors.append(f"normalizers: регион {region!r} не синхронизируется")
+        errors.extend(self._adapter_errors())
         return errors
+
+    def _adapter_errors(self) -> list[str]:
+        """Адаптеры проверяются при объявлении: ошибка сразу, а не на первом входе в проде (R2-F27)."""
+        errors: list[str] = []
+        auth = self.authenticator
+        if auth is not None:
+            login = getattr(auth, "login", None)
+            if login is None and not callable(auth):
+                errors.append(
+                    "authenticator: нужен объект с методом `async def login(self, ctx: LoginContext) -> "
+                    "BaseModel` или функция `async def login(ctx)`"
+                )
+            elif not _is_async(login if login is not None else auth):
+                errors.append("authenticator.login: нужна корутина — `async def login(...)`")
+        if self.probes is not None:
+            present = [name for name in _PROBES if getattr(self.probes, name, None) is not None]
+            if not present:
+                errors.append(
+                    f"probes ({type(self.probes).__name__}): нужен хотя бы один из методов "
+                    "`async def auth(ctx)`, `async def standing(ctx)`, `async def verification(ctx, factor)`"
+                )
+            for name in present:
+                if not _is_async(getattr(self.probes, name)):
+                    errors.append(
+                        f"probes.{name} ({type(self.probes).__name__}): нужен `async def {name}(...)`"
+                    )
+        classifier = self.error_classifier
+        if (
+            classifier is not None
+            and not isinstance(classifier, Mapping)
+            and not callable(getattr(classifier, "classify", None))
+        ):
+            errors.append(
+                "error_classifier: нужен объект с методом `classify(exc) -> Fault | None` "
+                "или словарь {тип исключения: Fault}"
+            )
+        for index, importer in enumerate(self.importers):
+            label = f"importers[{index}] ({type(importer).__name__})"
+            if not callable(getattr(importer, "can_import", None)):
+                errors.append(f"{label}: нужен метод `can_import(path) -> bool`")
+            read = getattr(importer, "read", None)
+            if not inspect.isasyncgenfunction(read):
+                errors.append(
+                    f"{label}.read: нужен async-генератор `async def read(self, path)` с `yield ImportRecord`"
+                )
+        return errors
+
+
+_PROBES = ("auth", "standing", "verification")
+
+
+def _is_async(function: object) -> bool:
+    """Корутинная функция или объект с асинхронным `__call__`."""
+    return inspect.iscoroutinefunction(function) or inspect.iscoroutinefunction(
+        getattr(function, "__call__", None)  # noqa: B004 - объект с async __call__
+    )
 
 
 def _cycle_errors(specs: tuple[VerificationSpec, ...]) -> list[str]:

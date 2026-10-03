@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -21,10 +21,10 @@ if TYPE_CHECKING:
     from identity_hub.importing import ImportRecord
 
 __all__ = [
+    "AuthProbe",
     "Authenticator",
     "Blame",
     "ErrorClassifier",
-    "EventConsumer",
     "Fault",
     "FileImporter",
     "LinkedIdentity",
@@ -34,6 +34,9 @@ __all__ = [
     "ProbeResult",
     "Probes",
     "SecretsProvider",
+    "SessionRefresher",
+    "StandingProbe",
+    "VerificationProbe",
 ]
 
 
@@ -100,16 +103,33 @@ class LoginChallenge(Exception):
 
 @runtime_checkable
 class Authenticator(Protocol):
+    """Вход на платформе. Вместо объекта можно передать функцию `async def login(ctx)` (R2-F27)."""
+
     async def login(self, ctx: LoginContext) -> BaseModel:
-        """Выполнить вход и вернуть сессию (схема `Service.session`) или бросить `LoginChallenge`."""
-        ...
-
-    async def refresh(self, credentials: BaseModel | None, session: BaseModel) -> BaseModel | None:
-        """Обновить сессию; None — обновление невозможно, нужен вход."""
+        """Выполнить вход и вернуть сессию по схеме `Service.session`; вопрос человеку — `LoginChallenge`."""
         ...
 
 
-# ---------------------------------------------------------------- пробы
+@runtime_checkable
+class SessionRefresher(Protocol):
+    """Необязательное обновление сессии без полного входа. Библиотека пока его не вызывает."""
+
+    async def refresh(self, credentials: BaseModel | None, session: BaseModel) -> BaseModel | None: ...
+
+
+class _FunctionAuthenticator:
+    """`Service(authenticator=login_fn)`: функция входа в форме объекта с методом `login`."""
+
+    __slots__ = ("_login",)
+
+    def __init__(self, login: Callable[[LoginContext], Awaitable[BaseModel]]) -> None:
+        self._login = login
+
+    async def login(self, ctx: LoginContext) -> BaseModel:
+        return await self._login(ctx)
+
+    def __repr__(self) -> str:
+        return f"Authenticator({getattr(self._login, '__qualname__', self._login)!r})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,14 +162,21 @@ class ProbeContext(Protocol):
     async def session(self, slot: str = "default") -> BaseModel | None: ...
 
 
-class Probes(Protocol):
-    """Активные наблюдения по регионам (FR-9.7). Необъявленная проба — `None` (регион не проверяется)."""
-
+class AuthProbe(Protocol):
     async def auth(self, ctx: ProbeContext) -> ProbeResult | None: ...
 
+
+class StandingProbe(Protocol):
     async def standing(self, ctx: ProbeContext) -> ProbeResult | None: ...
 
+
+class VerificationProbe(Protocol):
     async def verification(self, ctx: ProbeContext, factor: str) -> ProbeResult | None: ...
+
+
+class Probes(AuthProbe, StandingProbe, VerificationProbe, Protocol):
+    """Все три пробы. `Service(probes=...)` принимает объект с любым их подмножеством (R2-F27):
+    регион без пробы не сверяется. Каждая проба — `async def`; None — «не знаю»."""
 
 
 # ---------------------------------------------------------------- классификатор ошибок
@@ -178,9 +205,27 @@ class Fault:
 
 
 class ErrorClassifier(Protocol):
+    """Классификатор ошибок операций. Если `classify` принимает именованный `kind`, библиотека передаёт
+    вид операции. Вместо объекта можно передать словарь `{тип исключения: Fault}` (R2-F27)."""
+
     def classify(self, exc: BaseException) -> Fault | None:
         """None — неизвестная ошибка: считается виной запроса."""
         ...
+
+
+class _MappingClassifier:
+    """`Service(error_classifier={TimeoutError: Fault(...)})`: тип исключения или его предок → `Fault`."""
+
+    __slots__ = ("_faults",)
+
+    def __init__(self, faults: Mapping[type[BaseException], Fault]) -> None:
+        self._faults = dict(faults)
+
+    def classify(self, exc: BaseException, *, kind: str | None = None) -> Fault | None:
+        for cls in type(exc).__mro__:
+            if cls in self._faults:
+                return self._faults[cls]
+        return None
 
 
 # ---------------------------------------------------------------- секреты, события, импорт
@@ -196,12 +241,6 @@ class SecretsProvider(Protocol):
     def active_key_id(self) -> str:
         """KEK, которым шифруются новые записи."""
         ...
-
-
-class EventConsumer(Protocol):
-    """Python-колбэк, получающий события после коммита (FR-13.5). At-least-once."""
-
-    async def __call__(self, event: Any) -> None: ...
 
 
 class FileImporter(Protocol):

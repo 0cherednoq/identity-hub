@@ -10,7 +10,7 @@
 | Нет публичного метода «сообщить наблюдение» (например, из вебхука платформы) | Классификатор ошибок в операциях, пробы + `sync.refresh`, либо `identities.override` |
 | Библиотека не запускает сверку, вход и перепроверку прокси сама | Периодически вызывайте `sync.refresh_many()`, `auth.login_many()`, `proxies.recheck_due()` |
 | Проба (`sync.refresh`/`sync.refresh_many`) не работает для аккаунтов в `provisioning`: бросает `OperationNotAllowed(lifecycle)` | Логиньте через `auth.login` (он работает), проверку делайте после перевода в `ready` |
-| `Authenticator.refresh()` не вызывается | Обновляйте сессию своим кодом через `lease.save_session` |
+| Обновление сессии без входа (`SessionRefresher.refresh`) библиотека не вызывает | Обновляйте сессию своим кодом через `lease.save_session` |
 | Нет продления/`renew` для аренды из `pool.acquire()` | Для длинной работы используйте `async with pool.lease()` |
 | Нет массовых изменений аккаунтов | Цикл по отдельным методам |
 | `idempotency_key` и `pools.revoke` не работают для shared-аренд (ключ даёт `ValidationFailed`) | Для задач, требующих этого, используйте эксклюзивный сервис |

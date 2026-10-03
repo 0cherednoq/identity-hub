@@ -44,11 +44,8 @@ class TgAuthenticator:
         )
         return TgSession(auth_key=client.export_key())     # сессия по схеме Service.session
 
-    async def refresh(self, credentials, session):
-        return None      # в 1.0.0a1 не вызывается
 
-
-TELEGRAM = Service(..., authenticator=TgAuthenticator())
+TELEGRAM = Service(..., authenticator=TgAuthenticator())  # или authenticator=login — сама функция
 ```
 
 `ctx` (`LoginContext`): `identity_id`, `external_ref`, `proxy_url`, `challenge_answer`,
