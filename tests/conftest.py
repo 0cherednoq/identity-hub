@@ -19,6 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from identity_hub.crypto import StaticSecretsProvider
 from identity_hub.hub import IdentityHub, SpaceHandle
 
+# учёт вызовов методов Store при полном прогоне (F5.3b): IH_STORE_COVERAGE=1
+pytest_plugins = ["tests.store_coverage"] if os.environ.get("IH_STORE_COVERAGE") == "1" else []
+
 
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:

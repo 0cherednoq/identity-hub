@@ -55,3 +55,11 @@ def test_pgbouncer_job_runs_smoke_set_through_transaction_pooling() -> None:
     assert 'IH_TEST_PGBOUNCER: "1"' in job
     assert "IH_TEST_MIGRATE_DATABASE_URL" in job and ":5432/" in job and ":6432/" in job
     assert "tests/pg/test_pgbouncer.py" in job
+
+
+def test_check_job_enforces_store_method_coverage() -> None:
+    """F5.3b (R2-P23): один из прогонов check учитывает вызовы всех методов Store."""
+    job = _job("check")
+    assert "IH_STORE_COVERAGE" in job
+    conftest = (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    assert "tests.store_coverage" in conftest and "IH_STORE_COVERAGE" in conftest

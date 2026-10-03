@@ -63,6 +63,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --all-extras
       - run: bash scripts/check.sh
+        env:
+          # полный прогон на одной версии проверяет, что тесты вызывают каждый метод Store (F5.3b)
+          IH_STORE_COVERAGE: ${{ matrix.python-version == '3.14' && '1' || '0' }}
       # check.sh начинает с автоисправления: непустой diff означает неотформатированный код.
       - run: git diff --exit-code
 
