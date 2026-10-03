@@ -611,9 +611,10 @@
 - `sync.refresh` → `RefreshResult`; `proxies.recheck_due` → `RecheckReport`.
 - **DoD:** тест на сигнатуры изменяющих методов; руководство и примеры на новых именах.
 
-### F6.3 Адаптеры
+### F6.3a Протоколы адаптеров и их проверка
 
-Находки: `R2-F27`.
+Пункты 1–6 предложений ревью к находке `R2-F27`; находка закрывается вместе с `F6.3b`. Часть исходной
+`F6.3` (`D-199`).
 
 - `Authenticator` — только `login`; `refresh` — необязательный протокол `SessionRefresher`.
 - `Probes`: методы необязательны; `Service(probes=…)` принимает объект с любым подмножеством.
@@ -622,10 +623,16 @@
 - `Service(authenticator=callable)` и `error_classifier=Mapping[type[Exception], Fault]`.
 - `ErrorClassifier.classify(exc, *, kind)` — `kind` передаётся, если принимается.
 - `EventConsumer` удалён; `subscribe` типизирован `Callable[[Event], Awaitable[None]]`.
+- **DoD:** тесты проверки при объявлении `Service`.
+
+### F6.3b Контексты и импортёры
+
+Находки: `R2-F27` (пункты 8–9 предложений ревью). Часть исходной `F6.3` (`D-199`).
+
 - `ProbeContext.external_ref`, `LoginContext.session()`; `FileImporter.read` может вернуть
   `Iterable`; `imports.run_files(base_dir=, max_bytes=)`.
 - Примеры и руководство: `ctx: LoginContext`, `ctx: ProbeContext`.
-- **DoD:** тесты проверки при объявлении `Service`; примеры без заглушек.
+- **DoD:** тесты контекстов и импортёра; примеры без заглушек.
 
 ### F6.4 Удаление устаревших алиасов
 
@@ -676,10 +683,11 @@ F4.4a → F4.4b
 F5.2a → F5.2b
 F5.3a → F5.3b
 F6.2a → F6.2b
+F6.3a → F6.3b
 F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8 → F5.3a
 F5.2b → F5.3a
 F1.6a → F1.6b
-F1.6b, F6.2b, F6.3 → F6.4
+F1.6b, F6.2b, F6.3b → F6.4
 F6.4 → F6.5
 все → F7.1
 ```
@@ -771,7 +779,7 @@ F6.4 → F6.5
 | R2-F24 | F3.8 |
 | R2-F25 | F3.3 |
 | R2-F26 | F5.2a |
-| R2-F27 | F6.3 |
+| R2-F27 | F6.3b |
 | R2-D01 | F2.2 |
 | R2-D02 | F2.4 |
 | R2-D03 | F1.1 |
