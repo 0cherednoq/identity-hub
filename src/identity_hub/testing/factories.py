@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from identity_hub.api.identities import IdentityCreate
 from identity_hub.enums import AuthState, Lifecycle
+from identity_hub.errors import ValidationFailed
 from identity_hub.hub import SpaceHandle
 from identity_hub.service import OperationRule, Service
 
@@ -17,9 +18,13 @@ __all__ = ["TestingModel", "make_identity", "make_service"]
 
 
 class TestingModel(BaseModel):
-    """Разрешает произвольные поля, чтобы тест не объявлял Pydantic-схему ради одной записи."""
+    """Модель данных сервиса из `make_service` по умолчанию: без полей, лишние поля — ошибка.
 
-    model_config = ConfigDict(extra="allow")
+    Опечатка в поле (`pasword`) не проходит молча (R2-P20). Сервису, которому в тесте нужны
+    credentials, сессия или профиль, передайте свою модель: `make_service(credentials=Creds)`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 def make_service(
@@ -33,7 +38,11 @@ def make_service(
     session: type[BaseModel] = TestingModel,
     **overrides: Any,
 ) -> Service:
-    """Создать минимальный Service; операция ``work`` доступна по умолчанию."""
+    """Создать минимальный Service для теста.
+
+    По умолчанию: операция ``work`` без квот, модели данных — `TestingModel` (без полей),
+    ``title`` — из имени. Остальные параметры `Service` передаются через ``overrides``.
+    """
 
     return Service(
         name=name,
@@ -67,10 +76,15 @@ async def make_identity(
 ) -> UUID:
     """Зарегистрировать аккаунт и вернуть UUID.
 
-    По умолчанию аккаунт сразу ``ready`` и ``authenticated``, поэтому его можно взять из пула.
-    Передайте ``authenticated=False`` для сценария входа или явно задайте ``session``.
+    В отличие от `IdentityCreate` (по умолчанию ``provisioning`` без сессии), фабрика создаёт
+    аккаунт сразу ``ready`` и ``authenticated`` с пустой сессией в слоте ``default`` — его можно
+    взять из пула. ``authenticated=False`` — аккаунт без сессии (``no_session``) для сценария
+    входа; вместе с ``session`` это противоречие и `ValidationFailed`. ``external_ref`` по
+    умолчанию — ``test-<uuid>``; если аккаунт с таким ref уже есть, возвращается его id.
     """
 
+    if not authenticated and session is not None:
+        raise ValidationFailed("make_identity: authenticated=False не сочетается с session")
     if external_ref is None:
         external_ref = f"test-{uuid4()}"
     effective_session = session

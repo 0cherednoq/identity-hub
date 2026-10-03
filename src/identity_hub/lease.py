@@ -545,6 +545,22 @@ class _SkipCandidate(Exception):
         self.identity_id = identity_id
 
 
+async def _matching_ids(pool: Pool, predicate: Callable[[Any], bool]) -> list[UUID]:
+    """Id аккаунтов сервиса пула, для которых `predicate(identity)` истинен; читается постранично."""
+    from identity_hub.api.identities import IdentityFilter
+
+    matched: list[UUID] = []
+    after: str | None = None
+    while True:
+        page = await pool.space.identities.list(  # type: ignore[attr-defined]
+            IdentityFilter(service=pool.service.name), limit=500, after=after
+        )
+        matched.extend(identity.id for identity in page.items if predicate(identity))
+        if page.next_cursor is None:
+            return matched
+        after = page.next_cursor
+
+
 async def acquire(
     pool: Pool,
     *,
@@ -568,6 +584,8 @@ async def acquire(
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
     explicit_query = query
+    if callable(among):  # предикат от Identity: заранее превращается в список id (F5.1)
+        among = await _matching_ids(pool, among)
     if query is None:  # готовый запрос — внутренние выборки библиотеки (вход, сверка)
         query = pool.candidate_query(
             for_operation=for_operation,

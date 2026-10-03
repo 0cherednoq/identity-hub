@@ -229,6 +229,21 @@ def _resume_deliveries(state: Any, endpoint_id: UUID, now: datetime) -> None:
             state.webhook_deliveries[delivery_id] = replace(row, status="pending", next_attempt_at=now)
 
 
+def _with_among_ids(query: CandidateQuery) -> CandidateQuery:
+    """`among` как множество id; подзапрос SQL в памяти выполнить нельзя (R2-P02)."""
+    if query.among is None or isinstance(query.among, frozenset):
+        return query
+    if hasattr(query.among, "compile") or isinstance(query.among, (str, bytes)):
+        raise ValidationFailed(
+            "among: подзапрос SQL работает только с PostgreSQL; в MemoryStore передайте "
+            "коллекцию id или функцию-предикат от Identity"
+        )
+    try:
+        return replace(query, among=frozenset(query.among))
+    except TypeError:
+        raise ValidationFailed("among: ожидается коллекция id, подзапрос или функция-предикат") from None
+
+
 class MemoryTx(StoreTx):
     """Транзакция MemoryStore. Экземпляр живёт только внутри context manager."""
 
@@ -550,7 +565,7 @@ class MemoryTx(StoreTx):
             return False
         if query.exclude and row.id in query.exclude:
             return False
-        if query.among is not None and row.id not in set(query.among):
+        if query.among is not None and row.id not in query.among:  # множество из `_with_among_ids`
             return False
         lease = self.state.leases.get(row.id)
         if not query.shared and lease is not None and lease.expires_at > now:
@@ -562,6 +577,7 @@ class MemoryTx(StoreTx):
         return True
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
+        query = _with_among_ids(query)
         candidates = [
             row
             for row in self.state.identities.values()
@@ -572,6 +588,7 @@ class MemoryTx(StoreTx):
         return candidates[0] if candidates else None
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
+        query = _with_among_ids(query)
         return min(
             limit,
             sum(
@@ -581,7 +598,7 @@ class MemoryTx(StoreTx):
         )
 
     async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
-        unrestricted = replace(query, shared=True)
+        unrestricted = replace(_with_among_ids(query), shared=True)
         return min(
             limit,
             sum(
@@ -2473,9 +2490,20 @@ class MemoryStore(Store):
         self._own_clock = clock is not None
         self.clock = clock or SystemClock()
         self._state = _MemoryState()
-        self._lock = asyncio.Lock()
+        self._locks: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
         self._consumer_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._listeners: defaultdict[str, set[asyncio.Event]] = defaultdict(set)
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        """Блокировка текущего event loop: хранилище живёт дольше одного `asyncio.run()` (R2-P19)."""
+        loop = asyncio.get_running_loop()
+        lock = self._locks.get(loop)
+        if lock is None:
+            # блокировки закрытых loop больше не нужны: их ожидающие не вернутся
+            self._locks = {known: item for known, item in self._locks.items() if not known.is_closed()}
+            lock = self._locks[loop] = asyncio.Lock()
+        return lock
 
     def bind_clock(self, clock: Clock | None) -> Clock:
         """Время записей хранилища и дедлайны хаба идут по одним часам (R2-P21).

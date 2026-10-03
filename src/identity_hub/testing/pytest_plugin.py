@@ -1,12 +1,23 @@
-"""Pytest-плагин с полностью in-memory окружением Identity Hub."""
+"""Pytest-плагин с полностью in-memory окружением Identity Hub.
+
+Асинхронные фикстуры объявлены через `pytest_asyncio.fixture`, поэтому работают и в strict-режиме
+pytest-asyncio (по умолчанию), и в auto. Без pytest-asyncio тест, которому нужна фикстура хаба,
+останавливается с понятной ошибкой (R1-01).
+"""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
+from typing import Any
 from uuid import UUID
 
 import pytest
+
+try:
+    import pytest_asyncio
+except ImportError:  # pragma: no cover - зависит от окружения пользователя
+    pytest_asyncio = None  # type: ignore[assignment]
 
 from identity_hub.clock import FakeClock
 from identity_hub.crypto import StaticSecretsProvider
@@ -53,7 +64,27 @@ def identity_hub_store(identity_hub_clock: FakeClock) -> MemoryStore:
     return MemoryStore(identity_hub_clock)
 
 
-@pytest.fixture
+_NEEDS_ASYNCIO = (
+    "фикстуры Identity Hub асинхронные: установите pytest-asyncio (pip install 'identity-hub[testing]') "
+    "и не отключайте его плагин; в strict-режиме отметьте тест @pytest.mark.asyncio"
+)
+
+
+def _async_fixture(function: Any) -> Any:
+    if pytest_asyncio is None:  # pragma: no cover - зависит от окружения пользователя
+        return pytest.fixture(function)
+    return pytest_asyncio.fixture(function)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    if "identity_hub" in getattr(item, "fixturenames", ()) and not item.config.pluginmanager.has_plugin(
+        "asyncio"
+    ):
+        raise pytest.UsageError(_NEEDS_ASYNCIO)
+
+
+@_async_fixture
 async def identity_hub(
     identity_hub_store: MemoryStore,
     identity_hub_clock: FakeClock,

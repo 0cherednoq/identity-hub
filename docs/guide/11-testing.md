@@ -7,13 +7,17 @@ pytest-плагин даёт готовые фикстуры.
 uv add --dev "identity-hub[testing]"
 ```
 
-Плагин подключается автоматически. Фикстура хаба асинхронная, поэтому включите
-`asyncio_mode = "auto"` для pytest-asyncio:
+Плагин подключается автоматически. Фикстура хаба асинхронная и работает с pytest-asyncio в
+любом режиме. В режиме `strict` (по умолчанию) отмечайте асинхронные тесты
+`@pytest.mark.asyncio`; в режиме `auto` отметка не нужна:
 
 ```toml
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 ```
+
+Без pytest-asyncio (или с отключённым плагином `-p no:asyncio`) тест, которому нужна фикстура
+хаба, останавливается с ошибкой, где сказано, что установить.
 
 ## Фикстуры
 
@@ -23,7 +27,7 @@ asyncio_mode = "auto"
 | `identity_hub_space` | Пространство `test` |
 | `identity_hub_services` | Сервисы хаба — **переопределите**, чтобы подставить свои |
 | `identity_hub_service` | Тестовый сервис `test_service` с операцией `work` |
-| `identity_hub_make_identity` | Фабрика аккаунтов: по умолчанию `ready` и `authenticated` |
+| `identity_hub_make_identity` | Фабрика аккаунтов: по умолчанию `ready` и `authenticated` с пустой сессией (в отличие от `IdentityCreate`, где `provisioning`); `authenticated=False` — без сессии, вместе с `session=` — ошибка |
 | `identity_hub_clock` | `FakeClock`; `.advance(timedelta)` двигает время |
 | `identity_hub_store`, `identity_hub_secrets` | Хранилище и ключи |
 
@@ -117,6 +121,15 @@ async def test_ban_event(identity_hub, identity_hub_space, identity_hub_make_ide
 
 - Нет `space.using(session)` — транзакции приложения работают только с PostgreSQL.
 - Нет конкурентности между процессами; поведение `SKIP LOCKED` и гонок проверяйте на PostgreSQL.
+- `among=select(...)` — подзапрос SQL — работает только с PostgreSQL; в памяти он даёт
+  `ValidationFailed`. Для теста передайте коллекцию id или предикат от `Identity`:
+  `pool.lease(among=lambda identity: identity.labels.get("farm") == "3")`. Предикат работает на
+  обоих хранилищах, но перебирает все аккаунты сервиса пула, поэтому в рабочем коде на
+  PostgreSQL используйте подзапрос.
+- Сервис из `make_service` по умолчанию не принимает полей в credentials, сессии и профиле
+  (`TestingModel` с `extra="forbid"`): опечатка не проходит молча. Передайте свою модель —
+  `make_service("telegram", session=TgSession)`.
+- Один `MemoryStore` можно использовать в нескольких `asyncio.run()` подряд.
 - Для интеграционных тестов с PostgreSQL используйте testcontainers или отдельную базу и
   `IdentityHub(sessionmaker=...)`.
 

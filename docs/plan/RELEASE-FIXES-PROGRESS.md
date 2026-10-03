@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F5.1 pytest-плагин и фабрики
-- **Начата:** 2026-10-03
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: плагин через pytester в strict и auto, без pytest-asyncio, among=select в памяти, предикат among, два event loop, фабрики
-  - [ ] Плагин: pytest_asyncio.fixture и понятная ошибка без pytest-asyncio
-  - [ ] among: ValidationFailed для подзапроса в MemoryStore, предикат от Identity; ленивая блокировка MemoryStore
-  - [ ] Фабрики: authenticated=False с session — ошибка, TestingModel extra=forbid, докстринги
-  - [ ] Руководство 11-testing, CHANGELOG, решение D-188
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -60,7 +55,7 @@
 | F4.4b | Админ-чтение на объёме | F4.4a | done |  | часть F4.4 (D-183) |
 | F4.5 | PgBouncer | F0.1 | done |  |  |
 | F4.6 | Мелкие расхождения хранилища | F0.1 | done |  |  |
-| F5.1 | pytest-плагин и фабрики | F0.1 | in_progress |  |  |
+| F5.1 | pytest-плагин и фабрики | F0.1 | done |  |  |
 | F5.2 | Паритет `MemoryStore` | F0.1 | todo |  |  |
 | F5.3 | Conformance и раздел о своём Store | F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8, F5.2 | todo |  |  |
 | F6.1 | Пространства | F0.1 | todo |  |  |
@@ -70,7 +65,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 35 / 44 done
+**Итого:** 36 / 44 done
 
 ## Журнал сессий
 
@@ -111,3 +106,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-03 · F4.4b · done · metrics_snapshot(slugs) через and_ (conformance, background_snapshot с allowed_spaces), списки id одним параметром-массивом (_any_of) — очередь оператора открывается на 40 000 аккаунтов, doctor.check страницами по 1000 с линейной сверкой (D-185); check зелёный: 1331 passed, admin unit 67 passed · дальше F4.5
 2026-10-03 · F4.5 · done · рецепт PgBouncer из трёх настроек asyncpg (локально PgBouncer 1.26: 60 операций без ошибок при max_prepared_statements 0 и по умолчанию, старый рецепт — 26 ошибок из 60), listen() проверяет подписку пробным NOTIFY с другого соединения и при неудаче освобождает соединение и логирует режим опроса, job CI pgbouncer с дымовым набором (actionlint чисто, в CI ещё не запускался) (D-186); check зелёный: 1334 passed, 2 skipped, admin unit 67 passed · дальше F4.6
 2026-10-03 · F4.6 · done · AlreadyExists без id чужого пространства, Store.current_time() — границы purge, час снимка и минуты метрик по времени хранилища (сдвиг метрик округляется до минут), new_id() строго растёт в процессе, uuid-utils >= 1.0 (D-187); check зелёный: 1340 passed, 2 skipped, admin unit 67 passed. Первый прогон упал: таймаут test_human_queue_opens_with_40000 (F4.4b) — наблюдатель показал, что вставка 40 000 строк ih_region_states в посеве шла ~110 с на долгоживущем соединении пула (гипотеза: закэшированный план проверки FK для маленькой таблицы, не доказано); строки регионов убраны из посева этого теста (запрос регионов по-прежнему получает 40 000 id), следующий прогон — без долгих запросов · дальше F5.1
+2026-10-03 · F5.1 · done · фикстура identity_hub через pytest_asyncio.fixture (pytester: strict и auto), без pytest-asyncio — UsageError с инструкцией; among=select в MemoryStore — ValidationFailed, among принимает предикат от Identity; блокировка MemoryStore на каждый event loop; make_identity(authenticated=False, session=…) — ошибка, TestingModel extra=forbid (D-188); check зелёный: 1348 passed, 2 skipped, admin unit 67 passed · дальше F5.2
