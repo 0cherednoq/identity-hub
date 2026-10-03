@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+from identity_hub._ids import new_id
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
@@ -151,6 +152,7 @@ class _MemoryState:
     proxy_load: dict[UUID, int] = field(default_factory=dict)
     bindings: dict[UUID, UUID] = field(default_factory=dict)
     binding_times: dict[UUID, datetime] = field(default_factory=dict)
+    link_times: dict[tuple[UUID, str], datetime] = field(default_factory=dict)
     verifications: dict[tuple[UUID, str], VerificationRow] = field(default_factory=dict)
     challenges: dict[UUID, ChallengeRow] = field(default_factory=dict)
     lease_logs: list[dict[str, Any]] = field(default_factory=list)
@@ -275,7 +277,7 @@ class MemoryTx(StoreTx):
                     self.state.identities[identity.id] = replace(
                         identity, event_seq=sequence, updated_at=self._now
                     )
-            event_id = uuid4()
+            event_id = new_id()  # UUIDv7, как в PostgreSQL: порядок при равном времени (R2-P10)
             event = Event(
                 id=self.state.next_event_id,
                 event_id=event_id,
@@ -416,6 +418,7 @@ class MemoryTx(StoreTx):
         if key in self.state.links or self._own(identity_id) is None or self._own(linked_identity_id) is None:
             return False
         self.state.links[key] = linked_identity_id
+        self.state.link_times[key] = self._now
         return True
 
     async def get_profile_secret(self, identity_id: UUID) -> EncryptedPayload | None:
@@ -452,7 +455,10 @@ class MemoryTx(StoreTx):
                 )
         self.state.credentials.pop(identity_id, None)
         self.state.profile_secrets.pop(identity_id, None)
-        self.state.bindings.pop(identity_id, None)
+        bound = self.state.bindings.pop(identity_id, None)
+        self.state.binding_times.pop(identity_id, None)
+        if bound is not None:  # место на прокси освобождается, как каскад в PostgreSQL (R2-P06)
+            self.state.proxy_load[bound] = max(0, self.state.proxy_load.get(bound, 0) - 1)
         for region_key in [item for item in self.state.regions if item[0] == identity_id]:
             del self.state.regions[region_key]
         for session_key in [item for item in self.state.sessions if item[0] == identity_id]:
@@ -467,6 +473,7 @@ class MemoryTx(StoreTx):
         for key, target in list(self.state.links.items()):
             if key[0] == identity_id or target == identity_id:
                 del self.state.links[key]
+                self.state.link_times.pop(key, None)
         return True
 
     async def load_data(self, identity_id: UUID, namespace: str) -> DataRow | None:
@@ -496,15 +503,21 @@ class MemoryTx(StoreTx):
         return version
 
     async def delete_link(self, identity_id: UUID, role: str) -> UUID | None:
-        return self.state.links.pop((identity_id, role), None) if self._own(identity_id) else None
+        if self._own(identity_id) is None:
+            return None
+        self.state.link_times.pop((identity_id, role), None)
+        return self.state.links.pop((identity_id, role), None)
 
     def _link(self, source: UUID, role: str, target: UUID, outgoing: bool) -> LinkRow:
         other = self.state.identities[target if outgoing else source]
-        return LinkRow(source, role, target, other.service, other.external_ref, other.created_at)
+        created = self.state.link_times.get((source, role), other.created_at)  # время связи (R2-P14)
+        return LinkRow(source, role, target, other.service, other.external_ref, created)
 
     async def links_of(self, identity_id: UUID) -> tuple[list[LinkRow], list[LinkRow]]:
-        outgoing = [self._link(s, r, t, True) for (s, r), t in self.state.links.items() if s == identity_id]
-        incoming = [self._link(s, r, t, False) for (s, r), t in self.state.links.items() if t == identity_id]
+        # порядок как в PostgreSQL: исходящие по роли, входящие по роли и id
+        links = sorted(self.state.links.items(), key=lambda item: (item[0][1], item[0][0]))
+        outgoing = [self._link(s, r, t, True) for (s, r), t in links if s == identity_id]
+        incoming = [self._link(s, r, t, False) for (s, r), t in links if t == identity_id]
         return outgoing, incoming
 
     async def link_counts(self, ids: Sequence[UUID]) -> dict[UUID, tuple[int, int, list[str]]]:
@@ -523,8 +536,9 @@ class MemoryTx(StoreTx):
             for target, path in frontier:
                 for (source, role), linked in self.state.links.items():
                     if linked == target and source not in found and source != identity_id:
-                        found[source] = depth, [role, *path]
-                        upcoming.append((source, [role, *path]))
+                        # путь от исходного аккаунта наружу, как `path || role` в PostgreSQL (R2-P14)
+                        found[source] = depth, [*path, role]
+                        upcoming.append((source, [*path, role]))
             frontier = upcoming
         return [(key, depth, path) for key, (depth, path) in found.items()]
 
@@ -559,9 +573,12 @@ class MemoryTx(StoreTx):
             for factor in query.required_factors
         ):
             return False
-        if query.labels and any(row.labels.get(k) != v for k, v in query.labels.items()):
+        # как JSONB `@>`: ключ должен быть, `{"country": None}` не совпадает с отсутствующим полем (R2-P12)
+        if query.labels and any(k not in row.labels or row.labels[k] != v for k, v in query.labels.items()):
             return False
-        if query.profile and any(row.profile.get(k) != v for k, v in query.profile.items()):
+        if query.profile and any(
+            k not in row.profile or row.profile[k] != v for k, v in query.profile.items()
+        ):
             return False
         if query.exclude and row.id in query.exclude:
             return False
@@ -655,8 +672,8 @@ class MemoryTx(StoreTx):
         if not shared:
             self.state.identities[identity.id] = replace(current, fencing_seq=fencing, updated_at=self._now)
         lease = LeaseRow(
-            uuid4(),
-            uuid4(),
+            new_id(),  # публичный id аренды упорядочен по времени, как в PostgreSQL (R2-P10)
+            uuid4(),  # token — секрет аренды, случайный
             identity.id,
             fencing,
             pool,
@@ -1253,11 +1270,11 @@ class MemoryTx(StoreTx):
         previous = self.state.verifications.get(
             (identity_id, factor), VerificationRow(0, None, None, None, None, None)
         )
-        payload = asdict(previous)
-        payload.update(values)
+        # replace, а не asdict: asdict превращал сохранённые доказательства в dict (R2-P07)
+        changes = dict(values)
         if evidence is not None:
-            payload["evidence"] = evidence
-        self.state.verifications[(identity_id, factor)] = VerificationRow(**payload)
+            changes["evidence"] = evidence
+        self.state.verifications[(identity_id, factor)] = replace(previous, **changes)
 
     async def due_regions(self, region: str, limit: int) -> list[tuple[UUID, str]]:
         rows = [
@@ -1745,8 +1762,7 @@ class MemoryTx(StoreTx):
         reasons: dict[str, int] = defaultdict(int)
         operations: dict[str, int] = defaultdict(int)
         for row in rows:
-            if row.end_reason is not None:
-                reasons[row.end_reason] += 1
+            reasons[row.end_reason or "active"] += 1  # открытая аренда — как в PostgreSQL (R2-P18)
             for kind, count in row.operations.items():
                 operations[kind] += count
         return LeaseStatsRow(
