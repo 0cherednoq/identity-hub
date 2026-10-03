@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F5.3a Набор StoreConformanceSuite
-- **Начата:** 2026-10-03
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Тест мутаций через pytester: каждый намеренный дефект Store ловится набором (сначала падает)
-  - [ ] Сценарии набора: изоляция пространств, живая аренда, отзыв и fencing, атомарность квот, курсор поиска, откат всех разделов, process_events
-  - [ ] Руководство: контракт Store внутренний и нестабильный до 1.0; CHANGELOG, решение D-193
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -61,7 +58,7 @@
 | F5.1 | pytest-плагин и фабрики | F0.1 | done |  |  |
 | F5.2a | Паритет поведения `MemoryStore` | F0.1 | done |  | часть F5.2 (D-189) |
 | F5.2b | Скорость `MemoryStore` | F5.2a | done |  | часть F5.2 (D-189) |
-| F5.3a | Набор StoreConformanceSuite | F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8, F5.2b | in_progress |  | часть F5.3 (D-192) |
+| F5.3a | Набор StoreConformanceSuite | F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8, F5.2b | done |  | часть F5.3 (D-192) |
 | F5.3b | Покрытие методов Store | F5.3a | todo |  | часть F5.3 (D-192) |
 | F6.1 | Пространства | F0.1 | todo |  |  |
 | F6.2 | Единообразие API | F0.1 | todo |  |  |
@@ -70,7 +67,7 @@
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 38 / 46 done
+**Итого:** 39 / 46 done
 
 ## Журнал сессий
 
@@ -114,3 +111,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-03 · F5.1 · done · фикстура identity_hub через pytest_asyncio.fixture (pytester: strict и auto), без pytest-asyncio — UsageError с инструкцией; among=select в MemoryStore — ValidationFailed, among принимает предикат от Identity; блокировка MemoryStore на каждый event loop; make_identity(authenticated=False, session=…) — ошибка, TestingModel extra=forbid (D-188); check зелёный: 1348 passed, 2 skipped, admin unit 67 passed · дальше F5.2
 2026-10-03 · F5.2a · done · MemoryStore как PostgreSQL: удаление аккаунта освобождает прокси, доказательства верификации через replace, event_id и lease_id — new_id, фильтр профиля и меток как JSONB @>, время и порядок связей, путь impact от исходного аккаунта, active в lease_stats; 12 conformance-тестов (D-190); check зелёный: 1360 passed, 2 skipped, admin unit 67 passed · дальше F5.2b
 2026-10-03 · F5.2b · done · транзакция MemoryStore снимает поразделовый снимок вместо deepcopy (словари поверхностно, import_items и notifications глубоко, журналы по длине); lease+operation на 1000 аккаунтах 5,4 мс вместо 587, тест отката всех разделов (D-191); check зелёный: 1362 passed, 2 skipped, admin unit 67 passed · дальше F5.3
+2026-10-03 · F5.3a · done · StoreConformanceSuite: шесть новых сценариев и полный откат; восемь сломанных Store через pytester — набор ловит все (прежний пропускал 6 из 8), исправный MemoryStore проходит; контракт Store помечен внутренним и нестабильным до 1.0 (D-193); check зелёный: 1383 passed, 2 skipped, admin unit 67 passed · дальше F5.3b

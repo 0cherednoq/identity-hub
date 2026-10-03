@@ -2,6 +2,10 @@
 
 Пользователь объявляет класс ``TestStore(StoreConformanceSuite)`` и переопределяет fixture
 ``store_under_test``. Один и тот же набор затем проверяет сторонний адаптер и эталонные реализации.
+
+Контракт `Store` внутренний и до версии 1.0 нестабилен (D-152): методы добавляются и меняются
+вместе с библиотекой. Набор проверяет главные гарантии — изоляцию пространств, аренду и fencing,
+атомарность квот, откат транзакции, курсор поиска и журнал событий, — но не каждый метод.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.idempotency import fingerprint, namespace
 from identity_hub.domain.regions import RegionState
 from identity_hub.errors import IdempotencyConflict
@@ -70,7 +75,7 @@ async def _tx(store: Store, space: SpaceRef) -> AsyncIterator[StoreTx]:
 
 
 class StoreConformanceSuite:
-    """Шесть обязательных сценариев для реализации Store."""
+    """Обязательные сценарии для реализации Store."""
 
     @pytest.fixture
     async def store_under_test(self) -> AsyncIterator[Store]:
@@ -85,13 +90,87 @@ class StoreConformanceSuite:
         return await store_under_test.ensure_space("conformance", "Conformance")
 
     async def test_transaction_rolls_back(self, store_under_test: Store, conformance_space: SpaceRef) -> None:
+        kept = _identity("kept")
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.insert_identity(kept)
         row = _identity()
         with pytest.raises(RuntimeError, match="rollback"):
             async with _tx(store_under_test, conformance_space) as transaction:
                 assert await transaction.insert_identity(row)
+                await transaction.emit(
+                    [EventDraft("identity.registered", "test", service="svc", identity_id=row.id)]
+                )
+                stored = await transaction.get_identity(kept.id)
+                assert stored is not None
+                lease, _ = await transaction.acquire_lease(
+                    stored, pool="p", holder="h", ttl_seconds=30, idempotency_key=None, shared=False
+                )
+                assert lease.fencing == 1
                 raise RuntimeError("rollback")
         async with _tx(store_under_test, conformance_space) as transaction:
             assert await transaction.get_identity(row.id) is None
+            assert await transaction.current_fencing(kept.id) == 0  # аренда откатилась вместе с аккаунтом
+            assert await transaction.current_lease(kept.id) is None
+
+        async def nothing_expected(events: list[Any]) -> None:
+            raise AssertionError(f"событие отменённой транзакции доставлено: {events}")
+
+        assert not await store_under_test.process_events("rollback", nothing_expected, limit=10)
+
+    async def test_spaces_are_isolated(self, store_under_test: Store, conformance_space: SpaceRef) -> None:
+        """Аккаунт одного пространства не виден и не меняется из другого."""
+        other = await store_under_test.ensure_space("conformance-other", "Other")
+        row = _identity()
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.insert_identity(row)
+        async with _tx(store_under_test, other) as transaction:
+            assert await transaction.get_identity(row.id) is None
+            assert not await transaction.update_identity(row.id, {"note": "чужое"}, {"note": "контракт"})
+            rows, count = await transaction.search_identities(
+                SearchFilter(services=frozenset({"svc"})), limit=10, after=None, count_limit=10
+            )
+            assert rows == [] and count == 0
+            assert await transaction.pick_candidate(CandidateQuery("svc", frozenset({"good"}))) is None
+
+    async def test_live_lease_excludes_candidate_until_release(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        row = _identity()
+        query = CandidateQuery("svc", frozenset({"good"}))
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.insert_identity(row)
+            candidate = await transaction.pick_candidate(query)
+            assert candidate is not None
+            lease, _ = await transaction.acquire_lease(
+                candidate, pool="p", holder="h", ttl_seconds=30, idempotency_key=None, shared=False
+            )
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.pick_candidate(query) is None  # единственный аккаунт занят
+            assert await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.pick_candidate(query) is not None
+
+    async def test_revoked_lease_is_not_extended_and_fences_writes(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        row = _identity()
+        payload = EncryptedPayload("k", b"dek", b"nonce", b"cipher")
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.insert_identity(row)
+            stored = await transaction.get_identity(row.id)
+            assert stored is not None
+            lease, _ = await transaction.acquire_lease(
+                stored, pool="p", holder="h", ttl_seconds=30, idempotency_key=None, shared=False
+            )
+            assert await transaction.extend_lease(lease, 30, LeaseCounters.empty(), shared=False) is not None
+            assert await transaction.put_session(row.id, "default", payload, fencing=lease.fencing)
+            revoked = await transaction.revoke_lease(row.id)
+            assert revoked is not None and revoked.lease_id == lease.lease_id
+            assert await transaction.current_fencing(row.id) == lease.fencing + 1
+            assert await transaction.extend_lease(lease, 30, LeaseCounters.empty(), shared=False) is None
+            # запись с fencing отозванной аренды отклоняется: новая сессия записана более новой арендой
+            assert await transaction.put_session(row.id, "default", payload, fencing=lease.fencing + 1)
+            assert not await transaction.put_session(row.id, "default", payload, fencing=lease.fencing)
 
     async def test_identity_region_and_data_compare_and_set(
         self, store_under_test: Store, conformance_space: SpaceRef
@@ -160,6 +239,20 @@ class StoreConformanceSuite:
             # исчерпанная квота ключ не заняла: он свободен для следующей попытки
             free = await transaction.claim_idempotency_key(op_2)
             assert (free.claimed, free.attempt) == (True, 1)
+
+    async def test_quota_charge_is_all_or_nothing(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        """Исчерпано позднее окно — более раннее в списке не списывается."""
+        row = _identity()
+        origin = datetime(2020, 1, 1, tzinfo=UTC)
+        charges = [QuotaCharge("day", 86_400, origin, 10), QuotaCharge("write", 60, origin, 1)]
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.insert_identity(row)
+            assert (await transaction.charge_quotas(row.id, charges)).ok
+            assert not (await transaction.charge_quotas(row.id, charges)).ok
+            usage = {item.kind: item.used for item in await transaction.quota_usage(row.id)}
+            assert usage == {"day": 1, "write": 1}
 
     async def test_idempotency_key_claim_complete_replay_conflict(
         self, store_under_test: Store, conformance_space: SpaceRef
@@ -260,3 +353,47 @@ class StoreConformanceSuite:
             )
         assert [row.id for row in rows] == [first.id]
         assert count == 1
+
+    async def test_search_pages_with_cursor(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        rows_in = [_identity(f"page-{n}") for n in range(3)]
+        async with _tx(store_under_test, conformance_space) as transaction:
+            for row in rows_in:
+                assert await transaction.insert_identity(row)
+            seen: list[UUID] = []
+            after: tuple[Any, UUID] | None = None
+            for _ in range(5):
+                page, _total = await transaction.search_identities(
+                    SearchFilter(terms=("page",)), limit=1, after=after, count_limit=None
+                )
+                if not page:
+                    break
+                seen.append(page[0].id)
+                after = (page[0].created_at, page[0].id)
+        assert sorted(seen) == sorted(row.id for row in rows_in)
+        assert len(seen) == len(set(seen)) == 3
+
+    async def test_event_batches_skip_journal_and_respect_limit(
+        self, store_under_test: Store, conformance_space: SpaceRef
+    ) -> None:
+        row = _identity()
+        async with _tx(store_under_test, conformance_space) as transaction:
+            assert await transaction.insert_identity(row)
+            await transaction.emit(
+                [
+                    EventDraft("identity.registered", "test", service="svc", identity_id=row.id),
+                    EventDraft("lease.acquired", "test", service="svc", identity_id=row.id),  # только журнал
+                    EventDraft("identity.updated", "test", service="svc", identity_id=row.id),
+                    EventDraft("identity.updated", "test", service="svc", identity_id=row.id),
+                ]
+            )
+        batches: list[list[str]] = []
+
+        async def collect(events: list[Any]) -> None:
+            batches.append([event.type for event in events])
+
+        assert await store_under_test.process_events("limits", collect, limit=2) == 2
+        assert await store_under_test.process_events("limits", collect, limit=2) == 1
+        assert await store_under_test.process_events("limits", collect, limit=2) == 0
+        assert batches == [["identity.registered", "identity.updated"], ["identity.updated"]]
