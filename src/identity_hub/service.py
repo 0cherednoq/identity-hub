@@ -365,10 +365,10 @@ class Service:
             label = f"importers[{index}] ({type(importer).__name__})"
             if not callable(getattr(importer, "can_import", None)):
                 errors.append(f"{label}: нужен метод `can_import(path) -> bool`")
-            read = getattr(importer, "read", None)
-            if not inspect.isasyncgenfunction(read):
+            if not callable(getattr(importer, "read", None)):
                 errors.append(
-                    f"{label}.read: нужен async-генератор `async def read(self, path)` с `yield ImportRecord`"
+                    f"{label}: нужен метод `read(path)` — async-генератор с `yield ImportRecord` "
+                    "или функция, возвращающая список записей"
                 )
         return errors
 

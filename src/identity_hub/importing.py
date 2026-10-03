@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -30,6 +31,7 @@ from identity_hub.store.base import UNREADABLE_IMPORT_ITEM, ImportItemResult, Ne
 
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub
+    from identity_hub.protocols import FileImporter
 
 __all__ = [
     "BatchHook",
@@ -142,23 +144,34 @@ class ImportingMixin(SpaceBase):
         return report
 
     async def _import_files(
-        self, *, service: Service | str, paths: Iterable[str | Path], **kwargs: Any
+        self,
+        *,
+        service: Service | str,
+        paths: Iterable[str | Path],
+        base_dir: str | Path | None = None,
+        max_bytes: int | None = None,
+        **kwargs: Any,
     ) -> ImportReport:
         """Импорт файлов импортёрами сервиса (`.session`, tdata, JSON с cookies — FR-2.6).
 
-        Файл без импортёра и файл, который импортёр не смог прочитать, попадают в `failed` под
-        именем файла; остальные файлы импортируются.
+        Файл без импортёра, вне `base_dir`, больше `max_bytes` и файл, который импортёр не смог
+        прочитать, попадают в `failed` под именем файла; остальные файлы импортируются.
         """
+        if max_bytes is not None and max_bytes < 1:
+            raise ValidationFailed("max_bytes ≥ 1")
         svc = self.hub.service(service)
         report = ImportReport()
         for raw in paths:
-            path = Path(raw)
+            path, problem = _check_file(Path(raw), base_dir, max_bytes)
+            if problem is not None:
+                report.failed.append((path.name, problem))
+                continue
             importer = next((i for i in svc.importers if i.can_import(path)), None)
             if importer is None:
                 report.failed.append((path.name, "нет импортёра для файла"))
                 continue
             try:
-                records = [record async for record in importer.read(path)]
+                records = await _read_records(importer, path)
             except Exception as exc:
                 # текст ошибки чтения содержит путь и фрагменты файла: в отчёт — только тип
                 logger.warning("импортёр не прочитал файл %s: %s", path.name, describe_error(exc))
@@ -749,6 +762,42 @@ MAX_ITEM_CLAIMS = 3
 def _record_error(exc: Exception) -> str:
     """Причина отказа записи для отчёта: сообщение библиотеки или только тип чужого исключения."""
     return str(exc) if isinstance(exc, IdentityHubError) else describe_error(exc)
+
+
+async def _read_records(importer: FileImporter, path: Path) -> list[ImportRecord]:
+    """`read` импортёра: async-генератор, `Iterable` или корутина со списком (R2-F27)."""
+    result: Any = importer.read(path)
+    if inspect.isawaitable(result):
+        result = await result
+    if hasattr(result, "__aiter__"):
+        return [record async for record in result]
+    return list(result)
+
+
+def _check_file(path: Path, base_dir: str | Path | None, max_bytes: int | None) -> tuple[Path, str | None]:
+    """Путь с учётом `base_dir` и причина отказа: вне `base_dir`, нет файла, больше `max_bytes`."""
+    if base_dir is not None:
+        root = Path(base_dir).resolve()
+        path = (root / path).resolve()
+        if not path.is_relative_to(root):
+            return path, "файл вне base_dir"
+    if max_bytes is not None:
+        size = _path_size(path)
+        if size is None:
+            return path, "файл не найден"
+        if size > max_bytes:
+            return path, "файл больше max_bytes"
+    return path, None
+
+
+def _path_size(path: Path) -> int | None:
+    """Размер файла или суммарный размер файлов каталога (tdata); нет пути — None."""
+    try:
+        if path.is_dir():
+            return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+        return path.stat().st_size
+    except OSError:
+        return None
 
 
 def _merge(report: ImportReport, part: ImportReport) -> None:

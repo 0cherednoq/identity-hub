@@ -72,11 +72,20 @@ class Imports(Namespace):
         actor: str,
         run_id: UUID | None = None,
         max_identities: int = 3,
+        base_dir: str | Path | None = None,
+        max_bytes: int | None = None,
     ) -> ImportReport:
-        """Прочитать файлы импортёрами `Service.importers` и импортировать; параметры — как у `run`."""
+        """Прочитать файлы импортёрами `Service.importers` и импортировать; параметры — как у `run`.
+
+        `base_dir` — относительные пути считаются от него, путь за его пределами (в том числе через
+        `..` или абсолютный) попадает в `failed`. `max_bytes` — файл (каталог — суммарно) больше
+        лимита в `failed`, не читается. Пути из внешнего ввода передавайте только с `base_dir`.
+        """
         return await self._space._import_files(
             service=service,
             paths=paths,
+            base_dir=base_dir,
+            max_bytes=max_bytes,
             batch_size=batch_size,
             on_existing=on_existing,
             verify_sessions=verify_sessions,

@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F6.3b Контексты и импортёры
-- **Начата:** 2026-10-03
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Регрессионные тесты: external_ref в ProbeContext, LoginContext.session(), импортёр со списком, run_files base_dir/max_bytes
-  - [ ] ProbeContext.external_ref и LoginContext.session()
-  - [ ] FileImporter.read: AsyncIterator или Iterable; проверка при объявлении
-  - [ ] imports.run_files(base_dir=, max_bytes=)
-  - [ ] Примеры и руководство: ctx: LoginContext / ProbeContext, без заглушек; CHANGELOG, DECISIONS
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -69,12 +64,12 @@
 | F6.2a | Имена и типы API | F0.1 | done |  | часть F6.2 (D-196) |
 | F6.2b | actor и результаты-DTO | F6.2a | done |  | часть F6.2 (D-196) |
 | F6.3a | Протоколы адаптеров и их проверка | F0.1 | done |  | часть F6.3 (D-199) |
-| F6.3b | Контексты и импортёры | F6.3a | in_progress |  | часть F6.3 (D-199) |
+| F6.3b | Контексты и импортёры | F6.3a | done |  | часть F6.3 (D-199) |
 | F6.4 | Удаление устаревших алиасов | F1.6b, F6.2b, F6.3b | todo |  |  |
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 44 / 48 done
+**Итого:** 45 / 48 done
 
 ## Журнал сессий
 
@@ -124,3 +119,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-03 · F6.2a · done · IdentityCreate.auth вместо auth_state, proxies.create_many(OnConflict), run_files с явными параметрами, among типизирован, LeaseUnavailable → 503 с retry_after в context, Page.total по COUNT_CAP, webhooks/notifications — кэшируемые Namespace; тесты, админка, README и примеры переведены (D-197); check зелёный: 1417 passed, 2 skipped, admin unit 67 passed, примеры проходят · дальше F6.2b
 2026-10-03 · F6.2b · done · actor обязательный именованный в 21 методе неймспейсов, которые записывают исполнителя (тест на сигнатуры); вызовы в тестах, примерах и документации дополнены; sync.refresh → RefreshResult, proxies.recheck_due и recheck_group → RecheckReport (D-198); check зелёный: 1419 passed, 2 skipped, admin unit 67 passed, примеры проходят · дальше F6.3
 2026-10-03 · F6.3a · done · адаптеры проверяются при объявлении Service; Authenticator только login, пробы — подмножество, функция входа и словарь-классификатор, kind в классификаторе, EventConsumer удалён (D-199, D-200) · дальше F6.3b
+2026-10-03 · F6.3b · done · ProbeContext.external_ref; LoginContext.session — прежняя сессия, в том числе недействительная; FileImporter.read — async-генератор, Iterable или корутина со списком; run_files(base_dir=, max_bytes=); примеры и руководство с ctx: LoginContext/ProbeContext без заглушек; D-201; 1433 passed, admin unit 67 passed · дальше F6.4

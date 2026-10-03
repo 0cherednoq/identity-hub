@@ -24,8 +24,10 @@ from identity_hub import (
     IdentityHub,
     Lifecycle,
     LoginChallenge,
+    LoginContext,
     OperationRule,
     Override,
+    ProbeContext,
     ProbeResult,
     ProxyPolicy,
     Quota,
@@ -74,7 +76,7 @@ PLATFORM = FakePlatform()
 
 
 class Authenticator:
-    async def login(self, ctx: Any) -> BaseModel:
+    async def login(self, ctx: LoginContext) -> BaseModel:
         if ctx.challenge_answer is None:
             raise LoginChallenge("sms_code", "Код из SMS", {"hash": "h1"}, timedelta(minutes=5))
         if ctx.challenge_answer != PLATFORM.sms_code:
@@ -83,15 +85,14 @@ class Authenticator:
 
 
 class Probes:
-    async def auth(self, ctx: Any) -> ProbeResult | None:
+    """Пробы `auth` и `standing`; `verification` не нужна — регион просто не сверяется."""
+
+    async def auth(self, ctx: ProbeContext) -> ProbeResult | None:
         return ProbeResult("authenticated")
 
-    async def standing(self, ctx: Any) -> ProbeResult | None:
+    async def standing(self, ctx: ProbeContext) -> ProbeResult | None:
         code = PLATFORM.statuses.get(str(ctx.identity_id), "OK")
         return ProbeResult(None, code=code)
-
-    async def verification(self, ctx: Any, factor: str) -> ProbeResult | None:
-        return None
 
 
 class ErrorClassifier:

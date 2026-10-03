@@ -127,7 +127,7 @@ tg = await space.identities.create(
 , actor="operator")
 
 class TgAuthenticator:
-    async def login(self, ctx):
+    async def login(self, ctx: LoginContext):
         mailbox = await ctx.linked("recovery_email")         # почта взята в аренду на время входа
         code = await read_code_from_mail(await mailbox.credentials())
         ...

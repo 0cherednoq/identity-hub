@@ -351,11 +351,15 @@ class Lease:
 
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         """Расшифрованная действующая сессия слота или None."""
+        return await self._stored_session(slot, valid_only=True)
+
+    async def _stored_session(self, slot: str, *, valid_only: bool) -> BaseModel | None:
+        """Сессия слота; `valid_only=False` — и признанная недействительной (для повторного входа)."""
         self.check()
         async with self.pool.space._tx(own=True) as tx:
             await self._check_ownership(tx)
             found = await tx.get_session(self.identity_id, slot)
-        if found is None or found[1] != SessionStatus.VALID:
+        if found is None or (valid_only and found[1] != SessionStatus.VALID):
             return None
         aad = associated_data("ih_sessions", self.identity_id, slot)
         return self.pool.space.hub._envelope.open_model(self.pool.service.session, found[0], aad)

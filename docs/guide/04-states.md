@@ -244,24 +244,21 @@ flowchart LR
 Проба — ваш код, который спрашивает платформу о статусе и возвращает `ProbeResult`:
 
 ```python
-from identity_hub import ProbeResult
+from identity_hub import ProbeContext, ProbeResult
 
 
 class TgProbes:
-    async def auth(self, ctx):
+    async def auth(self, ctx: ProbeContext):
         session = await ctx.session()
         if session is None:
             return None                                   # не проверяли
         ok = await telegram_client(session, proxy=ctx.proxy_url).is_authorized()
         return ProbeResult("authenticated" if ok else "session_invalid")
 
-    async def standing(self, ctx):
+    async def standing(self, ctx: ProbeContext):
         status = await telegram_client(await ctx.session()).account_status()
         # код платформы переведётся через Service.standing_codes
         return ProbeResult(None, code=status.code, raw_status=status.raw)
-
-    async def verification(self, ctx, factor):
-        return None
 ```
 
 - `ProbeResult(state, raw_status=None, code=None, until=None, observed_at=None)`.

@@ -60,6 +60,11 @@
 
 ### Changed
 
+- `ProbeContext.external_ref`; `LoginContext.session(slot)` — прежняя сессия при повторном входе,
+  в том числе признанная недействительной. `FileImporter.read` может быть async-генератором,
+  обычной функцией или `async def`, возвращающими список. `imports.run_files(base_dir=,
+  max_bytes=)`: путь вне каталога и файл больше лимита попадают в `failed`. Примеры и руководство
+  типизируют `ctx: LoginContext` / `ctx: ProbeContext` и обходятся без заглушек.
 - Адаптеры сервиса проверяются при объявлении `Service`: метод на месте, `async def`, у
   `FileImporter.read` — async-генератор; сообщение называет адаптер и нужную сигнатуру.
   `Authenticator` требует только `login` (`refresh` — необязательный `SessionRefresher`);

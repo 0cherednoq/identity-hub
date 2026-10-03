@@ -55,6 +55,10 @@ class _ProbeContext:
         return self._lease.identity_id
 
     @property
+    def external_ref(self) -> str:
+        return self._lease.identity.external_ref
+
+    @property
     def proxy_url(self) -> str | None:
         return self._lease._proxy_url()
 

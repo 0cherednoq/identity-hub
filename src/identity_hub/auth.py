@@ -116,6 +116,11 @@ class _LoginContext:
     async def credentials(self) -> BaseModel | None:
         return await self._lease.credentials()
 
+    async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
+        """Последняя сохранённая сессия слота, в том числе признанная недействительной: при повторном
+        входе из неё берут параметры устройства и т.п. (R2-F27). Нет сессии — None."""
+        return await self._lease._stored_session(slot, valid_only=False)
+
     async def linked(self, role: str) -> _LinkedIdentity | None:
         """Связанный аккаунт по роли, взятый в аренду (FR-4.3). Нет связи — None."""
         if role in self._linked:

@@ -19,11 +19,11 @@ challenge, сохраняет сессию, пишет события.
 
 ```python
 from datetime import timedelta
-from identity_hub import LoginChallenge
+from identity_hub import LoginChallenge, LoginContext
 
 
 class TgAuthenticator:
-    async def login(self, ctx):
+    async def login(self, ctx: LoginContext):
         creds = await ctx.credentials()
         client = make_client(proxy=ctx.proxy_url)
 

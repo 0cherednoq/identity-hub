@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -81,6 +81,10 @@ class LoginContext(Protocol):
 
     async def credentials(self) -> BaseModel | None: ...
 
+    async def session(self, slot: str = "default") -> BaseModel | None:
+        """Последняя сохранённая сессия слота, в том числе недействительная (повторный вход), или None."""
+        ...
+
     async def linked(self, role: str) -> LinkedIdentity | None: ...
 
 
@@ -151,8 +155,13 @@ class ProbeResult:
 
 
 class ProbeContext(Protocol):
+    """Контекст пробы, передаётся `auth`/`standing`/`verification`."""
+
     @property
     def identity_id(self) -> UUID: ...
+
+    @property
+    def external_ref(self) -> str: ...
 
     @property
     def proxy_url(self) -> str | None: ...
@@ -244,8 +253,14 @@ class SecretsProvider(Protocol):
 
 
 class FileImporter(Protocol):
-    """Импортёр файлов сервиса (.session, tdata, JSON с cookies) → ImportRecord (FR-2.6)."""
+    """Импортёр файлов сервиса (.session, tdata, JSON с cookies) → ImportRecord (FR-2.6).
+
+    `read` — async-генератор, обычная функция со списком (любым `Iterable`) или `async def`,
+    возвращающая список (R2-F27).
+    """
 
     def can_import(self, path: Path) -> bool: ...
 
-    def read(self, path: Path) -> AsyncIterator[ImportRecord]: ...
+    def read(
+        self, path: Path
+    ) -> AsyncIterator[ImportRecord] | Iterable[ImportRecord] | Awaitable[Iterable[ImportRecord]]: ...

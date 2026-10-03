@@ -105,21 +105,19 @@ TELEGRAM = Service(
 обычные классы с нужными методами, наследоваться ни от чего не требуется.
 
 ```python
-from identity_hub import Blame, Fault, LoginChallenge, ProbeResult
+from identity_hub import Blame, Fault, LoginChallenge, LoginContext, ProbeContext, ProbeResult
 
 
 class TgAuthenticator:
-    async def login(self, ctx):             # вход; вернуть сессию или бросить LoginChallenge
+    async def login(self, ctx: LoginContext):    # вход; вернуть сессию или бросить LoginChallenge
         ...
 
 
-class TgProbes:
-    async def auth(self, ctx):               # жива ли сессия
+class TgProbes:                                  # любое подмножество auth / standing / verification
+    async def auth(self, ctx: ProbeContext):     # жива ли сессия; None — «не знаю»
         ...
-    async def standing(self, ctx):           # не забанен ли аккаунт
+    async def standing(self, ctx: ProbeContext): # не забанен ли аккаунт
         ...
-    async def verification(self, ctx, factor):
-        return None                          # None — «не проверяется»
 
 
 class TgErrors:
@@ -146,7 +144,17 @@ TELEGRAM = Service(
 - `error_classifier` — объект с `classify(exc)` или словарь `{TimeoutError: Fault(Blame.PROXY)}`
   (подходящий тип ищется по MRO исключения); если `classify` принимает именованный `kind`, туда
   приходит вид операции;
-- `importers` — объекты с `can_import(path)` и async-генератором `read(path)`.
+- `importers` — объекты с `can_import(path)` и `read(path)`: async-генератор с `yield ImportRecord`,
+  обычная функция или `async def`, возвращающие список записей.
+
+Что адаптер получает в `ctx`:
+
+| `LoginContext` | `ProbeContext` |
+|---|---|
+| `identity_id`, `external_ref`, `proxy_url` | `identity_id`, `external_ref`, `proxy_url` |
+| `await ctx.credentials()` | `await ctx.credentials()` |
+| `await ctx.session(slot)` — прежняя сессия, в том числе недействительная | `await ctx.session(slot)` — действующая сессия |
+| `challenge_answer`, `challenge_context`, `await ctx.linked(role)` | — |
 
 Подробно: [вход](05-login.md), [пробы](04-states.md#синхронизация-статусов-с-платформой),
 [классификатор ошибок](08-limits.md#классификатор-ошибок).

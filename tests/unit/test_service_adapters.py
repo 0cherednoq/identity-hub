@@ -116,12 +116,11 @@ def test_classifier_receives_operation_kind_when_it_accepts_it() -> None:
     assert seen == ["send", "no-kind"]
 
 
-class AsyncListImporter:
+class NoReadImporter:
+    read = None
+
     def can_import(self, path: Path) -> bool:
         return True
-
-    async def read(self, path: Path) -> list[Any]:  # корутина, а не генератор: async for не сработает
-        return []
 
 
 class GoodImporter:
@@ -135,8 +134,8 @@ class GoodImporter:
 
 def test_importer_read_is_checked() -> None:
     assert _service(importers=(GoodImporter(),)).importers
-    message = _errors(importers=(AsyncListImporter(),))
-    assert "AsyncListImporter" in message and "read" in message
+    message = _errors(importers=(NoReadImporter(),))  # F6.3b: read может вернуть и список, но он нужен
+    assert "NoReadImporter" in message and "read" in message
     assert "can_import" in _errors(importers=(object(),))
 
 
