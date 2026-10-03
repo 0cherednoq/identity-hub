@@ -153,18 +153,6 @@ async def test_filter_rejects_unknown_profile_and_ambiguous_label(space: SpaceHa
         await space.identities.list(IdentityFilter(labels={"country": "DE"}))
 
 
-async def test_legacy_names_warn_and_match(space: SpaceHandle) -> None:
-    identity_id = await _add(space, "+700")
-
-    with pytest.warns(DeprecationWarning, match=r"space\.identities\.card"):
-        card = await space.identity_card(identity_id)
-    with pytest.warns(DeprecationWarning, match=r"space\.identities\.search"):
-        page = await space.search("+700")
-
-    assert card.identity.id == identity_id
-    assert [row.id for row in page.items] == [identity_id]
-
-
 async def test_namespace_calls_do_not_warn(space: SpaceHandle) -> None:
     identity_id = await _add(space, "+800")
     with warnings.catch_warnings():

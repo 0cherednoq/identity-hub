@@ -19,7 +19,6 @@ import pydantic_core
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
-from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
 from identity_hub.crypto.envelope import DecryptionFailed
 from identity_hub.domain.regions import Observation
@@ -254,11 +253,6 @@ class ImportingMixin(SpaceBase):
         """Request cancellation; an in-flight batch is allowed to finish."""
         async with self._tx() as tx:
             return await tx.request_import_cancel(run_id) is not None
-
-    import_many = legacy(_import_many, "import_many")
-    import_files = legacy(_import_files, "import_files")
-    stage_import = legacy(_stage_import, "stage_import")
-    cancel_import = legacy(_cancel_import, "cancel_import")
 
     async def _import_batch(
         self,

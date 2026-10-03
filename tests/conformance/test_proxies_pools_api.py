@@ -12,7 +12,6 @@ from identity_hub import (
     IdentityCreate,
     Lifecycle,
     NotFound,
-    ProxyPolicy,
     ProxyStatus,
     SpaceHandle,
     ValidationFailed,
@@ -115,32 +114,6 @@ async def test_lease_rejects_unknown_parameter(space: SpaceHandle) -> None:
         pool.lease(for_opration="read_channel")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         await pool.acquire(tag=["x"])  # type: ignore[call-arg]
-
-
-def test_proxy_policy_group_and_legacy_pool() -> None:
-    assert ProxyPolicy(group="res").group == "res"
-    assert ProxyPolicy("res").group == "res"
-    with pytest.warns(DeprecationWarning, match=r"ProxyPolicy\(group="):
-        legacy = ProxyPolicy(pool="res", sticky=False)
-    assert legacy == ProxyPolicy(group="res", sticky=False)
-    with pytest.raises(ValueError, match="group"):
-        ProxyPolicy()
-    with pytest.raises(ValueError), pytest.warns(DeprecationWarning):
-        ProxyPolicy(group="a", pool="b")
-
-
-async def test_legacy_proxy_and_pool_names_warn(space: SpaceHandle) -> None:
-    with pytest.warns(DeprecationWarning, match=r"space\.proxies\.ensure"):
-        proxy_id, created = await space.add_proxy("http://10.0.9.1:80", pool="legacy")
-    with pytest.warns(DeprecationWarning, match=r"space\.proxies\.get"):
-        row = await space.get_proxy(proxy_id)
-    with pytest.warns(DeprecationWarning, match=r"space\.pools\.define"):
-        pool = space.pool("legacy", service="fake_tg")
-    with pytest.warns(DeprecationWarning, match=r"pool\.capacity"):
-        await pool.check_capacity()
-    with pytest.warns(DeprecationWarning, match=r"space\.proxies\.health"):
-        _ = space.proxy_health
-    assert created is True and row.pool == "legacy"
 
 
 async def test_due_proxies_include_dead_and_skip_pinned(space: SpaceHandle) -> None:

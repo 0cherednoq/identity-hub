@@ -19,7 +19,6 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
-from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
@@ -517,12 +516,6 @@ class LoginMixin(SpaceBase):
     async def _resolve(self, challenge_id: UUID) -> None:
         async with self._tx(own=True) as tx:
             await tx.resolve_challenge(challenge_id)
-
-    run_login = legacy(_run_login, "run_login")
-    run_logins = legacy(_run_logins, "run_logins")
-    answer_challenge = legacy(_answer_challenge, "answer_challenge")
-
-    expire_challenges = legacy(_expire_challenges, "expire_challenges")
 
 
 def _record(report: LoginReport, identity_id: UUID, outcome: LoginOutcome, error: str | None) -> None:

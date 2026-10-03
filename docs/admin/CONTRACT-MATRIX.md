@@ -83,7 +83,7 @@
 | Уровни и факторы верификации | `verified_factors`, verification region facts, `Service.tiers` | `расширить read`: tier/factor counts A2.1 |
 | Requirements и ближайший deadline | identity requirements и requirement region facts | `расширить read`: requirement counts A2.1 |
 | Метки/теги × standing | identity labels/tags | `расширить read`: A2.1 |
-| Пулы и low threshold | `Pool.count_candidates()`/`check_capacity()` и pool events | `расширить read`: read-only capacity A2.1 |
+| Пулы и low threshold | `Pool.count_candidates()`/`capacity()` и pool events | `расширить read`: read-only capacity A2.1 |
 | Окна аренд | lease history | `расширить read`: A2.4 |
 | Тренды 7/30 дней | event rollups без scan журнала | `готово` как хранение; A4.5/A4.7 |
 | Агрегаты квот | quota usage + `Service.operations` | `расширить read`: A2.1 |

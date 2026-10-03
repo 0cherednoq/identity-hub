@@ -12,7 +12,7 @@
 - Ресурсные неймспейсы пространства (`space.identities`, `space.imports`, `space.secrets`,
   `space.proxies`, `space.pools`, `space.auth`, `space.sync`, `space.links`, `space.data`,
   `space.verifications`, `space.admin`, `space.analytics`, `space.maintenance`) с единой
-  конвенцией глаголов; соответствие старых имён — [`docs/api-migration.md`](docs/api-migration.md).
+  конвенцией глаголов; карта — [«Карта API»](docs/guide/api.md).
 - `LoginOutcome` (`StrEnum`, значения прежних строк), `LoginReport`, `ReconcileReport` в корне пакета.
 - `hub.read`: публичная read-схема на SQLAlchemy Core (`identities`, `leases`, `lease_history`,
   `region_states`, `events`, `proxies`) без секретов для join с таблицами приложения и `among=`;
@@ -351,11 +351,17 @@
   `base64:key_id`) в исключении и stderr CLI.
 - Deadlock двух параллельных импортов с `on_existing="update_session"` и общими ref.
 
-### Deprecated
+### Removed
 
-- Плоские методы `SpaceHandle` (`register`, `search`, `identity_card`, `import_many`,
-  `reveal_secret`, `add_proxy`, `pool` и другие) — алиасы с `DeprecationWarning` до `1.0.0b1`.
-- `ProxyPolicy(pool=...)` → `ProxyPolicy(group=...)`; `Pool.check_capacity()` → `Pool.capacity()`.
+- **Несовместимо:** 84 плоских метода `SpaceHandle` (`register`, `search`, `identity_card`,
+  `import_many`, `reveal_secret`, `add_proxy`, `pool`, `proxy_health` и другие) удалены без
+  периода совместимости: API ещё не публиковался. Вместо них — неймспейсы (`space.identities.ensure`,
+  `space.identities.search`, `space.secrets.reveal`, `space.proxies.ensure`, `space.pools.define`,
+  `space.proxies.health`…), см. [«Карта API»](docs/guide/api.md). У `SpaceHandle` публичны только
+  неймспейсы, `using` и `ref`.
+- `ProxyPolicy(pool=...)` — используйте `ProxyPolicy(group=...)`; `Pool.check_capacity()` —
+  `Pool.capacity()`. Таблица миграции `docs/api-migration.md` и `identity_hub.api.warn_deprecated`
+  удалены.
 
 ## [1.0.0a1] - 2026-09-30
 

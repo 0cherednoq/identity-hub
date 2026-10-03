@@ -11,7 +11,6 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from identity_hub.api._base import legacy
 from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.data import validate_labels
 from identity_hub.enums import Standing
@@ -199,17 +198,6 @@ class Pool:
         пишутся при смене состояния (FR-13.3, D-119)."""
         return await self._check_capacity()
 
-    async def check_capacity(self) -> int:
-        """Устарело: используйте `pool.capacity()`."""
-        import warnings
-
-        warnings.warn(
-            "pool.check_capacity устарел и будет удалён в 1.0.0b1, используйте pool.capacity",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return await self._check_capacity()
-
     async def _check_capacity(self) -> int:
         """Свободная ёмкость пула; `pool.capacity.low/empty` — при смене состояния (FR-13.3, D-119)."""
         threshold = self.capacity_low or 0
@@ -311,6 +299,3 @@ class PoolsMixin:
             holder=holder or default_holder(),
             capacity_low=capacity_low,
         )
-
-    pool = legacy(_pool, "pool")
-    revoke_lease = legacy(_revoke_lease, "revoke_lease")

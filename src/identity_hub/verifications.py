@@ -15,7 +15,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.crypto import EncryptedPayload, associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.regions import Observation
@@ -327,11 +326,6 @@ class VerificationsMixin(SpaceBase):
                 changed += int(decision.changed)
         return changed
 
-    verification_status = legacy(_verification_status, "verification_status")
-    review_verification = legacy(_review_verification, "review_verification")
-
-    expire_verifications = legacy(_expire_verifications, "expire_verifications")
-
 
 class RequirementsMixin(SpaceBase):
     """Что платформа требует сейчас (`ih_identities.requirements`), события requirement.added/resolved."""
@@ -381,6 +375,3 @@ class RequirementsMixin(SpaceBase):
         await self._emit(
             tx, EventDraft(event, actor=actor, service=row.service, identity_id=row.id, data=dict(data))
         )
-
-    add_requirement = legacy(_add_requirement, "add_requirement")
-    resolve_requirement = legacy(_resolve_requirement, "resolve_requirement")

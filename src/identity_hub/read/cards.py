@@ -12,7 +12,6 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.domain.data import build_search_text
 from identity_hub.domain.regions import RegionState
 from identity_hub.errors import ValidationFailed
@@ -274,8 +273,6 @@ class CardsMixin(SpaceBase):
             blockers=blockers,
         )
 
-    identity_card = legacy(_identity_card, "identity_card")
-
     async def _access_card(self, identity_id: UUID) -> AccessCard:
         """Secret-free credential/session metadata for an account card."""
         async with self._tx(own=True) as tx:
@@ -295,8 +292,6 @@ class CardsMixin(SpaceBase):
                 for row in sessions
             ],
         )
-
-    access_card = legacy(_access_card, "access_card")
 
     async def _pool_summary(self, service: str | None = None) -> dict[str, dict[str, dict[str, int]]]:
         """Число аккаунтов по сервису и значениям регионов (FR-11.6): service → регион → значение → n."""
@@ -350,11 +345,6 @@ class CardsMixin(SpaceBase):
             if len(page) < batch_size:
                 return changed
             after = page[-1].id
-
-    lease_history = legacy(_lease_history, "lease_history")
-    lease_stats = legacy(_lease_stats, "lease_stats")
-    pool_summary = legacy(_pool_summary, "pool_summary")
-    reindex_search = legacy(_reindex_search, "reindex_search")
 
 
 def _blockers(identity: IdentityRow, now: datetime) -> tuple[str, ...]:

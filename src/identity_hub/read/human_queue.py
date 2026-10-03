@@ -11,7 +11,6 @@ from typing import Any, Literal
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import ValidationFailed
 from identity_hub.store.base import AttentionIdentityRow
 
@@ -290,5 +289,3 @@ class HumanQueueMixin(SpaceBase):
             next_cursor=_encode_cursor(visible[-1]) if len(page) > limit and visible else None,
             counts=counts,
         )
-
-    human_queue = legacy(_human_queue, "human_queue")

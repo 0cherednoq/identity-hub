@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import inspect
 import re
-import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -113,28 +112,14 @@ class Pacing:
 
 @dataclass(frozen=True)
 class ProxyPolicy:
-    """Привязка прокси (FR-8.2, 8.3). `group` — группа прокси, из которой выдаются адреса.
-
-    `pool=` — устаревшее имя `group` (до 1.0.0b1, D-141): «пул» в API означает пул аренды.
-    """
+    """Привязка прокси (FR-8.2, 8.3). `group` — группа прокси, из которой выдаются адреса."""
 
     group: str = ""
     sticky: bool = True
     max_identities: int | None = None  # None — берётся из прокси (ih_proxies.max_identities)
     on_proxy_down: ProxyDownPolicy = ProxyDownPolicy.WAIT
-    pool: str | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.pool is not None:
-            warnings.warn(
-                "ProxyPolicy(pool=...) устарел и будет удалён в 1.0.0b1, используйте ProxyPolicy(group=...)",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-            if self.group and self.group != self.pool:
-                raise ValueError("ProxyPolicy: group и устаревший pool заданы по-разному")
-            object.__setattr__(self, "group", self.pool)
-            object.__setattr__(self, "pool", None)
         if not self.group:
             raise ValueError("ProxyPolicy: нужна группа прокси (group)")
 

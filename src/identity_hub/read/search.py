@@ -16,7 +16,6 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.domain.query import SearchQuery, parse_query, profile_sort_text
 from identity_hub.errors import ValidationFailed
 from identity_hub.service import Service
@@ -334,8 +333,6 @@ class SearchMixin(SpaceBase):
         next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
         return SearchPage(items=page, next_cursor=next_cursor, total=total)
 
-    search = legacy(_search, "search")
-
     async def _account_search(
         self,
         query: str | SearchQuery = "",
@@ -532,9 +529,6 @@ class SearchMixin(SpaceBase):
             sort_by=sort_by,
             sort_desc=options.sort_desc,
         )
-
-    account_search = legacy(_account_search, "account_search")
-    account_selection_snapshot = legacy(_account_selection_snapshot, "account_selection_snapshot")
 
 
 def _account_blockers(row: IdentityRow, now: datetime) -> tuple[str, ...]:

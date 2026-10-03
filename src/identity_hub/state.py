@@ -13,7 +13,6 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase, logger
-from identity_hub.api._base import legacy
 from identity_hub.domain import regions as machine
 from identity_hub.domain.regions import Change, Command, Observation, RegionDecision, RegionState, Timer
 from identity_hub.domain.verification import VERIFICATION
@@ -261,12 +260,6 @@ class StateMixin(SpaceBase):
                 key,
                 machine.Unpin(reason=reason, actor=actor),
             )
-
-    set_lifecycle = legacy(_set_lifecycle, "set_lifecycle")
-    retire = legacy(_retire, "retire")
-    restore_standing = legacy(_restore_standing, "restore_standing")
-    override = legacy(_override, "override")
-    unpin = legacy(_unpin, "unpin")
 
     # --------------------------------------------------------- внутреннее: факты внешнего мира
 

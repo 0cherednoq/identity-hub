@@ -14,7 +14,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, require_actor_and_reason
-from identity_hub.api._base import legacy
 from identity_hub.crypto import associated_data, reveal
 from identity_hub.domain.data import validate_model
 from identity_hub.errors import NotFound, ValidationFailed
@@ -149,7 +148,3 @@ class SecretsAdminMixin(SpaceBase):
             )
         revealed: dict[str, Any] = reveal(value)
         return revealed
-
-    update_credentials = legacy(_update_credentials, "update_credentials")
-    update_session = legacy(_update_session, "update_session")
-    reveal_secret = legacy(_reveal_secret, "reveal_secret")

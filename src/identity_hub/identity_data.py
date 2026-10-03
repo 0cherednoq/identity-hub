@@ -15,7 +15,6 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.domain.data import validate_json_payload
 from identity_hub.errors import ConcurrentModification, ValidationFailed
 
@@ -78,9 +77,6 @@ class IdentityDataMixin(SpaceBase):
         if version is None:
             raise ConcurrentModification("identity_data", f"{identity_id}/{namespace}", expected_version)
         return version
-
-    load_data = legacy(_load_data, "load_data")
-    save_data = legacy(_save_data, "save_data")
 
 
 def _check_namespace(namespace: str) -> None:

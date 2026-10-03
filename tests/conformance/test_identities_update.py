@@ -138,35 +138,3 @@ async def test_override_pin_and_unpin(space: SpaceHandle) -> None:
     decision = await space.identities.unpin(created.id, "standing", "", actor="admin", reason="снять")
     assert decision.state.pinned_until is None
     assert (await space.identities.get(created.id)).standing is Standing.LIMITED
-
-
-LEGACY_CALLS: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = [
-    ("set_labels", ({"k": 1},), {}),
-    ("add_tags", (["new"],), {}),
-    ("remove_tags", (["t"],), {}),
-    ("set_tags", (["u"],), {}),
-    ("set_attributes", ({"device": "d"},), {}),
-    ("update_profile", ({"country": "FR"},), {}),
-    ("set_note", ("n",), {}),
-    ("set_lifecycle", (Lifecycle.READY,), {"actor": "ops"}),
-    ("retire", (), {"actor": "ops"}),
-]
-
-
-@pytest.mark.parametrize(("name", "args", "kwargs"), LEGACY_CALLS, ids=[c[0] for c in LEGACY_CALLS])
-async def test_legacy_mutations_warn_and_apply(
-    space: SpaceHandle, name: str, args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> None:
-    created = await _new(space, f"+legacy-{name}", tags=["t"])
-
-    with pytest.warns(DeprecationWarning, match=rf"space\.{name} "):
-        await getattr(space, name)(created.id, *args, **kwargs)
-
-    assert (await space.identities.get(created.id)).revision > created.revision
-
-
-async def test_legacy_delete_warns(space: SpaceHandle) -> None:
-    created = await _new(space, "+legacy-delete")
-    with pytest.warns(DeprecationWarning, match=r"space\.identities\.delete"):
-        await space.delete(created.id)
-    assert await space.identities.find(created.id) is None

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from uuid import uuid4
 
 import pytest
@@ -116,22 +115,6 @@ def test_secret_ref_string_forms() -> None:
     assert str(SecretRef.session()) == "session:default"
     assert str(SecretRef.evidence("kyc")) == "evidence:kyc"
     assert SecretRef.parse("session:web") == SecretRef.session("web")
-
-
-async def test_legacy_import_and_secret_names_warn(space: SpaceHandle) -> None:
-    with pytest.warns(DeprecationWarning, match=r"space\.imports\.run"):
-        report = await space.import_many(service="fake_tg", records=[ImportRecord(external_ref="+60")])
-    identity_id = report.created[0]
-    with pytest.warns(DeprecationWarning, match=r"space\.secrets\.describe"):
-        await space.access_card(identity_id)
-    with pytest.warns(DeprecationWarning, match=r"space\.secrets\.replace_credentials"):
-        await space.update_credentials(
-            identity_id, {"phone": "+60", "password": "zz-secret-99"}, actor="admin"
-        )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        await space.reveal_secret(identity_id, "credentials", actor="admin", reason="тест")
-    assert len(caught) == 1 and "zz-secret-99" not in str(caught[0].message)
 
 
 async def test_rejected_batch_report_has_no_foreign_exception_text(

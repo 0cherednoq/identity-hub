@@ -2,7 +2,7 @@
 
 Тесты создают identity и прокси сотнями; эти обёртки сохраняют форму результата, которой
 пользуются проверки (`identity_id`/`created`, `(proxy_id, created)`), но вызывают только
-неймспейсы `space.identities` и `space.proxies`, поэтому не дают `DeprecationWarning`.
+неймспейсы `space.identities` и `space.proxies`.
 """
 
 from __future__ import annotations

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any
@@ -200,30 +199,3 @@ async def test_verifications_status_review_requirements(space: SpaceHandle) -> N
     assert await requirements.add(identity_id, "selfie", actor="platform") is False
     assert await requirements.resolve(identity_id, "selfie", actor="admin", reason="загружено") is True
     assert await requirements.resolve(identity_id, "selfie", actor="platform") is False
-
-
-async def test_legacy_names_warn_and_match_new(login_space: SpaceHandle) -> None:
-    space = login_space
-    first = await space.identities.create(
-        IdentityCreate(service="tg_login", external_ref="+160"), actor="test"
-    )
-    second = await space.identities.create(
-        IdentityCreate(service="fake_tg", external_ref="+161"), actor="test"
-    )
-
-    with pytest.warns(DeprecationWarning, match=r"space\.auth\.login"):
-        outcome = await space.run_login(first.id)
-    assert outcome == "challenged" and outcome is LoginOutcome.CHALLENGED
-    with pytest.warns(DeprecationWarning, match=r"space\.links\.add"):
-        await space.link(second.id, "pair", first.id)
-    with pytest.warns(DeprecationWarning, match=r"space\.links\.of"):
-        legacy_links = await space.links_of(second.id)
-    assert legacy_links == await space.links.of(second.id)
-    with pytest.warns(DeprecationWarning, match=r"space\.verifications\.requirements\.add"):
-        await space.add_requirement(second.id, "email")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        await space.save_data(second.id, "app.state", Warmup(day=3), expected_version=None)
-    assert [str(w.message) for w in caught] == [
-        "space.save_data устарел и будет удалён в 1.0.0b1, используйте space.data.save"
-    ]

@@ -6,7 +6,6 @@ from typing import Literal
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.events import EventDraft
 
 __all__ = ["AdminAuditMixin"]
@@ -122,8 +121,3 @@ class AdminAuditMixin(SpaceBase):
                     },
                 ),
             )
-
-    record_admin_bulk = legacy(_record_admin_bulk, "record_admin_bulk")
-    record_admin_export = legacy(_record_admin_export, "record_admin_export")
-    record_admin_import = legacy(_record_admin_import, "record_admin_import")
-    record_admin_integration = legacy(_record_admin_integration, "record_admin_integration")

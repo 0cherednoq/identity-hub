@@ -2,32 +2,14 @@
 
 from __future__ import annotations
 
-import inspect
 from datetime import timedelta
 from uuid import uuid4
 
 import pytest
 
 from identity_hub import IdentityCreate, IdentityHub, Lifecycle, SpaceHandle
-from identity_hub.api._migration import LEGACY
 
 pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
-
-MOVED = {
-    old: new for old, new in LEGACY.items() if new.split(".")[0] in {"admin", "analytics", "maintenance"}
-}
-
-
-def test_every_moved_name_has_same_signature() -> None:
-    """Новый метод неймспейса принимает те же параметры, что и старый плоский метод."""
-    assert len(MOVED) == 32
-    for old, new in MOVED.items():
-        namespace, method = new.split(".")
-        old_params = list(inspect.signature(getattr(SpaceHandle, old)).parameters)[1:]
-        new_params = list(
-            inspect.signature(getattr(getattr(SpaceHandle, namespace).func(None), method)).parameters
-        )
-        assert new_params == old_params, (old, new)
 
 
 async def test_admin_read_models(space: SpaceHandle) -> None:
@@ -71,12 +53,3 @@ async def test_maintenance_operations(space: SpaceHandle) -> None:
     assert await space.maintenance.expire_challenges() == 0
     assert await space.maintenance.expire_verifications() == 0
     assert await space.maintenance.reindex_search("fake_tg") == 0
-
-
-async def test_moved_legacy_names_warn(space: SpaceHandle) -> None:
-    with pytest.warns(DeprecationWarning, match=r"space\.admin\.overview"):
-        await space.space_overview()
-    with pytest.warns(DeprecationWarning, match=r"space\.maintenance\.reindex_search"):
-        await space.reindex_search("fake_tg")
-    with pytest.warns(DeprecationWarning, match=r"space\.admin\.identity_page"):
-        await space.account_search("")

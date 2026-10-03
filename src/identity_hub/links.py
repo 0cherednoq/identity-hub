@@ -8,7 +8,6 @@ from datetime import datetime
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 
@@ -142,10 +141,3 @@ class LinksMixin(SpaceBase):
             await self._identity(tx, identity_id)
             rows = await tx.dependents(identity_id, max_depth)
         return [Impact(i, depth, path) for i, depth, path in rows]
-
-    link = legacy(_link, "link")
-    unlink = legacy(_unlink, "unlink")
-    links_of = legacy(_links_of, "links_of")
-    impact_of = legacy(_impact_of, "impact_of")
-
-    link_summary = legacy(_link_summary, "link_summary")

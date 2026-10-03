@@ -7,7 +7,6 @@ from datetime import datetime
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import ValidationFailed
 
 __all__ = ["AdminStateMixin", "ImportRunInfo", "ProviderOperationInfo"]
@@ -120,8 +119,6 @@ class AdminStateMixin(SpaceBase):
             report=dict(row.report),
         )
 
-    import_run = legacy(_import_run, "import_run")
-
     async def _provider_operations(
         self,
         *,
@@ -158,6 +155,3 @@ class AdminStateMixin(SpaceBase):
             )
             for row in rows
         )
-
-    import_runs = legacy(_import_runs, "import_runs")
-    provider_operations = legacy(_provider_operations, "provider_operations")

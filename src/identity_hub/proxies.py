@@ -22,7 +22,6 @@ from pydantic import BaseModel, SecretStr
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger, require_actor_and_reason
-from identity_hub.api._base import legacy, warn_deprecated
 from identity_hub.crypto import associated_data
 from identity_hub.domain import regions as machine
 from identity_hub.domain.region_specs import PROXY_HEALTH
@@ -266,11 +265,6 @@ class ProxiesMixin(SpaceBase):
     def _proxy_health(self) -> ProxyHealthPolicy:
         policy: ProxyHealthPolicy = self.hub.proxy_health
         return policy
-
-    @property
-    def proxy_health(self) -> ProxyHealthPolicy:
-        warn_deprecated("proxy_health")
-        return self._proxy_health
 
     async def _report_proxy_failure(
         self, proxy_id: UUID, *, weight: float = 1.0, actor: str = "worker", raw_status: str | None = None
@@ -605,17 +599,6 @@ class ProxiesMixin(SpaceBase):
                 ),
             )
             return True
-
-    add_proxy = legacy(_add_proxy, "add_proxy")
-    add_proxies = legacy(_add_proxies, "add_proxies")
-    get_proxy = legacy(_get_proxy, "get_proxy")
-    proxy_url_of = legacy(_proxy_url_of, "proxy_url_of")
-    report_proxy_failure = legacy(_report_proxy_failure, "report_proxy_failure")
-    report_proxy_success = legacy(_report_proxy_success, "report_proxy_success")
-    recheck_proxies = legacy(_recheck_proxies, "recheck_proxies")
-    recheck_proxy = legacy(_recheck_proxy, "recheck_proxy")
-    override_proxy = legacy(_override_proxy, "override_proxy")
-    rebind_proxy = legacy(_rebind_proxy, "rebind_proxy")
 
     async def _apply(
         self, tx: StoreTx, row: ProxyRow, change: Change, extra: dict[str, Any]

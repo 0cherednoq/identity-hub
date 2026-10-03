@@ -18,7 +18,8 @@ from identity_hub.maintenance import MaintenanceSchedule
 
 pytestmark = pytest.mark.conformance
 
-SOON = timedelta(seconds=0.3)
+# срок по реальному времени БД: запас на медленную машину, пока ставятся все состояния
+SOON = timedelta(seconds=2)
 
 
 async def _account(space: SpaceHandle, ref: str) -> UUID:
@@ -46,7 +47,7 @@ async def _pass_time(hub: IdentityHub) -> None:
     if isinstance(hub.clock, FakeClock):
         hub.clock.advance(timedelta(hours=2))
     else:
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(SOON.total_seconds() + 0.6)
 
 
 async def _due(space: SpaceHandle, limit: int = 10) -> list[tuple[UUID, str]]:

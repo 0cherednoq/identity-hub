@@ -1,20 +1,16 @@
-"""IMP-23 (I8.1): поверхность SpaceHandle, карта миграции и предупреждения об устаревании."""
+"""IMP-23 (I8.1, I8.10): поверхность SpaceHandle — только неймспейсы; устаревших алиасов нет."""
 
 from __future__ import annotations
 
-import re
-import warnings
-from pathlib import Path
+import importlib.util
 
 import pytest
 
-from identity_hub import SpaceHandle
-from identity_hub.api import Namespace, warn_deprecated
-from identity_hub.api._migration import LEGACY, NAMESPACES, PERMANENT
+from identity_hub import ProxyPolicy, SpaceHandle
+from identity_hub.api import Namespace
+from identity_hub.pool import Pool
 
-ROOT = Path(__file__).parents[1]
-MIGRATION_DOC = ROOT / "docs" / "api-migration.md"
-PLANNED_NAMESPACES = {
+NAMESPACES = {
     "admin",
     "analytics",
     "auth",
@@ -23,13 +19,15 @@ PLANNED_NAMESPACES = {
     "imports",
     "links",
     "maintenance",
+    "notifications",
     "pools",
     "proxies",
     "secrets",
     "sync",
     "verifications",
+    "webhooks",
 }
-DOC_ROW = re.compile(r"^\| `space\.(\w+)` \| `space\.([\w.]+)` \|", re.MULTILINE)
+PERMANENT = {"ref", "using"}
 
 
 def _public(cls: type) -> set[str]:
@@ -37,48 +35,23 @@ def _public(cls: type) -> set[str]:
 
 
 def test_space_surface_allowlist() -> None:
-    """Новое публичное имя появляется только как неймспейс, не как плоский метод."""
-    assert _public(SpaceHandle) == PERMANENT | NAMESPACES | set(LEGACY)
+    """Новое публичное имя появляется только как неймспейс, не как плоский метод (F6.4)."""
+    assert _public(SpaceHandle) == NAMESPACES | PERMANENT
 
 
-def test_surface_groups_do_not_overlap() -> None:
-    assert not PERMANENT & NAMESPACES
-    assert not PERMANENT & set(LEGACY)
-    assert not NAMESPACES & set(LEGACY)
-    assert NAMESPACES <= PLANNED_NAMESPACES
+def test_deprecated_forms_are_removed() -> None:
+    """R1-09: алиасы до первой публикации удалены, а не доживают до 1.0.0b1."""
+    assert not hasattr(Pool, "check_capacity")
+    assert importlib.util.find_spec("identity_hub.api._migration") is None
+    with pytest.raises(TypeError):
+        ProxyPolicy(pool="res")  # type: ignore[call-arg]
 
 
-def test_every_legacy_name_targets_planned_namespace() -> None:
-    targets = {new.split(".", 1)[0] for new in LEGACY.values()}
-    assert targets == PLANNED_NAMESPACES
-    assert len(set(LEGACY.values())) == len(LEGACY), "две старые функции ведут в один метод"
-
-
-def test_migration_doc_matches_legacy_map() -> None:
-    rows = DOC_ROW.findall(MIGRATION_DOC.read_text(encoding="utf-8"))
-    assert len(rows) == len(dict(rows)), "дубли в таблице миграции"
-    assert dict(rows) == LEGACY
-
-
-def test_warn_deprecated_points_to_caller_and_names_replacement() -> None:
-    def alias() -> None:
-        warn_deprecated("register")
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        alias()
-
-    assert len(caught) == 1
-    warning = caught[0]
-    assert warning.category is DeprecationWarning
-    assert Path(warning.filename) == Path(__file__)
-    assert "space.register" in str(warning.message)
-    assert "space.identities.ensure" in str(warning.message)
-
-
-def test_warn_deprecated_rejects_unknown_name() -> None:
-    with pytest.raises(KeyError):
-        warn_deprecated("no_such_method")
+def test_proxy_policy_needs_group() -> None:
+    assert ProxyPolicy(group="res").group == "res"
+    assert ProxyPolicy("res").group == "res"
+    with pytest.raises(ValueError, match="group"):
+        ProxyPolicy()
 
 
 def test_namespace_holds_only_space_reference() -> None:

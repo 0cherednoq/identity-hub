@@ -57,11 +57,11 @@
 | I6.3 | Set-based import fast path | I1.4, I3.2 | todo |  |  |
 | I6.4 | Полный load harness и бюджеты | I5.3, I6.1, I6.2, I6.3 | todo |  |  |
 | I6.5 | Полная deterministic race matrix | I1.4, I2.4, I3.3, I4.3, I5.3 | todo |  |  |
-| I8.10 | API: удаление legacy-алиасов | I8.9 | todo |  |  |
+| I8.10 | API: удаление legacy-алиасов | I8.9 | done |  | закрыта F6.4 (D-151) |
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 18 / 40 done
+**Итого:** 19 / 40 done
 
 ## Журнал сессий
 

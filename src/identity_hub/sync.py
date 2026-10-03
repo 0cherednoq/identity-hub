@@ -16,7 +16,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
-from identity_hub.api._base import legacy
 from identity_hub.auth import ALL_LIFECYCLES
 from identity_hub.domain.regions import Observation, Outcome
 from identity_hub.enums import Availability, ChangeSource, Standing
@@ -239,6 +238,3 @@ class SyncMixin(SpaceBase):
         )
         outcome: Outcome = decision.outcome
         return str(outcome)
-
-    resync = legacy(_resync, "resync")
-    reconcile = legacy(_reconcile, "reconcile")

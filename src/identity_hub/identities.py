@@ -11,7 +11,6 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.crypto import EncryptedPayload, associated_data
 from identity_hub.domain.data import (
     build_search_text,
@@ -180,8 +179,6 @@ class IdentitiesMixin(SpaceBase):
         )
         async with self._tx() as tx:
             return await self._create_one(tx, svc, prepared, actor=actor)
-
-    register = legacy(_register, "register")
 
     async def _create_one(
         self, tx: Any, svc: Service, prepared: PreparedIdentity, *, actor: str, fail_existing: bool = False
@@ -459,15 +456,6 @@ class IdentitiesMixin(SpaceBase):
                 ),
             )
             await tx.delete_identity(identity_id)
-
-    set_labels = legacy(_set_labels, "set_labels")
-    set_tags = legacy(_set_tags, "set_tags")
-    add_tags = legacy(_add_tags, "add_tags")
-    remove_tags = legacy(_remove_tags, "remove_tags")
-    set_attributes = legacy(_set_attributes, "set_attributes")
-    update_profile = legacy(_update_profile, "update_profile")
-    set_note = legacy(_set_note, "set_note")
-    delete = legacy(_delete, "delete")
 
     async def _mutate(
         self,

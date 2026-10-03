@@ -202,8 +202,3 @@ record = await space.data.load(identity_id, "farm.warmup", Warmup)
 creds = await space.secrets.reveal(identity_id, SecretRef.CREDENTIALS, actor="admin", reason="...")
 report = await space.imports.run(service=TELEGRAM, records=records, actor="operator")
 ```
-
-## Переход со старых имён
-
-Старые плоские методы пространства работают до `1.0.0b1`
-с `DeprecationWarning`. Таблица замен — [docs/api-migration.md](../api-migration.md).

@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** F6.4 Удаление устаревших алиасов
-- **Начата:** 2026-10-03
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Регрессионный тест: dir(SpaceHandle) = неймспейсы + using/ref; нет Pool.check_capacity и ProxyPolicy(pool=)
-  - [ ] Удалить legacy-алиасы миксинов, хелперы legacy/warn_deprecated и api/_migration.py
-  - [ ] Удалить ProxyPolicy(pool=) и Pool.check_capacity
-  - [ ] Тесты и админка без старых имён; фильтр предупреждений в pyproject
-  - [ ] docs/api-migration.md удалить, ссылки и CHANGELOG (Removed); I8.10 done
-  - [ ] scripts/check.sh зелёный
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -70,11 +65,11 @@
 | F6.2b | actor и результаты-DTO | F6.2a | done |  | часть F6.2 (D-196) |
 | F6.3a | Протоколы адаптеров и их проверка | F0.1 | done |  | часть F6.3 (D-199) |
 | F6.3b | Контексты и импортёры | F6.3a | done |  | часть F6.3 (D-199) |
-| F6.4 | Удаление устаревших алиасов | F1.6b, F6.2b, F6.3b | in_progress |  |  |
+| F6.4 | Удаление устаревших алиасов | F1.6b, F6.2b, F6.3b | done |  |  |
 | F6.5 | Версия, язык и публичный контракт | F6.4 | todo |  |  |
 | F7.1 | Финальная сверка | все задачи F0–F6 | todo |  |  |
 
-**Итого:** 45 / 48 done
+**Итого:** 46 / 48 done
 
 ## Журнал сессий
 
@@ -125,3 +120,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-03 · F6.2b · done · actor обязательный именованный в 21 методе неймспейсов, которые записывают исполнителя (тест на сигнатуры); вызовы в тестах, примерах и документации дополнены; sync.refresh → RefreshResult, proxies.recheck_due и recheck_group → RecheckReport (D-198); check зелёный: 1419 passed, 2 skipped, admin unit 67 passed, примеры проходят · дальше F6.3
 2026-10-03 · F6.3a · done · адаптеры проверяются при объявлении Service; Authenticator только login, пробы — подмножество, функция входа и словарь-классификатор, kind в классификаторе, EventConsumer удалён (D-199, D-200) · дальше F6.3b
 2026-10-03 · F6.3b · done · ProbeContext.external_ref; LoginContext.session — прежняя сессия, в том числе недействительная; FileImporter.read — async-генератор, Iterable или корутина со списком; run_files(base_dir=, max_bytes=); примеры и руководство с ctx: LoginContext/ProbeContext без заглушек; D-201; 1433 passed, admin unit 67 passed · дальше F6.4
+2026-10-03 · F6.4 · done · удалены 84 legacy-алиаса SpaceHandle, proxy_health, Pool.check_capacity, ProxyPolicy(pool=), warn_deprecated, api/_migration.py и docs/api-migration.md; allowlist SpaceHandle = неймспейсы + using/ref; тест документации ловит любой плоский вызов; фильтры устаревания убраны; запас SOON в test_maintenance_timers 0.3→2 с (падал под нагрузкой); D-202; 1395 passed, admin unit 67 passed · дальше F6.5

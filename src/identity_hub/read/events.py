@@ -9,7 +9,6 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import CATALOG, scrub
 from identity_hub.store.base import EventReadFilter, EventReadRow
@@ -168,6 +167,3 @@ class EventsReadMixin(SpaceBase):
         if row is None:
             raise NotFound("event", event_id)
         return _item(row)
-
-    event_detail = legacy(_event_detail, "event_detail")
-    event_page = legacy(_event_page, "event_page")

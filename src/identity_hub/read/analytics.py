@@ -14,7 +14,6 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import Event
 from identity_hub.rollups import BucketSize, RollupRow, bucket_start, next_bucket
@@ -593,11 +592,3 @@ class AnalyticsMixin(SpaceBase):
         _validate_range(start, end)
         events = await self.hub._store.rollup_source_events(self.slug, start, end)
         return [event for event in events if service is None or event.service == service]
-
-    analytics_ban_rate = legacy(_analytics_ban_rate, "analytics_ban_rate")
-    analytics_cohorts = legacy(_analytics_cohorts, "analytics_cohorts")
-    analytics_funnel = legacy(_analytics_funnel, "analytics_funnel")
-    analytics_proxy_quality = legacy(_analytics_proxy_quality, "analytics_proxy_quality")
-    analytics_series = legacy(_analytics_series, "analytics_series")
-    analytics_time_to = legacy(_analytics_time_to, "analytics_time_to")
-    analytics_utilization = legacy(_analytics_utilization, "analytics_utilization")

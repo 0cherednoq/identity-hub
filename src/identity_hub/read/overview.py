@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import SpaceMismatch
 
 if TYPE_CHECKING:
@@ -262,6 +261,3 @@ class OverviewMixin(SpaceBase):
         threshold = pool.capacity_low
         state = "empty" if free == 0 else ("low" if threshold is not None and free <= threshold else "ok")
         return PoolCapacity(pool.name, pool.service.name, eligible, leased, free, threshold, state)
-
-    pool_capacity = legacy(_pool_capacity, "pool_capacity")
-    space_overview = legacy(_space_overview, "space_overview")

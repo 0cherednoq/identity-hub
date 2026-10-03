@@ -8,7 +8,6 @@ from typing import Literal
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
-from identity_hub.api._base import legacy
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.store.base import (
     ProxyBindingHistoryRow,
@@ -200,6 +199,3 @@ class ProxyReadMixin(SpaceBase):
                 else None,
             ),
         )
-
-    proxy_detail = legacy(_proxy_detail, "proxy_detail")
-    proxy_overview = legacy(_proxy_overview, "proxy_overview")

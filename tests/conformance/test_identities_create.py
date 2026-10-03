@@ -134,13 +134,3 @@ async def test_create_many_limit(space: SpaceHandle) -> None:
     with pytest.raises(ValidationFailed, match="1000"):
         await space.identities.create_many((_spec(f"+{n}") for n in range(1001)), actor="test")
     assert (await space.identities.create_many([], actor="test")).created == []
-
-
-async def test_register_alias_keeps_result_and_warns(space: SpaceHandle) -> None:
-    with pytest.warns(DeprecationWarning, match=r"space\.identities\.ensure"):
-        first = await space.register(service="fake_tg", external_ref="+r")
-    with pytest.warns(DeprecationWarning):
-        again = await space.register(service="fake_tg", external_ref="+r")
-
-    assert first.created is True and again.created is False
-    assert again.identity_id == first.identity_id
