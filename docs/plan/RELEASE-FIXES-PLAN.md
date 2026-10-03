@@ -589,21 +589,27 @@
 - Перевести примеры, руководство и фикстуры.
 - **DoD:** тест опечатки в slug; примеры проходят.
 
-### F6.2 Единообразие API
+### F6.2a Имена и типы API
 
-Находки: `R1-22`, `R1-23`, `R1-24`, `R1-25`, `R1-26`, `R1-27`, `R1-28`, `R1-30`.
+Находки: `R1-22`, `R1-24`, `R1-25`, `R1-27`, `R1-28`, `R1-30`. Часть исходной `F6.2` (`D-196`).
 
 - `IdentityCreate.auth` вместо `auth_state`.
-- `actor` — обязательный именованный параметр во всех изменяющих методах.
 - `proxies.create_many(on_conflict: OnConflict | str)`.
 - `imports.run_files` — явные параметры; `among: Select | Iterable[UUID] | Callable`.
-- `sync.refresh` → `RefreshResult`; `proxies.recheck_due` → `RecheckReport`.
 - `LeaseUnavailable` → HTTP 503 с `Retry-After`-подсказкой в `context`.
 - Комментарий `Page.total` приведён к `COUNT_CAP`.
 - `space.webhooks`, `space.notifications` — `cached_property` на базе `Namespace`.
 - Так как API ещё не опубликован, старые имена удаляются без алиасов; CHANGELOG — Changed.
 - **DoD:** `tests/test_public_api.py` и `test_space_surface.py` обновлены; руководство и примеры
   на новых именах.
+
+### F6.2b `actor` и результаты-DTO
+
+Находки: `R1-23`, `R1-26`. Часть исходной `F6.2` (`D-196`).
+
+- `actor` — обязательный именованный параметр во всех изменяющих методах.
+- `sync.refresh` → `RefreshResult`; `proxies.recheck_due` → `RecheckReport`.
+- **DoD:** тест на сигнатуры изменяющих методов; руководство и примеры на новых именах.
 
 ### F6.3 Адаптеры
 
@@ -669,10 +675,11 @@ F4.1a → F4.1b
 F4.4a → F4.4b
 F5.2a → F5.2b
 F5.3a → F5.3b
+F6.2a → F6.2b
 F2.2, F3.2, F3.3, F3.5, F3.6, F3.7b, F3.8 → F5.3a
 F5.2b → F5.3a
 F1.6a → F1.6b
-F1.6b, F6.2, F6.3 → F6.4
+F1.6b, F6.2b, F6.3 → F6.4
 F6.4 → F6.5
 все → F7.1
 ```
@@ -708,15 +715,15 @@ F6.4 → F6.5
 | R1-19 | F0.2 |
 | R1-20 | F4.2 |
 | R1-21 | F2.1 |
-| R1-22 | F6.2 |
-| R1-23 | F6.2 |
-| R1-24 | F6.2 |
-| R1-25 | F6.2 |
-| R1-26 | F6.2 |
-| R1-27 | F6.2 |
-| R1-28 | F6.2 |
+| R1-22 | F6.2a |
+| R1-23 | F6.2b |
+| R1-24 | F6.2a |
+| R1-25 | F6.2a |
+| R1-26 | F6.2b |
+| R1-27 | F6.2a |
+| R1-28 | F6.2a |
 | R1-29 | F1.6b |
-| R1-30 | F6.2 |
+| R1-30 | F6.2a |
 | R1-31 | F6.5 |
 | R1-32 | F6.5 |
 | R2-S01 | F1.2 |
