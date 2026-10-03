@@ -123,11 +123,15 @@ class Identity:
 
 @dataclass(frozen=True, slots=True)
 class Page[T]:
-    """Страница результата. `next_cursor` передаётся в `after` следующего вызова."""
+    """Страница результата. `next_cursor` передаётся в `after` следующего вызова.
+
+    `total` — только при `count=True`: точное число до `COUNT_LIMIT` (1000), больше —
+    `COUNT_LIMIT + 1` («больше 1000»). Точное число до `COUNT_CAP` — `identities.count()` (R1-28).
+    """
 
     items: list[T]
     next_cursor: str | None
-    total: int | None = None  # только при count=True; точно до `COUNT_CAP`, больше — не считается
+    total: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -305,7 +309,7 @@ class Identities(Namespace):
         return await self._page(self._query(where), limit, after, count)
 
     async def count(self, where: IdentityFilter | None = None) -> int:
-        """Число identity по фильтру (точное до `COUNT_CAP`)."""
+        """Число identity по фильтру: точное до `COUNT_CAP` (1 000 000), больше — `COUNT_CAP + 1`."""
         flt = self._space._search_filter(self._query(where))
         async with self._space._tx(own=True) as tx:
             _rows, total = await tx.search_identities(flt, limit=1, after=None, count_limit=COUNT_CAP)
