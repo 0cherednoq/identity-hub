@@ -12,7 +12,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -175,6 +175,38 @@ class _MemoryState:
     next_event_id: int = 1
     next_webhook_delivery_id: int = 1
     next_notification_id: int = 1
+
+
+# Снимок для отката транзакции (R2-P22). Значения разделов — неизменяемые dataclass и кортежи,
+# поэтому словарям хватает поверхностной копии. Исключения: элементы `import_items` и
+# `notifications` — изменяемые словари, их копия глубокая; журналы `events` и `lease_logs`
+# транзакция только дополняет, поэтому запоминается их длина. Новый раздел состояния с
+# изменяемыми значениями нужно добавить в `_DEEP_SECTIONS`.
+_DEEP_SECTIONS = frozenset({"import_items", "notifications"})
+_APPEND_ONLY_SECTIONS = frozenset({"events", "lease_logs"})
+
+
+def _snapshot(state: _MemoryState) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    for item in fields(state):
+        value = getattr(state, item.name)
+        if item.name in _APPEND_ONLY_SECTIONS:
+            snapshot[item.name] = len(value)
+        elif item.name in _DEEP_SECTIONS:
+            snapshot[item.name] = deepcopy(value)
+        elif isinstance(value, dict):
+            snapshot[item.name] = dict(value)
+        else:  # счётчики: неизменяемые значения
+            snapshot[item.name] = value
+    return snapshot
+
+
+def _restore(state: _MemoryState, snapshot: dict[str, Any]) -> None:
+    for name, value in snapshot.items():
+        if name in _APPEND_ONLY_SECTIONS:
+            del getattr(state, name)[value:]
+        else:
+            setattr(state, name, value)
 
 
 def _utc(value: datetime) -> datetime:
@@ -2541,12 +2573,12 @@ class MemoryStore(Store):
         if session is not None:
             raise TypeError("MemoryStore не поддерживает внешнюю SQL-сессию")
         async with self._lock:
-            snapshot = deepcopy(self._state)
+            snapshot = _snapshot(self._state)
             tx = MemoryTx(self, space, self.clock.now())
             try:
                 yield tx
             except BaseException:
-                self._state = snapshot
+                _restore(self._state, snapshot)
                 raise
             else:
                 if tx._notify:
