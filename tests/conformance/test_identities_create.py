@@ -52,7 +52,7 @@ async def test_ensure_returns_existing_without_changes(space: SpaceHandle) -> No
 
 async def test_create_in_other_space_conflicts(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
     await space.identities.create(_spec("+3"))
-    other = hub_under_test.space(f"o-{uuid4().hex[:8]}")
+    other = hub_under_test.space(f"o-{uuid4().hex[:8]}", create=True)
 
     with pytest.raises(AlreadyExists) as exc:
         await other.identities.ensure(_spec("+3"))

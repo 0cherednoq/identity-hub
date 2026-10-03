@@ -135,7 +135,7 @@ async def test_shared_mode_does_not_block(
 ) -> None:
     hub.register_service(replace(FAKE_TG, name="imap", lease_mode=LeaseMode.SHARED))
     await hub.start()
-    space = hub.space("s")
+    space = hub.space("s", create=True)
     await make_identity(space, service="imap")
     pool = space.pools.define("mail", service="imap")
     a, b = await pool.acquire(), await pool.acquire()

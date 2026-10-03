@@ -33,7 +33,7 @@ def _hub() -> tuple[IdentityHub, MemoryStore]:
 
 
 async def _golden(hub: IdentityHub, store: MemoryStore) -> tuple[datetime, datetime]:
-    space = hub.space("analytics")
+    space = hub.space("analytics", create=True)
     ref = await space.ref()
     start = datetime(2026, 1, 5, tzinfo=UTC)
     end = start + timedelta(days=7)
@@ -96,7 +96,7 @@ async def _golden(hub: IdentityHub, store: MemoryStore) -> tuple[datetime, datet
 async def test_golden_series_funnel_time_to_cohorts_ban_rate_and_proxy_quality() -> None:
     hub, store = _hub()
     start, end = await _golden(hub, store)
-    space = hub.space("analytics")
+    space = hub.space("analytics", create=True)
 
     series = await space.analytics.series(
         "identities.added", start=start, end=end, bucket_size=BucketSize.DAY
@@ -135,7 +135,7 @@ async def test_golden_series_funnel_time_to_cohorts_ban_rate_and_proxy_quality()
 async def test_analytics_rejects_unknown_dimensions_and_caps_points() -> None:
     hub, store = _hub()
     start, end = await _golden(hub, store)
-    space = hub.space("analytics")
+    space = hub.space("analytics", create=True)
     with pytest.raises(ValidationFailed):
         await space.analytics.series(
             "identities.added",
@@ -192,7 +192,7 @@ async def test_analytics_rejects_unknown_dimensions_and_caps_points() -> None:
 
 async def test_analytics_daily_series_uses_wall_clock_days_across_dst() -> None:
     hub, store = _hub()
-    space = hub.space("analytics")
+    space = hub.space("analytics", create=True)
     ref = await space.ref()
     zone = ZoneInfo("Europe/Berlin")
     local_start = datetime(2026, 3, 28, tzinfo=zone)
@@ -238,7 +238,7 @@ async def test_analytics_daily_series_uses_wall_clock_days_across_dst() -> None:
 
 async def test_utilization_heatmap_uses_space_timezone() -> None:
     hub, _ = _hub()
-    space = hub.space("analytics")
+    space = hub.space("analytics", create=True)
     registered = await register(
         space,
         service=FAKE_EXCHANGE,

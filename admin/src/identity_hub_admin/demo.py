@@ -120,7 +120,7 @@ async def seed_demo(hub: IdentityHub, environment: Environment) -> DemoSeedResul
     created = 0
     existing = 0
     for spec in DEMO_SPACES:
-        space = hub.space(spec.slug, spec.title)
+        space = hub.space(spec.slug, spec.title, create=True)
         await space.ref()
         for index in range(1, spec.account_count + 1):
             _identity, created_now = await space.identities.ensure(
@@ -172,7 +172,7 @@ async def demo_counts(hub: IdentityHub) -> dict[str, int]:
     """Return scenario counts without exposing account details or secrets."""
     counts: dict[str, int] = {}
     for spec in DEMO_SPACES:
-        page = await hub.space(spec.slug, spec.title).identities.search(limit=1, count=True)
+        page = await hub.space(spec.slug, spec.title, create=True).identities.search(limit=1, count=True)
         counts[spec.slug] = page.total or 0
     return counts
 

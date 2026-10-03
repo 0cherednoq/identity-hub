@@ -51,7 +51,7 @@ def _hub() -> IdentityHub:
 
 async def _seed(hub: IdentityHub) -> None:
     await register(
-        hub.space("import-space", "Imports"),
+        hub.space("import-space", "Imports", create=True),
         service=DEMO_SERVICE,
         external_ref="existing",
         profile={"display_name": "Existing", "country": "UA"},

@@ -56,7 +56,7 @@ async def test_postgres_snapshot_matches_current_slice_and_two_workers_do_not_du
 
 
 async def test_postgres_empty_space_has_complete_zero_frame(hub: IdentityHub) -> None:
-    empty = hub.space("empty-snapshot")
+    empty = hub.space("empty-snapshot", create=True)
     await empty.ref()
     hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     await hub._state_snapshots.backfill_current(at=hour)

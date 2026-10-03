@@ -139,8 +139,8 @@ class TgAuthenticator:
 ## Несколько клиентов в одной базе
 
 ```python
-acme = hub.space("acme", "ACME Corp")
-globex = hub.space("globex", "Globex")
+acme = await hub.spaces.ensure("acme", "ACME Corp")
+globex = await hub.spaces.ensure("globex", "Globex")
 ```
 
 Аккаунты, прокси, вебхуки и события изолированы по пространствам. Сервисы общие. Один и тот же

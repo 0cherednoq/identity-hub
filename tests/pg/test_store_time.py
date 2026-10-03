@@ -38,7 +38,7 @@ async def skewed(
 
 
 async def test_minute_rollup_purge_uses_database_time(skewed: IdentityHub, db: AsyncEngine) -> None:
-    ref = await skewed.space("time", "Time").ref()
+    ref = await skewed.space("time", "Time", create=True).ref()
     minute = bucket_start(await _db_now(db) - timedelta(hours=1), BucketSize.MINUTE, "UTC")
     await skewed._store.replace_rollups(
         [RollupRow(RollupKey(ref.id, "", "leases.acquired", (), minute, BucketSize.MINUTE), 1.0)]
@@ -48,7 +48,7 @@ async def test_minute_rollup_purge_uses_database_time(skewed: IdentityHub, db: A
 
 
 async def test_snapshot_hour_and_purge_use_database_time(skewed: IdentityHub, db: AsyncEngine) -> None:
-    space = skewed.space("time", "Time")
+    space = skewed.space("time", "Time", create=True)
     await register(space, service="fake_tg", external_ref="+1", lifecycle="ready")
     now = await _db_now(db)
 
@@ -61,7 +61,7 @@ async def test_snapshot_hour_and_purge_use_database_time(skewed: IdentityHub, db
 
 
 async def test_metric_minutes_use_database_time(skewed: IdentityHub, db: AsyncEngine) -> None:
-    await skewed.space("time", "Time").ref()
+    await skewed.space("time", "Time", create=True).ref()
     skewed.metrics.counter("identity_hub_custom_total", space="time")
 
     assert await skewed.flush_metrics() == 1

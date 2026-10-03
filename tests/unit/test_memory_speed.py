@@ -28,7 +28,7 @@ async def _hub(count: int) -> tuple[IdentityHub, object]:
         clock=clock,
     )
     await hub.start()
-    space = hub.space("s", "S")
+    space = hub.space("s", "S", create=True)
     specs = [
         IdentityCreate(service="svc", external_ref=f"ref-{n}", lifecycle="ready", session={})
         for n in range(count)

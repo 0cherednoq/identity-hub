@@ -241,7 +241,7 @@ async def renormalize_factory() -> IdentityHub:
     mail = make_service("mail")
     hub = _new_hub(services=[mail])
     await hub.start()
-    space = hub.space("main", "Main")
+    space = hub.space("main", "Main", create=True)
     for ref in _REFS:
         await space.identities.create(IdentityCreate(service="mail", external_ref=ref))
     # объявление сервиса сменилось в коде: новая версия нормализации

@@ -70,7 +70,9 @@ async def test_lifecycle_command_and_event(
 async def test_unknown_identity_and_foreign_space(hub: IdentityHub, space: SpaceHandle) -> None:
     identity_id = await make_identity(space)
     with pytest.raises(NotFound):
-        await hub.space("other").identities.set_lifecycle(identity_id, Lifecycle.RETIRED, actor="a")
+        await hub.space("other", create=True).identities.set_lifecycle(
+            identity_id, Lifecycle.RETIRED, actor="a"
+        )
 
 
 async def test_observation_writes_region_denormalizes_and_emits(

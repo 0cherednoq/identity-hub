@@ -79,8 +79,8 @@ async def hub(db: AsyncEngine, fake_clock: FakeClock) -> IdentityHub:
 
 @pytest.fixture
 async def seeded_spaces(hub: IdentityHub) -> SeededSpaces:
-    alpha = hub.space("alpha", "Alpha")
-    beta = hub.space("beta", "Beta")
+    alpha = hub.space("alpha", "Alpha", create=True)
+    beta = hub.space("beta", "Beta", create=True)
     alpha_factory = AccountFactory(alpha, "alpha")
     beta_factory = AccountFactory(beta, "beta")
     alpha_ids = tuple([await alpha_factory.create(), await alpha_factory.create()])

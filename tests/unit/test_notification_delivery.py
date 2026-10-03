@@ -61,7 +61,7 @@ async def _banned(
         telegram_transport=telegram,
     )
     await hub.start()
-    space = hub.space("notify", "Notify")
+    space = hub.space("notify", "Notify", create=True)
     channel = await space.notifications.create_telegram_channel(
         "ops", bot_token=SecretStr("123:abc"), chat_id=-100
     )

@@ -72,7 +72,7 @@ async def _hub() -> tuple[IdentityHub, object]:
         store=MemoryStore(),
     )
     await hub.start()
-    return hub, hub.space("s", "S")
+    return hub, hub.space("s", "S", create=True)
 
 
 async def test_among_select_on_memory_store_is_a_clear_error() -> None:
@@ -110,7 +110,7 @@ def test_memory_store_survives_contention_in_two_event_loops() -> None:
             store=store,
         )
         await hub.start()
-        space = hub.space("s", "S")
+        space = hub.space("s", "S", create=True)
 
         async def hold() -> None:
             async with space._tx(own=True):

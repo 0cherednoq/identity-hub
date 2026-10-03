@@ -44,7 +44,7 @@ async def test_space_created_once_with_custom_id(
     hub: IdentityHub, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     custom = new_id()
-    first = await hub.space("alpha", "Alpha", space_id=custom).ref()
+    first = await hub.space("alpha", "Alpha", space_id=custom, create=True).ref()
     assert first.id == custom
     again = await IdentityHub(sessionmaker, _keys(), []).space("alpha").ref()
     assert again == first
@@ -121,7 +121,7 @@ async def test_library_savepoint_failure_keeps_user_transaction(
 async def test_session_bound_to_one_space(
     hub: IdentityHub, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    a, b = hub.space("a"), hub.space("b")
+    a, b = hub.space("a", create=True), hub.space("b", create=True)
     async with sessionmaker() as user, user.begin():
         async with a.using(user)._tx():
             pass

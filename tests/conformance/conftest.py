@@ -34,4 +34,4 @@ async def hub_under_test(
 
 @pytest.fixture
 def space(hub_under_test: IdentityHub) -> SpaceHandle:
-    return hub_under_test.space(f"s-{uuid4().hex[:8]}")
+    return hub_under_test.space(f"s-{uuid4().hex[:8]}", create=True)

@@ -28,7 +28,7 @@ def _hub(metrics: MetricsHook | None = None) -> IdentityHub:
 async def _identity(
     hub: IdentityHub, ref: str = "metrics@example.test"
 ) -> tuple[SpaceHandle, RegisterResult]:
-    space = hub.space("tier-metrics")
+    space = hub.space("tier-metrics", create=True)
     registered = await register(
         space,
         service=FAKE_EXCHANGE,

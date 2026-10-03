@@ -33,7 +33,14 @@ from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
 from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
 from identity_hub.doctor import Doctor
-from identity_hub.errors import NotFound, SchemaIncompatible, ValidationFailed, describe_error
+from identity_hub.errors import (
+    AlreadyExists,
+    NotFound,
+    SchemaIncompatible,
+    SpaceMismatch,
+    ValidationFailed,
+    describe_error,
+)
 from identity_hub.events import EventDraft
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
@@ -78,7 +85,7 @@ if TYPE_CHECKING:
     from identity_hub.postgres.read_schema import ReadSchema
     from identity_hub.read.overview import SpaceInfo, SpacesMatrix
 
-__all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle"]
+__all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle", "Spaces"]
 
 
 @dataclass(frozen=True)
@@ -291,9 +298,21 @@ class IdentityHub:
 
     # --------------------------------------------------------- пространства
 
-    def space(self, slug: str, title: str | None = None, *, space_id: UUID | None = None) -> SpaceHandle:
-        """Пространство создаётся при первом обращении к БД."""
-        return SpaceHandle(self, slug, title=title, space_id=space_id)
+    def space(
+        self, slug: str, title: str | None = None, *, space_id: UUID | None = None, create: bool = False
+    ) -> SpaceHandle:
+        """Пространство по slug. Обращения к БД нет до первой операции.
+
+        Несуществующее пространство при первой операции даёт `NotFound`: опечатка в slug не создаёт
+        пустое пространство (R1-07). `create=True` — создать его при первой операции, если его нет;
+        явное создание — `hub.spaces.create(slug, title)` или `hub.spaces.ensure(slug, title)`.
+        """
+        return SpaceHandle(self, slug, title=title, space_id=space_id, create=create)
+
+    @property
+    def spaces(self) -> Spaces:
+        """Создание и поиск пространств: `create`, `ensure`, `get`."""
+        return Spaces(self)
 
     async def get_space(self, slug: str) -> SpaceHandle | None:
         """Вернуть существующее пространство, не создавая новое."""
@@ -352,12 +371,46 @@ class IdentityHub:
                 )
         return len(losses)
 
-    async def _space_ref(self, slug: str, title: str | None, space_id: UUID | None) -> SpaceRef:
+    async def _space_ref(
+        self, slug: str, title: str | None, space_id: UUID | None, *, create: bool = False
+    ) -> SpaceRef:
         ref = self._spaces.get(slug)
         if ref is None:
-            ref = await self._store.ensure_space(slug, title, space_id, timezone=self.timezone)
+            if create:
+                ref = await self._store.ensure_space(slug, title, space_id, timezone=self.timezone)
+            else:
+                ref = await self._store.get_space(slug)
+                if ref is None:
+                    raise NotFound("space", slug)
+                if space_id is not None and ref.id != space_id:
+                    raise SpaceMismatch(f"пространство {slug!r} существует с другим id")
             self._spaces[slug] = ref
         return ref
+
+
+class Spaces:
+    """`hub.spaces`: явное создание и поиск пространств (R1-07)."""
+
+    def __init__(self, hub: IdentityHub) -> None:
+        self._hub = hub
+
+    async def get(self, slug: str) -> SpaceHandle:
+        """Существующее пространство; нет — `NotFound`."""
+        space = self._hub.space(slug)
+        await space.ref()
+        return space
+
+    async def ensure(self, slug: str, title: str | None = None) -> SpaceHandle:
+        """Пространство, созданное при необходимости; у существующего название не меняется."""
+        space = self._hub.space(slug, title, create=True)
+        await space.ref()
+        return space
+
+    async def create(self, slug: str, title: str | None = None) -> SpaceHandle:
+        """Новое пространство; уже есть — `AlreadyExists`."""
+        if self._hub._spaces.get(slug) is not None or await self._hub._store.get_space(slug) is not None:
+            raise AlreadyExists("space", slug)
+        return await self.ensure(slug, title)
 
 
 class SpaceHandle(

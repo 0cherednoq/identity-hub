@@ -122,8 +122,8 @@ async def test_register_is_idempotent(
 async def test_external_ref_unique_across_spaces(hub: IdentityHub, space: SpaceHandle) -> None:
     await register(space, service="fake_tg", external_ref="+1")
     with pytest.raises(AlreadyExists):
-        await register(hub.space("other"), service="fake_tg", external_ref="+1")
-    other = await register(hub.space("other"), service="fake_exchange", external_ref="+1")
+        await register(hub.space("other", create=True), service="fake_tg", external_ref="+1")
+    other = await register(hub.space("other", create=True), service="fake_exchange", external_ref="+1")
     assert other.created
 
 
@@ -149,7 +149,7 @@ async def test_links_same_space_only(
     links = await _one(sessionmaker, IdentityLinkRecord, tg.identity_id)
     assert [(link.role, link.linked_identity_id) for link in links] == [("recovery_email", email.identity_id)]
 
-    foreign = await register(hub.space("other"), service="fake_exchange", external_ref="mail@y")
+    foreign = await register(hub.space("other", create=True), service="fake_exchange", external_ref="mail@y")
     with pytest.raises(NotFound):
         await register(
             space, service="fake_tg", external_ref="+3", links={"recovery_email": foreign.identity_id}
@@ -185,7 +185,7 @@ async def test_encrypted_profile(hub: IdentityHub, sessionmaker: async_sessionma
     hub.register_service(secret_tg)
     await hub.start()
     result = await register(
-        hub.space("s"),
+        hub.space("s", create=True),
         service="secret_tg",
         external_ref="+9",
         profile={"first_name": "Olena", "country": "UA"},

@@ -51,7 +51,7 @@ async def test_link_unlink_and_views(space: SpaceHandle) -> None:
 
 async def test_link_validation(hub: IdentityHub, space: SpaceHandle) -> None:
     a = await _reg(space, "+1")
-    foreign = await _reg(hub.space("other"), "+2")
+    foreign = await _reg(hub.space("other", create=True), "+2")
     with pytest.raises(ValidationFailed):
         await space.links.add(a, "x", a)
     with pytest.raises(NotFound):

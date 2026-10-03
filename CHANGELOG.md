@@ -60,6 +60,10 @@
 
 ### Changed
 
+- **Несовместимо:** `hub.space(slug)` больше не создаёт пространство. Если его нет, первая
+  операция даёт `NotFound` — опечатка в slug не превращается в пустое пространство. Создание —
+  `hub.spaces.create(slug, title)` (уже есть — `AlreadyExists`), `hub.spaces.ensure(slug, title)`
+  или `hub.space(slug, title, create=True)`; поиск — `hub.spaces.get(slug)`.
 - CI проверяет, что тесты вызывают каждый метод контракта `Store` на `MemoryStore` и PostgreSQL
   (`IH_STORE_COVERAGE=1` для полного прогона).
 - `StoreConformanceSuite` проверяет изоляцию пространств, учёт живой аренды при выборке, отзыв

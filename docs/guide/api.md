@@ -25,7 +25,7 @@ from identity_hub import EnvSecretsProvider, IdentityHub
 
 hub = IdentityHub(sessionmaker=sessions, secrets=EnvSecretsProvider(), services=[TELEGRAM])
 await hub.start()                       # синхронизирует сервисы и проверяет схему БД
-space = hub.space("production")         # пространство: изоляция данных клиента/проекта
+space = await hub.spaces.ensure("production", "Production")  # пространство: изоляция данных
 ```
 
 Один `IdentityHub` на процесс. Всё остальное — через пространство `space`: у него нет плоских
@@ -60,7 +60,8 @@ space = hub.space("production")         # пространство: изоляц
 | `hub.start()` | проверить ревизию схемы и синхронизировать реестр сервисов |
 | `hub.aclose()`, `async with hub:` | штатное завершение: записать накопленные метрики и потери аренд, закрыть HTTP-клиент, созданный хабом |
 | `hub.register_service(service)`, `hub.service(name)`, `hub.services` | реестр сервисов |
-| `hub.space(slug)`, `hub.get_space(slug)` | пространство; `get_space` не создаёт новое |
+| `hub.spaces.create(slug, title)`, `hub.spaces.ensure(slug, title)`, `hub.spaces.get(slug)` | создать пространство (уже есть — `AlreadyExists`), создать при необходимости, найти существующее (`NotFound`) |
+| `hub.space(slug)`, `hub.get_space(slug)` | пространство по slug без обращения к БД; несуществующее — `NotFound` при первой операции (`create=True` — создать); `get_space` возвращает `None` |
 | `hub.list_spaces()`, `hub.spaces_matrix()`, `hub.service_catalog()`, `hub.background_snapshot()` | сводные read-модели по пространствам для админок |
 | `hub.read` | read-схема Core для join и `among=` |
 | `hub.events` | `subscribe(name, fn, types=...)` — подписчики в коде, см. [События](10-events.md) |

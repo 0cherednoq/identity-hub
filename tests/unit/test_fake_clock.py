@@ -33,7 +33,7 @@ async def hub(clock: FakeClock) -> IdentityHub:
 
 
 async def _account(hub: IdentityHub, ref: str = "+1") -> object:
-    space = hub.space("clock", "Clock")
+    space = hub.space("clock", "Clock", create=True)
     await register(space, service="fake_tg", external_ref=ref, lifecycle="ready", session={"auth_key": "k"})
     return space
 
@@ -84,7 +84,7 @@ async def test_system_clock_sleeps_for_real() -> None:
 
 async def test_wait_expires_under_fake_clock(hub: IdentityHub, clock: FakeClock) -> None:
     """R2-P01: `wait=` при пустом пуле заканчивается `LeaseUnavailable`, а не зависает."""
-    space = hub.space("clock", "Clock")
+    space = hub.space("clock", "Clock", create=True)
     pool = space.pools.define("p", service="fake_tg")
     started = clock.monotonic()
 
@@ -137,7 +137,7 @@ async def test_memory_store_adopts_hub_clock(clock: FakeClock) -> None:
     await hub.start()
     assert store.clock is clock and hub.clock is clock
 
-    space = hub.space("clock", "Clock")
+    space = hub.space("clock", "Clock", create=True)
     identity = await register(space, service="fake_tg", external_ref="+1")
     created = (await space.identities.get(identity.identity_id)).created_at
     assert created == clock.now()

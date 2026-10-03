@@ -108,7 +108,7 @@ async def _rotation_hub(keys: dict[str, bytes]) -> IdentityHub:
 
     hub = IdentityHub(store=MemoryStore(), secrets=StaticSecretsProvider({"k1": _K1}, "k1"))
     await hub.start()
-    await hub.space("main", "Main").proxies.create("http://user:pw@10.0.0.1:8080", group="g")
+    await hub.space("main", "Main", create=True).proxies.create("http://user:pw@10.0.0.1:8080", group="g")
     hub._envelope = Envelope(StaticSecretsProvider(keys, "k2"))
     return hub
 

@@ -141,7 +141,7 @@ async def run_walkthrough() -> WalkthroughResult:
         services=[SERVICE],
     )
     await hub.start()
-    space = hub.space("guide", "Guide")
+    space = hub.space("guide", "Guide", create=True)
     await space.proxies.ensure("socks5://user:pass@10.0.0.1:1080", group="residential")
 
     # 1. Онбординг: регистрация → вход с SMS-кодом → ready

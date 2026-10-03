@@ -73,7 +73,7 @@ async def test_rotate_key_rewraps_every_encrypted_table(
     secret_service = replace(FAKE_TG, name="secret_tg", profile_encrypted=True)
     hub.register_service(secret_service)
     await hub.start()
-    space = hub.space("rotation")
+    space = hub.space("rotation", create=True)
     registered = await register(
         space,
         service="secret_tg",

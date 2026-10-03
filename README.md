@@ -101,7 +101,7 @@ uv run pytest
    from identity_hub import AuthState, IdentityCreate, Lifecycle
 
    await hub.start()
-   space = hub.space("production", "Production")
+   space = await hub.spaces.ensure("production", "Production")
 
    await space.identities.create(
        IdentityCreate(

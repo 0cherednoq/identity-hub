@@ -59,7 +59,7 @@ async def test_proxy_counts_bindings_active_leases_history_and_scope(
     assert "private-user" not in repr((overview, detail))
     assert "private-password" not in repr((overview, detail))
 
-    other = hub.space("proxy-pg-other", "Proxy PG other")
+    other = hub.space("proxy-pg-other", "Proxy PG other", create=True)
     foreign_id, _ = await add_proxy(other, "http://9.9.9.9:80", pool="res")
     with pytest.raises(NotFound):
         await space.admin.proxy_detail(foreign_id)

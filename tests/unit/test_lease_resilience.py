@@ -67,7 +67,7 @@ async def test_proxy_pool_exhausted_repeats_after_a_minute() -> None:
         clock=clock,
     )
     await hub.start()
-    space = hub.space("exhausted", "Exhausted")
+    space = hub.space("exhausted", "Exhausted", create=True)
     await register(
         space, service="proxied_tg", external_ref="+1", lifecycle="ready", session={"auth_key": "k"}
     )

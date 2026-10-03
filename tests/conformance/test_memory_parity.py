@@ -54,7 +54,7 @@ async def hub(
 
 @pytest.fixture
 def space(hub: IdentityHub) -> SpaceHandle:
-    return hub.space(f"s-{uuid4().hex[:8]}")
+    return hub.space(f"s-{uuid4().hex[:8]}", create=True)
 
 
 async def _account(space: SpaceHandle, ref: str, service: str = "fake_tg", **fields: object) -> UUID:

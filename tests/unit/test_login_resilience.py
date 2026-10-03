@@ -55,7 +55,7 @@ async def _hub(login: Any, **service: Any) -> tuple[IdentityHub, FakeClock, Spac
         clock=clock,
     )
     await hub.start()
-    space = hub.space("s", "S")
+    space = hub.space("s", "S", create=True)
     identity_id = await make_identity(space, service=svc, authenticated=False)
     return hub, clock, space, identity_id, svc
 
@@ -287,7 +287,7 @@ async def test_linked_lease_wait_is_bounded_by_the_main_lease() -> None:
         clock=clock,
     )
     await hub.start()
-    space = hub.space("s", "S")
+    space = hub.space("s", "S", create=True)
     mail_id = await make_identity(space, service=mail)
     identity_id = await make_identity(space, service=svc, authenticated=False, links={"recovery": mail_id})
     busy = await space.pools.define("mailers", service=mail).acquire()  # почта занята другим воркером

@@ -36,7 +36,7 @@ async def _hub(policy: WebhookPolicy) -> IdentityHub:
 
 
 async def _emit(hub: IdentityHub, count: int) -> Any:
-    space = hub.space("hooks", "Hooks")
+    space = hub.space("hooks", "Hooks", create=True)
     for n in range(count):
         async with space._tx(own=True) as tx:
             await space._emit(tx, EventDraft("identity.updated", actor="test", data={"n": n}))
@@ -47,7 +47,7 @@ async def _emit(hub: IdentityHub, count: int) -> Any:
 async def test_slow_endpoint_does_not_delay_other_endpoints_or_pumps() -> None:
     """R1-05: недоступный получатель стоит пачке одного таймаута и не задерживает остальных."""
     hub = await _hub(WebhookPolicy(timeout=0.5, claim_for=timedelta(seconds=3)))
-    space = hub.space("hooks", "Hooks")
+    space = hub.space("hooks", "Hooks", create=True)
     slow = await space.webhooks.create(url=SLOW, secret=SecretStr("s"), event_types=["identity.updated"])
     fast = await space.webhooks.create(url=FAST, secret=SecretStr("s"), event_types=["identity.updated"])
     loop = asyncio.get_running_loop()
@@ -89,7 +89,7 @@ async def test_delivery_is_not_repeated_when_claim_expires() -> None:
     """R1-05: пачка, не уложившаяся в срок захвата, не доставляется вторым экземпляром повторно."""
     policy = WebhookPolicy(timeout=0.3, claim_for=timedelta(seconds=1))
     hub = await _hub(policy)
-    space = hub.space("hooks", "Hooks")
+    space = hub.space("hooks", "Hooks", create=True)
     endpoint = await space.webhooks.create(url=SLOW, secret=SecretStr("s"), event_types=["identity.updated"])
     posted: list[str] = []
 
@@ -118,7 +118,7 @@ async def test_delivery_is_not_repeated_when_claim_expires() -> None:
 @respx.mock
 async def test_one_endpoint_gets_one_request_at_a_time_and_endpoints_run_in_parallel() -> None:
     hub = await _hub(WebhookPolicy(timeout=1.0, claim_for=timedelta(seconds=10), concurrency=2))
-    space = hub.space("hooks", "Hooks")
+    space = hub.space("hooks", "Hooks", create=True)
     urls = [f"https://h{n}.example.test/hook" for n in range(4)]
     for url in urls:
         await space.webhooks.create(url=url, secret=SecretStr("s"), event_types=["identity.updated"])

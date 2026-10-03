@@ -30,7 +30,7 @@ async def test_make_identity_creates_pool_candidate() -> None:
         store=MemoryStore(),
     )
     await hub.start()
-    space = hub.space("factory")
+    space = hub.space("factory", create=True)
     identity_id = await make_identity(space, tags=["worker"])
 
     lease = await space.pools.define("p", service=service, tags=["worker"]).acquire()

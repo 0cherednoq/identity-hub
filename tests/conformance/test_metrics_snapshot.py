@@ -27,7 +27,7 @@ async def _queued_delivery(hub: IdentityHub, space: SpaceHandle) -> None:
 async def test_metrics_snapshot_counts_only_allowed_spaces(
     hub_under_test: IdentityHub, space: SpaceHandle
 ) -> None:
-    other = hub_under_test.space(f"o-{uuid4().hex[:8]}")
+    other = hub_under_test.space(f"o-{uuid4().hex[:8]}", create=True)
     await _queued_delivery(hub_under_test, space)
     await _queued_delivery(hub_under_test, other)
     store = hub_under_test._store

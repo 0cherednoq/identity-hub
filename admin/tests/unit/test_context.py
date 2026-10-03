@@ -102,8 +102,8 @@ def test_space_guard_command_context_and_non_enumerating_not_found() -> None:
 async def test_get_space_does_not_create_and_object_lookup_stays_scoped() -> None:
     hub = create_demo_hub()
     await hub.start()
-    alpha = hub.space("alpha", "Alpha")
-    beta = hub.space("beta", "Beta")
+    alpha = hub.space("alpha", "Alpha", create=True)
+    beta = hub.space("beta", "Beta", create=True)
     await beta.ref()
     registered = await register(
         alpha,

@@ -63,7 +63,7 @@ def _hub() -> IdentityHub:
 
 
 async def _seed(hub: IdentityHub) -> None:
-    space = hub.space("bulk-space", "Bulk")
+    space = hub.space("bulk-space", "Bulk", create=True)
     for identity_id, external_ref in ((FIRST, "=2+2"), (SECOND, "second")):
         await register(
             space,
@@ -95,7 +95,7 @@ def _preview(client: TestClient[Litestar], key: str = "bulk-preview-0001") -> di
 def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
     hub = _hub()
     asyncio.run(_seed(hub))
-    space = hub.space("bulk-space")
+    space = hub.space("bulk-space", create=True)
     app = create_admin_app(_settings(), hub=hub)
     with TestClient(app) as client:
         preview = _preview(client)

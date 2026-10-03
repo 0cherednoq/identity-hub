@@ -79,7 +79,7 @@ def _hub() -> IdentityHub:
 
 async def _seed(hub: IdentityHub) -> None:
     await register(
-        hub.space("secret-space", "Secrets"),
+        hub.space("secret-space", "Secrets", create=True),
         service=SECRET_SERVICE,
         external_ref="secret-target",
         id=SECRET_ID,

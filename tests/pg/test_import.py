@@ -149,7 +149,7 @@ async def test_async_stream_hook_and_other_space(
     )
     assert len(report.created) == 5
     assert [len(batch) for batch in seen] == [2, 2, 1]
-    other = await hub.space("other").imports.run(service="fake_tg", records=[rec("+0")])
+    other = await hub.space("other", create=True).imports.run(service="fake_tg", records=[rec("+0")])
     assert "другом пространстве" in other.failed[0][1]
 
 

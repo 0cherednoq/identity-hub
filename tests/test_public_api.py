@@ -78,6 +78,7 @@ HUB_PUBLIC = {
     "services",
     # пространства и сводные read-модели
     "space",
+    "spaces",
     "get_space",
     "list_spaces",
     "spaces_matrix",

@@ -104,7 +104,7 @@ async def identity_hub(
 
 @pytest.fixture
 def identity_hub_space(identity_hub: IdentityHub) -> SpaceHandle:
-    return identity_hub.space("test", "Test")
+    return identity_hub.space("test", "Test", create=True)
 
 
 @pytest.fixture

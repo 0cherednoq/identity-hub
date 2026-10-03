@@ -36,7 +36,7 @@ async def impatient_hub(db: AsyncEngine, database_url: str) -> AsyncIterator[Ide
 
 
 async def _lease(hub: IdentityHub) -> Lease:
-    space = hub.space("tennet", "Tennet")
+    space = hub.space("tennet", "Tennet", create=True)
     await make_identity(space)
     return await space.pools.define("p", service="fake_tg", holder="w").acquire()
 
@@ -75,7 +75,7 @@ async def test_statement_timeout_on_locked_lease_row_hides_token(
 
 
 async def test_constraint_violation_is_library_error_without_parameters(impatient_hub: IdentityHub) -> None:
-    space = impatient_hub.space("tennet", "Tennet")
+    space = impatient_hub.space("tennet", "Tennet", create=True)
     with pytest.raises(StorageError) as exc:
         async with space._tx(own=True) as tx:
             await tx.execute(insert(ServiceRecord).values(name="fake_tg", title="SECRET-TITLE"))
@@ -91,7 +91,7 @@ async def test_constraint_violation_is_library_error_without_parameters(impatien
 async def test_error_inside_user_session_is_translated_too(
     impatient_hub: IdentityHub, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    space = impatient_hub.space("tennet", "Tennet")
+    space = impatient_hub.space("tennet", "Tennet", create=True)
     async with sessionmaker() as session, session.begin():
         with pytest.raises(StorageError) as exc:
             async with space.using(session)._tx() as tx:

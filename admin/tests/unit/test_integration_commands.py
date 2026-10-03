@@ -55,7 +55,7 @@ def _hub() -> tuple[IdentityHub, RecordingTelegramTransport]:
         strict_events=True,
         telegram_transport=transport,
     )
-    asyncio.run(hub.space(SPACE, "Integrations").ref())
+    asyncio.run(hub.space(SPACE, "Integrations", create=True).ref())
     return hub, transport
 
 

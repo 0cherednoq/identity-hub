@@ -95,7 +95,7 @@ def _interaction_hub() -> IdentityHub:
 
 
 async def _seed_interaction_target(hub: IdentityHub) -> None:
-    space = hub.space("demo-large", "Interactive commands")
+    space = hub.space("demo-large", "Interactive commands", create=True)
     await register(
         space,
         service=INTERACTION_SERVICE,
@@ -115,7 +115,7 @@ async def _seed_interaction_target(hub: IdentityHub) -> None:
 
 
 async def _seed_command_target(hub: Any) -> None:
-    space = hub.space("demo-large", "Large dataset")
+    space = hub.space("demo-large", "Large dataset", create=True)
     await register(
         space,
         service=DEMO_SERVICE,
@@ -379,7 +379,7 @@ def test_login_challenge_and_manual_verification_are_guarded_and_secret_free() -
 
 
 async def _seed_resource_commands(hub: IdentityHub) -> tuple[UUID, UUID]:
-    space = hub.space("demo-large", "Large dataset")
+    space = hub.space("demo-large", "Large dataset", create=True)
     for identity_id, external_ref in (
         (RESOURCE_TARGET_ID, "resource-target"),
         (RESOURCE_LINKED_ID, "resource-linked"),
@@ -402,7 +402,7 @@ async def _seed_resource_commands(hub: IdentityHub) -> tuple[UUID, UUID]:
     )
     proxy_id, _ = await add_proxy(space, "http://10.10.0.1:8080", pool="manual", max_identities=1)
     await space.proxies.override(proxy_id, "alive", reason="seed available proxy", actor="test:seed")
-    other = hub.space("other-resource-space", "Other")
+    other = hub.space("other-resource-space", "Other", create=True)
     foreign_proxy_id, _ = await add_proxy(other, "http://10.10.0.2:8080", pool="manual")
     await other.proxies.override(foreign_proxy_id, "alive", reason="seed foreign proxy", actor="test:seed")
     async with space._tx() as tx:

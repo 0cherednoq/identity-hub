@@ -53,7 +53,7 @@ async def hub(
 
 @pytest.fixture
 def space(hub: IdentityHub) -> SpaceHandle:
-    return hub.space(f"s-{uuid4().hex[:8]}")
+    return hub.space(f"s-{uuid4().hex[:8]}", create=True)
 
 
 async def _add(space: SpaceHandle, ref: str, **profile: Any) -> UUID:

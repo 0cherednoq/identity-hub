@@ -18,7 +18,7 @@ def _hub(timezone: str) -> IdentityHub:
 
 async def test_hub_timezone_is_validated_and_persisted_for_new_spaces() -> None:
     hub = _hub("Europe/Simferopol")
-    assert (await hub.space("crimea").ref()).timezone == "Europe/Simferopol"
+    assert (await hub.space("crimea", create=True).ref()).timezone == "Europe/Simferopol"
 
 
 def test_unknown_timezone_is_rejected() -> None:

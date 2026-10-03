@@ -94,7 +94,7 @@ async def custom_schema(db: AsyncEngine) -> AsyncIterator[str]:
 
 
 async def _seed(hub: IdentityHub, farm: Table, engine: AsyncEngine) -> dict[str, object]:
-    space = hub.space(f"read-{uuid4().hex[:6]}")
+    space = hub.space(f"read-{uuid4().hex[:6]}", create=True)
     ids = {}
     for ref, energy in (("+1", 900), ("+2", 100), ("+3", 700)):
         identity = await space.identities.create(
@@ -156,7 +156,7 @@ async def test_join_in_custom_db_schema(db: AsyncEngine, custom_schema: str) -> 
 
 
 async def test_read_tables_expose_state_without_secrets(hub: IdentityHub, db: AsyncEngine) -> None:
-    space = hub.space(f"read-{uuid4().hex[:6]}")
+    space = hub.space(f"read-{uuid4().hex[:6]}", create=True)
     identity = await space.identities.create(
         IdentityCreate(
             service="fake_tg", external_ref="+700", session={"auth_key": "k"},

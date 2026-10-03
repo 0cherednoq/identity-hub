@@ -70,7 +70,7 @@ async def test_get_missing_raises_and_find_returns_none(space: SpaceHandle) -> N
 
 async def test_other_space_identity_is_invisible(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
     identity_id = await _add(space, "+200")
-    other = hub_under_test.space(f"o-{uuid4().hex[:8]}")
+    other = hub_under_test.space(f"o-{uuid4().hex[:8]}", create=True)
 
     assert await other.identities.find(identity_id) is None
     assert await other.identities.find(service="fake_tg", external_ref="+200") is None

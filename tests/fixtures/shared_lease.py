@@ -18,7 +18,7 @@ SHARED_TG = replace(FAKE_TG, name="imap", lease_mode=LeaseMode.SHARED)
 
 async def check_parallel_shared_leases_keep_writing(hub: IdentityHub) -> None:
     """Параллельные shared-аренды одного аккаунта не вытесняют друг друга через fencing."""
-    space = hub.space("shared-parallel")
+    space = hub.space("shared-parallel", create=True)
     reg = await register(
         space, service=SHARED_TG, external_ref="box", session={"auth_key": "s0"}, lifecycle=Lifecycle.READY
     )
@@ -39,7 +39,7 @@ async def check_parallel_shared_leases_keep_writing(hub: IdentityHub) -> None:
 
 async def check_shared_rotates_least_recently_leased(hub: IdentityHub) -> None:
     """Выдача shared-аккаунтов идёт по давности последнего захвата, а не всегда один и тот же."""
-    space = hub.space("shared-rotation")
+    space = hub.space("shared-rotation", create=True)
     for ref in ("box-a", "box-b", "box-c"):
         await register(
             space, service=SHARED_TG, external_ref=ref, session={"auth_key": "s"}, lifecycle=Lifecycle.READY
@@ -58,7 +58,7 @@ async def check_shared_rotates_least_recently_leased(hub: IdentityHub) -> None:
 
 async def check_shared_rejects_idempotency_key(hub: IdentityHub) -> None:
     """Ключ идемпотентности не поддерживается в shared-режиме — явная ошибка вместо молчаливого игнора."""
-    space = hub.space("shared-key")
+    space = hub.space("shared-key", create=True)
     await register(
         space, service=SHARED_TG, external_ref="box-k", session={"auth_key": "s"}, lifecycle=Lifecycle.READY
     )

@@ -81,7 +81,7 @@ async def memory_hub() -> IdentityHub:
 
 
 async def test_public_register_mutate_search_and_lease(memory_hub: IdentityHub) -> None:
-    space = memory_hub.space("memory", "Memory")
+    space = memory_hub.space("memory", "Memory", create=True)
     registered = await register(
         space,
         service="fake_tg",
@@ -115,8 +115,8 @@ async def test_public_register_mutate_search_and_lease(memory_hub: IdentityHub) 
 
 
 async def test_service_catalog_is_deterministic_safe_and_scoped(memory_hub: IdentityHub) -> None:
-    visible = memory_hub.space("catalog-visible", "Catalog visible")
-    hidden = memory_hub.space("catalog-hidden", "Catalog hidden")
+    visible = memory_hub.space("catalog-visible", "Catalog visible", create=True)
+    hidden = memory_hub.space("catalog-hidden", "Catalog hidden", create=True)
     for space, suffix in ((visible, "visible"), (hidden, "hidden")):
         await register(
             space,
@@ -174,7 +174,7 @@ async def test_lease_dashboard_clips_boundaries_and_uses_stable_cursor(
     memory_hub: IdentityHub,
 ) -> None:
     clock = cast(FakeClock, memory_hub.clock)
-    boundary = memory_hub.space("lease-boundary", "Lease boundary")
+    boundary = memory_hub.space("lease-boundary", "Lease boundary", create=True)
     await register(
         boundary,
         service="fake_tg",
@@ -192,7 +192,7 @@ async def test_lease_dashboard_clips_boundaries_and_uses_stable_cursor(
     assert quarter.utilization == 1.0
     assert dashboard.slices[0].value == "worker-a"
 
-    percentiles = memory_hub.space("lease-percentiles", "Lease percentiles")
+    percentiles = memory_hub.space("lease-percentiles", "Lease percentiles", create=True)
     await register(
         percentiles,
         service="fake_tg",
@@ -215,8 +215,8 @@ async def test_lease_dashboard_clips_boundaries_and_uses_stable_cursor(
 
 
 async def test_overview_handles_empty_single_large_and_allowed_spaces(memory_hub: IdentityHub) -> None:
-    await memory_hub.space("empty", "Empty").ref()
-    single = memory_hub.space("single", "Single")
+    await memory_hub.space("empty", "Empty", create=True).ref()
+    single = memory_hub.space("single", "Single", create=True)
     await register(
         single,
         service="fake_tg",
@@ -224,7 +224,7 @@ async def test_overview_handles_empty_single_large_and_allowed_spaces(memory_hub
         lifecycle="ready",
         auth_state="authenticated",
     )
-    large = memory_hub.space("large", "Large")
+    large = memory_hub.space("large", "Large", create=True)
     for index in range(250):
         await register(
             large,
@@ -245,7 +245,7 @@ async def test_overview_handles_empty_single_large_and_allowed_spaces(memory_hub
 
 
 async def test_account_search_filters_and_equal_timestamp_keyset(memory_hub: IdentityHub) -> None:
-    space = memory_hub.space("accounts", "Accounts")
+    space = memory_hub.space("accounts", "Accounts", create=True)
     ids = []
     for index in range(5):
         result = await register(
@@ -294,7 +294,7 @@ async def test_account_search_filters_and_equal_timestamp_keyset(memory_hub: Ide
 
 
 async def test_public_links_and_identity_data(memory_hub: IdentityHub) -> None:
-    space = memory_hub.space("memory")
+    space = memory_hub.space("memory", create=True)
     mail = await register(space, service="fake_exchange", external_ref="mail@example.test")
     account = await register(
         space,
@@ -319,7 +319,7 @@ async def test_public_links_and_identity_data(memory_hub: IdentityHub) -> None:
 
 @respx.mock
 async def test_public_webhook_dispatch(memory_hub: IdentityHub) -> None:
-    space = memory_hub.space("memory")
+    space = memory_hub.space("memory", create=True)
     endpoint = await space.webhooks.create(
         url="https://hooks.example.test/memory",
         secret=SecretStr("memory-secret"),
@@ -340,7 +340,7 @@ async def test_public_webhook_dispatch(memory_hub: IdentityHub) -> None:
 async def test_public_notification_dispatch(memory_hub: IdentityHub) -> None:
     transport = FakeTelegramTransport()
     memory_hub._notification_dispatcher.transport = transport
-    space = memory_hub.space("memory")
+    space = memory_hub.space("memory", create=True)
     channel = await space.notifications.create_telegram_channel(
         "Ops", bot_token=SecretStr("123456:memory-token"), chat_id=-100
     )
@@ -379,7 +379,7 @@ async def test_direct_delivery_tests_do_not_touch_production_queues_or_cursors(
 ) -> None:
     transport = FakeTelegramTransport()
     memory_hub._notification_dispatcher.transport = transport
-    space = memory_hub.space("delivery-tests")
+    space = memory_hub.space("delivery-tests", create=True)
     channel = await space.notifications.create_telegram_channel(
         "Probe", bot_token=SecretStr("123456:test-token"), chat_id=-200
     )
@@ -406,7 +406,7 @@ async def test_public_key_rotation_covers_all_secret_kinds(memory_hub: IdentityH
     secret_service = replace(FAKE_TG, name="memory_secret_tg", profile_encrypted=True)
     memory_hub.register_service(secret_service)
     await memory_hub.start()
-    space = memory_hub.space("rotation")
+    space = memory_hub.space("rotation", create=True)
     registered = await register(
         space,
         service="memory_secret_tg",
@@ -454,8 +454,8 @@ async def test_public_key_rotation_covers_all_secret_kinds(memory_hub: IdentityH
 async def test_human_queue_prioritizes_and_isolates_secret_free_attention(
     memory_hub: IdentityHub,
 ) -> None:
-    space = memory_hub.space("attention", "Attention")
-    other = memory_hub.space("other", "Other")
+    space = memory_hub.space("attention", "Attention", create=True)
+    other = memory_hub.space("other", "Other", create=True)
     clock = cast(FakeClock, memory_hub.clock)
     now = clock.now()
 
@@ -584,7 +584,7 @@ async def test_proxy_reads_match_bindings_and_redact_userinfo(memory_hub: Identi
     )
     memory_hub.register_service(service)
     await memory_hub.start()
-    space = memory_hub.space("proxy-read", "Proxy read")
+    space = memory_hub.space("proxy-read", "Proxy read", create=True)
     proxy_id, _ = await add_proxy(
         space,
         "socks5://private-user:private-password@1.2.3.4:1080",
@@ -635,7 +635,7 @@ async def test_proxy_reads_match_bindings_and_redact_userinfo(memory_hub: Identi
     assert (pool.bound_count, pool.max_identities, pool.in_lease_count) == (2, 2, 1)
     assert not selected.actions_available
 
-    other = memory_hub.space("proxy-other", "Proxy other")
+    other = memory_hub.space("proxy-other", "Proxy other", create=True)
     foreign_id, _ = await add_proxy(other, "http://9.9.9.9:80", pool="res")
     with pytest.raises(NotFound, match="proxy"):
         await space.admin.proxy_detail(foreign_id)

@@ -15,7 +15,7 @@ pytestmark = pytest.mark.pg
 
 
 async def test_space_timezone_defaults_and_uses_hub_setting(hub: IdentityHub) -> None:
-    default = await hub.space("default-timezone").ref()
+    default = await hub.space("default-timezone", create=True).ref()
     custom = await hub._store.ensure_space("custom-timezone", timezone="Europe/Simferopol")
 
     assert default.timezone == "UTC"
@@ -31,7 +31,7 @@ async def test_durable_admin_reads_are_space_scoped(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     identity_id = await make_identity(space)
-    other = hub.space("admin-state-other")
+    other = hub.space("admin-state-other", create=True)
     other_identity_id = await make_identity(other, external_ref="other-admin-state")
     ref = await space.ref()
     other_ref = await other.ref()

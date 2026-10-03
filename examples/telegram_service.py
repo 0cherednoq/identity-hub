@@ -91,7 +91,7 @@ async def run_example() -> ExampleResult:
     )
     await hub.start()
 
-    space = hub.space("tennet", "Tennet")
+    space = hub.space("tennet", "Tennet", create=True)
     registered = await space.identities.create(
         IdentityCreate(
             service=TELEGRAM,

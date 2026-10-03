@@ -71,7 +71,7 @@ async def test_encrypted_profile_update(
 ) -> None:
     hub.register_service(replace(FAKE_TG, name="secret_tg", profile_encrypted=True))
     await hub.start()
-    space = hub.space("s")
+    space = hub.space("s", create=True)
     r = await register(
         space, service="secret_tg", external_ref="+9", profile={"first_name": "Olena", "country": "UA"}
     )

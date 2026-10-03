@@ -2,7 +2,9 @@
 
 Identity, или аккаунт, — учётная запись во внешнем сервисе. Все операции — в неймспейсе
 `space.identities` (и соседних `space.imports`, `space.secrets`, `space.links`, `space.data`).
-Пространство `space = hub.space("production")` создаётся лениво при первом обращении к БД.
+Пространство создаётся явно — `space = await hub.spaces.ensure("production", "Production")` — и
+дальше берётся по slug: `hub.space("production")`. Если пространства нет, первая операция с
+`hub.space(...)` даёт `NotFound`: опечатка в slug не создаёт пустое пространство.
 
 Чтение возвращает лёгкий DTO `Identity` без секретов: `id`, `service`, `external_ref`,
 регионы (`lifecycle`, `standing`, `auth`, `availability`), `verified_factors`, `tags`,

@@ -20,8 +20,8 @@ async def test_overview_matches_sql_oracle_and_keeps_authorization_before_aggreg
     space: SpaceHandle,
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    await hub.space("empty", "Empty").ref()
-    await register(hub.space("hidden", "Hidden"), service="fake_tg", external_ref="hidden")
+    await hub.space("empty", "Empty", create=True).ref()
+    await register(hub.space("hidden", "Hidden", create=True), service="fake_tg", external_ref="hidden")
     registered = await register(
         space,
         service="fake_exchange",

@@ -120,7 +120,8 @@ async def test_regular_work_does_not_take_migration_lock(db: AsyncEngine, schema
         try:
             await asyncio.wait_for(hub.start(), timeout=10)
             await asyncio.wait_for(
-                hub.space("lockless").identities.find(service="fake_tg", external_ref="+none"), timeout=10
+                hub.space("lockless", create=True).identities.find(service="fake_tg", external_ref="+none"),
+                timeout=10,
             )
         finally:
             await transaction.rollback()
@@ -147,7 +148,7 @@ async def test_compatible_revision_starts_and_works(db: AsyncEngine, schema: str
 
     await hub.start()
 
-    space = hub.space("compat", "Compat")
+    space = hub.space("compat", "Compat", create=True)
     reg = await register(
         space, service="fake_tg", external_ref="+100", lifecycle="ready", session={"auth_key": "k"}
     )

@@ -30,7 +30,7 @@ async def _space(**policy: Any) -> tuple[IdentityHub, FakeClock, SpaceHandle]:
         proxy_health=ProxyHealthPolicy(jitter=0.0, **policy),
     )
     await hub.start()
-    return hub, clock, hub.space("s", "S")
+    return hub, clock, hub.space("s", "S", create=True)
 
 
 async def _quarantined(space: SpaceHandle, count: int, group: str = "g") -> list[UUID]:

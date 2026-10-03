@@ -39,7 +39,7 @@ def tx_class(hub: IdentityHub) -> type:
 
 
 async def _pool(hub: IdentityHub, name: str, **options: Any) -> tuple[SpaceHandle, Pool, UUID]:
-    space = hub.space(name, name)
+    space = hub.space(name, name, create=True)
     reg = await register(
         space, service="fake_tg", external_ref="+1", lifecycle="ready", session={"auth_key": "k"}
     )
@@ -214,7 +214,7 @@ async def check_proxy_pool_exhausted_is_reported_once_per_acquire(hub: IdentityH
     """R1-12: ожидающий `acquire` пишет одно событие, а не по одному на каждую итерацию ожидания."""
     hub.register_service(PROXIED)
     await hub.start()
-    space = hub.space("exhausted", "Exhausted")
+    space = hub.space("exhausted", "Exhausted", create=True)
     await register(
         space, service="proxied_tg", external_ref="+1", lifecycle="ready", session={"auth_key": "k"}
     )

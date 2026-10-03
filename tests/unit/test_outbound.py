@@ -282,7 +282,7 @@ SECRET_URL = "https://hooks.example.test/services/T0/WEBHOOK-SECRET?sig=QUERY-SE
 )
 async def test_delivery_to_name_resolving_inside_is_refused(hub: IdentityHub, host: str) -> None:
     """R1-04: имена из `repro/secrets/a7.py` проходят проверку URL, но соединения с ними нет."""
-    space = hub.space("ssrf", "SSRF")
+    space = hub.space("ssrf", "SSRF", create=True)
     endpoint = await space.webhooks.create(
         url=f"https://{host}/hook", secret=SecretStr("s"), event_types=["identity.*"]
     )
@@ -332,7 +332,7 @@ async def test_webhook_url_secret_is_not_exposed_by_space_api_or_logs(
     """R2-S15: путь и query URL — секрет получателя; наружу отдаётся только `scheme://host/***`."""
     route = respx.post(SECRET_URL).mock(return_value=httpx.Response(204))
     caplog.set_level(logging.DEBUG)
-    space = hub.space("masking", "Masking")
+    space = hub.space("masking", "Masking", create=True)
     endpoint = await space.webhooks.create(url=SECRET_URL, secret=SecretStr("s"), event_types=["identity.*"])
     await register(space, service="fake_tg", external_ref="+mask")
 
@@ -349,7 +349,7 @@ async def test_webhook_url_secret_is_not_exposed_by_space_api_or_logs(
 @respx.mock
 async def test_failed_test_delivery_does_not_keep_url_in_exception_chain(hub: IdentityHub) -> None:
     respx.post(SECRET_URL).mock(side_effect=httpx.ConnectError("boom"))
-    space = hub.space("masking", "Masking")
+    space = hub.space("masking", "Masking", create=True)
     endpoint = await space.webhooks.create(url=SECRET_URL, secret=SecretStr("s"), event_types=["*"])
     with pytest.raises(ValidationFailed, match="ConnectError") as exc:
         await space.webhooks.send_test(endpoint.id)

@@ -154,7 +154,7 @@ class _NoTransaction(AssertionError):
 
 @pytest.fixture
 def space_without_tx(identity_hub: IdentityHub, monkeypatch: pytest.MonkeyPatch) -> SpaceHandle:
-    space = identity_hub.space("limits")
+    space = identity_hub.space("limits", create=True)
 
     def forbidden(*_args: Any, **_kwargs: Any) -> Any:
         raise _NoTransaction("транзакция не должна открываться для слишком большого ввода")

@@ -27,7 +27,7 @@ async def import_hub() -> IdentityHub:
 
 
 async def test_staged_import_finishes_and_removes_encrypted_payloads(import_hub: IdentityHub) -> None:
-    space = import_hub.space("jobs")
+    space = import_hub.space("jobs", create=True)
     run_id = await space.imports.stage(
         service="fake_tg",
         source="accounts.jsonl",
@@ -58,7 +58,7 @@ async def test_staged_import_finishes_and_removes_encrypted_payloads(import_hub:
 
 
 async def test_expired_claim_is_resumed_without_duplicate(import_hub: IdentityHub) -> None:
-    space = import_hub.space("resume")
+    space = import_hub.space("resume", create=True)
     run_id = await space.imports.stage(
         service="fake_tg",
         source="resume.csv",
@@ -88,7 +88,7 @@ async def test_expired_claim_is_resumed_without_duplicate(import_hub: IdentityHu
 
 
 async def test_cancel_waits_for_claimed_batch_boundary(import_hub: IdentityHub) -> None:
-    space = import_hub.space("cancel")
+    space = import_hub.space("cancel", create=True)
     run_id = await space.imports.stage(
         service="fake_tg",
         source="cancel.jsonl",

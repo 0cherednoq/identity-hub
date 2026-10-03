@@ -45,7 +45,7 @@ async def test_delivery_center_redacts_scopes_paginates_and_does_not_mutate(
         secret=SecretStr("webhook-secret-must-not-leak"),
         event_types=["identity.registered"],
     )
-    other = hub.space("delivery-other", "Delivery other")
+    other = hub.space("delivery-other", "Delivery other", create=True)
     other_endpoint = await other.webhooks.create(
         url="https://other.example.test/hidden",
         secret=SecretStr("other-secret"),

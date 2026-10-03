@@ -100,7 +100,7 @@ def test_gateway_replays_maps_revision_conflict_and_rejects_viewer() -> None:
     hub = create_demo_hub()
     asyncio.run(
         register(
-            hub.space("command-space", "Command space"),
+            hub.space("command-space", "Command space", create=True),
             service=DEMO_SERVICE,
             external_ref="command-account",
             id=IDENTITY_ID,

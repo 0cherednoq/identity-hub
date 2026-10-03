@@ -175,6 +175,6 @@ async def test_rule_for_missing_channel_is_not_found(space: SpaceHandle, hub_und
     """R2-P13: несуществующий или чужой канал — `NotFound`, а не `KeyError`."""
     with pytest.raises(NotFound):
         await _rule(space, uuid4())
-    foreign = await _channel(hub_under_test.space(f"other-{uuid4().hex[:6]}"))
+    foreign = await _channel(hub_under_test.space(f"other-{uuid4().hex[:6]}", create=True))
     with pytest.raises(NotFound):
         await _rule(space, foreign)

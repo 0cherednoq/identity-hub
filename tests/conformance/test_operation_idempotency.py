@@ -51,7 +51,7 @@ async def test_same_key_in_two_spaces_is_independent(hub_under_test: IdentityHub
     """R2-D03: ключ `order-123` второго пространства не считается повтором первого."""
     flags = []
     for _ in range(2):
-        space = hub_under_test.space(f"s-{uuid4().hex[:8]}")
+        space = hub_under_test.space(f"s-{uuid4().hex[:8]}", create=True)
         pool = await _pool(space, f"+{uuid4().int % 10**9}")
         async with pool.lease() as lease, lease.operation("read_channel", key="order-123") as op:
             flags.append(op.duplicate)

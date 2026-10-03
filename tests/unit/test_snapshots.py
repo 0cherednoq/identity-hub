@@ -27,7 +27,7 @@ def _hub(start: datetime, *, retention: timedelta = timedelta(days=365)) -> tupl
 
 async def _register(hub: IdentityHub, ref: str) -> None:
     await register(
-        hub.space("snapshots"),
+        hub.space("snapshots", create=True),
         service=FAKE_EXCHANGE,
         external_ref=ref,
         credentials={"email": ref, "password": "test"},
@@ -57,7 +57,7 @@ async def test_snapshot_matches_current_slice_and_same_hour_is_idempotent() -> N
 async def test_empty_complete_frame_distinguishes_zero_from_missing_coverage() -> None:
     now = datetime(2026, 1, 1, 12, 25, tzinfo=UTC)
     hub, _ = _hub(now)
-    await hub.space("snapshots").ref()
+    await hub.space("snapshots", create=True).ref()
     await hub._state_snapshots.capture()
 
     frames = await hub._state_snapshots.frames(

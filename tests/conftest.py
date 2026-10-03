@@ -110,4 +110,4 @@ async def hub(sessionmaker: async_sessionmaker[AsyncSession]) -> IdentityHub:
 
 @pytest.fixture
 def space(hub: IdentityHub) -> SpaceHandle:
-    return hub.space("tennet", "Tennet")
+    return hub.space("tennet", "Tennet", create=True)

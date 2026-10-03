@@ -44,7 +44,7 @@ async def _hub(**service: Any) -> tuple[IdentityHub, FakeClock, SpaceHandle, Any
         clock=clock,
     )
     await hub.start()
-    return hub, clock, hub.space("s", "S"), svc
+    return hub, clock, hub.space("s", "S", create=True), svc
 
 
 async def _events(space: SpaceHandle, type_: str) -> list[Any]:
@@ -132,7 +132,7 @@ async def test_item_is_failed_after_three_claims_and_other_spaces_proceed(
 ) -> None:
     """Сбой обработки элемента: после трёх захватов он помечается `failed`; другое пространство не ждёт."""
     hub, clock, space, svc = await _hub()
-    other = hub.space("zz-other", "Other")
+    other = hub.space("zz-other", "Other", create=True)
     poisoned = await space.imports.stage(
         service=svc, records=[ImportRecord("p1"), ImportRecord("p2")], source="x"
     )

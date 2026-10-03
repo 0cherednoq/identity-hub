@@ -42,7 +42,7 @@ async def test_postgres_human_queue_is_scoped_and_never_reads_challenge_context(
             datetime.now(UTC) - timedelta(minutes=1),
         )
 
-    foreign = hub.space("foreign", "Foreign")
+    foreign = hub.space("foreign", "Foreign", create=True)
     foreign_identity = await register(
         foreign,
         service="fake_exchange",

@@ -100,7 +100,7 @@ async def test_same_key_in_two_spaces_gives_independent_leases(hub_under_test: I
     """R1-13: тот же ключ в другом пространстве — своя аренда, а не ошибка уникального индекса."""
     leases = []
     for _ in range(2):
-        space = hub_under_test.space(f"s-{uuid4().hex[:8]}")
+        space = hub_under_test.space(f"s-{uuid4().hex[:8]}", create=True)
         await _tg(space, f"+{uuid4().int % 10**9}")
         pool = space.pools.define("senders", service="fake_tg", holder="worker-1")
         leases.append(await pool.acquire(idempotency_key="job-42"))

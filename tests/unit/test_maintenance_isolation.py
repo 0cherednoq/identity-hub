@@ -29,7 +29,7 @@ async def test_identity_of_unregistered_service_does_not_stop_maintenance() -> N
     removed = make_service("removed")
     hub = _hub(store, clock, [kept, removed], RecordingMetrics())
     await hub.start()
-    space = hub.space("s", "S")
+    space = hub.space("s", "S", create=True)
     of_kept = await make_identity(space, service=kept)
     of_removed = await make_identity(space, service=removed)
     now = clock.now()
@@ -49,7 +49,7 @@ async def test_identity_of_unregistered_service_does_not_stop_maintenance() -> N
     report = await restarted.maintenance.run_all()
 
     assert report.counts["region_timers"] == 1
-    assert (await restarted.space("s").identities.get(of_kept)).standing == "good"
+    assert (await restarted.space("s", create=True).identities.get(of_kept)).standing == "good"
     skipped = [
         event
         for event in metrics.events
@@ -66,7 +66,7 @@ async def test_failing_group_does_not_block_other_groups_in_run_due() -> None:
     clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
     hub = _hub(MemoryStore(), clock, [make_service("svc")], RecordingMetrics())
     await hub.start()
-    space = hub.space("s", "S")
+    space = hub.space("s", "S", create=True)
     identity_id = await make_identity(space, service="svc")
     pool = space.pools.define(
         "p",

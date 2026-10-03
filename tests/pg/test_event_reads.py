@@ -106,7 +106,7 @@ async def test_event_journal_catalog_filters_keyset_redaction_and_scope(
     assert redacted.data["password"] == "[redacted]"
     assert "must-not-leak" not in repr(redacted)
 
-    other = hub.space("event-read-other", "Event read other")
+    other = hub.space("event-read-other", "Event read other", create=True)
     await other.ref()
     with pytest.raises(NotFound):
         await other.admin.event_detail(external_ids[0])

@@ -38,7 +38,7 @@ async def space_n(hub_under_test: IdentityHub) -> SpaceHandle:
         if service.name not in {s.name for s in hub_under_test.services}:
             hub_under_test.register_service(service)
     await hub_under_test.start()
-    return hub_under_test.space(f"n-{uuid4().hex[:8]}")
+    return hub_under_test.space(f"n-{uuid4().hex[:8]}", create=True)
 
 
 def _phone(ref: str, **kwargs: Any) -> IdentityCreate:
@@ -66,7 +66,7 @@ async def test_invalid_ref_rejected_without_value_in_message(space_n: SpaceHandl
 
 async def test_duplicate_between_spaces(hub_under_test: IdentityHub, space_n: SpaceHandle) -> None:
     await space_n.identities.create(_phone("+1 202 555 0123"))
-    other = hub_under_test.space(f"o-{uuid4().hex[:8]}")
+    other = hub_under_test.space(f"o-{uuid4().hex[:8]}", create=True)
     with pytest.raises(AlreadyExists):
         await other.identities.ensure(_phone("12025550123"))
 

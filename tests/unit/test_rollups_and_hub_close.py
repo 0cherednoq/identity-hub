@@ -57,7 +57,7 @@ async def _hub(**options: Any) -> tuple[IdentityHub, FakeClock, Any]:
         **options,
     )
     await hub.start()
-    return hub, clock, hub.space("s", "S")
+    return hub, clock, hub.space("s", "S", create=True)
 
 
 async def _emit(space: Any, count: int) -> None:
@@ -239,7 +239,7 @@ async def test_user_transport_is_not_closed_and_hub_is_a_context_manager() -> No
 
     async with hub as entered:
         assert entered is hub
-        await make_identity(hub.space("s", "S"), service="svc")  # start() выполнен
+        await make_identity(hub.space("s", "S", create=True), service="svc")  # start() выполнен
 
     assert transport.closed == 0  # транспорт создал вызывающий — он его и закрывает
 

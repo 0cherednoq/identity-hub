@@ -54,19 +54,29 @@ class SpaceBase:
         title: str | None = None,
         space_id: UUID | None = None,
         session: AsyncSession | None = None,
+        create: bool = False,
     ) -> None:
         self.hub = hub
         self.slug = slug
         self._title = title
         self._space_id = space_id
         self._session = session
+        self._create = create  # создать пространство при первом обращении, если его нет
 
     def using(self, session: AsyncSession) -> Self:
         """Операции общей группы (ТЗ §7.2) выполняются в транзакции пользователя (savepoint)."""
-        return type(self)(self.hub, self.slug, title=self._title, space_id=self._space_id, session=session)
+        return type(self)(
+            self.hub,
+            self.slug,
+            title=self._title,
+            space_id=self._space_id,
+            session=session,
+            create=self._create,
+        )
 
     async def ref(self) -> SpaceRef:
-        return await self.hub._space_ref(self.slug, self._title, self._space_id)
+        """Строка пространства; без `create=True` несуществующее пространство — `NotFound` (R1-07)."""
+        return await self.hub._space_ref(self.slug, self._title, self._space_id, create=self._create)
 
     @property
     def webhooks(self) -> Webhooks:
