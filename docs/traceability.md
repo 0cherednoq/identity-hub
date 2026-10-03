@@ -152,6 +152,13 @@
 | S-8 | `tests/pg/test_outbox.py::test_secrets_never_reach_journal` |
 | S-9 | `tests/unit/test_webhooks.py::test_signature_supports_rotation_and_replay_window` |
 
+## Исправления перед публикацией
+
+Находки предрелизного ревью (`R1-*`, `R2-*`), задача очереди `F`, которая их закрыла, и тесты —
+в разделе [«Статус исправлений»](review/PRE-RELEASE-REVIEW.md#статус-исправлений). Открытые
+находки, перенесённые в очередь улучшений, перечислены в
+[ограничениях](guide/limitations.md#известные-дефекты).
+
 ## Release-candidate проверки
 
 Сценарий §11, корневой `__all__` и версия проверяются в

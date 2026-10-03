@@ -118,3 +118,10 @@ def test_schema_upgrade_protocol_is_documented() -> None:
     protocol = _section(integrations, "### Обновление без простоя")
     assert "SCHEMA_COMPATIBLE" in protocol and "identity-hub migrate" in protocol
     assert "integrations.md#обновление-без-простоя" in API
+
+
+def test_long_transaction_delay_is_documented() -> None:
+    """R1-18: долгая транзакция в базе задерживает доставку всех событий — это сказано в руководстве."""
+    events = (ROOT / "docs" / "guide" / "10-events.md").read_text(encoding="utf-8")
+    section = events[events.index("**Порядок и долгие транзакции.**") :][:800]
+    assert "горизонт" in section and "idle_in_transaction_session_timeout" in section

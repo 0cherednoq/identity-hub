@@ -37,7 +37,7 @@ page = await space.identities.list(
     limit=100,
     count=True,
 )
-page.items, page.next_cursor, page.total
+page.items, page.next_cursor, page.total   # total — точно до 1000, больше — 1001; точное — count()
 page = await space.identities.list(IdentityFilter(service="telegram"), after=page.next_cursor)
 
 total = await space.identities.count(IdentityFilter(lifecycle="ready"))

@@ -29,6 +29,8 @@
 
 Сводный список того, что стоит закрыть до публикации, — в разделе 5.
 
+Что исправлено и какими тестами закреплено — в разделе [«Статус исправлений»](#статус-исправлений).
+
 ## Итог раунда 1
 
 Архитектурное ядро сделано грамотно: аренда на времени БД с fencing, outbox с горизонтом `pg_snapshot_xmin`, envelope-шифрование с AAD, атомарные квоты. До первой публикации стоит исправить шесть вещей из раздела 1; три из них подтверждены запуском.
@@ -509,6 +511,143 @@ R2-D12 касается только БД, созданных до публик�
 18. R1-09 — удалить устаревшие алиасы (I8.10) до публикации.
 
 Из 18 пунктов план улучшений покрывает полностью только три (I1.3 — пункты 1 и 4, I8.10 — пункт 18) и частично ещё три (I1.2 — пункт 7, I4.2 — пункт 9, I2.3/I2.4 — смежные находки).
+
+## Статус исправлений
+
+Итог очереди `F` (`RELEASE-FIXES-PLAN.md`, задача `F7.1`). «Задача» — по матрице трассировки
+плана; «Тесты» — файлы, которые ссылаются на находку (до трёх, полный список — `git grep <ID>
+tests admin/tests .github`). Находки, перенесённые в очередь улучшений (задачи `I*`), остаются
+открытыми; их скрипты воспроизведения сохранены в `repro/`.
+
+| Находка | Задача | Статус | Тесты |
+|---|---|---|---|
+| R1-01 | F5.1 | исправлена | `tests/unit/test_testing_plugin.py` |
+| R1-02 | F1.1 | исправлена | `tests/conformance/test_operation_idempotency.py` |
+| R1-03 | F2.1 | исправлена | `tests/fixtures/lease_resilience.py`, `tests/pg/test_lease_resilience.py`, `tests/unit/test_lease_resilience.py` |
+| R1-04 | F1.5 | исправлена | `tests/unit/test_outbound.py` |
+| R1-05 | F3.2 | исправлена | `tests/unit/test_webhook_delivery.py` |
+| R1-06 | F3.1 | исправлена | `tests/conformance/test_dispatcher_isolation.py` |
+| R1-07 | F6.1 | исправлена | `tests/conformance/test_spaces.py` |
+| R1-08 | F3.9 | исправлена | `tests/conformance/test_override_verification.py` |
+| R1-09 | F6.4 | исправлена | `tests/test_space_surface.py` |
+| R1-10 | F3.10 | исправлена | `tests/unit/test_rollups_and_hub_close.py` |
+| R1-11 | F1.1 | исправлена | `tests/conformance/test_operation_idempotency.py` |
+| R1-12 | F2.1 | исправлена | `tests/fixtures/lease_resilience.py`, `tests/pg/test_lease_resilience.py`, `tests/unit/test_lease_resilience.py` |
+| R1-13 | F1.2 | исправлена | `tests/conformance/test_lease_idempotency.py` |
+| R1-14 | F2.1 | исправлена | `tests/fixtures/lease_resilience.py`, `tests/pg/test_lease_resilience.py`, `tests/unit/test_lease_resilience.py` |
+| R1-15 | I2.3 | открыта, очередь улучшений | — |
+| R1-16 | I2.4 | открыта, очередь улучшений | — |
+| R1-17 | F4.3 | исправлена | `tests/pg/test_schema_check.py` |
+| R1-18 | F3.1 | исправлена | `tests/unit/test_public_contract_docs.py` |
+| R1-19 | F0.2 | исправлена | `tests/test_library_ci.py` |
+| R1-20 | F4.2 | исправлена | `tests/pg/test_migrate_privileges.py` |
+| R1-21 | F2.1 | исправлена | `tests/fixtures/lease_resilience.py`, `tests/pg/test_lease_resilience.py`, `tests/unit/test_lease_resilience.py` |
+| R1-22 | F6.2a | исправлена | `tests/unit/test_api_names.py` |
+| R1-23 | F6.2b | исправлена | `tests/unit/test_api_names.py` |
+| R1-24 | F6.2a | исправлена | `tests/unit/test_api_names.py` |
+| R1-25 | F6.2a | исправлена | `tests/unit/test_api_names.py` |
+| R1-26 | F6.2b | исправлена | `tests/unit/test_api_names.py` |
+| R1-27 | F6.2a | исправлена | `tests/unit/test_api_names.py`, `tests/unit/test_error_codes.py` |
+| R1-28 | F6.2a | исправлена | `tests/unit/test_page_total.py` |
+| R1-29 | F1.6b | исправлена | `tests/test_public_api.py` |
+| R1-30 | F6.2a | исправлена | `tests/unit/test_api_names.py` |
+| R1-31 | F6.5 | исправлена | `tests/unit/test_public_contract_docs.py` |
+| R1-32 | F6.5 | исправлена | `tests/unit/test_public_contract_docs.py` |
+| R2-S01 | F1.2 | исправлена | `tests/conformance/test_lease_idempotency.py` |
+| R2-S02 | F1.5 | исправлена | `tests/unit/test_outbound.py` |
+| R2-S03 | F1.3 | исправлена | `tests/conformance/test_imports_secrets_api.py`, `tests/pg/test_storage_errors.py` |
+| R2-S04 | F1.4 | исправлена | `tests/conformance/test_free_text_channels.py` |
+| R2-S05 | F1.6a | исправлена | `tests/conformance/test_secret_boundaries.py` |
+| R2-S06 | F1.4 | исправлена | `tests/conformance/test_free_text_channels.py`, `tests/unit/test_redaction.py` |
+| R2-S07 | F1.4 | исправлена | `tests/unit/test_redaction.py` |
+| R2-S08 | F1.8 | исправлена | `tests/conformance/test_key_rotation.py`, `tests/pg/test_doctor.py`, `tests/unit/test_cli.py` |
+| R2-S09 | F1.8 | исправлена | `tests/conformance/test_key_rotation.py` |
+| R2-S10 | F1.6a | исправлена | `tests/conformance/test_secret_boundaries.py`, `tests/test_public_api.py` |
+| R2-S11 | F1.4 | исправлена | `tests/unit/test_redaction.py` |
+| R2-S12 | F3.8 | исправлена | `tests/unit/test_import_resilience.py` |
+| R2-S13 | F1.7 | исправлена | `tests/unit/test_key_providers.py` |
+| R2-S14 | F1.6a | исправлена | `tests/conformance/test_secret_boundaries.py` |
+| R2-S15 | F1.5 | исправлена | `tests/unit/test_outbound.py` |
+| R2-S16 | I1.4 | открыта, очередь улучшений | — |
+| R2-S17 | F1.4 | исправлена | `tests/conformance/test_free_text_channels.py` |
+| R2-S18 | F3.11 | исправлена | `tests/unit/test_cli_safety.py` |
+| R2-S19 | F3.3 | исправлена | `tests/unit/test_notification_delivery.py` |
+| R2-F01 | F3.4 | исправлена | `tests/unit/test_login_resilience.py` |
+| R2-F02 | F3.5 | исправлена | `tests/conformance/test_sync_refresh.py` |
+| R2-F03 | F3.3 | исправлена | `tests/conformance/test_notification_queue.py`, `tests/pg/test_notifications.py`, `tests/unit/test_notification_delivery.py` |
+| R2-F04 | F3.7a | исправлена | `tests/pg/test_proxies.py`, `tests/unit/test_proxy_health.py` |
+| R2-F05 | F3.8 | исправлена | `tests/unit/test_import_resilience.py` |
+| R2-F06 | F3.6 | исправлена | `tests/conformance/test_maintenance_timers.py`, `tests/unit/test_maintenance_isolation.py` |
+| R2-F07 | F3.8 | исправлена | `tests/unit/test_import_resilience.py` |
+| R2-F08 | F3.8 | исправлена | `tests/conformance/test_imports_secrets_api.py`, `tests/unit/test_import_resilience.py` |
+| R2-F09 | F3.8 | исправлена | `tests/unit/test_import_resilience.py` |
+| R2-F10 | F3.9 | исправлена | `tests/conformance/test_override_verification.py` |
+| R2-F11 | F3.10 | исправлена | `tests/unit/test_rollups_and_hub_close.py` |
+| R2-F12 | F3.10 | исправлена | `tests/unit/test_rollups_and_hub_close.py` |
+| R2-F13 | F3.9 | исправлена | `tests/conformance/test_override_verification.py`, `tests/pg/test_verifications.py`, `tests/unit/test_verification.py` |
+| R2-F14 | F3.7a | исправлена | `tests/unit/test_proxy_health.py` |
+| R2-F15 | F3.7b | исправлена | `tests/conformance/test_proxy_management.py` |
+| R2-F16 | F3.11 | исправлена | `tests/unit/test_cli_safety.py` |
+| R2-F17 | F3.5 | исправлена | `tests/conformance/test_sync_refresh.py` |
+| R2-F18 | F3.5 | исправлена | `tests/conformance/test_sync_refresh.py` |
+| R2-F19 | F1.6a | исправлена | `tests/conformance/test_secret_boundaries.py` |
+| R2-F20 | F3.4 | исправлена | `tests/pg/test_logins.py`, `tests/unit/test_login_resilience.py` |
+| R2-F21 | F3.4 | исправлена | `tests/unit/test_login_resilience.py` |
+| R2-F22 | F3.4 | исправлена | `tests/unit/test_login_resilience.py` |
+| R2-F23 | F3.7b | исправлена | `tests/conformance/test_proxy_management.py` |
+| R2-F24 | F3.8 | исправлена | `tests/unit/test_import_resilience.py` |
+| R2-F25 | F3.3 | исправлена | `tests/unit/test_notification_delivery.py` |
+| R2-F26 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-F27 | F6.3b | исправлена | `tests/unit/test_adapter_contexts.py`, `tests/unit/test_service_adapters.py` |
+| R2-D01 | F2.2 | исправлена | `tests/conformance/test_lease_cleanup.py`, `tests/pg/test_maintenance.py` |
+| R2-D02 | F2.4 | исправлена | `tests/conformance/test_identity_lost_updates.py` |
+| R2-D03 | F1.1 | исправлена | `tests/conformance/test_operation_idempotency.py` |
+| R2-D04 | F4.5 | исправлена | `tests/conftest.py`, `tests/pg/test_pgbouncer.py`, `tests/test_library_ci.py` |
+| R2-D05 | F4.4a | исправлена | `tests/conformance/test_account_search.py` |
+| R2-D06 | F4.4b | исправлена | `tests/pg/test_admin_volume.py` |
+| R2-D07 | F4.4b | исправлена | `tests/pg/test_admin_volume.py` |
+| R2-D08 | I6.2 | открыта, очередь улучшений | — |
+| R2-D09 | I6.2 | открыта, очередь улучшений | — |
+| R2-D10 | F4.1b | исправлена | `tests/conformance/test_retention.py`, `tests/pg/test_retention_plans.py` |
+| R2-D11 | F4.2 | исправлена | `tests/pg/test_migrate_privileges.py` |
+| R2-D12 | F4.2 | исправлена | `tests/pg/test_migrate_privileges.py` |
+| R2-D13 | F3.3 | исправлена | `tests/conformance/test_notification_queue.py` |
+| R2-D14 | F2.2 | исправлена | `tests/conformance/test_lease_cleanup.py` |
+| R2-D15 | F4.1a | исправлена | `tests/conformance/test_webhook_claims.py`, `tests/pg/test_schema_integrity.py` |
+| R2-D16 | F4.1a | исправлена | `tests/pg/test_schema_integrity.py` |
+| R2-D17 | F4.1a | исправлена | `tests/pg/test_schema_integrity.py` |
+| R2-D18 | F4.1a | исправлена | `tests/pg/test_migrations.py` |
+| R2-D19 | F4.6 | исправлена | `tests/conformance/test_identities_create.py` |
+| R2-D20 | F4.6 | исправлена | `tests/pg/test_store_time.py` |
+| R2-D21 | F4.5 | исправлена | `tests/pg/test_pgbouncer.py` |
+| R2-D22 | F4.4a | исправлена | `tests/conformance/test_account_search.py` |
+| R2-D23 | I1.2 | открыта, очередь улучшений | — |
+| R2-D24 | F4.6 | исправлена | `tests/unit/test_ids.py` |
+| R2-P01 | F2.3 | исправлена | `tests/unit/test_fake_clock.py` |
+| R2-P02 | F5.1 | исправлена | `tests/unit/test_testing_plugin.py` |
+| R2-P03 | F4.4b | исправлена | `tests/conformance/test_metrics_snapshot.py` |
+| R2-P04 | F5.3a | исправлена | `tests/fixtures/broken_stores.py`, `tests/unit/test_conformance_mutations.py` |
+| R2-P05 | F2.3 | исправлена | `tests/unit/test_fake_clock.py` |
+| R2-P06 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-P07 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-P08 | I3.1 | открыта, очередь улучшений | — |
+| R2-P09 | F2.2 | исправлена | `tests/conformance/test_lease_cleanup.py` |
+| R2-P10 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-P11 | F3.6 | исправлена | `tests/conformance/test_maintenance_timers.py` |
+| R2-P12 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-P13 | F3.3 | исправлена | `tests/conformance/test_notification_queue.py` |
+| R2-P14 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-P15 | F3.5 | исправлена | `tests/conformance/test_sync_refresh.py` |
+| R2-P16 | F4.4a | исправлена | `tests/conformance/test_account_search.py`, `tests/pg/test_search.py` |
+| R2-P17 | F3.2 | исправлена | `tests/conformance/test_webhook_claims.py` |
+| R2-P18 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
+| R2-P19 | F5.1 | исправлена | `tests/unit/test_testing_plugin.py` |
+| R2-P20 | F5.1 | исправлена | `tests/unit/test_testing_plugin.py` |
+| R2-P21 | F2.3 | исправлена | `tests/unit/test_fake_clock.py` |
+| R2-P22 | F5.2b | исправлена | `tests/unit/test_memory_speed.py` |
+| R2-P23 | F5.3b | исправлена | `tests/conformance/test_store_coverage.py`, `tests/store_coverage.py`, `tests/test_library_ci.py` |
+
+Итого: 118 из 125 находок исправлены и покрыты тестами, 7 перенесены в очередь улучшений.
 
 ## Приложение A. Уроки похожих инструментов
 

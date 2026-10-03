@@ -281,7 +281,7 @@ SECRET_URL = "https://hooks.example.test/services/T0/WEBHOOK-SECRET?sig=QUERY-SE
     "host", ["internal-db.corp.example", "127.0.0.1.nip.io", "kubernetes.default.svc"], ids=str
 )
 async def test_delivery_to_name_resolving_inside_is_refused(hub: IdentityHub, host: str) -> None:
-    """R1-04: имена из `repro/secrets/a7.py` проходят проверку URL, но соединения с ними нет."""
+    """R1-04: имена из скрипта ревью (`a7.py`) проходят проверку URL, но соединения с ними нет."""
     space = hub.space("ssrf", "SSRF", create=True)
     endpoint = await space.webhooks.create(
         url=f"https://{host}/hook", secret=SecretStr("s"), event_types=["identity.*"]

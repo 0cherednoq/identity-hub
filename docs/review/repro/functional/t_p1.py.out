@@ -1,6 +1,0 @@
-
-=== P1
-  after 3 failures: ['quarantined', 'quarantined', 'quarantined']
-  provider outage: all dead after 0:31:00 (15 checks)
-  provider is back, recheck_due after 1 day -> {} ['dead', 'dead', 'dead']
-  proxy events: [('proxy.status.changed', 'quarantined'), ('proxy.status.changed', 'quarantined'), ('proxy.status.changed', 'quarantined'), ('proxy.status.changed', 'dead'), ('proxy.status.changed', 'dead'), ('proxy.status.changed', 'dead')]

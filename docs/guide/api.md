@@ -136,7 +136,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 |---|---|
 | `get(id)` | объект или `NotFound` |
 | `find(...)` | объект или `None` |
-| `list(filter)` / `search(query)` | страница `Page[T]`: `items`, `next_cursor`, `total` (при `count=True`) |
+| `list(filter)` / `search(query)` | страница `Page[T]`: `items`, `next_cursor`, `total` (при `count=True`; точно до 1000, больше — 1001) |
 | `create(spec)` | создать; уже есть — `AlreadyExists` |
 | `ensure(spec)` | вернуть существующий без изменений или создать → `(obj, created)` |
 | `create_many(specs, on_conflict=)` | массовое создание одной транзакцией: `"fail"` или `"skip"` |
