@@ -115,7 +115,7 @@ class Identity:
             attributes=dict(row.attributes),
             note=row.note,
             error_score=row.error_score,
-            revision=row.event_seq,
+            revision=row.revision,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

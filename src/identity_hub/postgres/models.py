@@ -323,6 +323,8 @@ class IdentityRecord(IdentityHubBase):
     # последняя попытка фоновой сверки при любом исходе: очередь refresh_many идёт по ней (0013)
     probe_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     event_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # номер последнего события аккаунта
+    # число команд, изменивших агрегат (IMP-07, D-205); новая строка — 0, событие создания даёт 1
+    revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("1"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -979,6 +981,7 @@ class EventRecord(IdentityHubBase):
     proxy_id: Mapped[UUID | None]
     lease_id: Mapped[UUID | None]
     sequence: Mapped[int | None] = mapped_column(BigInteger)  # event_seq аккаунта на момент события
+    revision: Mapped[int | None] = mapped_column(BigInteger)  # ревизия аккаунта после команды (0017)
     actor: Mapped[str] = mapped_column(String(256))  # воркер, пользователь админки, platform
     data: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # без секретов
     external: Mapped[bool] = mapped_column(default=True)  # False — только журнал (lease.*, operation.*)

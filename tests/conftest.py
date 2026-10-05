@@ -34,7 +34,12 @@ def database_url() -> Iterator[str]:
     except ImportError:  # старые версии testcontainers
         from testcontainers.postgres import PostgresContainer
 
-    with PostgresContainer("postgres:16-alpine", driver="asyncpg") as pg:
+    # БД одноразовая: долговечность не нужна, а fsync на TRUNCATE между тестами при занятом
+    # диске растягивает прогон в разы
+    container = PostgresContainer("postgres:16-alpine", driver="asyncpg").with_command(
+        "postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off"
+    )
+    with container as pg:
         yield pg.get_connection_url()
 
 

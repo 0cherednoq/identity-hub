@@ -35,6 +35,8 @@ class EventSpec:
     group: str
     external: bool = True  # False — только журнал: не уходит диспетчеру (lease.*, operation.*)
     severity: Severity = Severity.INFO
+    # меняет агрегат identity: первое такое событие команды поднимает его `revision` (D-205)
+    aggregate: bool = False
 
 
 def _specs() -> dict[str, EventSpec]:
@@ -111,9 +113,17 @@ def _specs() -> dict[str, EventSpec]:
         # колбэк подписчика не справился с событием за max_attempts попыток, событие пропущено
         "dispatcher.event.skipped",
     ]
-    specs = {t: EventSpec(t, group, True, sev) for group, items in groups.items() for t, sev in items}
-    specs |= {t: EventSpec(t, "journal", external=False) for t in journal}
+    specs = {
+        t: EventSpec(t, group, True, sev, aggregate=t.startswith("identity.") and t not in _NOT_AGGREGATE)
+        for group, items in groups.items()
+        for t, sev in items
+    }
+    specs |= {t: EventSpec(t, "journal", external=False, aggregate=t == "session.saved") for t in journal}
     return specs
+
+
+# события identity, которые агрегат не меняют: чтение секрета, окно квот, расхождение с платформой
+_NOT_AGGREGATE = frozenset({"identity.secret.revealed", "identity.quota.exhausted", "identity.state.drift"})
 
 
 CATALOG: Mapping[str, EventSpec] = _specs()
@@ -253,6 +263,7 @@ class Event:
     sequence: int | None
     actor: str
     data: Mapping[str, Any]
+    revision: int | None = None  # ревизия identity после команды (IMP-07); у событий до 0017 — None
 
     def to_dict(self) -> dict[str, Any]:
         """Тело вебхука и payload колбэков (без внутреннего `id`)."""
@@ -267,6 +278,7 @@ class Event:
             "proxy_id": str(self.proxy_id) if self.proxy_id else None,
             "lease_id": str(self.lease_id) if self.lease_id else None,
             "sequence": self.sequence,
+            "revision": self.revision,
             "actor": self.actor,
             "data": dict(self.data),
         }

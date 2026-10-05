@@ -621,7 +621,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-D20 | F4.6 | исправлена | `tests/pg/test_store_time.py` |
 | R2-D21 | F4.5 | исправлена | `tests/pg/test_pgbouncer.py` |
 | R2-D22 | F4.4a | исправлена | `tests/conformance/test_account_search.py` |
-| R2-D23 | I1.2 | открыта, очередь улучшений | — |
+| R2-D23 | I1.2a | исправлена | `tests/pg/test_read_schema.py` |
 | R2-D24 | F4.6 | исправлена | `tests/unit/test_ids.py` |
 | R2-P01 | F2.3 | исправлена | `tests/unit/test_fake_clock.py` |
 | R2-P02 | F5.1 | исправлена | `tests/unit/test_testing_plugin.py` |
@@ -648,6 +648,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-P23 | F5.3b | исправлена | `tests/conformance/test_store_coverage.py`, `tests/store_coverage.py`, `tests/test_library_ci.py` |
 
 Итого: 118 из 125 находок исправлены и покрыты тестами, 7 перенесены в очередь улучшений.
+Из перенесённых закрыты: `R2-D23` (`I1.2a`).
 
 ## Приложение A. Уроки похожих инструментов
 

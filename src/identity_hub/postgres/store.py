@@ -71,6 +71,7 @@ from identity_hub.errors import (
     IdentityHubError,
     LeaseUnavailable,
     NotFound,
+    RevisionConflict,
     SpaceMismatch,
     StorageError,
     describe_error,
@@ -284,6 +285,7 @@ class PgTx(StoreTx):
         self.session = session
         self.space = space
         self._now: datetime | None = None
+        self._revised: set[UUID] = set()  # identity, чья ревизия уже поднята этой командой (D-205)
 
     async def execute(self, stmt: Executable, params: Any = None) -> Result[Any]:
         return await _execute(self.session, stmt, params, execution_options=self.store.options)
@@ -298,18 +300,27 @@ class PgTx(StoreTx):
             return []
         rows: list[dict[str, Any]] = []
         for draft in drafts:
-            sequence = None
+            sequence: int | None = None
+            revision: int | None = None
             if draft.identity_id is not None:
-                sequence = (
+                bump = draft.spec.aggregate and draft.identity_id not in self._revised
+                counters: Any = (
                     await self.execute(
                         update(IdentityRecord)
                         .where(
                             IdentityRecord.id == draft.identity_id, IdentityRecord.space_id == self.space.id
                         )
-                        .values(event_seq=IdentityRecord.event_seq + 1)
-                        .returning(IdentityRecord.event_seq)
+                        .values(
+                            event_seq=IdentityRecord.event_seq + 1,
+                            revision=IdentityRecord.revision + int(bump),
+                        )
+                        .returning(IdentityRecord.event_seq, IdentityRecord.revision)
                     )
-                ).scalar_one_or_none()
+                ).one_or_none()
+                if counters is not None:
+                    sequence, revision = int(counters[0]), int(counters[1])
+                    if bump:
+                        self._revised.add(draft.identity_id)
             rows.append(
                 {
                     "event_id": new_id(),
@@ -321,6 +332,7 @@ class PgTx(StoreTx):
                     "proxy_id": draft.proxy_id,
                     "lease_id": draft.lease_id,
                     "sequence": sequence,
+                    "revision": revision,
                     "actor": draft.actor,
                     "data": dict(draft.data),
                     "external": draft.spec.external,
@@ -355,7 +367,7 @@ class PgTx(StoreTx):
     async def lock_identity_revision(self, identity_id: UUID, expected_revision: int) -> int:
         revision = (
             await self.execute(
-                select(IDENTITIES.c.event_seq)
+                select(IDENTITIES.c.revision)
                 .where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
                 .with_for_update()
             )
@@ -364,7 +376,7 @@ class PgTx(StoreTx):
             raise NotFound("identity", identity_id)
         actual = int(revision)
         if actual != expected_revision:
-            raise ConcurrentModification("identity", identity_id, expected_revision, actual)
+            raise RevisionConflict("identity", identity_id, expected_revision, actual)
         return actual
 
     async def update_identity(
@@ -1920,6 +1932,7 @@ class PgTx(StoreTx):
             EVENTS.c.data,
             EVENTS.c.external,
             EVENTS.c.occurred_at,
+            EVENTS.c.revision,
         ).where(
             EVENTS.c.space_id == self.space.id,
             EVENTS.c.type.in_(filters.allowed_types),
@@ -1972,6 +1985,7 @@ class PgTx(StoreTx):
                         EVENTS.c.data,
                         EVENTS.c.external,
                         EVENTS.c.occurred_at,
+                        EVENTS.c.revision,
                     ).where(EVENTS.c.space_id == self.space.id, EVENTS.c.event_id == event_id)
                 )
             )
@@ -3759,6 +3773,7 @@ def _event(row: Any) -> Event:
         sequence=row["sequence"],
         actor=row["actor"],
         data=row["data"],
+        revision=row["revision"],
     )
 
 
@@ -5172,12 +5187,20 @@ class PgStore(Store):
             regions[region["identity_id"]][(region["region"], region["key"])] = region
         event_rows = await _execute(
             session,
-            select(EVENTS.c.identity_id, func.max(EVENTS.c.sequence).label("last_sequence"))
+            select(
+                EVENTS.c.identity_id,
+                func.max(EVENTS.c.sequence).label("last_sequence"),
+                func.max(EVENTS.c.revision).label("last_revision"),
+            )
             .where(_any_of(EVENTS.c.identity_id, ids), EVENTS.c.sequence.is_not(None))
             .group_by(EVENTS.c.identity_id),
             execution_options=self.options,
         )
-        event_seq = {row.identity_id: int(row.last_sequence) for row in event_rows}
+        event_seq: dict[UUID, int] = {}
+        event_revision: dict[UUID, int] = {}
+        for event_row in event_rows:
+            event_seq[event_row.identity_id] = int(event_row.last_sequence)
+            event_revision[event_row.identity_id] = int(event_row.last_revision or 0)
         issues: list[DoctorIssue] = []
         for row in identities:
             identity_id = row["id"]
@@ -5217,6 +5240,12 @@ class PgStore(Store):
                     DoctorIssue("event_seq", row["slug"], identity_id, expected_seq, row["event_seq"])
                 )
                 changes["event_seq"] = expected_seq
+            expected_revision = event_revision.get(identity_id, 0)
+            if row["revision"] < expected_revision:
+                issues.append(
+                    DoctorIssue("revision", row["slug"], identity_id, expected_revision, row["revision"])
+                )
+                changes["revision"] = expected_revision
             if fix and changes:
                 await _execute(
                     session,

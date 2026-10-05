@@ -302,7 +302,7 @@ class SearchMixin(SpaceBase):
             entries=tuple(
                 AccountSelectionEntry(
                     id=row.id,
-                    revision=row.event_seq,
+                    revision=row.revision,
                     service=row.service,
                     external_ref=row.external_ref,
                 )

@@ -48,6 +48,7 @@ class EventItem:
     data: Mapping[str, Any]
     external: bool
     occurred_at: datetime
+    revision: int | None = None  # ревизия identity после команды (IMP-07)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +125,7 @@ def _item(row: EventReadRow) -> EventItem:
         data=data,
         external=row.external,
         occurred_at=row.occurred_at,
+        revision=row.revision,
     )
 
 

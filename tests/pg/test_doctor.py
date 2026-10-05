@@ -51,6 +51,7 @@ async def test_doctor_finds_and_fixes_denormalization(
                 auth_state="session_invalid",
                 verified_factors=["ghost"],
                 event_seq=0,
+                revision=0,
             )
         )
 
@@ -60,6 +61,7 @@ async def test_doctor_finds_and_fixes_denormalization(
         "auth_state",
         "verified_factors",
         "event_seq",
+        "revision",  # нижняя граница — ревизия последнего события (D-205)
     }
     fixed = await hub.doctor.check(fix=True)
     assert len(fixed) == len(issues)

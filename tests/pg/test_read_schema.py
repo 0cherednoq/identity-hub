@@ -64,7 +64,7 @@ EXPECTED_COLUMNS = {
     },
     "events": {
         "event_id", "space_id", "type", "severity", "service", "identity_id", "proxy_id",
-        "lease_id", "sequence", "actor", "data", "external", "occurred_at",
+        "lease_id", "sequence", "revision", "actor", "data", "external", "occurred_at",
     },
     "proxies": {
         "id", "space_id", "group", "scheme", "host", "port", "status", "error_score", "fail_streak",
@@ -175,19 +175,21 @@ async def test_read_tables_expose_state_without_secrets(hub: IdentityHub, db: As
         )
         proxy = (await conn.execute(select(read.proxies))).mappings().one()
         history = (await conn.execute(select(read.lease_history))).mappings().all()
-        events = (await conn.execute(select(read.events.c.type))).scalars().all()
+        result = await conn.execute(select(read.events.c.type, read.events.c.revision))
+        events = {event_type: revision for event_type, revision in result}
         regions = (await conn.execute(select(read.region_states))).mappings().all()
-    assert row["auth"] == "authenticated" and row["revision"] > identity.revision  # события аренды
+    # R2-D23: ревизия агрегата, а не счётчик событий — аренда её не меняет (D-205)
+    assert row["auth"] == "authenticated" and row["revision"] == identity.revision == 1
     assert proxy["group"] == "res" and proxy["host"] == "9.9.9.9"
     assert lease["identity_id"] == identity.id and "token" not in lease
-    assert len(history) == 1 and "identity.registered" in events and regions
+    assert len(history) == 1 and events["identity.registered"] == 1 and regions
     dumped = repr([dict(row), dict(proxy), dict(lease), *map(dict, history), *map(dict, regions)])
     assert "secret-pass" not in dumped and "proxy-pass" not in dumped
 
 
 def test_column_allowlist_and_version() -> None:
     read = ReadSchema()
-    assert READ_SCHEMA_VERSION == 1 and read.version == READ_SCHEMA_VERSION
+    assert READ_SCHEMA_VERSION == 2 and read.version == READ_SCHEMA_VERSION
     assert set(READ_TABLES) == set(EXPECTED_COLUMNS)
     for name, expected in EXPECTED_COLUMNS.items():
         table = getattr(read, name)

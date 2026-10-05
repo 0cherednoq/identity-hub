@@ -26,10 +26,10 @@ from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
 from identity_hub.errors import (
-    ConcurrentModification,
     IdempotencyConflict,
     LeaseUnavailable,
     NotFound,
+    RevisionConflict,
     SpaceMismatch,
     ValidationFailed,
 )
@@ -286,6 +286,7 @@ class MemoryTx(StoreTx):
         self.space = space
         self._now = now
         self._notify = False
+        self._revised: set[UUID] = set()  # identity, чья ревизия уже поднята этой командой (D-205)
 
     @property
     def state(self) -> _MemoryState:
@@ -302,13 +303,18 @@ class MemoryTx(StoreTx):
         ids: list[UUID] = []
         for draft in drafts:
             sequence: int | None = None
+            revision: int | None = None
             if draft.identity_id is not None:
                 identity = self._own(draft.identity_id)
                 if identity is not None:
+                    bump = draft.spec.aggregate and identity.id not in self._revised
                     sequence = identity.event_seq + 1
+                    revision = identity.revision + int(bump)
                     self.state.identities[identity.id] = replace(
-                        identity, event_seq=sequence, updated_at=self._now
+                        identity, event_seq=sequence, revision=revision, updated_at=self._now
                     )
+                    if bump:
+                        self._revised.add(identity.id)
             event_id = new_id()  # UUIDv7, как в PostgreSQL: порядок при равном времени (R2-P10)
             event = Event(
                 id=self.state.next_event_id,
@@ -324,6 +330,7 @@ class MemoryTx(StoreTx):
                 sequence=sequence,
                 actor=draft.actor,
                 data=dict(draft.data),
+                revision=revision,
             )
             self.state.next_event_id += 1
             self.state.events.append((event, self.space.id, draft.spec.external))
@@ -338,9 +345,9 @@ class MemoryTx(StoreTx):
         row = self._own(identity_id)
         if row is None:
             raise NotFound("identity", identity_id)
-        if row.event_seq != expected_revision:
-            raise ConcurrentModification("identity", identity_id, expected_revision, row.event_seq)
-        return row.event_seq
+        if row.revision != expected_revision:
+            raise RevisionConflict("identity", identity_id, expected_revision, row.revision)
+        return row.revision
 
     async def update_identity(
         self, identity_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
@@ -1267,6 +1274,7 @@ class MemoryTx(StoreTx):
                     data=event.data,
                     external=external,
                     occurred_at=event.occurred_at,
+                    revision=event.revision,
                 )
             )
         rows.sort(key=lambda row: (row.occurred_at, row.event_id), reverse=True)
@@ -1288,6 +1296,7 @@ class MemoryTx(StoreTx):
                     data=event.data,
                     external=external,
                     occurred_at=event.occurred_at,
+                    revision=event.revision,
                 )
         return None
 
@@ -3228,9 +3237,13 @@ class MemoryStore(Store):
             issues: list[DoctorIssue] = []
             spaces = {space.id: space.slug for space in self._state.spaces.values()}
             event_seq: dict[UUID, int] = defaultdict(int)
+            event_revision: dict[UUID, int] = defaultdict(int)
             for event, _, _ in self._state.events:
                 if event.identity_id is not None and event.sequence is not None:
                     event_seq[event.identity_id] = max(event_seq[event.identity_id], event.sequence)
+                    event_revision[event.identity_id] = max(
+                        event_revision[event.identity_id], event.revision or 0
+                    )
             for identity_id, row in list(self._state.identities.items()):
                 changes: dict[str, Any] = {}
                 standing = self._state.regions.get((identity_id, "standing", ""))
@@ -3278,6 +3291,14 @@ class MemoryStore(Store):
                         )
                     )
                     changes["event_seq"] = expected_seq
+                expected_revision = event_revision.get(identity_id, 0)
+                if row.revision < expected_revision:
+                    issues.append(
+                        DoctorIssue(
+                            "revision", spaces[row.space_id], identity_id, expected_revision, row.revision
+                        )
+                    )
+                    changes["revision"] = expected_revision
                 if fix and changes:
                     self._state.identities[identity_id] = replace(row, **changes)
             for proxy_id, proxy in self._state.proxies.items():

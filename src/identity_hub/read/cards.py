@@ -268,7 +268,7 @@ class CardsMixin(SpaceBase):
             if challenge
             else None,
             admin_url=f"{base}/identities/{identity_id}" if base else None,
-            revision=identity.event_seq,
+            revision=identity.revision,
             eligible=not blockers,
             blockers=blockers,
         )

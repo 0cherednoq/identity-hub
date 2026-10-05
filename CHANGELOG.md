@@ -67,6 +67,16 @@
 
 ### Changed
 
+- `Identity.revision`, `IdentityCard.revision` и `hub.read.identities.c.revision` — ревизия
+  агрегата: растёт на 1 за команду, изменившую аккаунт, а не на каждое событие (`IMP-07`,
+  `D-205`). Аренда, операции, прокси и раскрытие секрета её больше не меняют. Миграция `0017`
+  переносит прежние значения (`GREATEST(event_seq, 1)`), `READ_SCHEMA_VERSION` — 2 (`R2-D23`).
+  `hub.start()` требует ревизию схемы `0017`.
+- В событии — поле `revision` (ревизия аккаунта после команды): `Event.revision`, тело вебхука,
+  журнал админки, колонка `hub.read.events.c.revision`. `StoreTx.lock_identity_revision` при
+  расхождении бросает `RevisionConflict` (наследник `ConcurrentModification`); `doctor`
+  проверяет ревизию по последнему событию.
+
 - `ProbeContext.external_ref`; `LoginContext.session(slot)` — прежняя сессия при повторном входе,
   в том числе признанная недействительной. `FileImporter.read` может быть async-генератором,
   обычной функцией или `async def`, возвращающими список. `imports.run_files(base_dir=,

@@ -15,6 +15,7 @@ from identity_hub import (
     SpaceHandle,
     ValidationFailed,
 )
+from identity_hub.read.events import EventFilters
 
 pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
 
@@ -94,8 +95,12 @@ async def test_secrets_describe_reveal_and_replace(space: SpaceHandle) -> None:
     assert (await space.secrets.reveal(identity.id, SecretRef.session("web"), actor="admin", reason="тест"))[
         "auth_key"
     ] == "k3"
-    # каждое раскрытие и замена — событие identity: аудит не теряется
-    assert (await space.identities.get(identity.id)).revision >= identity.revision + 6
+    # каждое раскрытие — событие аудита; ревизию меняют только две замены (D-205)
+    revealed = await space.admin.event_page(
+        filters=EventFilters(type="identity.secret.revealed", identity_id=identity.id)
+    )
+    assert len(revealed.items) == 5
+    assert (await space.identities.get(identity.id)).revision == identity.revision + 2
 
 
 async def test_reveal_missing_and_unknown(space: SpaceHandle) -> None:

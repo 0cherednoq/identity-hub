@@ -327,6 +327,7 @@ class IdentityRow:
     updated_at: datetime
     normalized_ref: str = ""  # Service.normalize_ref(external_ref), IMP-08
     normalize_version: int = 0
+    revision: int = 0  # число команд, изменивших агрегат (IMP-07, D-205)
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,6 +612,7 @@ class EventReadRow:
     data: Mapping[str, Any]
     external: bool
     occurred_at: datetime
+    revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

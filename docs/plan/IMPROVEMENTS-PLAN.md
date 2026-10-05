@@ -156,27 +156,33 @@ bash scripts/check.sh
 - **DoD:** email/phone/custom normalizer; дубль внутри пространства и между пространствами;
   import-report после нормализации; migration collision test; conformance parity.
 
-### I1.2 Revision агрегата и compare-and-set
+### I1.2a Revision агрегата: колонка, рост, события, read-схема
 
-Связанное улучшение: `IMP-07`.
+Связанное улучшение: `IMP-07`. Задача `I1.2` разбита решением `D-205` на `I1.2a` и `I1.2b`.
 
 - Новой миграцией добавить `ih_identities.revision BIGINT NOT NULL DEFAULT 1`; определить полный
   список изменений агрегата, каждое из которых увеличивает revision ровно один раз на команду.
-- Добавить `expected_revision` к операторским и `using(session)` mutation API. `None` сохраняет
-  совместимость, переданное значение проверяется атомарно и при конфликте даёт
-  `RevisionConflict`.
 - Добавить revision в события и read DTO. Region/data version остаются локальными CAS и не
   подменяют общую revision.
 - Синхронизировать PgStore/MemoryStore; повтор идемпотентной команды не увеличивает revision.
+- `StoreTx.lock_identity_revision` сверяет новую колонку и при расхождении даёт
+  `RevisionConflict`; `doctor` проверяет нижнюю границу по ревизии последнего события.
 - **Дополнение из ревью (`D-151`).** `R2-D23`: `hub.read.identities.c.revision` переводится на новую колонку, `READ_SCHEMA_VERSION`
   повышается. Регрессионный тест `F2.4` (параллельные `add_tags`) остаётся зелёным.
+- **DoD:** рост ровно на 1 для каждой команды изменения, без роста от аренды и раскрытия секрета;
+  все события команды несут одну ревизию; миграция с backfill и downgrade; read-схема v2;
+  conformance memory/pg.
+
+### I1.2b `expected_revision` в командах изменения
+
+Связанное улучшение: `IMP-07`.
+
+- Добавить `expected_revision` к операторским и `using(session)` mutation API. `None` сохраняет
+  совместимость, переданное значение проверяется атомарно и при конфликте даёт
+  `RevisionConflict`.
+- Перевести админку на проверку ревизии внутри команды вместо отдельной транзакции.
 - **DoD:** две admin-сессии с одной revision, один победитель; rollback/savepoint; revision в
-  последовательности событий; conformance для всех mutation families.
-- **Разбиение (`D-205`).** `I1.2a` — миграция, правило роста (один раз на команду, только
-  события, меняющие агрегат), `revision` в событиях, `Identity`/`IdentityCard`, `hub.read`
-  (`R2-D23`), `lock_identity_revision` → `RevisionConflict`. `I1.2b` — `expected_revision` во
-  всех командах изменения `space.*` (в том числе через `using(session)`), conformance по
-  семействам, гонка двух сессий, документация и CHANGELOG.
+  последовательности событий; conformance для всех mutation families; документация и CHANGELOG.
 
 ### I1.3 Единый протокол идемпотентности и canonical fingerprint
 
@@ -681,21 +687,21 @@ I0.1 → I0.2a → I0.2b
 I0.2b → I0.3
 I0.1 + I0.2b → I0.4
 I0.3 + I0.4 → I1.1
-I0.2b + I0.4 → {I1.2, I1.3}
+I0.2b + I0.4 → {I1.2a → I1.2b, I1.3}
 I0.3 + I1.3 → I1.4
 
 I0.4 → I2.1 → I2.2
 I0.2b + I2.1 → I2.3 → I2.4
 
-I0.3 + I0.4 + I1.2 → I3.1 → I3.2 → I3.3
+I0.3 + I0.4 + I1.2b → I3.1 → I3.2 → I3.3
 
-I0.2b + I0.4 + I1.2 + I2.3 → I4.1
+I0.2b + I0.4 + I1.2b + I2.3 → I4.1
 I3.3 + I4.1 → I4.2
 I2.4 + I4.1 → I4.3
 
 I0.4 → I5.1
 I4.3 → I5.2
-I1.2 + I5.2 → I5.3
+I1.2b + I5.2 → I5.3
 
 I1.3 + I2.2 + I2.4 → I6.1
 I1.1 + I5.1 → I6.2
