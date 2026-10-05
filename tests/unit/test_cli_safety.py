@@ -278,3 +278,25 @@ def test_doctor_renormalize_unknown_service_is_exit_2(capsys: pytest.CaptureFixt
 
     assert main(argv) == 2
     assert "error[" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- doctor rekey-fingerprints (D-207)
+
+
+async def rekey_factory() -> IdentityHub:
+    hub = _new_hub(services=[make_service("mail")])
+    await hub.start()
+    space = hub.space("main", "Main", create=True)
+    proxy = await space.proxies.create("socks5://alice:secret@10.0.0.9:1080", group="res")
+    async with space._tx(own=True) as tx:  # отпечаток до миграции 0018
+        await tx.set_proxy_fingerprint(proxy.id, "0" * 64, None)
+    return hub
+
+
+def test_doctor_rekey_fingerprints(capsys: pytest.CaptureFixture[str]) -> None:
+    argv = ["doctor", "rekey-fingerprints", "--factory", f"{ME}:rekey_factory"]
+
+    assert main(argv) == 0
+
+    out = capsys.readouterr().out
+    assert out.splitlines() == ["updated: 1"] and "alice" not in out

@@ -568,7 +568,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-S13 | F1.7 | исправлена | `tests/unit/test_key_providers.py` |
 | R2-S14 | F1.6a | исправлена | `tests/conformance/test_secret_boundaries.py` |
 | R2-S15 | F1.5 | исправлена | `tests/unit/test_outbound.py` |
-| R2-S16 | I1.4a | открыта, очередь улучшений | — |
+| R2-S16 | I1.4a | исправлена | `tests/conformance/test_proxy_fingerprint.py` |
 | R2-S17 | F1.4 | исправлена | `tests/conformance/test_free_text_channels.py` |
 | R2-S18 | F3.11 | исправлена | `tests/unit/test_cli_safety.py` |
 | R2-S19 | F3.3 | исправлена | `tests/unit/test_notification_delivery.py` |
@@ -648,7 +648,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-P23 | F5.3b | исправлена | `tests/conformance/test_store_coverage.py`, `tests/store_coverage.py`, `tests/test_library_ci.py` |
 
 Итого: 118 из 125 находок исправлены и покрыты тестами, 7 перенесены в очередь улучшений.
-Из перенесённых закрыты: `R2-D23` (`I1.2a`).
+Из перенесённых закрыты: `R2-D23` (`I1.2a`), `R2-S16` (`I1.4a`).
 
 ## Приложение A. Уроки похожих инструментов
 

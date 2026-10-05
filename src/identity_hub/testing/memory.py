@@ -935,9 +935,9 @@ class MemoryTx(StoreTx):
             self.state.sessions[key] = (old[0], status, old[2], old[3])
 
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
-        for proxy in self.state.proxies.values():
-            if proxy.space_id == self.space.id and proxy.fingerprint == row.fingerprint:
-                return proxy.id, False
+        known = await self.proxy_by_fingerprint([row.fingerprint, *row.aliases])
+        if known is not None:
+            return known, False
         proxy = ProxyRow(
             id=row.id,
             space_id=self.space.id,
@@ -958,6 +958,7 @@ class MemoryTx(StoreTx):
             max_identities=row.max_identities,
             created_at=self._now,
             secret=row.secret,
+            fingerprint_key_id=row.fingerprint_key_id,
         )
         self.state.proxies[row.id] = proxy
         self.state.proxy_load[row.id] = 0
@@ -984,17 +985,32 @@ class MemoryTx(StoreTx):
         self.state.proxies[proxy_id] = replace(row, error_score=score)
         return score
 
-    async def proxy_by_fingerprint(self, fingerprint: str) -> UUID | None:
-        for row in self.state.proxies.values():
-            if row.space_id == self.space.id and row.fingerprint == fingerprint:
-                return row.id
-        return None
+    async def proxy_by_fingerprint(self, fingerprints: Sequence[str]) -> UUID | None:
+        wanted = set(fingerprints)
+        found = sorted(
+            row.id
+            for row in self.state.proxies.values()
+            if row.space_id == self.space.id and row.fingerprint in wanted
+        )
+        return found[0] if found else None
 
-    async def set_proxy_secret(self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload) -> bool:
+    async def set_proxy_secret(
+        self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload, *, fingerprint_key_id: str | None
+    ) -> bool:
         row = await self.get_proxy(proxy_id)
         if row is None:
             return False
-        self.state.proxies[proxy_id] = replace(row, fingerprint=fingerprint, secret=secret)
+        self.state.proxies[proxy_id] = replace(
+            row, fingerprint=fingerprint, fingerprint_key_id=fingerprint_key_id, secret=secret
+        )
+        return True
+
+    async def set_proxy_fingerprint(self, proxy_id: UUID, fingerprint: str, key_id: str | None) -> bool:
+        row = await self.get_proxy(proxy_id)
+        taken = await self.proxy_by_fingerprint([fingerprint])
+        if row is None or (taken is not None and taken != proxy_id):
+            return False
+        self.state.proxies[proxy_id] = replace(row, fingerprint=fingerprint, fingerprint_key_id=key_id)
         return True
 
     async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
@@ -3200,6 +3216,21 @@ class MemoryStore(Store):
                     del self._state.rollups[rollup_key]
                 result[name] = len(rollup_keys)
             return result
+
+    async def stale_proxy_fingerprints(
+        self, active_key_id: str, limit: int, after: UUID | None
+    ) -> list[tuple[str, ProxyRow]]:
+        async with self._lock:
+            spaces = {space.id: space.slug for space in self._state.spaces.values()}
+            rows = sorted(
+                (
+                    row
+                    for row in self._state.proxies.values()
+                    if row.fingerprint_key_id != active_key_id and (after is None or row.id > after)
+                ),
+                key=lambda row: row.id,
+            )
+            return [(spaces[row.space_id], row) for row in rows[:limit]]
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         async with self._lock:

@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I1.4a Кольцо ключей отпечатков и HMAC-отпечаток прокси
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: KEK не HMAC-ключ, HMAC-отпечаток прокси, дедупликация по старому ключу и legacy SHA-256, пересчёт, без ключей в repr
-  - [ ] FingerprintKeyring: явное кольцо провайдера и HKDF из KEK; equivalence_tag
-  - [ ] Миграция 0018 fingerprint_key_id; NewProxy с алиасами, поиск и вставка в PgStore/MemoryStore
-  - [ ] doctor.rekey_fingerprints и CLI
-  - [ ] Документация, CHANGELOG, трассировка, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -43,7 +39,7 @@
 | I1.2a | Revision агрегата: колонка, рост, события, read-схема | I0.2b, I0.4 | done |  | разбиение D-205 |
 | I1.2b | expected_revision в API изменений | I1.2a | done |  | разбиение D-205 |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
-| I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | in_progress |  | разбиение D-207 |
+| I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | done |  | разбиение D-207 |
 | I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | todo |  | разбиение D-207 |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
@@ -67,7 +63,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 21 / 42 done
+**Итого:** 22 / 42 done
 
 ## Журнал сессий
 
@@ -92,3 +88,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-01 · I1.1 · done · normalized_ref (миграция 0008), Service.normalize_ref/version, нормализация во всех путях, doctor.renormalize, D-149; tests/load переведены на новый API · дальше I1.2
 2026-10-05 · I1.2a · done · revision агрегата (миграция 0017, backfill из event_seq), рост раз на команду по EventSpec.aggregate, revision в событиях/вебхуке/журнале, read-схема v2 (R2-D23), RevisionConflict, doctor; тестовая БД без fsync · дальше I1.2b
 2026-10-05 · I1.2b · done · expected_revision у ~20 команд space.* (проверка FOR UPDATE первой в транзакции команды, savepoint при using), гонка двух сессий, D-206; IMP-07 implemented; дефлейк test_override_verification (срок фактора 2 с) · дальше I1.4
+2026-10-05 · I1.4a · done · кольцо ключей отпечатков (явное или HKDF из KEK, не равно KEK), HMAC-отпечаток прокси (миграция 0018, fingerprint_key_id), поиск по всем ключам и legacy SHA-256, doctor rekey-fingerprints, R2-S16 закрыта, D-207 · дальше I1.4b

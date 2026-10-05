@@ -44,7 +44,8 @@ __all__ = [
     "ProxyChecker",
     "ProxyHealthPolicy",
     "ProxySecret",
-    "fingerprint",
+    "fingerprint_value",
+    "legacy_fingerprint",
     "parse_proxy_url",
 ]
 
@@ -121,8 +122,13 @@ def _split_proxy_url(url: str) -> tuple[str, str | None, int | None, str | None,
         return None
 
 
-def fingerprint(scheme: str, host: str, port: int, username: str | None) -> str:
-    """hash(scheme, host, port, username) — дедупликация в пространстве (FR-8.1)."""
+def fingerprint_value(scheme: str, host: str, port: int, username: str | None) -> str:
+    """Что подписывает HMAC-отпечаток прокси: дедупликация в пространстве (FR-8.1, D-207)."""
+    return f"proxy:v1|{scheme}|{host.lower()}|{port}|{username or ''}"
+
+
+def legacy_fingerprint(scheme: str, host: str, port: int, username: str | None) -> str:
+    """Отпечаток до миграции 0018 — SHA-256 без ключа (R2-S16); только для поиска до пересчёта."""
     raw = f"{scheme}|{host.lower()}|{port}|{username or ''}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -195,16 +201,31 @@ class ProxiesMixin(SpaceBase):
             username=parsed.username, password=SecretStr(parsed.password) if parsed.password else None
         )
         payload = self.hub._envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
+        tag, key_id, aliases = self._proxy_fingerprints(
+            parsed.scheme, parsed.host, parsed.port, parsed.username
+        )
         return NewProxy(
             id=proxy_id,
             pool=pool,
             scheme=parsed.scheme,
             host=parsed.host,
             port=parsed.port,
-            fingerprint=fingerprint(parsed.scheme, parsed.host, parsed.port, parsed.username),
+            fingerprint=tag,
             max_identities=max_identities,
             secret=payload,
+            fingerprint_key_id=key_id,
+            aliases=aliases,
         )
+
+    def _proxy_fingerprints(
+        self, scheme: str, host: str, port: int, username: str | None
+    ) -> tuple[str, str, tuple[str, ...]]:
+        """(отпечаток активным ключом, его key_id, отпечатки прежними ключами и SHA-256 до 0018)."""
+        keyring = self.hub._fingerprints
+        active = keyring.active_key_id
+        tags = keyring.tags(fingerprint_value(scheme, host, port, username))
+        aliases = tuple(tag for key_id, tag in sorted(tags.items()) if key_id != active)
+        return tags[active], active, (*aliases, legacy_fingerprint(scheme, host, port, username))
 
     async def _insert_proxies(
         self, rows: list[NewProxy], *, fail_existing: bool = False
@@ -539,11 +560,11 @@ class ProxiesMixin(SpaceBase):
         payload = self.hub._envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
         async with self._tx() as tx:
             row = await self._proxy(tx, proxy_id)
-            new_fingerprint = fingerprint(row.scheme, row.host, row.port, username)
-            other = await tx.proxy_by_fingerprint(new_fingerprint)
+            tag, key_id, aliases = self._proxy_fingerprints(row.scheme, row.host, row.port, username)
+            other = await tx.proxy_by_fingerprint([tag, *aliases])
             if other is not None and other != proxy_id:
                 raise AlreadyExists("proxy", f"{row.scheme}://{row.host}:{row.port}")
-            await tx.set_proxy_secret(proxy_id, new_fingerprint, payload)
+            await tx.set_proxy_secret(proxy_id, tag, payload, fingerprint_key_id=key_id)
             await self._proxy_updated(tx, row, actor, ["credentials"])
 
     async def _move_proxy(self, proxy_id: UUID, *, group: str, actor: str) -> None:

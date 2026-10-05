@@ -499,6 +499,9 @@ class NewProxy:
     fingerprint: str
     max_identities: int
     secret: EncryptedPayload
+    fingerprint_key_id: str | None = None
+    # отпечатки того же адреса и логина другими ключами кольца и прежний SHA-256 (D-207)
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,6 +527,7 @@ class ProxyRow:
     max_identities: int
     created_at: datetime
     secret: EncryptedPayload
+    fingerprint_key_id: str | None = None  # NULL — SHA-256 до миграции 0018
 
 
 @dataclass(frozen=True, slots=True)
@@ -1181,7 +1185,7 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
-        """(id, создан). Дубликат по fingerprint в пространстве возвращает существующий id (FR-8.1)."""
+        """(id, создан). Дубликат по fingerprint или `aliases` в пространстве — существующий id (FR-8.1)."""
 
     @abstractmethod
     async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None: ...
@@ -1204,12 +1208,18 @@ class StoreTx(ABC):
         """
 
     @abstractmethod
-    async def proxy_by_fingerprint(self, fingerprint: str) -> UUID | None:
-        """Прокси пространства с таким отпечатком адреса и логина."""
+    async def proxy_by_fingerprint(self, fingerprints: Sequence[str]) -> UUID | None:
+        """Прокси пространства с любым из отпечатков (теги разными ключами кольца, D-207)."""
 
     @abstractmethod
-    async def set_proxy_secret(self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload) -> bool:
+    async def set_proxy_secret(
+        self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload, *, fingerprint_key_id: str | None
+    ) -> bool:
         """Заменить логин и пароль прокси (шифртекст) вместе с отпечатком."""
+
+    @abstractmethod
+    async def set_proxy_fingerprint(self, proxy_id: UUID, fingerprint: str, key_id: str | None) -> bool:
+        """Записать пересчитанный отпечаток; `False` — прокси нет или отпечаток занят другим прокси."""
 
     @abstractmethod
     async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
@@ -1832,6 +1842,12 @@ class Store(ABC):
     @abstractmethod
     async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
         """Набор → `key_id` → число строк с шифртекстом под ключом, отличным от `active`."""
+
+    @abstractmethod
+    async def stale_proxy_fingerprints(
+        self, active_key_id: str, limit: int, after: UUID | None
+    ) -> list[tuple[str, ProxyRow]]:
+        """(slug, прокси) с отпечатком не активным ключом или без ключа, по возрастанию id после `after`."""
 
     @abstractmethod
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:

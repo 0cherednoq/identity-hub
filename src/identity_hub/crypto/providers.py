@@ -2,6 +2,9 @@
 
 Формат ключей в переменной окружения и файле: `key_id:base64` через запятую или с новой строки;
 первый ключ — активный (им шифруются новые записи), остальные — для расшифровки после ротации.
+Тем же форматом задаётся необязательное кольцо ключей отпечатков (D-207): переменная
+`IDENTITY_HUB_FINGERPRINT_KEYS` или `fingerprint_path` у файлового провайдера. Без него ключи
+отпечатков выводятся из KEK (`identity_hub.crypto.fingerprint`).
 
 Сообщения об ошибках не содержат ни значения ключа, ни `key_id`: при перепутанном порядке
 (`base64:key_id`) на месте идентификатора стоит сам ключ. Ошибка называет номер записи.
@@ -82,10 +85,50 @@ def _decode(encoded: str) -> bytes | None:
 
 
 class StaticSecretsProvider:
-    """Ключи, переданные напрямую (тесты, собственная загрузка из Vault/OpenBao)."""
+    """Ключи, переданные напрямую (тесты, собственная загрузка из Vault/OpenBao).
 
-    def __init__(self, keys: Mapping[str, bytes], active: str) -> None:
+    `fingerprint_keys` и `fingerprint_active` — отдельное кольцо ключей отпечатков (D-207); без
+    него ключи отпечатков выводятся из KEK.
+    """
+
+    def __init__(
+        self,
+        keys: Mapping[str, bytes],
+        active: str,
+        *,
+        fingerprint_keys: Mapping[str, bytes] | None = None,
+        fingerprint_active: str | None = None,
+    ) -> None:
         self._set(keys, active)
+        self._set_fingerprint(fingerprint_keys, fingerprint_active)
+
+    def _set_fingerprint(self, keys: Mapping[str, bytes] | None, active: str | None) -> None:
+        """Проверить и установить кольцо отпечатков; при ошибке прежнее кольцо остаётся."""
+        if not keys:
+            if active is not None:
+                raise ValidationFailed("активный ключ отпечатков задан без кольца ключей")
+            self._fingerprint_keys: Mapping[str, bytes] | None = None
+            self._fingerprint_active: str | None = None
+            return
+        for position, (key_id, raw) in enumerate(keys.items(), start=1):
+            if not _valid_key_id(key_id):
+                raise ValidationFailed(f"ключ отпечатков №{position}: {_KEY_ID_RULE}")
+            if len(raw) != KEY_BYTES:
+                raise ValidationFailed(f"ключ отпечатков №{position}: нужно {KEY_BYTES} байта")
+        active = active if active is not None else next(iter(keys))
+        if active not in keys:
+            raise ValidationFailed("активный ключ отпечатков отсутствует среди переданных")
+        if set(keys.values()) & set(self._keys.values()):
+            raise ValidationFailed("ключ отпечатков совпадает с мастер-ключом шифрования")
+        self._fingerprint_keys = MappingProxyType(dict(keys))
+        self._fingerprint_active = active
+
+    def fingerprint_keys(self) -> Mapping[str, bytes] | None:
+        """Явное кольцо ключей отпечатков; `None` — ключи выводятся из KEK."""
+        return self._fingerprint_keys
+
+    def active_fingerprint_key_id(self) -> str | None:
+        return self._fingerprint_active
 
     def _set(self, keys: Mapping[str, bytes], active: str) -> None:
         for position, (key_id, raw) in enumerate(keys.items(), start=1):
@@ -106,7 +149,10 @@ class StaticSecretsProvider:
         return self._active
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}(active={self._active!r}, keys={sorted(self._keys)})"
+        extra = ""
+        if self._fingerprint_keys is not None:
+            extra = f", fingerprint_active={self._fingerprint_active!r}"
+        return f"{type(self).__name__}(active={self._active!r}, keys={sorted(self._keys)}{extra})"
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("провайдер мастер-ключей нельзя сериализовать pickle")
@@ -121,19 +167,26 @@ class StaticSecretsProvider:
 class EnvSecretsProvider(StaticSecretsProvider):
     """Ключи из переменной окружения (по умолчанию `IDENTITY_HUB_KEK`)."""
 
-    def __init__(self, variable: str = "IDENTITY_HUB_KEK") -> None:
+    def __init__(
+        self,
+        variable: str = "IDENTITY_HUB_KEK",
+        fingerprint_variable: str = "IDENTITY_HUB_FINGERPRINT_KEYS",
+    ) -> None:
         value = os.environ.get(variable)
         if not value:
             raise ValidationFailed(f"переменная окружения {variable} не задана")
         active, keys = parse_keys(value)
-        super().__init__(keys, active)
+        fingerprint = os.environ.get(fingerprint_variable)
+        fp_active, fp_keys = parse_keys(fingerprint) if fingerprint else (None, None)
+        super().__init__(keys, active, fingerprint_keys=fp_keys, fingerprint_active=fp_active)
 
 
 class FileSecretsProvider(StaticSecretsProvider):
     """Ключи из файла (Docker/K8s secrets). `reload()` перечитывает файл без перезапуска процесса."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, fingerprint_path: str | Path | None = None) -> None:
         self._path = Path(path)
+        self._fingerprint_path = Path(fingerprint_path) if fingerprint_path is not None else None
         self.reload()
 
     def reload(self) -> None:
@@ -142,10 +195,24 @@ class FileSecretsProvider(StaticSecretsProvider):
         if text is None:  # вне except: в цепочке исключения нет пути и текста ошибки ОС
             raise ValidationFailed("файл мастер-ключей не удалось прочитать")
         active, keys = parse_keys(text)
+        fp_active: str | None = None
+        fp_keys: dict[str, bytes] | None = None
+        if self._fingerprint_path is not None:
+            fp_text = self._read(self._fingerprint_path)
+            if fp_text is None:
+                raise ValidationFailed("файл ключей отпечатков не удалось прочитать")
+            fp_active, fp_keys = parse_keys(fp_text)
+        previous = (self.__dict__.get("_keys"), self.__dict__.get("_active"))
         self._set(keys, active)
-
-    def _read(self) -> str | None:
         try:
-            return self._path.read_text(encoding="utf-8")
+            self._set_fingerprint(fp_keys, fp_active)
+        except ValidationFailed:
+            if previous[0] is not None:
+                self._set(previous[0], str(previous[1]))
+            raise
+
+    def _read(self, path: Path | None = None) -> str | None:
+        try:
+            return (path or self._path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return None

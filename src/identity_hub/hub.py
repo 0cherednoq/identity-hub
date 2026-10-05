@@ -29,6 +29,7 @@ from identity_hub.api.verifications import Verifications
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto import Envelope
+from identity_hub.crypto.fingerprint import FingerprintKeyring
 from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
 from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
@@ -142,6 +143,7 @@ class IdentityHub:
             raise ValidationFailed("нужен SecretsProvider (мастер-ключи)")
         self._store = store
         self._envelope = Envelope(secrets)
+        self._fingerprints = FingerprintKeyring(secrets)  # ключи отпечатков, не KEK (IMP-04, D-207)
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         try:

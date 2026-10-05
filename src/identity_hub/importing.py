@@ -504,7 +504,7 @@ class ImportingMixin(SpaceBase):
         """Есть ли у прокси записи импорта свободная ёмкость (R2-F09)."""
         state = capacity.get(proxy.fingerprint)
         if state is None:
-            existing_id = await tx.proxy_by_fingerprint(proxy.fingerprint)
+            existing_id = await tx.proxy_by_fingerprint([proxy.fingerprint, *proxy.aliases])
             read = await tx.proxy_read_one(existing_id) if existing_id is not None else None
             state = [read.max_identities, read.bound_count] if read is not None else [proxy.max_identities, 0]
             capacity[proxy.fingerprint] = state

@@ -7,14 +7,23 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from identity_hub.crypto import DecryptionFailed, associated_data
 from identity_hub.errors import ValidationFailed
+from identity_hub.proxies import ProxySecret, fingerprint_value
 from identity_hub.service import Service
 from identity_hub.store.base import ROTATION_TABLES, DoctorIssue, UnreadableSecret
 
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub
 
-__all__ = ["Doctor", "DoctorIssue", "RenormalizeReport", "RotationReport", "UnreadableSecret"]
+__all__ = [
+    "Doctor",
+    "DoctorIssue",
+    "FingerprintRekeyReport",
+    "RenormalizeReport",
+    "RotationReport",
+    "UnreadableSecret",
+]
 
 UNREADABLE_REPORT_LIMIT = 1000  # в отчёте перечисляются первые строки, счётчик — полный
 
@@ -33,6 +42,24 @@ class RenormalizeReport:
     @property
     def complete(self) -> bool:
         return not self.collisions and not self.invalid
+
+
+@dataclass(frozen=True, slots=True)
+class FingerprintRekeyReport:
+    """Итог `Doctor.rekey_fingerprints`: пересчитано, занятые и нерасшифрованные прокси (только id).
+
+    `conflicts` — прокси, чей новый отпечаток уже у другого прокси пространства: это дубли одного
+    адреса и логина, их нужно удалить или объединить вручную. Пока список не пуст, прежний ключ
+    отпечатков из конфигурации не убирают.
+    """
+
+    updated: int
+    conflicts: list[UUID]
+    unreadable: list[UUID]
+
+    @property
+    def complete(self) -> bool:
+        return not self.conflicts and not self.unreadable
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +143,38 @@ class Doctor:
             unreadable=tuple(unreadable.values())[:UNREADABLE_REPORT_LIMIT],
             unreadable_total=len(unreadable),
         )
+
+    async def rekey_fingerprints(self, *, batch_size: int = 500) -> FingerprintRekeyReport:
+        """Пересчитать отпечатки прокси активным ключом кольца отпечатков (D-207, R2-S16).
+
+        Нужен после миграции 0018 (прежний SHA-256 без ключа) и после смены активного ключа
+        отпечатков. Идемпотентно: уже пересчитанные строки не трогает.
+        """
+        if batch_size < 1:
+            raise ValidationFailed("размер пачки должен быть положительным")
+        hub = self.hub
+        active = hub._fingerprints.active_key_id
+        updated = 0
+        conflicts: list[UUID] = []
+        unreadable: list[UUID] = []
+        after: UUID | None = None
+        while batch := await hub._store.stale_proxy_fingerprints(active, batch_size, after):
+            for slug, row in batch:
+                after = row.id
+                try:
+                    secret = hub._envelope.open_model(
+                        ProxySecret, row.secret, associated_data("ih_proxies", row.id)
+                    )
+                except DecryptionFailed:
+                    unreadable.append(row.id)
+                    continue
+                value = fingerprint_value(row.scheme, row.host, row.port, secret.username)
+                async with hub.space(slug)._tx(own=True) as tx:
+                    if await tx.set_proxy_fingerprint(row.id, hub._fingerprints.tag(value), active):
+                        updated += 1
+                    else:
+                        conflicts.append(row.id)
+        return FingerprintRekeyReport(updated, conflicts, unreadable)
 
     async def renormalize(self, service: Service | str, *, batch_size: int = 1000) -> RenormalizeReport:
         """Пересчитать `normalized_ref` identity сервиса после смены `normalize_ref_version` (D-149).

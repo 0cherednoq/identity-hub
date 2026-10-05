@@ -12,6 +12,11 @@
 
 ### Added
 
+- Кольцо ключей отпечатков (`IMP-04`, `D-207`): HMAC-SHA-256 отдельными ключами, не KEK.
+  `StaticSecretsProvider(fingerprint_keys=, fingerprint_active=)`, переменная
+  `IDENTITY_HUB_FINGERPRINT_KEYS`, `FileSecretsProvider(fingerprint_path=)`; без них ключи
+  выводятся из KEK через HKDF. `hub.doctor.rekey_fingerprints()` и
+  `identity-hub doctor rekey-fingerprints` пересчитывают отпечатки прокси.
 - `expected_revision` у команд изменения аккаунта (`space.identities`, `space.secrets`,
   `space.links`, `space.verifications`): устаревшая ревизия — `RevisionConflict` без изменений,
   в том числе для параллельной команды в другой сессии (`IMP-07`, `D-206`). Руководство —
@@ -259,6 +264,11 @@
 
 ### Fixed
 
+- Отпечаток прокси — HMAC ключом отпечатков вместо SHA-256 без ключа: логин прокси больше не
+  подбирается перебором по известному хосту (`R2-S16`). Миграция `0018` добавляет
+  `ih_proxies.fingerprint_key_id`; прежние отпечатки находятся до пересчёта
+  `identity-hub doctor rekey-fingerprints`. `hub.start()` требует ревизию схемы `0018`.
+  `identity_hub.proxies.fingerprint` заменён на `fingerprint_value` и `legacy_fingerprint`.
 - `Page.total` у `identities.list`/`search` описан верно: точное число до 1000, больше — 1001;
   точное число до 1 000 000 — `identities.count()` (`R1-28`).
 - Транзакция `MemoryStore` больше не копирует всё состояние: цикл аренды с операцией при 1000

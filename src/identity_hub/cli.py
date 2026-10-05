@@ -67,6 +67,11 @@ def _parser() -> argparse.ArgumentParser:
     _factory_argument(renormalize, inherited=True)
     renormalize.add_argument("--service", required=True, help="имя сервиса")
     renormalize.add_argument("--batch-size", type=int, default=1000)
+    rekey = doctor_sub.add_parser(
+        "rekey-fingerprints", help="пересчитать отпечатки прокси активным ключом отпечатков"
+    )
+    _factory_argument(rekey, inherited=True)
+    rekey.add_argument("--batch-size", type=int, default=500)
 
     rotate = sub.add_parser("rotate-key", help="переобернуть DEK активным мастер-ключом")
     _factory_argument(rotate)
@@ -128,7 +133,11 @@ def _check_arguments(args: argparse.Namespace) -> None:
         return
     if command == "rotate-key" and args.batch_size < 1:
         raise _UsageError("--batch-size должен быть положительным")
-    if command == "doctor" and args.doctor_command == "renormalize" and args.batch_size < 1:
+    if (
+        command == "doctor"
+        and args.doctor_command in ("renormalize", "rekey-fingerprints")
+        and args.batch_size < 1
+    ):
         raise _UsageError("--batch-size должен быть положительным")
     destructive: str | None = None
     if command == "rollups":
@@ -268,6 +277,8 @@ async def _run(hub: IdentityHub, args: argparse.Namespace) -> int:
     if args.command == "doctor":
         if args.doctor_command == "renormalize":
             return await _renormalize(hub, args)
+        if args.doctor_command == "rekey-fingerprints":
+            return await _rekey_fingerprints(hub, args)
         issues = await hub.doctor.check(fix=args.fix)
         for issue in issues:
             marker = "fixed" if args.fix else "issue"
@@ -314,6 +325,16 @@ async def _renormalize(hub: IdentityHub, args: argparse.Namespace) -> int:
         print("collision: " + " ".join(str(identity_id) for identity_id in group))
     for identity_id in report.invalid:
         print(f"invalid: {identity_id}")
+    return 0 if report.complete else 1
+
+
+async def _rekey_fingerprints(hub: IdentityHub, args: argparse.Namespace) -> int:
+    report = await hub.doctor.rekey_fingerprints(batch_size=args.batch_size)
+    print(f"updated: {report.updated}")
+    for proxy_id in report.conflicts:
+        print(f"conflict: {proxy_id}")
+    for proxy_id in report.unreadable:
+        print(f"unreadable: {proxy_id}")
     return 0 if report.complete else 1
 
 

@@ -22,6 +22,7 @@ pytestmark = pytest.mark.unit
         (["maintenance", "--factory", "app:hub", "--once"], "maintenance"),
         (["doctor", "--factory", "app:hub", "--fix"], "doctor"),
         (["doctor", "--factory", "app:hub", "renormalize", "--service", "mail"], "doctor"),
+        (["doctor", "--factory", "app:hub", "rekey-fingerprints"], "doctor"),
         (["rotate-key", "--factory", "app:hub", "--batch-size", "10"], "rotate-key"),
         (
             [

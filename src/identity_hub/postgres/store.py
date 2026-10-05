@@ -1421,6 +1421,10 @@ class PgTx(StoreTx):
     # --------------------------------------------------------- прокси
 
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
+        if row.aliases:
+            known = await self.proxy_by_fingerprint(row.aliases)
+            if known is not None:
+                return known, False
         stmt = (
             insert(PROXIES)
             .values(
@@ -1431,6 +1435,7 @@ class PgTx(StoreTx):
                 host=row.host,
                 port=row.port,
                 fingerprint=row.fingerprint,
+                fingerprint_key_id=row.fingerprint_key_id,
                 max_identities=row.max_identities,
                 **row.secret.columns(),
             )
@@ -1489,21 +1494,39 @@ class PgTx(StoreTx):
         ).scalar_one_or_none()
         return float(score) if score is not None else None
 
-    async def proxy_by_fingerprint(self, fingerprint: str) -> UUID | None:
+    async def proxy_by_fingerprint(self, fingerprints: Sequence[str]) -> UUID | None:
+        if not fingerprints:
+            return None
         found: UUID | None = (
             await self.execute(
-                select(PROXIES.c.id).where(
-                    PROXIES.c.space_id == self.space.id, PROXIES.c.fingerprint == fingerprint
+                select(PROXIES.c.id)
+                .where(
+                    PROXIES.c.space_id == self.space.id, _any_of(PROXIES.c.fingerprint, list(fingerprints))
                 )
+                .order_by(PROXIES.c.id)
+                .limit(1)
             )
         ).scalar_one_or_none()
         return found
 
-    async def set_proxy_secret(self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload) -> bool:
+    async def set_proxy_secret(
+        self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload, *, fingerprint_key_id: str | None
+    ) -> bool:
         result = await self.execute(
             update(PROXIES)
             .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
-            .values(fingerprint=fingerprint, **secret.columns())
+            .values(fingerprint=fingerprint, fingerprint_key_id=fingerprint_key_id, **secret.columns())
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def set_proxy_fingerprint(self, proxy_id: UUID, fingerprint: str, key_id: str | None) -> bool:
+        taken = await self.proxy_by_fingerprint([fingerprint])
+        if taken is not None and taken != proxy_id:
+            return False
+        result = await self.execute(
+            update(PROXIES)
+            .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
+            .values(fingerprint=fingerprint, fingerprint_key_id=key_id)
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -5053,6 +5076,23 @@ class PgStore(Store):
                 return events, deliveries
 
     # --------------------------------------------------------- doctor / rotate-key
+
+    async def stale_proxy_fingerprints(
+        self, active_key_id: str, limit: int, after: UUID | None
+    ) -> list[tuple[str, ProxyRow]]:
+        p = PROXIES.c
+        stmt = (
+            select(PROXIES, SPACES.c.slug)
+            .join(SPACES, SPACES.c.id == p.space_id)
+            .where(or_(p.fingerprint_key_id.is_(None), p.fingerprint_key_id != active_key_id))
+            .order_by(p.id)
+            .limit(limit)
+        )
+        if after is not None:
+            stmt = stmt.where(p.id > after)
+        async with self.sessionmaker() as session:
+            rows = (await _execute(session, stmt, execution_options=self.options)).mappings()
+            return [(row["slug"], _proxy_row(row)) for row in rows]
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         i = IDENTITIES.c

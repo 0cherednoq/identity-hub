@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from identity_hub.errors import ValidationFailed
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import EventRecord, ProxyRecord
-from identity_hub.proxies import ProxyHealthPolicy, fingerprint, parse_proxy_url
+from identity_hub.proxies import ProxyHealthPolicy, fingerprint_value, parse_proxy_url
 from tests.fixtures.api import add_proxy
 
 pytestmark = pytest.mark.pg
@@ -53,10 +53,10 @@ def test_parse_and_fingerprint() -> None:
         "us@er",
         "p:ss",
     )
-    assert fingerprint("socks5", "PROXY.example.com", 1080, "u") == fingerprint(
+    assert fingerprint_value("socks5", "PROXY.example.com", 1080, "u") == fingerprint_value(
         "socks5", "proxy.example.com", 1080, "u"
     )
-    assert fingerprint("socks5", "h", 1, "a") != fingerprint("socks5", "h", 1, "b")
+    assert fingerprint_value("socks5", "h", 1, "a") != fingerprint_value("socks5", "h", 1, "b")
     for bad in ("ftp://h:1", "socks5://h", "http://:80"):
         with pytest.raises(ValidationFailed):
             parse_proxy_url(bad)

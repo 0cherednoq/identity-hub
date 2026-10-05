@@ -901,7 +901,9 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
     scheme: Mapped[str] = mapped_column(String(16))  # socks5, http, mtproxy
     host: Mapped[str] = mapped_column(String(256))
     port: Mapped[int] = mapped_column(Integer)
-    fingerprint: Mapped[str] = mapped_column(String(64))  # hash(scheme, host, port, username)
+    fingerprint: Mapped[str] = mapped_column(String(64))  # HMAC(scheme, host, port, username), D-207
+    # ключ кольца отпечатков; NULL — SHA-256 без ключа до 0018, до пересчёта
+    fingerprint_key_id: Mapped[str | None] = mapped_column(String(64))
 
     status: Mapped[str] = mapped_column(String(16), default=ProxyStatus.ALIVE)
     error_score: Mapped[float] = mapped_column(Float, default=0.0)
