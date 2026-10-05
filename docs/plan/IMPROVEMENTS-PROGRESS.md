@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I1.2b expected_revision в API изменений
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: expected_revision в каждом семействе команд, гонка двух сессий, savepoint и откат
+  - [ ] Проверка ревизии внутри транзакции команды (SpaceBase)
+  - [ ] Параметр expected_revision в space.identities, secrets, links, verifications
+  - [ ] Админка: проверка ревизии в той же транзакции, что и команда
+  - [ ] Документация, CHANGELOG, трассировка IMP-07, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -37,7 +41,7 @@
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | done |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | done |  |  |
 | I1.2a | Revision агрегата: колонка, рост, события, read-схема | I0.2b, I0.4 | done |  | разбиение D-205 |
-| I1.2b | expected_revision в API изменений | I1.2a | todo |  | разбиение D-205 |
+| I1.2b | expected_revision в API изменений | I1.2a | in_progress |  | разбиение D-205 |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
