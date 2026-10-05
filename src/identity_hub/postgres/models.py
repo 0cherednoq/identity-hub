@@ -885,6 +885,7 @@ class ProviderOperationRecord(IdentityHubBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))  # 0024, D-220
 
     __table_args__ = (
         _identity_fk(),
@@ -895,6 +896,7 @@ class ProviderOperationRecord(IdentityHubBase):
         ),
         Index(
             "ix_ih_provider_operations_claim",
+            "space_id",
             "available_at",
             postgresql_where=text("state IN ('pending', 'retryable')"),
         ),

@@ -12,6 +12,11 @@
 
 ### Added
 
+- Очередь операций провайдера (`IMP-11`, `D-220`, миграция `0024`): машина состояний и
+  `RetryPolicy` в `identity_hub.domain.provider_operations`; Store `enqueue_provider_operation`,
+  `claim_provider_operations`, `apply_provider_operation`, `recover_provider_operations`,
+  `cancel_provider_operation`. Гарантия — at-least-once попытка. `hub.start()` требует ревизию
+  схемы `0024`.
 - Режимы записи сессии (`IMP-10`, `D-219`): `lease.save_session(..., mode=)` и
   `secrets.replace_session(..., mode=)` — `in_place` (по умолчанию) или `replace` (новая запись,
   прежняя в истории); `secrets.revoke_session` — отзыв без замены. Вход сохраняет сессию в режиме

@@ -56,6 +56,9 @@ from identity_hub.crypto.envelope import (
     credential_associated_data,
 )
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
+from identity_hub.domain.provider_operations import CLAIMABLE as CLAIMABLE_OPERATIONS
+from identity_hub.domain.provider_operations import TERMINAL as TERMINAL_OPERATIONS
+from identity_hub.domain.provider_operations import resolve_outcome, resolve_recovery
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import (
@@ -167,6 +170,7 @@ from identity_hub.store.base import (
     OverviewRequirementRow,
     OverviewServiceRow,
     OverviewSnapshot,
+    ProviderClaim,
     ProviderOperationRow,
     ProxyBindingHistoryRow,
     ProxyBoundIdentityRow,
@@ -3844,6 +3848,178 @@ class PgTx(StoreTx):
             await self.execute(delete(IMPORT_ITEMS).where(IMPORT_ITEMS.c.run_id == run_id))
         return await self.get_import_run(run_id)
 
+    async def enqueue_provider_operation(
+        self,
+        identity_id: UUID,
+        kind: str,
+        *,
+        available_at: datetime | None = None,
+        deadline_at: datetime | None = None,
+    ) -> ProviderOperationRow:
+        values: dict[str, Any] = {
+            "id": new_id(),
+            "space_id": self.space.id,
+            "identity_id": identity_id,
+            "kind": kind,
+            "deadline_at": deadline_at,
+        }
+        if available_at is not None:
+            values["available_at"] = available_at
+        operation_id = (
+            await self.execute(
+                insert(PROVIDER_OPERATIONS).values(**values).returning(PROVIDER_OPERATIONS.c.id)
+            )
+        ).scalar_one()
+        (row,) = [
+            r for r in await self.list_provider_operations(identity_id=identity_id) if r.id == operation_id
+        ]
+        return row
+
+    async def claim_provider_operations(
+        self, worker: str, *, limit: int, claim_for: timedelta, kinds: frozenset[str] | None = None
+    ) -> list[ProviderClaim]:
+        p = PROVIDER_OPERATIONS.c
+        due = (
+            select(p.id)
+            .where(
+                p.space_id == self.space.id,
+                p.state.in_(sorted(CLAIMABLE_OPERATIONS)),
+                p.available_at <= func.now(),
+            )
+            .order_by(p.available_at, p.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        if kinds is not None:
+            due = due.where(p.kind.in_(sorted(kinds)))
+        ids = list((await self.execute(due)).scalars())
+        if not ids:
+            return []
+        rows = await self.execute(
+            update(PROVIDER_OPERATIONS)
+            .where(_any_of(p.id, ids))
+            .values(
+                state="running",
+                attempt=p.attempt + 1,
+                claim_id=func.gen_random_uuid(),
+                claim_token=p.claim_token + 1,
+                claimed_by=worker,
+                claim_expires_at=func.now() + claim_for,
+                updated_at=func.now(),
+                revision=p.revision + 1,
+            )
+            .returning(
+                p.id,
+                p.identity_id,
+                p.kind,
+                p.attempt,
+                p.claim_id,
+                p.claim_token,
+                p.claim_expires_at,
+                p.deadline_at,
+            )
+        )
+        claims = [
+            ProviderClaim(
+                row.id,
+                row.identity_id,
+                row.kind,
+                row.attempt,
+                row.claim_id,
+                row.claim_token,
+                row.claim_expires_at,
+                row.deadline_at,
+            )
+            for row in rows
+        ]
+        return sorted(claims, key=lambda claim: ids.index(claim.operation_id))
+
+    async def apply_provider_operation(
+        self,
+        claim: ProviderClaim,
+        outcome: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        policy: Any = None,
+        fence: LeaseFence | None = None,
+    ) -> bool:
+        p = PROVIDER_OPERATIONS.c
+        state, available_at = resolve_outcome(
+            outcome, attempt=claim.attempt, deadline_at=claim.deadline_at, now=await self.now(), policy=policy
+        )
+        if fence is not None:
+            await self.check_fence(fence)
+        values: dict[str, Any] = {
+            "state": state,
+            "error_code": error_code,
+            "claim_expires_at": None,
+            "updated_at": func.now(),
+            "revision": p.revision + 1,
+        }
+        if result is not None:
+            values["result"] = result
+        if available_at is not None:
+            values["available_at"] = available_at
+        if state in TERMINAL_OPERATIONS:
+            values["finished_at"] = func.now()
+        applied = await self.execute(
+            update(PROVIDER_OPERATIONS)
+            .where(
+                p.id == claim.operation_id,
+                p.space_id == self.space.id,
+                p.claim_id == claim.claim_id,
+                p.claim_token == claim.claim_token,
+                p.state == "running",
+                p.claim_expires_at > func.now(),
+            )
+            .values(**values)
+        )
+        return bool(applied.rowcount)  # type: ignore[attr-defined]
+
+    async def recover_provider_operations(self, *, limit: int, policy: Any = None) -> int:
+        p = PROVIDER_OPERATIONS.c
+        rows = list(
+            await self.execute(
+                select(p.id, p.attempt, p.deadline_at)
+                .where(p.space_id == self.space.id, p.state == "running", p.claim_expires_at <= func.now())
+                .order_by(p.claim_expires_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        now = await self.now()
+        for row in rows:
+            state, available_at = resolve_recovery(
+                attempt=row.attempt, deadline_at=row.deadline_at, now=now, policy=policy
+            )
+            values: dict[str, Any] = {
+                "state": state,
+                "error_code": "claim_expired",
+                "claim_expires_at": None,
+                "updated_at": func.now(),
+                "revision": p.revision + 1,
+            }
+            if available_at is not None:
+                values["available_at"] = available_at
+            if state in TERMINAL_OPERATIONS:
+                values["finished_at"] = func.now()
+            await self.execute(update(PROVIDER_OPERATIONS).where(p.id == row.id).values(**values))
+        return len(rows)
+
+    async def cancel_provider_operation(self, operation_id: UUID) -> bool:
+        p = PROVIDER_OPERATIONS.c
+        cancelled = await self.execute(
+            update(PROVIDER_OPERATIONS)
+            .where(
+                p.id == operation_id,
+                p.space_id == self.space.id,
+                p.state.in_(sorted(CLAIMABLE_OPERATIONS)),
+            )
+            .values(state="cancelled", finished_at=func.now(), updated_at=func.now(), revision=p.revision + 1)
+        )
+        return bool(cancelled.rowcount)  # type: ignore[attr-defined]
+
     async def list_provider_operations(
         self,
         *,
@@ -3887,6 +4063,7 @@ class PgTx(StoreTx):
                 created_at=row.created_at,
                 updated_at=row.updated_at,
                 finished_at=row.finished_at,
+                revision=row.revision,
             )
             for row in rows
         ]

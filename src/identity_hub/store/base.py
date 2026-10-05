@@ -181,6 +181,24 @@ class ProviderOperationRow:
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None
+    revision: int = 1  # каждое изменение записи + 1 (D-220)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderClaim:
+    """Claim операции провайдера (IMP-11, D-220): применить результат можно только с ним.
+
+    `claim_id` — ключ идемпотентности для адаптера; `claim_token` растёт с каждым claim.
+    """
+
+    operation_id: UUID
+    identity_id: UUID
+    kind: str
+    attempt: int
+    claim_id: UUID
+    claim_token: int
+    claim_expires_at: datetime
+    deadline_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1718,6 +1736,51 @@ class StoreTx(ABC):
     @abstractmethod
     async def request_import_cancel(self, run_id: UUID) -> ImportRunRow | None:
         """Stop new claims and cancel now or after the currently claimed batch."""
+
+    @abstractmethod
+    async def enqueue_provider_operation(
+        self,
+        identity_id: UUID,
+        kind: str,
+        *,
+        available_at: datetime | None = None,
+        deadline_at: datetime | None = None,
+    ) -> ProviderOperationRow:
+        """Поставить операцию в очередь: `pending`, `attempt = 0`, `revision = 1` (D-220)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def claim_provider_operations(
+        self, worker: str, *, limit: int, claim_for: timedelta, kinds: frozenset[str] | None = None
+    ) -> list[ProviderClaim]:
+        """Взять доступные `pending`/`retryable` операции пространства (`SKIP LOCKED`): `running`,
+        `attempt + 1`, новый `claim_id`, `claim_token + 1`, срок claim. Коммит — до вызова адаптера."""
+
+    @abstractmethod
+    async def apply_provider_operation(
+        self,
+        claim: ProviderClaim,
+        outcome: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        policy: Any = None,
+        fence: LeaseFence | None = None,
+    ) -> bool:
+        """Применить итог (`succeeded`/`retryable`/`failed`) по claim; `False` — поздний ответ.
+
+        Принимается только при совпадении `claim_id`/`claim_token`, состоянии `running` и
+        неистёкшем claim; `fence` — дополнительно полный lease fence (D-212). `retryable` по
+        `policy` (`RetryPolicy`) может стать `failed`: попытки исчерпаны или вышел срок.
+        """
+
+    @abstractmethod
+    async def recover_provider_operations(self, *, limit: int, policy: Any = None) -> int:
+        """`running` с истёкшим claim → `retryable` (или `failed` по `policy`); число восстановленных."""
+
+    @abstractmethod
+    async def cancel_provider_operation(self, operation_id: UUID) -> bool:
+        """`pending`/`retryable` → `cancelled`; `False` — операция уже выполняется или завершена."""
 
     @abstractmethod
     async def list_provider_operations(

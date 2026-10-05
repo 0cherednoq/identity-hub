@@ -26,6 +26,9 @@ from identity_hub.crypto.envelope import (
     credential_associated_data,
 )
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
+from identity_hub.domain.provider_operations import CLAIMABLE as CLAIMABLE_OPERATIONS
+from identity_hub.domain.provider_operations import TERMINAL as TERMINAL_OPERATIONS
+from identity_hub.domain.provider_operations import resolve_outcome, resolve_recovery
 from identity_hub.domain.query import profile_sort_text
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
@@ -86,6 +89,7 @@ from identity_hub.store.base import (
     OverviewRequirementRow,
     OverviewServiceRow,
     OverviewSnapshot,
+    ProviderClaim,
     ProviderOperationRow,
     ProxyBindingHistoryRow,
     ProxyBoundIdentityRow,
@@ -2688,6 +2692,158 @@ class MemoryTx(StoreTx):
             for key in [key for key in self.state.import_items if key[0] == run_id]:
                 del self.state.import_items[key]
         return deepcopy(row)
+
+    async def enqueue_provider_operation(
+        self,
+        identity_id: UUID,
+        kind: str,
+        *,
+        available_at: datetime | None = None,
+        deadline_at: datetime | None = None,
+    ) -> ProviderOperationRow:
+        if self._own(identity_id) is None:
+            raise NotFound("identity", identity_id)
+        row = ProviderOperationRow(
+            new_id(),
+            self.space.id,
+            identity_id,
+            kind,
+            "pending",
+            0,
+            None,
+            0,
+            None,
+            None,
+            available_at or self._now,
+            deadline_at,
+            {},
+            None,
+            self._now,
+            self._now,
+            None,
+            1,
+        )
+        self.state.provider_operations[row.id] = row
+        return deepcopy(row)
+
+    async def claim_provider_operations(
+        self, worker: str, *, limit: int, claim_for: timedelta, kinds: frozenset[str] | None = None
+    ) -> list[ProviderClaim]:
+        due = sorted(
+            (
+                row
+                for row in self.state.provider_operations.values()
+                if row.space_id == self.space.id
+                and row.state in CLAIMABLE_OPERATIONS
+                and row.available_at <= self._now
+                and (kinds is None or row.kind in kinds)
+            ),
+            key=lambda row: (row.available_at, row.id),
+        )[:limit]
+        claims: list[ProviderClaim] = []
+        for row in due:
+            claimed = replace(
+                row,
+                state="running",
+                attempt=row.attempt + 1,
+                claim_id=uuid4(),
+                claim_token=row.claim_token + 1,
+                claimed_by=worker,
+                claim_expires_at=self._now + claim_for,
+                updated_at=self._now,
+                revision=row.revision + 1,
+            )
+            self.state.provider_operations[row.id] = claimed
+            assert claimed.claim_id is not None and claimed.claim_expires_at is not None
+            claims.append(
+                ProviderClaim(
+                    claimed.id,
+                    claimed.identity_id,
+                    claimed.kind,
+                    claimed.attempt,
+                    claimed.claim_id,
+                    claimed.claim_token,
+                    claimed.claim_expires_at,
+                    claimed.deadline_at,
+                )
+            )
+        return claims
+
+    async def apply_provider_operation(
+        self,
+        claim: ProviderClaim,
+        outcome: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        policy: Any = None,
+        fence: LeaseFence | None = None,
+    ) -> bool:
+        state, available_at = resolve_outcome(
+            outcome, attempt=claim.attempt, deadline_at=claim.deadline_at, now=self._now, policy=policy
+        )
+        if fence is not None:
+            await self.check_fence(fence)
+        row = self.state.provider_operations.get(claim.operation_id)
+        if (
+            row is None
+            or row.space_id != self.space.id
+            or row.claim_id != claim.claim_id
+            or row.claim_token != claim.claim_token
+            or row.state != "running"
+            or row.claim_expires_at is None
+            or row.claim_expires_at <= self._now
+        ):
+            return False
+        self.state.provider_operations[row.id] = replace(
+            row,
+            state=state,
+            error_code=error_code,
+            claim_expires_at=None,
+            result=deepcopy(result) if result is not None else row.result,
+            available_at=available_at or row.available_at,
+            finished_at=self._now if state in TERMINAL_OPERATIONS else None,
+            updated_at=self._now,
+            revision=row.revision + 1,
+        )
+        return True
+
+    async def recover_provider_operations(self, *, limit: int, policy: Any = None) -> int:
+        stale = sorted(
+            (
+                row
+                for row in self.state.provider_operations.values()
+                if row.space_id == self.space.id
+                and row.state == "running"
+                and row.claim_expires_at is not None
+                and row.claim_expires_at <= self._now
+            ),
+            key=lambda row: row.claim_expires_at or self._now,
+        )[:limit]
+        for row in stale:
+            state, available_at = resolve_recovery(
+                attempt=row.attempt, deadline_at=row.deadline_at, now=self._now, policy=policy
+            )
+            self.state.provider_operations[row.id] = replace(
+                row,
+                state=state,
+                error_code="claim_expired",
+                claim_expires_at=None,
+                available_at=available_at or row.available_at,
+                finished_at=self._now if state in TERMINAL_OPERATIONS else None,
+                updated_at=self._now,
+                revision=row.revision + 1,
+            )
+        return len(stale)
+
+    async def cancel_provider_operation(self, operation_id: UUID) -> bool:
+        row = self.state.provider_operations.get(operation_id)
+        if row is None or row.space_id != self.space.id or row.state not in CLAIMABLE_OPERATIONS:
+            return False
+        self.state.provider_operations[operation_id] = replace(
+            row, state="cancelled", finished_at=self._now, updated_at=self._now, revision=row.revision + 1
+        )
+        return True
 
     async def list_provider_operations(
         self,
