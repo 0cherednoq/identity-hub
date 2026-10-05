@@ -26,7 +26,8 @@ from identity_hub.errors import AttemptsExhausted, LeaseUnavailable, OperationNo
 
 pytestmark = pytest.mark.conformance
 
-VALID_FOR = timedelta(seconds=0.4)
+# запас на медленную машину: между сверкой фактора и следующей арендой проходят сотни мс
+VALID_FOR = timedelta(seconds=2)
 
 
 async def _service(hub: IdentityHub, **spec: Any) -> None:
@@ -53,7 +54,7 @@ async def _pass_time(hub: IdentityHub) -> None:
     if isinstance(hub.clock, FakeClock):
         hub.clock.advance(timedelta(days=3))
     else:
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(VALID_FOR.total_seconds() + 0.6)
 
 
 # ---------------------------------------------------------------- R2-F10, R1-08

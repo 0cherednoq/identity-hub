@@ -27,13 +27,29 @@ class IdentityLinks(Namespace):
         *,
         actor: str,
         reason: str | None = None,
+        expected_revision: int | None = None,
     ) -> None:
-        """Добавить связь; на пару (identity, role) — одна связь, повтор — `AlreadyExists`."""
-        await self._space._link(identity_id, role, linked_identity_id, actor=actor, reason=reason)
+        """Добавить связь; на пару (identity, role) — одна связь, повтор — `AlreadyExists`.
 
-    async def remove(self, identity_id: UUID, role: str, *, actor: str, reason: str | None = None) -> bool:
+        `expected_revision` сверяется у `identity_id` — зависимого аккаунта.
+        """
+        await self._at(identity_id, expected_revision)._link(
+            identity_id, role, linked_identity_id, actor=actor, reason=reason
+        )
+
+    async def remove(
+        self,
+        identity_id: UUID,
+        role: str,
+        *,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
         """Удалить связь; `False` — её не было."""
-        return await self._space._unlink(identity_id, role, actor=actor, reason=reason)
+        return await self._at(identity_id, expected_revision)._unlink(
+            identity_id, role, actor=actor, reason=reason
+        )
 
     async def of(self, identity_id: UUID) -> Links:
         """Исходящие (от кого зависит identity) и входящие (кто зависит от него) связи."""

@@ -77,10 +77,16 @@ class Secrets(Namespace):
         )
 
     async def replace_credentials(
-        self, identity_id: UUID, credentials: BaseModel | Mapping[str, Any], *, actor: str
+        self,
+        identity_id: UUID,
+        credentials: BaseModel | Mapping[str, Any],
+        *,
+        actor: str,
+        expected_revision: int | None = None,
     ) -> None:
         """Заменить credentials целиком (валидация схемой сервиса, шифрование до транзакции)."""
-        await self._space._update_credentials(identity_id, credentials, actor=actor)
+        space = self._at(identity_id, expected_revision)
+        await space._update_credentials(identity_id, credentials, actor=actor)
 
     async def replace_session(
         self,
@@ -90,6 +96,9 @@ class Secrets(Namespace):
         actor: str,
         slot: str = "default",
         expires_at: datetime | None = None,
+        expected_revision: int | None = None,
     ) -> None:
         """Заменить сессию слота вне аренды на текущей границе fencing; под арендой — `lease.save_session`."""
-        await self._space._update_session(identity_id, session, actor=actor, slot=slot, expires_at=expires_at)
+        await self._at(identity_id, expected_revision)._update_session(
+            identity_id, session, actor=actor, slot=slot, expires_at=expires_at
+        )

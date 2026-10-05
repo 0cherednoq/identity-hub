@@ -16,6 +16,30 @@ Identity, или аккаунт, — учётная запись во внешн
 ревизию не меняют, команда без реальных изменений — тоже. Ту же ревизию несут события команды
 ([События](10-events.md#событие)) и колонка `hub.read.identities.c.revision`.
 
+### Параллельные правки: `expected_revision`
+
+Каждая команда изменения аккаунта принимает `expected_revision` — ревизию, которую видел
+оператор. Если аккаунт с тех пор изменили, команда ничего не пишет и бросает
+`RevisionConflict` (`expected_version` — переданная ревизия, `actual_version` — текущая):
+
+```python
+card = await space.identities.get(identity_id)
+try:
+    await space.identities.update(
+        identity_id, labels={"owner": "ops"}, actor="admin", expected_revision=card.revision
+    )
+except RevisionConflict:
+    ...  # перечитать карточку и показать оператору свежее состояние
+```
+
+Параметр есть у `identities.update`, `replace_*`, `add_tags`/`remove_tags`/`set_tags`,
+`set_note`, `delete`, `activate`, `retire`, `set_lifecycle`, `restore_standing`, `override`,
+`unpin`, `secrets.replace_credentials`/`replace_session`, `links.add`/`remove` и
+`verifications.requirements.add`/`resolve`, `verifications.review`. Без параметра (`None`) команда
+применяется безусловно. Проверка идёт под блокировкой строки аккаунта в транзакции команды: из
+двух команд с одной ревизией проходит одна. В `space.using(session)` конфликт откатывает только
+savepoint команды, транзакция приложения продолжается.
+
 ## Получить
 
 ```python

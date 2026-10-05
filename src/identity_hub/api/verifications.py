@@ -26,14 +26,30 @@ class Requirements(Namespace):
     __slots__ = ()
 
     async def add(
-        self, identity_id: UUID, code: str, *, deadline: datetime | None = None, actor: str
+        self,
+        identity_id: UUID,
+        code: str,
+        *,
+        deadline: datetime | None = None,
+        actor: str,
+        expected_revision: int | None = None,
     ) -> bool:
         """Добавить требование; `False` — такое уже есть."""
-        return await self._space._add_requirement(identity_id, code, deadline=deadline, actor=actor)
+        space = self._at(identity_id, expected_revision)
+        return await space._add_requirement(identity_id, code, deadline=deadline, actor=actor)
 
-    async def resolve(self, identity_id: UUID, code: str, *, actor: str, reason: str | None = None) -> bool:
+    async def resolve(
+        self,
+        identity_id: UUID,
+        code: str,
+        *,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
         """Снять требование; `False` — его не было."""
-        return await self._space._resolve_requirement(identity_id, code, actor=actor, reason=reason)
+        space = self._at(identity_id, expected_revision)
+        return await space._resolve_requirement(identity_id, code, actor=actor, reason=reason)
 
 
 class Verifications(Namespace):
@@ -59,8 +75,9 @@ class Verifications(Namespace):
         actor: str,
         reason: str,
         code: str | None = None,
+        expected_revision: int | None = None,
     ) -> VerificationStatus:
         """Решение человека: `approve` → verified, `reject` (нужен `code`) → rejected, `abandon` → missing."""
-        return await self._space._review_verification(
+        return await self._at(identity_id, expected_revision)._review_verification(
             identity_id, factor, action, actor=actor, reason=reason, code=code
         )

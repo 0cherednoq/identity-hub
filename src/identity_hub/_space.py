@@ -63,15 +63,43 @@ class SpaceBase:
         self._space_id = space_id
         self._session = session
         self._create = create  # создать пространство при первом обращении, если его нет
+        # (identity, ревизия), которую сверяет каждая транзакция команды (IMP-07, D-206)
+        self._expected: tuple[UUID, int] | None = None
 
     def using(self, session: AsyncSession) -> Self:
         """Операции общей группы (ТЗ §7.2) выполняются в транзакции пользователя (savepoint)."""
+        handle = self._copy()
+        handle._session = session
+        return handle
+
+    def _expecting(self, identity_id: UUID, expected_revision: int | None) -> Self:
+        """Копия хэндла, чьи транзакции сверяют ревизию identity; `None` — без проверки.
+
+        Проверка — первая блокировка транзакции (`lock_identity_revision`, `FOR UPDATE` строки
+        identity): параллельная команда с той же ревизией ждёт коммита и получает
+        `RevisionConflict`. Её повторяет каждая транзакция команды, в том числе вспомогательные
+        чтения до шифрования: ревизия между ними не меняется, а конфликт виден раньше. Своя
+        транзакция (`own=True`) при `using(session)` проверку не делает: строку может держать
+        транзакция пользователя. Команда, которая пишет в своей транзакции, вызывает
+        `_check_expected` сама.
+        """
+        if expected_revision is None:
+            return self
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+            raise ValidationFailed("expected_revision должен быть целым числом")
+        if expected_revision < 0:
+            raise ValidationFailed("expected_revision не может быть отрицательным")
+        handle = self._copy()
+        handle._expected = (identity_id, expected_revision)
+        return handle
+
+    def _copy(self) -> Self:
         return type(self)(
             self.hub,
             self.slug,
             title=self._title,
             space_id=self._space_id,
-            session=session,
+            session=self._session,
             create=self._create,
         )
 
@@ -99,7 +127,13 @@ class SpaceBase:
         ref = await self.ref()
         session: Any = None if own else self._session
         async with self.hub._store.transaction(ref, session=session) as tx:
+            if not (own and self._session is not None):
+                await self._check_expected(tx)
             yield tx
+
+    async def _check_expected(self, tx: StoreTx) -> None:
+        if self._expected is not None:
+            await tx.lock_identity_revision(*self._expected)
 
     async def _emit(self, tx: StoreTx, *drafts: EventDraft) -> list[UUID]:
         """Записать события в транзакции операции; данные очищаются от секретов (S-8)."""

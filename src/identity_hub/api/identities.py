@@ -391,76 +391,143 @@ class Identities(Namespace):
         labels: Mapping[str, Any] | None = None,
         note: str | _Unset | None = UNSET,
         actor: str,
+        expected_revision: int | None = None,
     ) -> Identity:
         """Частичное изменение одной транзакцией и одним событием `identity.updated`.
 
         `profile` и `labels` сливаются с текущими; `None` в значении удаляет ключ. `note`
         заменяет заметку, `note=None` очищает её. Без реальных изменений событие не пишется.
+
+        `expected_revision` — у всех команд изменения: ревизия, которую видел вызывающий.
+        Расхождение — `RevisionConflict` без изменений; `None` — без проверки (D-206).
         """
-        row = await self._space._update(identity_id, profile=profile, labels=labels, note=note, actor=actor)
+        row = await self._at(identity_id, expected_revision)._update(
+            identity_id, profile=profile, labels=labels, note=note, actor=actor
+        )
         return Identity.from_row(row)
 
-    async def replace_profile(self, identity_id: UUID, profile: SchemaInput, *, actor: str) -> Identity:
+    async def replace_profile(
+        self, identity_id: UUID, profile: SchemaInput, *, actor: str, expected_revision: int | None = None
+    ) -> Identity:
         """Заменить профиль целиком (валидация схемой сервиса)."""
-        return Identity.from_row(
-            await self._space._update_profile(identity_id, profile, replace=True, actor=actor)
-        )
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._update_profile(identity_id, profile, replace=True, actor=actor))
 
-    async def replace_attributes(self, identity_id: UUID, attributes: SchemaInput, *, actor: str) -> Identity:
+    async def replace_attributes(
+        self, identity_id: UUID, attributes: SchemaInput, *, actor: str, expected_revision: int | None = None
+    ) -> Identity:
         """Заменить технические атрибуты целиком (валидация схемой сервиса)."""
-        return Identity.from_row(await self._space._set_attributes(identity_id, attributes, actor=actor))
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._set_attributes(identity_id, attributes, actor=actor))
 
-    async def replace_labels(self, identity_id: UUID, labels: Mapping[str, Any], *, actor: str) -> Identity:
+    async def replace_labels(
+        self,
+        identity_id: UUID,
+        labels: Mapping[str, Any],
+        *,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> Identity:
         """Заменить метки целиком; для слияния — `update(labels=...)`."""
-        return Identity.from_row(await self._space._set_labels(identity_id, labels, actor=actor))
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._set_labels(identity_id, labels, actor=actor))
 
-    async def add_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str) -> Identity:
-        return Identity.from_row(await self._space._add_tags(identity_id, tags, actor=actor))
+    async def add_tags(
+        self, identity_id: UUID, tags: Iterable[str], *, actor: str, expected_revision: int | None = None
+    ) -> Identity:
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._add_tags(identity_id, tags, actor=actor))
 
-    async def remove_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str) -> Identity:
-        return Identity.from_row(await self._space._remove_tags(identity_id, tags, actor=actor))
+    async def remove_tags(
+        self, identity_id: UUID, tags: Iterable[str], *, actor: str, expected_revision: int | None = None
+    ) -> Identity:
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._remove_tags(identity_id, tags, actor=actor))
 
-    async def set_tags(self, identity_id: UUID, tags: Iterable[str], *, actor: str) -> Identity:
-        return Identity.from_row(await self._space._set_tags(identity_id, tags, actor=actor))
+    async def set_tags(
+        self, identity_id: UUID, tags: Iterable[str], *, actor: str, expected_revision: int | None = None
+    ) -> Identity:
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._set_tags(identity_id, tags, actor=actor))
 
-    async def set_note(self, identity_id: UUID, note: str | None, *, actor: str) -> Identity:
-        return Identity.from_row(await self._space._set_note(identity_id, note, actor=actor))
+    async def set_note(
+        self, identity_id: UUID, note: str | None, *, actor: str, expected_revision: int | None = None
+    ) -> Identity:
+        space = self._at(identity_id, expected_revision)
+        return Identity.from_row(await space._set_note(identity_id, note, actor=actor))
 
-    async def delete(self, identity_id: UUID, *, actor: str, revoke: bool = False) -> None:
+    async def delete(
+        self, identity_id: UUID, *, actor: str, revoke: bool = False, expected_revision: int | None = None
+    ) -> None:
         """Физически удалить identity. Нельзя, пока на неё ссылаются связи; журнал сохраняется.
 
         При живой аренде — `ValidationFailed`; `revoke=True` отзывает её в той же транзакции.
         """
-        await self._space._delete(identity_id, actor=actor, revoke=revoke)
+        await self._at(identity_id, expected_revision)._delete(identity_id, actor=actor, revoke=revoke)
 
     # ------------------------------------------------------------------ состояние
 
-    async def activate(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
+    async def activate(
+        self,
+        identity_id: UUID,
+        *,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
         """Перевести в работу (`lifecycle → ready`); из `retired` нужна причина."""
-        return await self._space._set_lifecycle(identity_id, Lifecycle.READY, actor=actor, reason=reason)
+        space = self._at(identity_id, expected_revision)
+        return await space._set_lifecycle(identity_id, Lifecycle.READY, actor=actor, reason=reason)
 
-    async def retire(self, identity_id: UUID, *, actor: str, reason: str | None = None) -> RegionDecision:
+    async def retire(
+        self,
+        identity_id: UUID,
+        *,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
         """Обратимо вывести из работы (`lifecycle → retired`), данные сохраняются."""
-        return await self._space._retire(identity_id, actor=actor, reason=reason)
+        return await self._at(identity_id, expected_revision)._retire(identity_id, actor=actor, reason=reason)
 
     async def set_lifecycle(
-        self, identity_id: UUID, state: Lifecycle | str, *, actor: str, reason: str | None = None
+        self,
+        identity_id: UUID,
+        state: Lifecycle | str,
+        *,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
     ) -> RegionDecision:
-        return await self._space._set_lifecycle(identity_id, state, actor=actor, reason=reason)
+        space = self._at(identity_id, expected_revision)
+        return await space._set_lifecycle(identity_id, state, actor=actor, reason=reason)
 
-    async def restore_standing(self, identity_id: UUID, *, actor: str, reason: str) -> RegionDecision:
+    async def restore_standing(
+        self, identity_id: UUID, *, actor: str, reason: str, expected_revision: int | None = None
+    ) -> RegionDecision:
         """Вернуть `banned → good` командой (sticky-бан наблюдения не снимают)."""
-        return await self._space._restore_standing(identity_id, actor=actor, reason=reason)
+        space = self._at(identity_id, expected_revision)
+        return await space._restore_standing(identity_id, actor=actor, reason=reason)
 
-    async def override(self, identity_id: UUID, override: Override) -> RegionDecision:
+    async def override(
+        self, identity_id: UUID, override: Override, *, expected_revision: int | None = None
+    ) -> RegionDecision:
         """Ручная правка региона админом; может закрепить регион (`pin_for`)."""
-        return await self._space._override(identity_id, override)
+        return await self._at(identity_id, expected_revision)._override(identity_id, override)
 
     async def unpin(
-        self, identity_id: UUID, region: str, key: str, *, actor: str, reason: str
+        self,
+        identity_id: UUID,
+        region: str,
+        key: str,
+        *,
+        actor: str,
+        reason: str,
+        expected_revision: int | None = None,
     ) -> RegionDecision:
         """Снять закрепление региона, не меняя состояния."""
-        return await self._space._unpin(identity_id, region, key, actor=actor, reason=reason)
+        space = self._at(identity_id, expected_revision)
+        return await space._unpin(identity_id, region, key, actor=actor, reason=reason)
 
     # ------------------------------------------------------------------ служебное
 

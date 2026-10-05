@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I1.2b expected_revision в API изменений
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: expected_revision в каждом семействе команд, гонка двух сессий, savepoint и откат
-  - [ ] Проверка ревизии внутри транзакции команды (SpaceBase)
-  - [ ] Параметр expected_revision в space.identities, secrets, links, verifications
-  - [ ] Админка: проверка ревизии в той же транзакции, что и команда
-  - [ ] Документация, CHANGELOG, трассировка IMP-07, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -41,7 +37,7 @@
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | done |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | done |  |  |
 | I1.2a | Revision агрегата: колонка, рост, события, read-схема | I0.2b, I0.4 | done |  | разбиение D-205 |
-| I1.2b | expected_revision в API изменений | I1.2a | in_progress |  | разбиение D-205 |
+| I1.2b | expected_revision в API изменений | I1.2a | done |  | разбиение D-205 |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
@@ -66,7 +62,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 20 / 41 done
+**Итого:** 21 / 41 done
 
 ## Журнал сессий
 
@@ -90,3 +86,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-01 · I5.1 · done · hub.read: ReadSchema (6 таблиц, белый список колонок, версия 1, явная db_schema), join с таблицей приложения и among= в default/custom схеме, SQL без секретных полей, D-150 (параллельная ветка) · дальше I5.2 после I4.3
 2026-10-01 · I1.1 · done · normalized_ref (миграция 0008), Service.normalize_ref/version, нормализация во всех путях, doctor.renormalize, D-149; tests/load переведены на новый API · дальше I1.2
 2026-10-05 · I1.2a · done · revision агрегата (миграция 0017, backfill из event_seq), рост раз на команду по EventSpec.aggregate, revision в событиях/вебхуке/журнале, read-схема v2 (R2-D23), RevisionConflict, doctor; тестовая БД без fsync · дальше I1.2b
+2026-10-05 · I1.2b · done · expected_revision у ~20 команд space.* (проверка FOR UPDATE первой в транзакции команды, savepoint при using), гонка двух сессий, D-206; IMP-07 implemented; дефлейк test_override_verification (срок фактора 2 с) · дальше I1.4

@@ -334,6 +334,7 @@ class RequirementsMixin(SpaceBase):
         self, identity_id: UUID, code: str, *, deadline: datetime | None = None, actor: str = "platform"
     ) -> bool:
         async with self._tx(own=True) as tx:
+            await self._check_expected(tx)  # своя транзакция при using(session) — сверка здесь
             await tx.lock_identities([identity_id])  # список требований читается и пишется целиком
             row = await self._identity(tx, identity_id)
             if any(r.get("code") == code for r in row.requirements):

@@ -42,7 +42,7 @@
 | Захват аренды | `ih_leases` выбранного аккаунта | после identity |
 | Импорт `update_session` | обновляемые identity пачки | `lock_identities`, по `id` |
 | `create_many` | уникальные индексы новых строк | по `(service, external_ref)` |
-| Команды админки с `expected_revision` | `ih_identities` (`lock_identity_revision`) | одна строка |
+| Команды `space.*` и админки с `expected_revision` | `ih_identities` (`lock_identity_revision`, `FOR UPDATE`), первой в каждой транзакции команды | п. 1, одна строка |
 | Изменение тегов, меток, профиля, атрибутов, заметки (`identities.update`, `add_tags`, …) | `ih_identities`, до чтения строки | `lock_identities`, одна строка |
 | `verifications.requirements.add/resolve`, шаг верификации | `ih_identities`, до чтения строки | `lock_identities`, одна строка |
 | Удаление identity | `ih_identities`, затем `ih_leases` | п. 1 → п. 5 |
