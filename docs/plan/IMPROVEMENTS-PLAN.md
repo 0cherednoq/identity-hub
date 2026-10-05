@@ -305,21 +305,27 @@ bash scripts/check.sh
 
 ## Фаза I3 — Credentials и sessions
 
-### I3.1 Схема и lifecycle нескольких credentials
+### I3.1a Credentials: схема, виды в Service и контракт Store
 
-Связанное улучшение: `IMP-09`.
+Связанное улучшение: `IMP-09`. Задача `I3.1` разбита решением `D-214` на `I3.1a` и `I3.1b`.
 
 - Новой миграцией преобразовать `ih_credentials`: UUIDv7 `id`, owner/space, kind, name,
   public_value, envelope, lifecycle, expires_at, revision; уникальность
   `(identity_id, kind, name)`. Legacy-строку перенести как default credential без потери envelope.
 - `Service` объявляет credential kinds и Pydantic secret schema для каждого kind; неизвестная
   kind/name отвергается до транзакции.
-- Реализовать lifecycle `active ↔ disabled`, `revoked` terminal и ленивую проверку expires_at.
-  Секрет, public_value и metadata изменяются атомарно с revision/event.
 - **Дополнение из ревью (`D-151`).** `R2-P08`: `MemoryStore` хранит `version` и `updated_at` credentials и сессий;
   conformance для `secrets.describe`.
-- **DoD:** migration roundtrip legacy data; несколько однотипных ключей; expiry/disable/revoke;
-  tenant isolation и отсутствие секретов в read models.
+- **DoD:** migration roundtrip legacy data; несколько однотипных ключей в Store; tenant isolation;
+  conformance memory/pg.
+
+### I3.1b Credentials: lifecycle, срок и команды
+
+Связанное улучшение: `IMP-09`.
+
+- Реализовать lifecycle `active ↔ disabled`, `revoked` terminal и ленивую проверку expires_at.
+  Секрет, public_value и metadata изменяются атомарно с revision/event.
+- **DoD:** expiry/disable/revoke; отсутствие секретов в read models и событиях; conformance.
 
 ### I3.2 API нескольких credentials и интеграция
 
@@ -711,7 +717,7 @@ I0.3 + I1.3 → I1.4a → I1.4b
 I0.4 → I2.1 → I2.2a → I2.2b
 I0.2b + I2.1 → I2.3 → I2.4
 
-I0.3 + I0.4 + I1.2b → I3.1 → I3.2 → I3.3
+I0.3 + I0.4 + I1.2b → I3.1a → I3.1b → I3.2 → I3.3
 
 I0.2b + I0.4 + I1.2b + I2.3 → I4.1
 I3.3 + I4.1 → I4.2

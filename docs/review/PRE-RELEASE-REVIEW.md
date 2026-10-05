@@ -630,7 +630,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-P05 | F2.3 | исправлена | `tests/unit/test_fake_clock.py` |
 | R2-P06 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
 | R2-P07 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
-| R2-P08 | I3.1 | открыта, очередь улучшений | — |
+| R2-P08 | I3.1a | открыта, очередь улучшений | — |
 | R2-P09 | F2.2 | исправлена | `tests/conformance/test_lease_cleanup.py` |
 | R2-P10 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
 | R2-P11 | F3.6 | исправлена | `tests/conformance/test_maintenance_timers.py` |

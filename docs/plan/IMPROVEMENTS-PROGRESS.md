@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I3.1a Credentials: схема, виды в Service, контракт Store, версии MemoryStore
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: describe с версией и updated_at в MemoryStore, несколько однотипных credentials в Store, legacy-строка как default после миграции, неизвестный вид отвергается
+  - [ ] MemoryStore: version и updated_at credentials и сессий (R2-P08)
+  - [ ] Миграция 0022 и модель ih_credentials (id, kind, name, public_value, lifecycle, expires_at, revision)
+  - [ ] Service.credential_kinds и контракт Store put/get/list credential (PgStore/MemoryStore), AAD и rotate-key
+  - [ ] Документация, ограничения, CHANGELOG, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -46,8 +50,9 @@
 | I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | done |  | разбиение D-210 |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | done |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | done |  |  |
-| I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
-| I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
+| I3.1a | Credentials: схема, виды в Service, контракт Store, версии MemoryStore | I0.3, I0.4, I1.2b | in_progress |  | разбиение D-214 |
+| I3.1b | Credentials: lifecycle, срок и команды space.secrets | I3.1a | todo |  | разбиение D-214 |
+| I3.2 | API нескольких credentials и интеграция | I3.1b | todo |  |  |
 | I3.3 | Два режима обновления session | I3.2 | todo |  |  |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
@@ -64,7 +69,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 28 / 43 done
+**Итого:** 28 / 44 done
 
 ## Журнал сессий
 
