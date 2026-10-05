@@ -10,10 +10,13 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I4.2 Login, refresh и challenge через provider operations
+- **Начата:** 2026-10-06
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: вход создаёт операцию и передаёт attempt_id, поздний ответ ничего не пишет, отказ и challenge через операцию, сбой между claim и apply восстанавливается
+  - [ ] Lease: запись сессии внутри чужой транзакции; ctx.attempt_id
+  - [ ] Вход: claim до вызова адаптера, итог одной транзакцией с claim и fence; LoginReport.operations
+  - [ ] Документация, CHANGELOG, трассировка, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -53,7 +56,7 @@
 | I3.3a | Session: схема, lifecycle и режимы в Store | I3.2b | done |  | разбиение D-218 |
 | I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | done |  | разбиение D-218 |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | done |  |  |
-| I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | todo |  |  |
+| I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | in_progress |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
