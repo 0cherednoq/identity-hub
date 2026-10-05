@@ -100,6 +100,7 @@ class Lease:
         self._lost: str | None = None
         self._closed = False
         self._last_ok = pool.space.hub.clock.monotonic()
+        self._last_flush = self._last_ok  # последняя запись времени и счётчиков в историю (D-210)
         self._started_at = self._last_ok
         self._owner: asyncio.Task[Any] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -261,15 +262,28 @@ class Lease:
 
     async def _extend(self) -> datetime | None:
         await self._flush_logs()
-        counters, self._counters = self._counters, LeaseCounters.empty()
+        clock = self.pool.space.hub.clock
+        started = clock.monotonic()
+        # история и счётчики — раз в stats_flush: между ними heartbeat меняет только ih_leases (HOT)
+        flush = self.pool.shared or started - self._last_flush >= self.pool.timing.stats_flush.total_seconds()
+        counters = LeaseCounters.empty()
+        if flush:
+            counters, self._counters = self._counters, LeaseCounters.empty()
         try:
             async with self.pool.space._tx(own=True) as tx:
-                return await tx.extend_lease(
-                    self._row, self.pool.timing.ttl.total_seconds(), counters, shared=self.pool.shared
+                expires_at = await tx.extend_lease(
+                    self._row,
+                    self.pool.timing.ttl.total_seconds(),
+                    counters,
+                    shared=self.pool.shared,
+                    flush=flush,
                 )
         except BaseException:
             self._merge_back(counters)
             raise
+        if flush and expires_at is not None:
+            self._last_flush = started
+        return expires_at
 
     def _merge_back(self, counters: LeaseCounters) -> None:
         for kind, n in counters.operations.items():

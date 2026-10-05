@@ -109,6 +109,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `LeaseTiming.ttl` | 1 мин | срок аренды без heartbeat |
 | `LeaseTiming.heartbeat` | 20 с | период продления аренды (не больше TTL/3) |
 | `LeaseTiming.safety_margin` | 20 с | запас до истечения, после которого клиент считает аренду потерянной |
+| `LeaseTiming.stats_flush` | 5 мин | как часто heartbeat пишет в историю время и счётчики операций |
 | `Service.login_timeout` | 2 мин | предел одного вызова `Authenticator.login` |
 | `Service.probe_timeout` | 1 мин | предел одного вызова пробы |
 | `LoginChallenge.expires_in` | 1 ч | срок вопроса платформы, если `expires_in` не задан |

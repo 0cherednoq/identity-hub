@@ -34,6 +34,7 @@ class Pools(Namespace):
         safety_margin: timedelta | None = None,
         holder: str | None = None,
         capacity_low: int | None = None,
+        stats_flush: timedelta | None = None,
     ) -> Pool:
         """Объявить пул: фильтры отбора и политики аренды. В БД не хранится, создаётся дёшево.
 
@@ -52,6 +53,7 @@ class Pools(Namespace):
             safety_margin=safety_margin,
             holder=holder,
             capacity_low=capacity_low,
+            stats_flush=stats_flush,
         )
 
     async def revoke(self, identity_id: UUID, *, reason: str, actor: str) -> bool:

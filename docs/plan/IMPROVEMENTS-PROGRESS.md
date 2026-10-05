@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I2.2a HOT heartbeat: индексы, fillfactor, редкая запись истории
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: доля HOT ≥ 0.9 за 10 кругов, история не пишется на каждом heartbeat, release сохраняет счётчики, свежий heartbeat в списке живых аренд
-  - [ ] Миграция 0021: удалить индексы expires_at и истории по last_heartbeat_at, fillfactor 70
-  - [ ] LeaseTiming.stats_flush и extend_lease без записи истории между сбросами (PgStore/MemoryStore)
-  - [ ] Список живых аренд: heartbeat из ih_leases
-  - [ ] Документация, таблица значений по умолчанию, CHANGELOG, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -46,7 +42,7 @@
 | I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | done |  | разбиение D-207 |
 | I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | done |  | разбиение D-207 |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | done |  |  |
-| I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | in_progress |  | разбиение D-210 |
+| I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | done |  | разбиение D-210 |
 | I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | todo |  | разбиение D-210 |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
@@ -68,7 +64,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 24 / 43 done
+**Итого:** 25 / 43 done
 
 ## Журнал сессий
 
@@ -96,3 +92,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I1.4a · done · кольцо ключей отпечатков (явное или HKDF из KEK, не равно KEK), HMAC-отпечаток прокси (миграция 0018, fingerprint_key_id), поиск по всем ключам и legacy SHA-256, doctor rekey-fingerprints, R2-S16 закрыта, D-207 · дальше I1.4b
 2026-10-05 · I1.4b · done · keyed_fingerprint (секрет HMAC-тегом), fingerprint_key_id в ключах идемпотентности (миграция 0019), повтор после ротации прежним ключом, нет ключа — SecretConfigurationError; idempotency_key у secrets.replace_*; hub.equivalence_tag; админка: отпечаток чувствительных команд по раскрытому секрету (был по маске SecretStr); IMP-04 implemented, D-208 · дальше I2.1
 2026-10-05 · I2.1 · done · last_leased_at (миграция 0020, backfill из истории) и индекс выборки по LRU; живая аренда через NOT EXISTS (на 50% из 100k: 192 → 0,16 мс на выборку); shared тоже ставит время; MemoryStore LRU с порядком захватов; load-замер 0/50/90/99% p95 33/22/29/18 мс на занятой машине (до: 73/253/267/187), D-209 · дальше I2.2
+2026-10-05 · I2.2a · done · миграция 0021 (без индексов expires_at и истории по last_heartbeat_at, fillfactor 70), LeaseTiming.stats_flush 5 мин: история и счётчики раз в интервал и при release, heartbeat в списке живых аренд из ih_leases; HOT 0/300 → ≥0.9, D-210 · дальше I2.2b

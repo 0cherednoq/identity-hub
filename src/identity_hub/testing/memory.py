@@ -762,7 +762,13 @@ class MemoryTx(StoreTx):
         return lease, reclaimed
 
     async def extend_lease(
-        self, lease: LeaseRow, ttl_seconds: float, counters: LeaseCounters, *, shared: bool
+        self,
+        lease: LeaseRow,
+        ttl_seconds: float,
+        counters: LeaseCounters,
+        *,
+        shared: bool,
+        flush: bool = True,
     ) -> datetime | None:
         if not shared:
             current = self.state.leases.get(lease.identity_id)
@@ -776,6 +782,8 @@ class MemoryTx(StoreTx):
             self.state.leases[lease.identity_id] = replace(
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
+            if not flush:
+                return expires_at
         self.state.history[lease.lease_id] = replace(
             history, last_heartbeat_at=self._now, **_merge_counters(history, counters)
         )
@@ -1853,9 +1861,13 @@ class MemoryTx(StoreTx):
     def _lease_read_row(self, row: LeaseHistoryRow) -> LeaseReadRow:
         identity = self.state.identities[row.identity_id]
         live = self.state.leases.get(row.identity_id)
-        expires_at = live.expires_at if live is not None and live.lease_id == row.lease_id else None
+        own = live is not None and live.lease_id == row.lease_id
+        expires_at = live.expires_at if live is not None and own else None
+        values = asdict(row)
+        if live is not None and own:  # heartbeat — в ih_leases, история раз в stats_flush (D-210)
+            values["last_heartbeat_at"] = live.heartbeat_at
         return LeaseReadRow(
-            **asdict(row),
+            **values,
             service=identity.service,
             external_ref=identity.external_ref,
             expires_at=expires_at,

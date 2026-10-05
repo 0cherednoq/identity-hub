@@ -47,10 +47,14 @@ class LeaseTiming:
     ttl: timedelta = timedelta(seconds=60)
     heartbeat: timedelta = timedelta(seconds=20)
     safety_margin: timedelta = timedelta(seconds=20)
+    # как часто heartbeat пишет в историю время и счётчики операций; между — только ih_leases (D-210)
+    stats_flush: timedelta = timedelta(minutes=5)
 
     def __post_init__(self) -> None:
         if self.heartbeat * 3 > self.ttl:
             raise ValidationFailed("heartbeat должен быть ≤ TTL/3 (G-1.2)")
+        if self.stats_flush < self.heartbeat:
+            raise ValidationFailed("stats_flush должен быть ≥ heartbeat")
         if self.safety_margin < self.heartbeat:
             raise ValidationFailed("safety_margin должен быть ≥ heartbeat (G-1.2)")
         if self.safety_margin >= self.ttl:
@@ -279,12 +283,14 @@ class PoolsMixin:
         safety_margin: timedelta | None = None,
         holder: str | None = None,
         capacity_low: int | None = None,
+        stats_flush: timedelta | None = None,
     ) -> Pool:
         defaults = LeaseTiming()
         timing = LeaseTiming(
             ttl=ttl or defaults.ttl,
             heartbeat=heartbeat or defaults.heartbeat,
             safety_margin=safety_margin or defaults.safety_margin,
+            stats_flush=stats_flush or defaults.stats_flush,
         )
         return Pool(
             space=self,

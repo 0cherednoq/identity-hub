@@ -688,9 +688,9 @@ class LeaseRecord(IdentityHubBase):
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+    # индекса на expires_at/heartbeat_at нет и место на странице оставлено: heartbeat — HOT (0021)
     __table_args__ = (
         _identity_fk(),
-        Index("ix_ih_leases_expires_at", "expires_at"),
         # поиск живой аренды по ключу в пределах пространства; единственность даёт ih_operation_keys
         Index(
             "ix_ih_leases_idempotency",
@@ -746,11 +746,6 @@ class LeaseHistoryRecord(IdentityHubBase):
         Index("ix_ih_lease_history_space_acquired", "space_id", "acquired_at"),
         Index("ix_ih_lease_history_space_released", "space_id", "released_at"),
         Index("ix_ih_lease_history_space_holder_acquired", "space_id", "holder", "acquired_at"),
-        Index(
-            "ix_ih_lease_history_open",
-            "last_heartbeat_at",
-            postgresql_where=text("released_at IS NULL"),
-        ),
         # чистильщик истёкших аренд идёт от открытой истории своего пространства (миграция 0011)
         Index(
             "ix_ih_lease_history_open_space",

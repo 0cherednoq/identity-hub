@@ -1112,9 +1112,19 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def extend_lease(
-        self, lease: LeaseRow, ttl_seconds: float, counters: LeaseCounters, *, shared: bool
+        self,
+        lease: LeaseRow,
+        ttl_seconds: float,
+        counters: LeaseCounters,
+        *,
+        shared: bool,
+        flush: bool = True,
     ) -> datetime | None:
-        """Heartbeat: продлить живую аренду по token и сбросить счётчики. None — аренды больше нет."""
+        """Heartbeat: продлить живую аренду по token. None — аренды больше нет.
+
+        `flush` — записать в историю время heartbeat и `counters`; без него эксклюзивная аренда
+        обновляет только `ih_leases` (HOT, D-210). Разделяемая пишет историю всегда.
+        """
 
     @abstractmethod
     async def release_lease(

@@ -978,7 +978,13 @@ class PgTx(StoreTx):
         return lease, reclaimed
 
     async def extend_lease(
-        self, lease: LeaseRow, ttl_seconds: float, counters: LeaseCounters, *, shared: bool
+        self,
+        lease: LeaseRow,
+        ttl_seconds: float,
+        counters: LeaseCounters,
+        *,
+        shared: bool,
+        flush: bool = True,
     ) -> datetime | None:
         expires_at: datetime | None
         if shared:
@@ -998,6 +1004,8 @@ class PgTx(StoreTx):
             ).scalar_one_or_none()
             if expires_at is None:
                 return None
+            if not flush:
+                return cast(datetime, expires_at)
         updated = await self.execute(
             update(HISTORY)
             .where(
@@ -2808,8 +2816,15 @@ class PgTx(StoreTx):
         )
 
     def _lease_read_statement(self) -> Select[Any]:
+        # heartbeat эксклюзивной аренды пишется в ih_leases, в историю — раз в stats_flush (D-210)
+        columns = [
+            func.coalesce(LEASES.c.heartbeat_at, HISTORY.c.last_heartbeat_at).label(field)
+            if field == "last_heartbeat_at"
+            else HISTORY.c[field]
+            for field in LEASE_HISTORY_FIELDS
+        ]
         return select(
-            *(HISTORY.c[field] for field in LEASE_HISTORY_FIELDS),
+            *columns,
             IDENTITIES.c.service,
             IDENTITIES.c.external_ref,
             LEASES.c.expires_at,

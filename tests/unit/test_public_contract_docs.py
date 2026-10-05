@@ -50,6 +50,7 @@ DEFAULTS: dict[str, str] = {
     "LeaseTiming.ttl": _duration(LeaseTiming().ttl),
     "LeaseTiming.heartbeat": _duration(LeaseTiming().heartbeat),
     "LeaseTiming.safety_margin": _duration(LeaseTiming().safety_margin),
+    "LeaseTiming.stats_flush": _duration(LeaseTiming().stats_flush),
     "Service.login_timeout": _duration(_service_default("login_timeout")),
     "Service.probe_timeout": _duration(_service_default("probe_timeout")),
     "LoginChallenge.expires_in": _duration(timedelta(hours=1)),
