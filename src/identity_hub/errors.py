@@ -230,18 +230,12 @@ class LeaseLost(IdentityHubError):
     """Аренда потеряна: воркер обязан прекратить работу с аккаунтом (ТЗ FR-6.3)."""
 
     code = "lease_lost"
-    context_fields = ("lease_id", "reason")
+    context_fields: ClassVar[tuple[str, ...]] = ("lease_id", "reason")
 
     def __init__(self, lease_id: UUID, reason: str) -> None:
         self.lease_id = lease_id
         self.reason = reason
         super().__init__(f"аренда {lease_id} потеряна: {reason}")
-
-
-class LeaseOwnershipLost(LeaseLost):
-    """Аренду держит другой владелец: fence не совпал (IMP-05)."""
-
-    code = "lease_ownership_lost"
 
 
 class LeaseRevoked(LeaseLost):
@@ -260,13 +254,34 @@ class StaleFencing(IdentityHubError):
     """Запись от имени устаревшей аренды отклонена (ТЗ G-1.4)."""
 
     code = "stale_fencing"
-    context_fields = ("identity_id", "fencing", "current")
+    context_fields: ClassVar[tuple[str, ...]] = ("identity_id", "fencing", "current")
 
     def __init__(self, identity_id: UUID, fencing: int, current: int | None = None) -> None:
         self.identity_id = identity_id
         self.fencing = fencing
         self.current = current
         super().__init__(f"устаревший fencing {fencing} для {identity_id} (текущий {current})")
+
+
+class LeaseOwnershipLost(LeaseLost, StaleFencing):
+    """Fence аренды не совпал: аренды нет, она истекла, отозвана или перешла другому (IMP-05, D-212).
+
+    Наследует и `StaleFencing`: код, ловивший отказ устаревшей аренды, продолжает его получать.
+    """
+
+    code = "lease_ownership_lost"
+    context_fields = ("lease_id", "reason", "identity_id", "fencing")
+
+    def __init__(
+        self, lease_id: UUID, reason: str, *, identity_id: UUID | None = None, fencing: int | None = None
+    ) -> None:
+        # LeaseLost.__init__ в цепочке super() дошёл бы до StaleFencing с чужой сигнатурой
+        self.lease_id = lease_id
+        self.reason = reason
+        self.identity_id = identity_id  # type: ignore[assignment]
+        self.fencing = fencing  # type: ignore[assignment]
+        self.current = None
+        IdentityHubError.__init__(self, f"аренда {lease_id} потеряна: {reason}")
 
 
 class ChallengeAlreadyOpen(IdentityHubError):

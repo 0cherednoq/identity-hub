@@ -69,6 +69,7 @@ from identity_hub.errors import (
     DatabaseBusy,
     IdempotencyConflict,
     IdentityHubError,
+    LeaseOwnershipLost,
     LeaseUnavailable,
     NotFound,
     RevisionConflict,
@@ -135,6 +136,7 @@ from identity_hub.store.base import (
     ImportItemRow,
     ImportRunRow,
     LeaseCounters,
+    LeaseFence,
     LeaseHistoryRow,
     LeaseReadRow,
     LeaseRow,
@@ -1052,6 +1054,33 @@ class PgTx(StoreTx):
             .where(_any_of(IDENTITIES.c.id, ordered), IDENTITIES.c.space_id == self.space.id)
             .order_by(IDENTITIES.c.id)
             .with_for_update(key_share=True)
+        )
+
+    async def check_fence(self, fence: LeaseFence, *, lock: bool = True) -> None:
+        i = IDENTITIES.c
+        stmt = select(i.fencing_seq).where(i.id == fence.identity_id, i.space_id == self.space.id)
+        if lock:
+            stmt = stmt.with_for_update(of=IDENTITIES, key_share=True)
+        current = (await self.execute(stmt)).scalar_one_or_none()
+        if current is not None and current == fence.fencing:
+            if fence.shared:
+                owner = select(HISTORY.c.lease_id).where(
+                    HISTORY.c.lease_id == fence.lease_id,
+                    HISTORY.c.token == fence.token,
+                    HISTORY.c.identity_id == fence.identity_id,
+                    HISTORY.c.released_at.is_(None),
+                )
+            else:
+                owner = select(LEASES.c.lease_id).where(
+                    LEASES.c.identity_id == fence.identity_id,
+                    LEASES.c.lease_id == fence.lease_id,
+                    LEASES.c.token == fence.token,
+                    LEASES.c.expires_at > func.now(),
+                )
+            if (await self.execute(owner)).scalar_one_or_none() is not None:
+                return
+        raise LeaseOwnershipLost(
+            fence.lease_id, "fence", identity_id=fence.identity_id, fencing=fence.fencing
         )
 
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:

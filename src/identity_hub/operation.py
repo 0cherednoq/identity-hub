@@ -25,7 +25,7 @@ from identity_hub.domain.idempotency import OPERATION_FAMILY, namespace
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import CODE_LIMIT, RAW_STATUS_LIMIT, Command, Observation, Timer
 from identity_hub.enums import AuthState, Availability, ChangeSource, SessionStatus, Standing
-from identity_hub.errors import OperationNotAllowed, StaleFencing, TransitionNotAllowed
+from identity_hub.errors import OperationNotAllowed, TransitionNotAllowed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.protocols import Blame, ErrorClassifier, Fault
@@ -93,9 +93,9 @@ async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> As
     space = lease.pool.space
     service = lease.pool.service
     async with space._tx(own=True) as tx:
+        # R1-15: fence под блокировкой строки и с живой арендой, а не одно сравнение номера (D-212)
+        await tx.check_fence(lease.fence)
         identity = await space._identity(tx, lease.identity_id)
-        if identity.fencing_seq != lease.fencing:
-            raise StaleFencing(lease.identity_id, lease.fencing, identity.fencing_seq)
         snapshot = IdentitySnapshot(
             lifecycle=identity.lifecycle,
             standing=identity.standing,

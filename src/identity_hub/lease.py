@@ -30,7 +30,6 @@ from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionSt
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseLost,
-    LeaseOwnershipLost,
     LeaseUnavailable,
     StaleFencing,
     ValidationFailed,
@@ -45,6 +44,7 @@ from identity_hub.store.base import (
     IdempotencyRequest,
     IdentityRow,
     LeaseCounters,
+    LeaseFence,
     LeaseRow,
     ProxyRow,
     StoreTx,
@@ -426,15 +426,19 @@ class Lease:
                 lease_id=self.lease_id,
             )
 
+    @property
+    def fence(self) -> LeaseFence:
+        """Кому принадлежит аренда: запись от её имени принимается при полном совпадении (IMP-05)."""
+        row = self._row
+        return LeaseFence(row.identity_id, row.lease_id, row.token, row.fencing, shared=self.pool.shared)
+
     async def _check_ownership(self, tx: StoreTx) -> None:
-        """Чтение секрета: аккаунт не отозван и не перешёл другому воркеру (без блокировки; fence — I2.3)."""
-        if await tx.current_fencing(self.identity_id) != self.fencing:
-            raise LeaseOwnershipLost(self.lease_id, "fencing")
+        """Чтение секрета: аренда жива и наша (R2-S05), без блокировки строки."""
+        await tx.check_fence(self.fence, lock=False)
 
     async def _check_fencing(self, tx: StoreTx) -> None:
-        current = await tx.current_fencing(self.identity_id, lock=True)
-        if current != self.fencing:
-            raise StaleFencing(self.identity_id, self.fencing, current)
+        """Запись от имени аренды: полный fence под блокировкой identity (IMP-05, D-212)."""
+        await tx.check_fence(self.fence)
 
     # --------------------------------------------------------- освобождение
 

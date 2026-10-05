@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I2.3 Полный lease fence
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: подмена lease_id/token/fencing, истёкшая без перехвата, отозванная, перехваченная — LeaseOwnershipLost; валидный fence пишет данные и событие
-  - [ ] LeaseFence, LeaseOwnershipLost как LeaseLost и StaleFencing
-  - [ ] StoreTx.check_fence в PgStore и MemoryStore
-  - [ ] Guard во всех записях и чтении секретов от имени аренды (operation_scope, save_session, auth, verifications)
-  - [ ] Документация, CHANGELOG, R1-15, трассировка IMP-05, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -48,7 +44,7 @@
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | done |  |  |
 | I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | done |  | разбиение D-210 |
 | I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | done |  | разбиение D-210 |
-| I2.3 | Полный lease fence | I0.2b, I2.1 | in_progress |  |  |
+| I2.3 | Полный lease fence | I0.2b, I2.1 | done |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
 | I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
 | I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
@@ -68,7 +64,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 26 / 43 done
+**Итого:** 27 / 43 done
 
 ## Журнал сессий
 
@@ -98,3 +94,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I2.1 · done · last_leased_at (миграция 0020, backfill из истории) и индекс выборки по LRU; живая аренда через NOT EXISTS (на 50% из 100k: 192 → 0,16 мс на выборку); shared тоже ставит время; MemoryStore LRU с порядком захватов; load-замер 0/50/90/99% p95 33/22/29/18 мс на занятой машине (до: 73/253/267/187), D-209 · дальше I2.2
 2026-10-05 · I2.2a · done · миграция 0021 (без индексов expires_at и истории по last_heartbeat_at, fillfactor 70), LeaseTiming.stats_flush 5 мин: история и счётчики раз в интервал и при release, heartbeat в списке живых аренд из ih_leases; HOT 0/300 → ≥0.9, D-210 · дальше I2.2b
 2026-10-05 · I2.2b · done · Store.renew_leases (UPDATE по token = ANY, до 500), HeartbeatBatcher хаба: одновременные heartbeat одной пачкой, отзыв — только своей аренде, ошибка — каждой по её backoff; тесты сбоев heartbeat переведены на оба пути; замер 272 → 21 313 (100) → 57 841 (500) продлений/с; IMP-02 implemented, D-211 · дальше I2.3
+2026-10-05 · I2.3 · done · LeaseFence (lease.fence), StoreTx.check_fence: lease_id+token+равенство fencing+живая аренда под FOR NO KEY UPDATE; guard в operation_scope (R1-15), save_session, auth, верификации и чтении секретов; LeaseOwnershipLost наследует LeaseLost и StaleFencing; IMP-05 implemented, D-212 · дальше I2.4

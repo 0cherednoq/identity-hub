@@ -27,6 +27,7 @@ from identity_hub.domain.regions import RegionState
 from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
 from identity_hub.errors import (
     IdempotencyConflict,
+    LeaseOwnershipLost,
     LeaseUnavailable,
     NotFound,
     RevisionConflict,
@@ -55,6 +56,7 @@ from identity_hub.store.base import (
     ImportItemRow,
     ImportRunRow,
     LeaseCounters,
+    LeaseFence,
     LeaseHistoryRow,
     LeaseReadRow,
     LeaseRow,
@@ -141,6 +143,8 @@ class _MemoryState:
     history: dict[UUID, LeaseHistoryRow] = field(default_factory=dict)
     # lease_id → пространство: история переживает удаление аккаунта, как ih_lease_history.space_id
     history_spaces: dict[UUID, UUID] = field(default_factory=dict)
+    # token аренды по lease_id: в строке истории его нет, а fence разделяемой аренды сверяет его (D-212)
+    history_tokens: dict[UUID, UUID] = field(default_factory=dict)
     # identity → (время, порядковый номер) последней попытки фоновой сверки
     probe_attempts: dict[UUID, tuple[datetime, int]] = field(default_factory=dict)
     next_probe_attempt: int = 1
@@ -742,6 +746,7 @@ class MemoryTx(StoreTx):
         if not shared:
             self.state.leases[identity.id] = lease
         self.state.history_spaces[lease.lease_id] = self.space.id
+        self.state.history_tokens[lease.lease_id] = lease.token
         self.state.history[lease.lease_id] = LeaseHistoryRow(
             lease.lease_id,
             identity.id,
@@ -811,6 +816,31 @@ class MemoryTx(StoreTx):
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""
+
+    async def check_fence(self, fence: LeaseFence, *, lock: bool = True) -> None:
+        identity = self._own(fence.identity_id)
+        if identity is not None and identity.fencing_seq == fence.fencing:
+            if fence.shared:
+                history = self.state.history.get(fence.lease_id)
+                if (
+                    history is not None
+                    and self.state.history_tokens.get(fence.lease_id) == fence.token
+                    and history.identity_id == fence.identity_id
+                    and history.released_at is None
+                ):
+                    return
+            else:
+                live = self.state.leases.get(fence.identity_id)
+                if (
+                    live is not None
+                    and live.lease_id == fence.lease_id
+                    and live.token == fence.token
+                    and live.expires_at > self._now
+                ):
+                    return
+        raise LeaseOwnershipLost(
+            fence.lease_id, "fence", identity_id=fence.identity_id, fencing=fence.fencing
+        )
 
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
         row = self._own(identity_id)

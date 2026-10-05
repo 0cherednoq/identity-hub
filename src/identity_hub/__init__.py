@@ -110,6 +110,7 @@ from identity_hub.service import (
     Service,
 )
 from identity_hub.state import Override
+from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
@@ -151,6 +152,7 @@ __all__ = [
     "LeaseContextFilter",
     "LeaseEndReason",
     "LeaseExpired",
+    "LeaseFence",
     "LeaseLogPolicy",
     "LeaseLost",
     "LeaseMode",

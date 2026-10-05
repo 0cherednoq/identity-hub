@@ -416,6 +416,20 @@ class LeaseRow:
     heartbeat_at: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class LeaseFence:
+    """Кому принадлежит аренда (IMP-05, D-212): запись от её имени принимается при полном совпадении.
+
+    `token` — секрет аренды, в repr не попадает.
+    """
+
+    identity_id: UUID
+    lease_id: UUID
+    token: UUID = field(repr=False)
+    fencing: int
+    shared: bool = False
+
+
 @dataclass(slots=True)
 class LeaseCounters:
     """Приращения счётчиков истории аренды с прошлого сброса (FR-6.7)."""
@@ -1139,6 +1153,16 @@ class StoreTx(ABC):
         Единый порядок блокировок (IMP-14): транзакция, меняющая несколько identity, сначала
         вызывает этот метод, и параллельные транзакции ждут друг друга вместо deadlock.
         """
+
+    @abstractmethod
+    async def check_fence(self, fence: LeaseFence, *, lock: bool = True) -> None:
+        """Аренда жива и принадлежит владельцу fence, иначе `LeaseOwnershipLost` (IMP-05, D-212).
+
+        Эксклюзивная: строка `ih_leases` с теми же `lease_id` и `token`, `expires_at > now()` и
+        `fencing_seq == fencing`; разделяемая — открытая история с теми же `lease_id` и `token`.
+        `lock=True` держит строку identity (`FOR NO KEY UPDATE`) до конца транзакции.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
