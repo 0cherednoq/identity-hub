@@ -174,6 +174,9 @@ class _MemoryState:
     channel_pauses: dict[UUID, datetime] = field(default_factory=dict)
     notifications: dict[int, dict[str, Any]] = field(default_factory=dict)
     next_event_id: int = 1
+    # порядок захватов: при одинаковом времени FakeClock LRU всё равно различает давность (D-209)
+    lease_order: dict[UUID, int] = field(default_factory=dict)
+    next_lease_order: int = 1
     next_webhook_delivery_id: int = 1
     next_notification_id: int = 1
 
@@ -640,8 +643,16 @@ class MemoryTx(StoreTx):
             for row in self.state.identities.values()
             if row.space_id == self.space.id and self._candidate(row, query)
         ]
-        last = {row.identity_id: row.acquired_at for row in self.state.history.values()}
-        candidates.sort(key=lambda row: (last.get(row.id, datetime.min.replace(tzinfo=UTC)), row.id))
+        # IMP-01 (D-209): наименее недавно арендованный, никогда не арендованные — первыми, затем по id
+        order = self.state.lease_order
+        candidates.sort(
+            key=lambda row: (
+                row.last_leased_at is not None,
+                row.last_leased_at or self._now,
+                order.get(row.id, 0),
+                row.id,
+            )
+        )
         return candidates[0] if candidates else None
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
@@ -709,8 +720,12 @@ class MemoryTx(StoreTx):
                 )
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
         fencing = current.fencing_seq if shared else current.fencing_seq + 1
-        if not shared:
-            self.state.identities[identity.id] = replace(current, fencing_seq=fencing, updated_at=self._now)
+        # время захвата ставят обе аренды — по нему идёт LRU-выборка (IMP-01, D-209)
+        self.state.identities[identity.id] = replace(
+            current, fencing_seq=fencing, last_leased_at=self._now, updated_at=self._now
+        )
+        self.state.lease_order[identity.id] = self.state.next_lease_order
+        self.state.next_lease_order += 1
         lease = LeaseRow(
             new_id(),  # публичный id аренды упорядочен по времени, как в PostgreSQL (R2-P10)
             uuid4(),  # token — секрет аренды, случайный

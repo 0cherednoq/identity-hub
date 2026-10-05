@@ -820,7 +820,10 @@ class PgTx(StoreTx):
         if query.exclude:
             conditions.append(i.id.not_in(list(query.exclude)))
         if not query.shared:
-            conditions.append(or_(lease.identity_id.is_(None), lease.expires_at <= now))
+            # NOT EXISTS, а не outer join с OR: иначе планировщик недооценивает число строк и
+            # соединяет хешем все живые аренды с сортировкой вместо обхода индекса LRU (D-209)
+            live = select(lease.identity_id).where(lease.identity_id == i.id, lease.expires_at > now)
+            conditions.append(~live.exists())
         if query.proxy_wait:
             down = (
                 select(BINDINGS.c.identity_id)
@@ -831,20 +834,14 @@ class PgTx(StoreTx):
         return conditions
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
-        i, lease = IDENTITIES.c, LEASES.c
+        i = IDENTITIES.c
         conditions = self._candidate_conditions(query)
-        # D-007: наименее недавно арендованный. Shared-аренды не пишут ih_leases,
-        # поэтому время последнего захвата берётся из истории (индекс identity_id, acquired_at).
-        last_acquired = (
-            select(func.max(HISTORY.c.acquired_at)).where(HISTORY.c.identity_id == i.id).scalar_subquery()
-            if query.shared
-            else lease.acquired_at
-        )
+        # IMP-01 (D-209): наименее недавно арендованный по `last_leased_at` — порядок индекса
+        # ix_ih_identities_pick. Захват ставит время, и занятые уходят в хвост: выборка не перебирает их.
         stmt = (
             select(IDENTITIES)
-            .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
             .where(*conditions)
-            .order_by(last_acquired.asc().nulls_first(), i.id)
+            .order_by(i.last_leased_at.asc().nulls_first(), i.id)
             .limit(1)
             .with_for_update(of=IDENTITIES, skip_locked=True)
         )
@@ -852,14 +849,8 @@ class PgTx(StoreTx):
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
-        i, lease = IDENTITIES.c, LEASES.c
-        capped = (
-            select(i.id)
-            .select_from(IDENTITIES.outerjoin(LEASES, lease.identity_id == i.id))
-            .where(*self._candidate_conditions(query))
-            .limit(limit)
-            .subquery()
-        )
+        i = IDENTITIES.c
+        capped = select(i.id).where(*self._candidate_conditions(query)).limit(limit).subquery()
         return int((await self.execute(select(func.count()).select_from(capped))).scalar_one())
 
     async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
@@ -903,14 +894,17 @@ class PgTx(StoreTx):
     ) -> tuple[LeaseRow, LeaseRow | None]:
         now = await self.now()
         expires_at = now + timedelta(seconds=ttl_seconds)
-        # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
+        # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140);
+        # время захвата ставят обе — по нему идёт LRU-выборка (IMP-01, D-209)
+        values: dict[str, Any] = {"last_leased_at": func.clock_timestamp()}
+        if not shared:
+            values["fencing_seq"] = IDENTITIES.c.fencing_seq + 1
         fencing_stmt = (
-            select(IDENTITIES.c.fencing_seq)
-            if shared
-            else update(IDENTITIES)
-            .values(fencing_seq=IDENTITIES.c.fencing_seq + 1)
+            update(IDENTITIES)
+            .values(**values)
             .returning(IDENTITIES.c.fencing_seq)
-        ).where(IDENTITIES.c.id == identity.id, IDENTITIES.c.space_id == self.space.id)
+            .where(IDENTITIES.c.id == identity.id, IDENTITIES.c.space_id == self.space.id)
+        )
         fencing: int = (await self.execute(fencing_stmt)).scalar_one()
         lease_id, token = new_id(), uuid4()
         reclaimed: LeaseRow | None = None

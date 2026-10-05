@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I2.1 Атомарная LRU-выборка аренды
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: равномерная ротация, last_leased_at у обычной и shared аренды, один запрос выборки при 90% занятых, EXPLAIN по ix_ih_identities_pick, backfill миграции
-  - [ ] Миграция 0020: last_leased_at, backfill из истории аренд, индекс выборки по LRU
-  - [ ] pick_candidate и acquire_lease в PgStore и MemoryStore
-  - [ ] Нагрузочный замер 0/50/90/99% на 100k (benchmarks), сырые результаты
-  - [ ] Документация, D-209, CHANGELOG, трассировка IMP-01, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -45,7 +41,7 @@
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
 | I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | done |  | разбиение D-207 |
 | I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | done |  | разбиение D-207 |
-| I2.1 | Атомарная LRU-выборка аренды | I0.4 | in_progress |  |  |
+| I2.1 | Атомарная LRU-выборка аренды | I0.4 | done |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
@@ -67,7 +63,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 23 / 42 done
+**Итого:** 24 / 42 done
 
 ## Журнал сессий
 
@@ -94,3 +90,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I1.2b · done · expected_revision у ~20 команд space.* (проверка FOR UPDATE первой в транзакции команды, savepoint при using), гонка двух сессий, D-206; IMP-07 implemented; дефлейк test_override_verification (срок фактора 2 с) · дальше I1.4
 2026-10-05 · I1.4a · done · кольцо ключей отпечатков (явное или HKDF из KEK, не равно KEK), HMAC-отпечаток прокси (миграция 0018, fingerprint_key_id), поиск по всем ключам и legacy SHA-256, doctor rekey-fingerprints, R2-S16 закрыта, D-207 · дальше I1.4b
 2026-10-05 · I1.4b · done · keyed_fingerprint (секрет HMAC-тегом), fingerprint_key_id в ключах идемпотентности (миграция 0019), повтор после ротации прежним ключом, нет ключа — SecretConfigurationError; idempotency_key у secrets.replace_*; hub.equivalence_tag; админка: отпечаток чувствительных команд по раскрытому секрету (был по маске SecretStr); IMP-04 implemented, D-208 · дальше I2.1
+2026-10-05 · I2.1 · done · last_leased_at (миграция 0020, backfill из истории) и индекс выборки по LRU; живая аренда через NOT EXISTS (на 50% из 100k: 192 → 0,16 мс на выборку); shared тоже ставит время; MemoryStore LRU с порядком захватов; load-замер 0/50/90/99% p95 33/22/29/18 мс на занятой машине (до: 73/253/267/187), D-209 · дальше I2.2

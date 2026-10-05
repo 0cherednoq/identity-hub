@@ -98,23 +98,29 @@ async def test_live_lease_excluded_and_least_recently_leased_first(
     ids = [await make_identity(space) for _ in range(4)]
     old, recent, busy, fresh = ids
     async with sessionmaker() as s, s.begin():
-        for identity_id, acquired, expires in (
-            (old, "now() - interval '2 hours'", "now() - interval '1 hour'"),
-            (recent, "now() - interval '1 minute'", "now() - interval '1 second'"),
-            (busy, "now()", "now() + interval '1 minute'"),
+        # время последнего захвата хранится в строке аккаунта (D-209); живая аренда — только у busy
+        for identity_id, acquired in (
+            (old, "now() - interval '2 hours'"),
+            (recent, "now() - interval '1 minute'"),
+            (busy, "now()"),
         ):
             await s.execute(
-                LeaseRecord.__table__.insert().values(
-                    identity_id=identity_id,
-                    space_id=ref.id,
-                    lease_id=new_id(),
-                    fencing=1,
-                    pool="p",
-                    holder="h",
-                    acquired_at=text(acquired),
-                    expires_at=text(expires),
-                )
+                update(IdentityRecord)
+                .where(IdentityRecord.id == identity_id)
+                .values(last_leased_at=text(acquired))
             )
+        await s.execute(
+            LeaseRecord.__table__.insert().values(
+                identity_id=busy,
+                space_id=ref.id,
+                lease_id=new_id(),
+                fencing=1,
+                pool="p",
+                holder="h",
+                acquired_at=text("now()"),
+                expires_at=text("now() + interval '1 minute'"),
+            )
+        )
     pool = space.pools.define("p", service="fake_tg")
     order = []
     exclude: list[UUID] = []

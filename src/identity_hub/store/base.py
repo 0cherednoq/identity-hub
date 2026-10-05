@@ -329,6 +329,7 @@ class IdentityRow:
     normalized_ref: str = ""  # Service.normalize_ref(external_ref), IMP-08
     normalize_version: int = 0
     revision: int = 0  # число команд, изменивших агрегат (IMP-07, D-205)
+    last_leased_at: datetime | None = None  # последний захват аренды: выборка LRU (IMP-01, D-209)
 
 
 @dataclass(frozen=True, slots=True)

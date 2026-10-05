@@ -323,6 +323,8 @@ class IdentityRecord(IdentityHubBase):
     # последняя попытка фоновой сверки при любом исходе: очередь refresh_many идёт по ней (0013)
     probe_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     event_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # номер последнего события аккаунта
+    # последний захват аренды (обычной и shared): выборка идёт по нему, LRU (IMP-01, 0020)
+    last_leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # число команд, изменивших агрегат (IMP-07, D-205); новая строка — 0, событие создания даёт 1
     revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("1"))
 
@@ -340,12 +342,13 @@ class IdentityRecord(IdentityHubBase):
         _enum_check("standing", Standing),
         _enum_check("auth_state", AuthState),
         _enum_check("availability", Availability),
-        # выборка аренды: только готовые, авторизованные, не забаненные
+        # выборка аренды: готовые, авторизованные, не забаненные — сразу в порядке LRU (IMP-01)
         Index(
             "ix_ih_identities_pick",
             "space_id",
             "service",
-            "availability",
+            text("last_leased_at ASC NULLS FIRST"),
+            "id",
             postgresql_where=text(
                 "lifecycle = 'ready' AND auth_state = 'authenticated' AND standing IN ('good', 'limited')"
             ),
