@@ -15,6 +15,8 @@ from enum import Enum
 from typing import Any, ClassVar
 from uuid import UUID
 
+from identity_hub.enums import LeaseUnavailableReason
+
 __all__ = [
     "AlreadyExists",
     "AttemptsExhausted",
@@ -215,14 +217,22 @@ class LeaseUnavailable(IdentityHubError):
     """Нет свободного аккаунта под условия аренды (с учётом wait) — временная недоступность.
 
     `retry_after` — через сколько секунд имеет смысл повторить, если это известно; HTTP-слой
-    отдаёт его в заголовке `Retry-After` вместе со статусом 503.
+    отдаёт его в заголовке `Retry-After` вместе со статусом 503. `reason` — почему отказано
+    (`LeaseUnavailableReason`); `None`, если причина не определена.
     """
 
     code = "no_resource_available"
-    context_fields = ("retry_after",)
+    context_fields = ("retry_after", "reason")
 
-    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after: float | None = None,
+        reason: LeaseUnavailableReason | None = None,
+    ) -> None:
         self.retry_after = retry_after
+        self.reason = reason
         super().__init__(message)
 
 

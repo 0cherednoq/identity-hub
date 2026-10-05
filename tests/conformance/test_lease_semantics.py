@@ -62,7 +62,7 @@ async def test_renew_never_shortens(hub_under_test: IdentityHub, space: SpaceHan
 
     renewed = await hub_under_test._store.renew_leases([lease._row.token], 1.0)
 
-    assert renewed[lease._row.token] >= before
+    assert renewed[lease._row.token].expires_at >= before
     await lease.release()
 
 

@@ -12,6 +12,11 @@
 
 ### Added
 
+- Причина отказа и причина потери аренды (`N0.1`, задачи 1, 4, 5 из `ISSUES-INTEGRATION.md`):
+  `LeaseUnavailable.reason` — `busy`, `no_candidates` или `no_proxy` (`LeaseUnavailableReason`);
+  держатель, чья аренда истекла до heartbeat, получает `LeaseExpired` с причиной `expired`, а не
+  `LeaseRevoked`. Контракт хранилища: `StoreTx.extend_lease` и `Store.renew_leases` возвращают
+  `LeaseRenewal(expires_at, end_reason)` вместо `datetime | None`.
 - Режимы записи сессии (`IMP-10`, `D-219`): `lease.save_session(..., mode=)` и
   `secrets.replace_session(..., mode=)` — `in_place` (по умолчанию) или `replace` (новая запись,
   прежняя в истории); `secrets.revoke_session` — отзыв без замены. Вход сохраняет сессию в режиме

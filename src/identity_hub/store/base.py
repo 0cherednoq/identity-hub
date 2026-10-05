@@ -19,6 +19,7 @@ from uuid import UUID
 from identity_hub.clock import Clock
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
+from identity_hub.enums import LeaseEndReason
 from identity_hub.errors import SecretConfigurationError
 from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupRow
@@ -49,6 +50,7 @@ __all__ = [
     "LeaseCounters",
     "LeaseHistoryRow",
     "LeaseReadRow",
+    "LeaseRenewal",
     "LeaseRow",
     "LeaseStatsRow",
     "LinkRow",
@@ -449,6 +451,19 @@ class LeaseCounters:
     @property
     def is_empty(self) -> bool:
         return not self.operations and not self.succeeded and not self.failed and self.last_error is None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseRenewal:
+    """Ответ продления аренды (heartbeat).
+
+    `expires_at` — новый срок живой аренды; `None` — аренды с этим token больше нет. Тогда
+    `end_reason` говорит, чем она кончилась: причина из закрытой истории, `expired` — срок вышел, а
+    строку ещё никто не забрал, `None` — строки нет, а история открыта или неизвестна.
+    """
+
+    expires_at: datetime | None
+    end_reason: LeaseEndReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1222,8 +1237,8 @@ class StoreTx(ABC):
         *,
         shared: bool,
         flush: bool = True,
-    ) -> datetime | None:
-        """Heartbeat: продлить живую аренду по token. None — аренды больше нет.
+    ) -> LeaseRenewal:
+        """Heartbeat: продлить живую аренду по token. Аренды больше нет — ответ без `expires_at`.
 
         `flush` — записать в историю время heartbeat и `counters`; без него эксклюзивная аренда
         обновляет только `ih_leases` (HOT, D-210). Разделяемая пишет историю всегда.
@@ -1996,10 +2011,10 @@ class Store(ABC):
         """(slug, прокси) с отпечатком не активным ключом или без ключа, по возрастанию id после `after`."""
 
     @abstractmethod
-    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:
         """Пачка heartbeat (IMP-02, D-211): продлить живые эксклюзивные аренды по token одним запросом.
 
-        Возвращает token → новый `expires_at`; аренды, которой нет или срок вышел, в ответе нет.
+        Возвращает ответ на каждый token; у аренды, которой нет или срок вышел, `expires_at` пуст.
         Историю не трогает.
         """
 

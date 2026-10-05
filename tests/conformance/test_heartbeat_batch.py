@@ -41,8 +41,10 @@ async def test_renew_leases_extends_live_and_skips_revoked(
         [lease._row.token for lease in (first, second, revoked)], 60.0
     )
 
-    assert set(renewed) == {first._row.token, second._row.token}
-    assert all(expires > first.expires_at for expires in renewed.values())
+    live = {token: renewal.expires_at for token, renewal in renewed.items() if renewal.expires_at}
+    assert set(live) == {first._row.token, second._row.token}
+    assert all(expires > first.expires_at for expires in live.values())
+    assert renewed[revoked._row.token].expires_at is None
     for lease in (first, second):
         await lease.release()
 
@@ -63,7 +65,7 @@ async def test_concurrent_heartbeats_share_one_batch(hub_under_test: IdentityHub
     finally:
         del store.renew_leases  # type: ignore[attr-defined]
 
-    assert all(result is not None for result in results)
+    assert all(result.expires_at is not None for result in results)
     assert sum(calls) == 20 and len(calls) <= 2  # одна пачка (вторая — если первая ушла раньше)
     assert hub_under_test._heartbeats.idle  # координатор завершился вместе с очередью
     for lease in leases:
@@ -76,5 +78,5 @@ async def test_revoked_lease_in_batch_is_lost_alone(hub_under_test: IdentityHub,
 
     results = await asyncio.gather(alive._extend(), revoked._extend())
 
-    assert results[0] is not None and results[1] is None
+    assert results[0].expires_at is not None and results[1].expires_at is None
     await alive.release()

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
+
+from identity_hub.store.base import LeaseRenewal
 
 if TYPE_CHECKING:
     from identity_hub.store.base import Store
@@ -22,11 +23,11 @@ BATCH_LIMIT = 500  # токенов в одном UPDATE: дольше — дл�
 
 
 class HeartbeatBatcher:
-    """Очередь продлений: (token, ttl) → future с новым `expires_at` или `None`."""
+    """Очередь продлений: (token, ttl) → future с ответом продления."""
 
     def __init__(self, store: Store) -> None:
         self._store = store
-        self._pending: dict[float, list[tuple[UUID, asyncio.Future[datetime | None]]]] = defaultdict(list)
+        self._pending: dict[float, list[tuple[UUID, asyncio.Future[LeaseRenewal]]]] = defaultdict(list)
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -34,9 +35,9 @@ class HeartbeatBatcher:
         """Координатор не работает и очередь пуста."""
         return (self._task is None or self._task.done()) and not self._pending
 
-    async def renew(self, token: UUID, ttl_seconds: float) -> datetime | None:
-        """Продлить аренду в ближайшей пачке. `None` — аренды с этим token больше нет."""
-        future: asyncio.Future[datetime | None] = asyncio.get_running_loop().create_future()
+    async def renew(self, token: UUID, ttl_seconds: float) -> LeaseRenewal:
+        """Продлить аренду в ближайшей пачке. Ответ без `expires_at` — аренды с этим token больше нет."""
+        future: asyncio.Future[LeaseRenewal] = asyncio.get_running_loop().create_future()
         self._pending[ttl_seconds].append((token, future))
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run(), name="ih-heartbeat-batcher")
@@ -65,4 +66,4 @@ class HeartbeatBatcher:
                 continue
             for token, future in live:
                 if not future.done():
-                    future.set_result(renewed.get(token))
+                    future.set_result(renewed.get(token) or LeaseRenewal(None))

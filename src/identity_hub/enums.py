@@ -103,6 +103,14 @@ class LeaseEndReason(StrEnum):
     REVOKED = "revoked"  # отозвана из админки
 
 
+class LeaseUnavailableReason(StrEnum):
+    """Почему аренда не выдана (`LeaseUnavailable.reason`)."""
+
+    BUSY = "busy"  # допустимые аккаунты есть, но все заняты
+    NO_CANDIDATES = "no_candidates"  # допустимых нет: состояние, фильтр или пустой пул
+    NO_PROXY = "no_proxy"  # аккаунт есть, но в пуле прокси нет свободного живого прокси
+
+
 class Severity(StrEnum):
     INFO = "info"
     WARNING = "warning"

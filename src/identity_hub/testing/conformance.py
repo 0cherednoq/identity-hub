@@ -163,12 +163,14 @@ class StoreConformanceSuite:
             lease, _ = await transaction.acquire_lease(
                 stored, pool="p", holder="h", ttl_seconds=30, idempotency_key=None, shared=False
             )
-            assert await transaction.extend_lease(lease, 30, LeaseCounters.empty(), shared=False) is not None
+            renewal = await transaction.extend_lease(lease, 30, LeaseCounters.empty(), shared=False)
+            assert renewal.expires_at is not None
             assert await transaction.put_session(row.id, "default", payload, fencing=lease.fencing)
             revoked = await transaction.revoke_lease(row.id)
             assert revoked is not None and revoked.lease_id == lease.lease_id
             assert await transaction.current_fencing(row.id) == lease.fencing + 1
-            assert await transaction.extend_lease(lease, 30, LeaseCounters.empty(), shared=False) is None
+            renewal = await transaction.extend_lease(lease, 30, LeaseCounters.empty(), shared=False)
+            assert renewal.expires_at is None
             # запись с fencing отозванной аренды отклоняется: новая сессия записана более новой арендой
             assert await transaction.put_session(row.id, "default", payload, fencing=lease.fencing + 1)
             assert not await transaction.put_session(row.id, "default", payload, fencing=lease.fencing)

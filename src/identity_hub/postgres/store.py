@@ -64,6 +64,7 @@ from identity_hub.enums import (
     ChangeSource,
     DeliveryStatus,
     LeaseEndReason,
+    LeaseUnavailableReason,
     Lifecycle,
     ProxyStatus,
     SessionStatus,
@@ -146,6 +147,7 @@ from identity_hub.store.base import (
     LeaseFence,
     LeaseHistoryRow,
     LeaseReadRow,
+    LeaseRenewal,
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
@@ -1081,7 +1083,9 @@ class PgTx(StoreTx):
             )
             if old is not None:
                 if old["expires_at"] > now:
-                    raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")
+                    raise LeaseUnavailable(
+                        f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
+                    )
                 closed = await self.execute(
                     update(HISTORY)
                     .where(HISTORY.c.lease_id == old["lease_id"], HISTORY.c.released_at.is_(None))
@@ -1108,7 +1112,9 @@ class PgTx(StoreTx):
                 where=LEASES.c.expires_at <= func.now(),
             )
             if not (await self.execute(stmt)).rowcount:  # type: ignore[attr-defined]
-                raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")  # pragma: no cover
+                raise LeaseUnavailable(
+                    f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
+                )  # pragma: no cover
         await self.execute(
             insert(HISTORY).values(
                 lease_id=lease_id,
@@ -1146,7 +1152,7 @@ class PgTx(StoreTx):
         *,
         shared: bool,
         flush: bool = True,
-    ) -> datetime | None:
+    ) -> LeaseRenewal:
         expires_at: datetime | None
         if shared:
             expires_at = await self.now() + timedelta(seconds=ttl_seconds)
@@ -1169,9 +1175,9 @@ class PgTx(StoreTx):
                 )
             ).scalar_one_or_none()
             if expires_at is None:
-                return None
+                return await self._gone(lease.token)
             if not flush:
-                return cast(datetime, expires_at)
+                return LeaseRenewal(cast(datetime, expires_at))
         updated = await self.execute(
             update(HISTORY)
             .where(
@@ -1182,8 +1188,12 @@ class PgTx(StoreTx):
             .values(last_heartbeat_at=func.now(), **_counter_values(counters))
         )
         if shared and not updated.rowcount:  # type: ignore[attr-defined]
-            return None
-        return expires_at
+            return await self._gone(lease.token)
+        return LeaseRenewal(expires_at)
+
+    async def _gone(self, token: UUID) -> LeaseRenewal:
+        rows = await self.execute(_end_reasons([token]))
+        return _renewals_of_gone([token], rows)[token]
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
@@ -4144,6 +4154,30 @@ def _merge_operations(delta: dict[str, int]) -> Any:
     return expr
 
 
+def _end_reasons(tokens: Sequence[UUID]) -> Any:
+    """Чем кончились аренды с этими token: причина из истории и жива ли ещё строка с тем же token."""
+    return (
+        select(HISTORY.c.token, HISTORY.c.released_at, HISTORY.c.end_reason, LEASES.c.token.label("held"))
+        .select_from(
+            HISTORY.outerjoin(
+                LEASES,
+                and_(LEASES.c.identity_id == HISTORY.c.identity_id, LEASES.c.token == HISTORY.c.token),
+            )
+        )
+        .where(_any_of(HISTORY.c.token, list(tokens)))
+    )
+
+
+def _renewals_of_gone(tokens: Sequence[UUID], rows: Any) -> dict[UUID, LeaseRenewal]:
+    gone = dict.fromkeys(tokens, LeaseRenewal(None))
+    for row in rows:
+        if row.released_at is not None:
+            gone[row.token] = LeaseRenewal(None, LeaseEndReason(row.end_reason))
+        elif row.held is not None:  # строка наша, но срок вышел: её ещё никто не забрал
+            gone[row.token] = LeaseRenewal(None, LeaseEndReason.EXPIRED)
+    return gone
+
+
 def _lease_row(row: Any) -> LeaseRow:
     return LeaseRow(
         lease_id=row["lease_id"],
@@ -5331,7 +5365,7 @@ class PgStore(Store):
             rows = (await _execute(session, stmt, execution_options=self.options)).mappings()
             return [(row["slug"], _proxy_row(row)) for row in rows]
 
-    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:
         if not tokens:
             return {}
         async with self._own() as session:
@@ -5349,7 +5383,12 @@ class PgStore(Store):
                 .returning(LEASES.c.token, LEASES.c.expires_at),
                 execution_options=self.options,
             )
-            return {row.token: row.expires_at for row in rows}
+            renewed = {row.token: LeaseRenewal(row.expires_at) for row in rows}
+            gone = [token for token in tokens if token not in renewed]
+            if gone:  # редкий путь: причина нужна держателю, чтобы отличить отзыв от истечения
+                reasons = await _execute(session, _end_reasons(gone), execution_options=self.options)
+                renewed.update(_renewals_of_gone(gone, reasons))
+            return renewed
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         i = IDENTITIES.c

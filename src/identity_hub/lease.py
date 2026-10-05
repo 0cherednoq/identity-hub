@@ -27,9 +27,16 @@ from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
-from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
+from identity_hub.enums import (
+    AuthState,
+    LeaseEndReason,
+    LeaseUnavailableReason,
+    ProxyStatus,
+    SessionStatus,
+)
 from identity_hub.errors import (
     IdempotencyConflict,
+    LeaseExpired,
     LeaseLost,
     LeaseRevoked,
     LeaseUnavailable,
@@ -47,6 +54,7 @@ from identity_hub.store.base import (
     IdentityRow,
     LeaseCounters,
     LeaseFence,
+    LeaseRenewal,
     LeaseRow,
     ProxyRow,
     StoreTx,
@@ -222,7 +230,7 @@ class Lease:
             try:
                 # одна попытка не забирает весь остаток: зависший запрос оставляет время на повтор
                 budget = min(self._deadline() - sent_at, max(interval, HEARTBEAT_MIN_BUDGET))
-                expires_at = await asyncio.wait_for(self._extend(), timeout=max(0.001, budget))
+                renewal = await asyncio.wait_for(self._extend(), timeout=max(0.001, budget))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -230,13 +238,13 @@ class Lease:
                 logger.warning("heartbeat аренды %s не прошёл: %s", self.lease_id, describe_error(exc))
                 failures += 1
             else:
-                if expires_at is None:
-                    await self._mark_lost("revoked")  # аренды с нашим token больше нет
+                if renewal.expires_at is None:  # аренды с нашим token больше нет
+                    await self._mark_lost(_lost_reason(renewal.end_reason))
                     return
                 confirmed = True
                 failures = 0
                 self._last_ok = sent_at
-                self._row = replace(self._row, expires_at=expires_at)
+                self._row = replace(self._row, expires_at=renewal.expires_at)
             if not confirmed and self._deadline_passed():
                 await self._mark_lost("heartbeat")
                 return
@@ -274,7 +282,7 @@ class Lease:
         except Exception:
             logging.getLogger("identity_hub.sink").debug("sink ih_lease_logs недоступен", exc_info=True)
 
-    async def _extend(self) -> datetime | None:
+    async def _extend(self) -> LeaseRenewal:
         await self._flush_logs()
         clock = self.pool.space.hub.clock
         started = clock.monotonic()
@@ -288,7 +296,7 @@ class Lease:
         counters, self._counters = self._counters, LeaseCounters.empty()
         try:
             async with self.pool.space._tx(own=True) as tx:
-                expires_at = await tx.extend_lease(
+                renewal = await tx.extend_lease(
                     self._row,
                     self.pool.timing.ttl.total_seconds(),
                     counters,
@@ -298,9 +306,9 @@ class Lease:
         except BaseException:
             self._merge_back(counters)
             raise
-        if expires_at is not None:
+        if renewal.expires_at is not None:
             self._last_flush = started
-        return expires_at
+        return renewal
 
     def _merge_back(self, counters: LeaseCounters) -> None:
         for kind, n in counters.operations.items():
@@ -596,6 +604,21 @@ class Lease:
             )
 
 
+def _lost_reason(end_reason: LeaseEndReason | None) -> str:
+    """Причина потери для держателя по ответу продления.
+
+    Строки с нашим token нет, а история открыта или неизвестна (`None`) — аренду сняли: это
+    прежнее «revoked». Истечение срока и закрытие с другой причиной называются своими именами.
+    """
+    return str(end_reason or LeaseEndReason.REVOKED)
+
+
+def _lost_error(reason: str | None) -> type[LeaseLost]:
+    if reason == LeaseEndReason.REVOKED:
+        return LeaseRevoked
+    return LeaseExpired if reason == LeaseEndReason.EXPIRED else LeaseLost
+
+
 @contextlib.asynccontextmanager
 async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> AsyncIterator[Lease]:
     """Тело `pool.lease()`: захват → heartbeat и контекст логов → освобождение с причиной."""
@@ -612,8 +635,7 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         if owner is not None:
             owner.uncancel()
         await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost}")
-        error = LeaseRevoked if lease._lost == "revoked" else LeaseLost
-        raise error(lease.lease_id, lease._lost or "heartbeat") from exc
+        raise _lost_error(lease._lost)(lease.lease_id, lease._lost or "heartbeat") from exc
     except LeaseLost:
         await lease._fire_on_lost()
         await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost or 'heartbeat'}")
@@ -627,8 +649,7 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
             await lease._fire_on_lost()
             await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost}")
             # R1-16: тело завершилось успешно, но аренду потеряли по пути — признак для вызывающего
-            error = LeaseRevoked if lease._lost == "revoked" else LeaseLost
-            raise error(lease.lease_id, lease._lost, body_completed=True)
+            raise _lost_error(lease._lost)(lease.lease_id, lease._lost, body_completed=True)
         await lease._release_quietly(LeaseEndReason.RELEASED)
     finally:
         _current.reset(token)
@@ -700,6 +721,7 @@ async def acquire(
     deadline = clock.monotonic() + wait_seconds
     delay = 0.05
     exhausted_reported = False
+    requested = query  # без кандидатов, пропущенных из-за гонки: они заняты, а не недопустимы
     while True:
         try:
             async with space._tx(own=True) as tx:
@@ -816,9 +838,26 @@ async def acquire(
             if explicit_query is None:  # внутренние выборки (вход, сверка) ёмкость пула не оценивают
                 with contextlib.suppress(Exception):
                     await pool._check_capacity()
-            raise LeaseUnavailable(f"пул {pool.name}: нет свободного аккаунта")
+            raise LeaseUnavailable(
+                f"пул {pool.name}: нет свободного аккаунта",
+                reason=await _unavailable_reason(pool, requested, proxy_exhausted=exhausted_reported),
+            )
         await clock.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)
+
+
+async def _unavailable_reason(
+    pool: Pool, query: CandidateQuery, *, proxy_exhausted: bool
+) -> LeaseUnavailableReason | None:
+    """Почему аренда не выдана. Считается только на пути отказа; сбой подсчёта причину не даёт."""
+    if proxy_exhausted:
+        return LeaseUnavailableReason.NO_PROXY
+    try:
+        async with pool.space._tx(own=True) as tx:
+            busy = await tx.count_live_candidates(query, 1)
+    except Exception:
+        return None
+    return LeaseUnavailableReason.BUSY if busy else LeaseUnavailableReason.NO_CANDIDATES
 
 
 def _observe_acquisition(pool: Pool, started: float, wait_seconds: float, status: str) -> None:

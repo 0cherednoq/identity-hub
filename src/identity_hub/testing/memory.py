@@ -29,7 +29,15 @@ from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPR
 from identity_hub.domain.query import profile_sort_text
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, Lifecycle, SessionStatus, Severity
+from identity_hub.enums import (
+    AuthState,
+    Availability,
+    LeaseEndReason,
+    LeaseUnavailableReason,
+    Lifecycle,
+    SessionStatus,
+    Severity,
+)
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseOwnershipLost,
@@ -65,6 +73,7 @@ from identity_hub.store.base import (
     LeaseFence,
     LeaseHistoryRow,
     LeaseReadRow,
+    LeaseRenewal,
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
@@ -274,6 +283,19 @@ def _memory_uuid(value: Any) -> UUID | None:
 def _window_start(now: datetime, charge: QuotaCharge) -> datetime:
     seconds = int((now - _utc(charge.origin)).total_seconds())
     return _utc(charge.origin) + timedelta(seconds=(seconds // charge.window_seconds) * charge.window_seconds)
+
+
+def _gone(state: Any, token: UUID) -> LeaseRenewal:
+    """Чем кончилась аренда с этим token — как `_renewals_of_gone` в PostgreSQL."""
+    lease_id = next((key for key, value in state.history_tokens.items() if value == token), None)
+    history = state.history.get(lease_id) if lease_id is not None else None
+    if history is None:
+        return LeaseRenewal(None)
+    if history.released_at is not None:
+        return LeaseRenewal(None, LeaseEndReason(history.end_reason))
+    current = state.leases.get(history.identity_id)
+    held = current is not None and current.token == token  # строка наша, но срок вышел
+    return LeaseRenewal(None, LeaseEndReason.EXPIRED if held else None)
 
 
 def _merge_counters(row: LeaseHistoryRow, counters: LeaseCounters) -> dict[str, Any]:
@@ -865,12 +887,16 @@ class MemoryTx(StoreTx):
     ) -> tuple[LeaseRow, LeaseRow | None]:
         current = self._own(identity.id)
         if current is None:
-            raise LeaseUnavailable(f"аккаунт {identity.id} недоступен")
+            raise LeaseUnavailable(
+                f"аккаунт {identity.id} недоступен", reason=LeaseUnavailableReason.NO_CANDIDATES
+            )
         reclaimed: LeaseRow | None = None
         old = self.state.leases.get(identity.id)
         if not shared and old is not None:
             if old.expires_at > self._now:
-                raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")
+                raise LeaseUnavailable(
+                    f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
+                )
             reclaimed = old
             history = self.state.history[old.lease_id]
             if history.released_at is None:
@@ -932,14 +958,14 @@ class MemoryTx(StoreTx):
         *,
         shared: bool,
         flush: bool = True,
-    ) -> datetime | None:
+    ) -> LeaseRenewal:
         if not shared:
             current = self.state.leases.get(lease.identity_id)
             if current is None or current.token != lease.token or current.expires_at <= self._now:
-                return None
+                return _gone(self.state, lease.token)
         history = self.state.history.get(lease.lease_id)
         if history is None or history.released_at is not None:
-            return None
+            return _gone(self.state, lease.token)
         expires_at = self._now + timedelta(seconds=ttl_seconds)
         if not shared and current is not None:
             expires_at = max(expires_at, current.expires_at)  # продление не укорачивает (D-213)
@@ -947,11 +973,11 @@ class MemoryTx(StoreTx):
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
             if not flush:
-                return expires_at
+                return LeaseRenewal(expires_at)
         self.state.history[lease.lease_id] = replace(
             history, last_heartbeat_at=self._now, **_merge_counters(history, counters)
         )
-        return expires_at
+        return LeaseRenewal(expires_at)
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
@@ -3460,16 +3486,18 @@ class MemoryStore(Store):
             )
             return [(spaces[row.space_id], row) for row in rows[:limit]]
 
-    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:
         async with self._lock:
             now = self.clock.now()
             wanted = set(tokens)
-            renewed: dict[UUID, datetime] = {}
+            renewed: dict[UUID, LeaseRenewal] = {}
             for identity_id, lease in list(self._state.leases.items()):
                 if lease.token in wanted and lease.expires_at > now:
                     expires_at = max(lease.expires_at, now + timedelta(seconds=ttl_seconds))
                     self._state.leases[identity_id] = replace(lease, expires_at=expires_at, heartbeat_at=now)
-                    renewed[lease.token] = expires_at
+                    renewed[lease.token] = LeaseRenewal(expires_at)
+            for token in wanted - set(renewed):
+                renewed[token] = _gone(self._state, token)
             return renewed
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:

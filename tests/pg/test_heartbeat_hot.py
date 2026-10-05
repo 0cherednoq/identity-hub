@@ -41,7 +41,7 @@ async def test_heartbeat_is_hot_update(space: SpaceHandle, db: AsyncEngine) -> N
 
     for _ in range(ROUNDS):
         for lease in leases:
-            assert await lease._extend() is not None
+            assert (await lease._extend()).expires_at is not None
     expected = LEASES * ROUNDS
     for _ in range(40):  # ждём, пока backend-ы пула сбросят свою статистику
         await asyncio.sleep(0.5)
