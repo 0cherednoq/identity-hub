@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I2.4 Семантика renew, release, revoke
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: продление не укорачивает, исходы release (своя, повтор, истёкшая, перехваченная, отозванная), отзыв будит heartbeat, гонка release/revoke, body_completed
+  - [ ] renew GREATEST и исход release_lease в PgStore/MemoryStore
+  - [ ] Lease.release: LeaseRevoked, lease.expired; LeaseLost.body_completed
+  - [ ] Отзыв будит heartbeat аренды этого процесса
+  - [ ] Таблица сценариев в руководстве, R1-16, CHANGELOG, трассировка IMP-06, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -45,7 +49,7 @@
 | I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | done |  | разбиение D-210 |
 | I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | done |  | разбиение D-210 |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | done |  |  |
-| I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
+| I2.4 | Семантика renew, release, revoke | I2.3 | in_progress |  |  |
 | I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
 | I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
 | I3.3 | Два режима обновления session | I3.2 | todo |  |  |
