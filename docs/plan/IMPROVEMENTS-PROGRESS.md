@@ -10,10 +10,13 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I3.3b Session: режимы в API, события, вход и обновление
+- **Начата:** 2026-10-06
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: save_session/replace_session с mode, события без payload, вход — replace, revoke_session, параллельная замена
+  - [ ] mode в lease.save_session и secrets.replace_session, secrets.revoke_session
+  - [ ] События с id записей и ревизией; вход в режиме replace
+  - [ ] Документация, CHANGELOG, IMP-10 implemented, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -51,7 +54,7 @@
 | I3.2a | Credentials под арендой, в контекстах входа и раскрытие по виду | I3.1b | done |  | разбиение D-216 |
 | I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | done |  | разбиение D-216 |
 | I3.3a | Session: схема, lifecycle и режимы в Store | I3.2b | done |  | разбиение D-218 |
-| I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | todo |  | разбиение D-218 |
+| I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | in_progress |  | разбиение D-218 |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | todo |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
