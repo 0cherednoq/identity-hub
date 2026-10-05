@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -19,8 +19,9 @@ import pydantic_core
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
-from identity_hub.crypto import associated_data
+from identity_hub.crypto import associated_data, reveal
 from identity_hub.crypto.envelope import DecryptionFailed
+from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle
 from identity_hub.errors import IdentityHubError, ValidationFailed, describe_error
@@ -67,6 +68,8 @@ class ImportRecord:
     links: Mapping[str, str] = field(default_factory=dict)
     proxy: str | None = field(default=None, repr=False)
     verifications: Mapping[str, str] = field(default_factory=dict)
+    # записи credentials кроме default — только новому аккаунту (IMP-09, D-217)
+    credential_records: Sequence[CredentialInput] = field(default=(), repr=False)
 
 
 class OnExisting(StrEnum):
@@ -291,6 +294,7 @@ class ImportingMixin(SpaceBase):
                     external_ref=record.external_ref,
                     identity_id=record.id,
                     credentials=record.credentials,
+                    credential_records=record.credential_records,
                     sessions=sessions,
                     attributes=record.attributes,
                     profile=record.profile,
@@ -824,6 +828,17 @@ def _record_payload(record: ImportRecord) -> dict[str, Any]:
         "links": dict(record.links),
         "proxy": record.proxy,
         "verifications": dict(record.verifications),
+        # секреты записей — в том же зашифрованном payload, что и credentials (D-217)
+        "credential_records": [
+            {
+                "kind": item.kind,
+                "name": item.name,
+                "value": pydantic_core.to_jsonable_python(reveal(item.value)),
+                "public_value": dict(item.public_value) if item.public_value is not None else None,
+                "expires_at": item.expires_at.isoformat() if item.expires_at is not None else None,
+            }
+            for item in record.credential_records
+        ],
     }
 
 
@@ -842,6 +857,16 @@ def _payload_record(value: Mapping[str, Any]) -> ImportRecord:
         links={str(key): str(item) for key, item in (value.get("links") or {}).items()},
         proxy=value.get("proxy"),
         verifications={str(key): str(item) for key, item in (value.get("verifications") or {}).items()},
+        credential_records=tuple(
+            CredentialInput(
+                kind=str(item["kind"]),
+                value=dict(item["value"]),
+                name=str(item["name"]),
+                public_value=dict(item["public_value"]) if item.get("public_value") is not None else None,
+                expires_at=datetime.fromisoformat(item["expires_at"]) if item.get("expires_at") else None,
+            )
+            for item in value.get("credential_records") or ()
+        ),
     )
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub.api._base import Namespace
+from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.domain.regions import RegionDecision
 from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
@@ -157,6 +158,8 @@ class IdentityCreate:
     links: Mapping[str, UUID] = field(default_factory=dict)
     lifecycle: Lifecycle | str = Lifecycle.PROVISIONING
     auth: AuthState | str | None = None  # None — по наличию сессии
+    # записи credentials кроме default: API-ключи, TOTP и т.п. (IMP-09, D-217)
+    credential_records: Sequence[CredentialInput] = field(default=(), repr=False)
 
     def __repr__(self) -> str:  # секреты не попадают в repr
         return f"IdentityCreate(service={self.service_name!r}, external_ref={self.external_ref!r})"
@@ -553,6 +556,7 @@ class Identities(Namespace):
             links=spec.links,
             lifecycle=spec.lifecycle,
             auth_state=spec.auth,
+            credential_records=spec.credential_records,
         )
         return svc, prepared
 

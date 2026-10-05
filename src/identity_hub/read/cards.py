@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase
+from identity_hub.domain.credentials import is_expired
 from identity_hub.domain.data import build_search_text
 from identity_hub.domain.regions import RegionState
 from identity_hub.errors import ValidationFailed
@@ -104,9 +105,44 @@ class SessionInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class Credential:
+    """Запись credentials без секрета (IMP-09): вид, имя, открытая часть, жизненный цикл, срок."""
+
+    id: UUID
+    kind: str
+    name: str
+    public_value: dict[str, Any] | None
+    lifecycle: str
+    expires_at: datetime | None
+    expired: bool  # срок вышел — считается по времени, не переходом (D-215)
+    revision: int
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_row(cls, row: Any, now: datetime) -> Credential:
+        return cls(
+            id=row.id,
+            kind=row.kind,
+            name=row.name,
+            public_value=row.public_value,
+            lifecycle=row.lifecycle,
+            expires_at=row.expires_at,
+            expired=is_expired(row.lifecycle, row.expires_at, now),
+            revision=row.revision,
+            version=row.version,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AccessCard:
     credential: CredentialInfo
     sessions: list[SessionInfo]
+    # все записи credentials без секретов: вид, имя, открытая часть, жизненный цикл (D-217)
+    credential_records: list[Credential] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +314,8 @@ class CardsMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             await self._identity(tx, identity_id)
             credential, sessions = await tx.access_metadata(identity_id)
+            records = await tx.list_credentials(identity_id)
+            now = await tx.now()
         return AccessCard(
             CredentialInfo(credential.present, credential.version, credential.updated_at),
             [
@@ -291,6 +329,7 @@ class CardsMixin(SpaceBase):
                 )
                 for row in sessions
             ],
+            [Credential.from_row(row, now) for row in records],
         )
 
     async def _pool_summary(self, service: str | None = None) -> dict[str, dict[str, dict[str, int]]]:

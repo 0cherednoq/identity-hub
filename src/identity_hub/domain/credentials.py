@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel
 
 from identity_hub.errors import TransitionNotAllowed
 
-__all__ = ["ACTIVE", "DISABLED", "LIFECYCLES", "REVOKED", "check_transition", "is_expired"]
+__all__ = ["ACTIVE", "DISABLED", "LIFECYCLES", "REVOKED", "CredentialInput", "check_transition", "is_expired"]
+
+
+@dataclass(frozen=True)
+class CredentialInput:
+    """Запись credentials при создании и импорте (IMP-09, D-217); значение в repr не попадает."""
+
+    kind: str
+    value: BaseModel | Mapping[str, Any] = field(repr=False)
+    name: str = "default"
+    public_value: Mapping[str, Any] | None = None
+    expires_at: datetime | None = None
+
 
 ACTIVE, DISABLED, REVOKED = "active", "disabled", "revoked"
 LIFECYCLES = frozenset({ACTIVE, DISABLED, REVOKED})

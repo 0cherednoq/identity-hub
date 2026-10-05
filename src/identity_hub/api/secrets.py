@@ -11,46 +11,14 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub.api._base import Namespace
-from identity_hub.domain.credentials import ACTIVE, DISABLED, REVOKED, is_expired
+from identity_hub.domain.credentials import ACTIVE, DISABLED, REVOKED
 from identity_hub.errors import ValidationFailed
+from identity_hub.read.cards import Credential
 
 if TYPE_CHECKING:
     from identity_hub.read.cards import AccessCard
 
 __all__ = ["Credential", "SecretRef", "Secrets"]
-
-
-@dataclass(frozen=True, slots=True)
-class Credential:
-    """Запись credentials без секрета (IMP-09): вид, имя, открытая часть, жизненный цикл, срок."""
-
-    id: UUID
-    kind: str
-    name: str
-    public_value: dict[str, Any] | None
-    lifecycle: str
-    expires_at: datetime | None
-    expired: bool  # срок вышел — считается по времени, не переходом (D-215)
-    revision: int
-    version: int
-    created_at: datetime
-    updated_at: datetime
-
-    @classmethod
-    def from_row(cls, row: Any, now: datetime) -> Credential:
-        return cls(
-            id=row.id,
-            kind=row.kind,
-            name=row.name,
-            public_value=row.public_value,
-            lifecycle=row.lifecycle,
-            expires_at=row.expires_at,
-            expired=is_expired(row.lifecycle, row.expires_at, now),
-            revision=row.revision,
-            version=row.version,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
 
 
 @dataclass(frozen=True, slots=True)

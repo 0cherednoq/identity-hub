@@ -423,6 +423,24 @@ value = await space.secrets.reveal(
 `lease.credentials()` по-прежнему отдаёт запись `default`. Раскрытие пишет
 `identity.secret.revealed` с видом и именем записи, но без значения.
 
+Записи можно передать сразу при создании и импорте (`D-217`): они проверяются и шифруются до
+транзакции и пишутся вместе с аккаунтом. Импорт пишет их только новому аккаунту — повтор импорта
+дубликатов не создаёт. `secrets.describe(id).credential_records` перечисляет все записи без
+секретов.
+
+```python
+from identity_hub import CredentialInput
+
+await space.identities.create(
+    IdentityCreate(
+        service=EXCHANGE, external_ref="trader-1", credentials={"login": "t1", "password": pw},
+        credential_records=[CredentialInput("api_key", {"secret": key}, name="trading")],
+    ),
+    actor="ops",
+)
+ImportRecord(external_ref="trader-2", credential_records=[CredentialInput("api_key", {"secret": key2})])
+```
+
 ## Связи между аккаунтами
 
 Аккаунт может зависеть от другого: Telegram восстанавливается через почту, биржевой аккаунт

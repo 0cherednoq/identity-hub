@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -11,7 +12,8 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase
-from identity_hub.crypto import EncryptedPayload, associated_data
+from identity_hub.crypto import EncryptedPayload, associated_data, credential_associated_data
+from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.data import (
     build_search_text,
     split_profile,
@@ -48,6 +50,17 @@ class RegisterResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedCredential:
+    """Запись credentials, проверенная схемой и зашифрованная до транзакции (D-217)."""
+
+    kind: str
+    name: str
+    payload: EncryptedPayload
+    public_value: dict[str, Any] | None
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedIdentity:
     """Аккаунт, провалидированный и зашифрованный до открытия транзакции (T-5). Используется и импортом."""
 
@@ -55,6 +68,7 @@ class PreparedIdentity:
     credentials: EncryptedPayload | None
     sessions: dict[str, EncryptedPayload]
     links: dict[str, UUID]
+    credential_records: tuple[PreparedCredential, ...] = ()
 
 
 def prepare_identity(
@@ -73,6 +87,7 @@ def prepare_identity(
     links: Mapping[str, UUID] | None = None,
     lifecycle: Lifecycle | str = Lifecycle.PROVISIONING,
     auth_state: AuthState | str | None = None,
+    credential_records: Iterable[CredentialInput] = (),
 ) -> PreparedIdentity:
     """Валидация схемами сервиса и шифрование секретов (FR-2.4: до обращения к БД)."""
     normalized_ref = service.normalize_external_ref(external_ref)  # IMP-08: до поиска и вставки
@@ -94,6 +109,19 @@ def prepare_identity(
     if credentials is not None:
         creds = validate_model(service.credentials, credentials, "credentials")
         creds_payload = envelope.seal_model(creds, associated_data("ih_credentials", identity_id))
+    records: list[PreparedCredential] = []
+    seen: set[tuple[str, str]] = {("default", "default")} if credentials is not None else set()
+    for record in credential_records:
+        kind, name = service.credential_key(record.kind, record.name)
+        if (kind, name) in seen:
+            raise ValidationFailed(f"credentials {kind}/{name}: запись передана дважды")
+        seen.add((kind, name))
+        model = validate_model(service.credential_schema(kind), record.value, f"credentials {kind}/{name}")
+        public = dict(record.public_value) if record.public_value is not None else None
+        if public is not None:
+            validate_json_payload(public, f"public_value {kind}/{name}")
+        sealed = envelope.seal_model(model, credential_associated_data(identity_id, kind, name))
+        records.append(PreparedCredential(kind, name, sealed, public, record.expires_at))
     session_payloads: dict[str, EncryptedPayload] = {}
     for slot, data in (sessions or {}).items():
         model = validate_model(service.session, data, f"sessions.{slot}")
@@ -127,7 +155,13 @@ def prepare_identity(
         normalized_ref=normalized_ref,
         normalize_version=service.normalize_ref_version,
     )
-    return PreparedIdentity(row=row, credentials=creds_payload, sessions=session_payloads, links=link_map)
+    return PreparedIdentity(
+        row=row,
+        credentials=creds_payload,
+        sessions=session_payloads,
+        links=link_map,
+        credential_records=tuple(records),
+    )
 
 
 class IdentitiesMixin(SpaceBase):
@@ -248,6 +282,15 @@ class IdentitiesMixin(SpaceBase):
         identity_id = prepared.row.id
         if prepared.credentials is not None:
             await tx.put_credentials(identity_id, prepared.credentials)
+        for record in prepared.credential_records:  # в той же транзакции, что и аккаунт (D-217)
+            await tx.put_credential(
+                identity_id,
+                record.kind,
+                record.name,
+                record.payload,
+                public_value=record.public_value,
+                expires_at=record.expires_at,
+            )
         for slot, payload in prepared.sessions.items():
             await tx.put_session(identity_id, slot, payload, fencing=0)
         now = await tx.now()

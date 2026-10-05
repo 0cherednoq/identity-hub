@@ -12,6 +12,9 @@
 
 ### Added
 
+- `CredentialInput` и `credential_records` у `IdentityCreate`, `ImportRecord` (в том числе
+  отложенного импорта) и `make_identity`; `AccessCard.credential_records` — все записи без
+  секретов (`IMP-09`, `D-217`).
 - `lease.credential(kind, name)`, `lease.active_credentials()`, `ctx.credential(kind, name)` в
   контекстах входа и проб, `SecretRef.credential(kind, name)` для раскрытия с аудитом
   (`IMP-09`, `D-216`). `lease.credentials()` остаётся доступом к записи `default` и, как и

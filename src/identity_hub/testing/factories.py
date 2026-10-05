@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict
 
 from identity_hub.api.identities import IdentityCreate
+from identity_hub.domain.credentials import CredentialInput
 from identity_hub.enums import AuthState, Lifecycle
 from identity_hub.errors import ValidationFailed
 from identity_hub.hub import SpaceHandle
@@ -73,6 +74,7 @@ async def make_identity(
     lifecycle: Lifecycle | str = Lifecycle.READY,
     authenticated: bool = True,
     actor: str = "test",
+    credential_records: Iterable[CredentialInput] = (),
 ) -> UUID:
     """Зарегистрировать аккаунт и вернуть UUID.
 
@@ -108,6 +110,7 @@ async def make_identity(
             links=links or {},
             lifecycle=lifecycle,
             auth=auth_state,
+            credential_records=tuple(credential_records),
         ),
         actor=actor,
     )

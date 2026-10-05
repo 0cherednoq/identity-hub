@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I3.2b Credentials в регистрации, импорте, карточке и фабриках
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: регистрация→аренда→ротация→раскрытие, импорт и повтор импорта, отложенный импорт, describe со списком, фабрика
-  - [ ] CredentialInput, prepare_identity и запись в транзакции создания
-  - [ ] Импорт: ImportRecord.credential_records, сериализация отложенного импорта
-  - [ ] AccessCard.credential_records и make_identity
-  - [ ] Документация, CHANGELOG, IMP-09 implemented, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -53,7 +49,7 @@
 | I3.1a | Credentials: схема, виды в Service, контракт Store, версии MemoryStore | I0.3, I0.4, I1.2b | done |  | разбиение D-214 |
 | I3.1b | Credentials: lifecycle, срок и команды space.secrets | I3.1a | done |  | разбиение D-214 |
 | I3.2a | Credentials под арендой, в контекстах входа и раскрытие по виду | I3.1b | done |  | разбиение D-216 |
-| I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | in_progress |  | разбиение D-216 |
+| I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | done |  | разбиение D-216 |
 | I3.3 | Два режима обновления session | I3.2b | todo |  |  |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
@@ -70,7 +66,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 31 / 45 done
+**Итого:** 32 / 45 done
 
 ## Журнал сессий
 
@@ -105,3 +101,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I3.1a · done · миграция 0022 (ih_credentials: id, kind, name, public_value, lifecycle, expires_at, revision; прежняя строка — default без перешифрования, откат только без других записей), Service.credential_kinds, Store put/get/list_credential, AAD default — прежний, метка в отчёте ротации; MemoryStore version/updated_at (R2-P08), repro parity удалены, D-214 · дальше I3.1b
 2026-10-05 · I3.1b · done · жизненный цикл credentials (active↔disabled, revoked конечное), срок по времени (Credential.expired), команды space.secrets put_credential/credentials/disable/enable/revoke_credential с expected_revision и событием без секрета; Store set_credential_lifecycle; D-215 · дальше I3.2
 2026-10-05 · I3.2a · done · lease.credential(kind, name) и active_credentials под полным fence (выключенная/отозванная/истёкшая — None), lease.credentials() — default (совместимость), ctx.credential в контекстах входа и проб, SecretRef.credential и раскрытие с kind/name в аудите; D-216 · дальше I3.2b
+2026-10-05 · I3.2b · done · CredentialInput и credential_records у IdentityCreate, ImportRecord (в т.ч. отложенный импорт) и make_identity: проверка и шифрование до транзакции, запись вместе с аккаунтом, импорт только новому аккаунту; AccessCard.credential_records; IMP-09 implemented, D-217 · дальше I3.3

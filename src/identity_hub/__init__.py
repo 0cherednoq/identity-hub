@@ -29,6 +29,7 @@ from identity_hub.dispatch.notifications import (
     TelegramUnavailable,
 )
 from identity_hub.dispatch.webhooks import WebhookPolicy
+from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.verification import VerificationMode, VerificationSpec, VerificationTier
 from identity_hub.enums import (
     AuthState,
@@ -130,6 +131,7 @@ __all__ = [
     "Clock",
     "ConcurrentModification",
     "CreateManyResult",
+    "CredentialInput",
     "DatabaseBusy",
     "DeliveryStatus",
     "EnvSecretsProvider",
