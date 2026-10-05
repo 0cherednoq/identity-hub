@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I4.3 Probes, reconcile и recovery worker
+- **Начата:** 2026-10-06
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: проба через операцию, отказ пробы, busy при живой операции, поздний ответ, восстановление и инвариант без истёкших running, обслуживание
+  - [ ] Миграция 0025 (дедупликация живых операций) и enqueue с AlreadyExists
+  - [ ] Пробы через операции: claim, итог с наблюдением, верификация
+  - [ ] ProviderOperationsWorker.run_once и вызов из обслуживания
+  - [ ] Документация, CHANGELOG, IMP-11 implemented, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -54,7 +58,7 @@
 | I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | done |  | разбиение D-218 |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | done |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | done |  |  |
-| I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
+| I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | in_progress |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
