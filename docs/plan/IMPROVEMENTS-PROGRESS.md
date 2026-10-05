@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I2.2a HOT heartbeat: индексы, fillfactor, редкая запись истории
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: доля HOT ≥ 0.9 за 10 кругов, история не пишется на каждом heartbeat, release сохраняет счётчики, свежий heartbeat в списке живых аренд
+  - [ ] Миграция 0021: удалить индексы expires_at и истории по last_heartbeat_at, fillfactor 70
+  - [ ] LeaseTiming.stats_flush и extend_lease без записи истории между сбросами (PgStore/MemoryStore)
+  - [ ] Список живых аренд: heartbeat из ih_leases
+  - [ ] Документация, таблица значений по умолчанию, CHANGELOG, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -42,7 +46,8 @@
 | I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | done |  | разбиение D-207 |
 | I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | done |  | разбиение D-207 |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | done |  |  |
-| I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
+| I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | in_progress |  | разбиение D-210 |
+| I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | todo |  | разбиение D-210 |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
 | I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
@@ -54,7 +59,7 @@
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
-| I6.1 | Fast path операции | I1.3, I2.2, I2.4 | todo |  |  |
+| I6.1 | Fast path операции | I1.3, I2.2b, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
 | I6.3 | Set-based import fast path | I1.4b, I3.2 | todo |  |  |
 | I6.4 | Полный load harness и бюджеты | I5.3, I6.1, I6.2, I6.3 | todo |  |  |
@@ -63,7 +68,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 24 / 42 done
+**Итого:** 24 / 43 done
 
 ## Журнал сессий
 
