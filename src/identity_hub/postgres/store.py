@@ -1281,6 +1281,7 @@ class PgTx(StoreTx):
             operation=request.operation,
             fingerprint_version=FINGERPRINT_VERSION,
             fingerprint=request.fingerprint,
+            fingerprint_key_id=request.fingerprint_key_id,
             attempt=1,
             outcome=None,
             expires_at=func.now() + request.ttl,
@@ -1290,7 +1291,7 @@ class PgTx(StoreTx):
             keys.operation == stmt.excluded.operation,
             or_(
                 keys.fingerprint_version == LEGACY_FINGERPRINT_VERSION,
-                keys.fingerprint == stmt.excluded.fingerprint,
+                keys.fingerprint.in_(request.candidates),  # прежний ключ отпечатков — тот же отпечаток
             ),
         )
         # Конкурент с тем же ключом ждёт на конфликте до коммита победителя; его откат освобождает ключ.
@@ -1302,6 +1303,7 @@ class PgTx(StoreTx):
                 "operation": stmt.excluded.operation,
                 "fingerprint_version": stmt.excluded.fingerprint_version,
                 "fingerprint": stmt.excluded.fingerprint,
+                "fingerprint_key_id": stmt.excluded.fingerprint_key_id,
                 "attempt": case((expired, 1), else_=keys.attempt + 1),
                 "outcome": None,
                 "result_type": None,
@@ -1324,6 +1326,7 @@ class PgTx(StoreTx):
                         keys.operation,
                         keys.fingerprint_version,
                         keys.fingerprint,
+                        keys.fingerprint_key_id,
                         keys.attempt,
                         keys.outcome,
                         keys.identity_id,
@@ -1340,7 +1343,7 @@ class PgTx(StoreTx):
                 continue
             if row.operation != request.operation or (
                 row.fingerprint_version != LEGACY_FINGERPRINT_VERSION
-                and row.fingerprint != request.fingerprint
+                and row.fingerprint != request.fingerprint_for(row.fingerprint_key_id)
             ):
                 raise IdempotencyConflict(row.operation)
             return IdempotencyClaim(

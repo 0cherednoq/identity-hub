@@ -9,8 +9,16 @@ from uuid import UUID
 import pytest
 from pydantic import SecretStr
 
+from identity_hub import StaticSecretsProvider
+from identity_hub.crypto.fingerprint import FingerprintKeyring
 from identity_hub.crypto.secret_value import SecretValue
-from identity_hub.domain.idempotency import OMITTED, canonical_json, fingerprint
+from identity_hub.domain.idempotency import (
+    OMITTED,
+    KeyedFingerprint,
+    canonical_json,
+    fingerprint,
+    keyed_fingerprint,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -58,3 +66,35 @@ def test_fingerprint_depends_on_operation_and_payload() -> None:
     assert len(base) == 64
     assert base != fingerprint("operation", {"kind": "read"})
     assert base != fingerprint("lease", {"kind": "send"})
+
+
+KEK, FP1, FP2 = bytes(range(32)), bytes(range(1, 33)), bytes(range(2, 34))
+
+
+def _keyed(password: str, keyring: FingerprintKeyring) -> KeyedFingerprint:
+    return keyed_fingerprint(
+        "replace_credentials",
+        {"identity_id": "i-1"},
+        {"value": {"password": password}},
+        tags=keyring.tags,
+        active_key_id=keyring.active_key_id,
+    )
+
+
+def test_keyed_fingerprint_hides_secret_and_tracks_keys() -> None:
+    """I1.4b (D-208): секрет — HMAC-тегом; отпечатки историческими ключами для повтора после ротации."""
+    old = FingerprintKeyring(StaticSecretsProvider({"k1": KEK}, "k1", fingerprint_keys={"f1": FP1}))
+    new = FingerprintKeyring(
+        StaticSecretsProvider(
+            {"k1": KEK}, "k1", fingerprint_keys={"f2": FP2, "f1": FP1}, fingerprint_active="f2"
+        )
+    )
+
+    first, again, other = _keyed("pw-1", old), _keyed("pw-1", old), _keyed("pw-2", old)
+    rotated = _keyed("pw-1", new)
+
+    assert first == again and first.fingerprint != other.fingerprint
+    assert (first.key_id, rotated.key_id) == ("f1", "f2")
+    assert rotated.for_key("f1") == first.fingerprint
+    assert rotated.for_key("gone") is None
+    assert "pw-1" not in repr(rotated) and first.fingerprint not in repr(rotated)

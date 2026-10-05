@@ -79,6 +79,19 @@ def test_notification_crud_test_send_validation_rbac_and_redacted_reads() -> Non
         )
         assert created.status_code == 201
         channel_id = created.json()["data"]["resource_id"]
+        # SecretStr в запросе маскируется при сериализации: другой токен с тем же ключом всё равно
+        # конфликт, потому что отпечаток считается по раскрытому значению HMAC-тегом (D-208)
+        other_token = client.post(
+            f"/api/v1/spaces/{SPACE}/notification-channels",
+            headers=_headers("admin", "channel-create-0001"),
+            json={
+                "title": "Ops",
+                "bot_token": "another-telegram-token",
+                "chat_id": "@identity-hub-ops",
+                "reason": "Configure operator alerts",
+            },
+        )
+        assert other_token.status_code == 409
 
         tested = client.post(
             f"/api/v1/spaces/{SPACE}/notification-channels/{channel_id}/commands/test",

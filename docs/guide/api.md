@@ -68,6 +68,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `hub.dispatcher` | фоновый цикл: `running()`, `run_once()`, `drain()` |
 | `hub.maintenance` | обслуживание по расписанию: таймеры и retention |
 | `hub.doctor` | диагностика и починка данных (`identity-hub doctor`) |
+| `hub.equivalence_tag(value)` | HMAC-тег значения ключом отпечатков: сравнить чувствительные данные, не храня их (`D-208`) |
 | `hub.metrics` | хук метрик, заданный параметром `metrics` |
 | `hub.lease_log_sink` | обработчик `logging` для записи логов аренды в `ih_lease_logs` |
 | `hub.flush_lease_losses()` | выпустить накопленные события `worker.leases_lost` |

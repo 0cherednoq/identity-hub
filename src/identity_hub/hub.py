@@ -226,6 +226,14 @@ class IdentityHub:
 
         return ReadSchema(self.db_schema)
 
+    def equivalence_tag(self, value: str) -> str:
+        """HMAC-SHA-256 значения активным ключом отпечатков (IMP-04, D-208), hex.
+
+        Чтобы сравнивать чувствительные данные (секрет команды, код подтверждения), не храня их и
+        не давая подобрать по SHA-256. Тег — тоже чувствительное значение: не пишите его в логи.
+        """
+        return self._fingerprints.tag(value)
+
     @property
     def services(self) -> tuple[Service, ...]:
         return tuple(self._services.values())

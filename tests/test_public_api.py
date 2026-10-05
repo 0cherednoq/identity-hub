@@ -90,6 +90,7 @@ HUB_PUBLIC = {
     "dispatcher",
     "maintenance",
     "doctor",
+    "equivalence_tag",
     "metrics",
     "lease_log_sink",
     "flush_lease_losses",

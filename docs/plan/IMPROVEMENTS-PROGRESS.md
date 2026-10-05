@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I1.4b HMAC-тег секретов в идемпотентных командах
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: одинаковый и другой секрет, ротация, нет ключа, нет тега в repr/событиях, replay memory/pg
-  - [ ] keyed_fingerprint и IdempotencyRequest с key_id и отпечатками историческими ключами
-  - [ ] Миграция 0019 и сверка в claim_idempotency_key (PgStore/MemoryStore)
-  - [ ] idempotency_key у secrets.replace_credentials/replace_session
-  - [ ] Админка: equivalence_tag вместо SHA-256 для чувствительных команд
-  - [ ] Документация, CHANGELOG, трассировка IMP-04, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -45,7 +40,7 @@
 | I1.2b | expected_revision в API изменений | I1.2a | done |  | разбиение D-205 |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
 | I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | done |  | разбиение D-207 |
-| I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | in_progress |  | разбиение D-207 |
+| I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | done |  | разбиение D-207 |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
@@ -68,7 +63,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 22 / 42 done
+**Итого:** 23 / 42 done
 
 ## Журнал сессий
 
@@ -94,3 +89,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I1.2a · done · revision агрегата (миграция 0017, backfill из event_seq), рост раз на команду по EventSpec.aggregate, revision в событиях/вебхуке/журнале, read-схема v2 (R2-D23), RevisionConflict, doctor; тестовая БД без fsync · дальше I1.2b
 2026-10-05 · I1.2b · done · expected_revision у ~20 команд space.* (проверка FOR UPDATE первой в транзакции команды, savepoint при using), гонка двух сессий, D-206; IMP-07 implemented; дефлейк test_override_verification (срок фактора 2 с) · дальше I1.4
 2026-10-05 · I1.4a · done · кольцо ключей отпечатков (явное или HKDF из KEK, не равно KEK), HMAC-отпечаток прокси (миграция 0018, fingerprint_key_id), поиск по всем ключам и legacy SHA-256, doctor rekey-fingerprints, R2-S16 закрыта, D-207 · дальше I1.4b
+2026-10-05 · I1.4b · done · keyed_fingerprint (секрет HMAC-тегом), fingerprint_key_id в ключах идемпотентности (миграция 0019), повтор после ротации прежним ключом, нет ключа — SecretConfigurationError; idempotency_key у secrets.replace_*; hub.equivalence_tag; админка: отпечаток чувствительных команд по раскрытому секрету (был по маске SecretStr); IMP-04 implemented, D-208 · дальше I2.1

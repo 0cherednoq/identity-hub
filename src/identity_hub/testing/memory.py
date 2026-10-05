@@ -121,6 +121,7 @@ class _IdempotencyRecord:
     result_type: str | None = None
     result_version: int | None = None
     result: dict[str, Any] | None = None
+    fingerprint_key_id: str | None = None  # команда с секретами (D-208)
 
 
 @dataclass
@@ -865,7 +866,7 @@ class MemoryTx(StoreTx):
         if old is not None and not expired:
             same = old.operation == request.operation and (
                 old.fingerprint_version == LEGACY_FINGERPRINT_VERSION
-                or old.fingerprint == request.fingerprint
+                or old.fingerprint == request.fingerprint_for(old.fingerprint_key_id)
             )
             if not same:
                 raise IdempotencyConflict(old.operation)
@@ -886,6 +887,7 @@ class MemoryTx(StoreTx):
             operation=request.operation,
             fingerprint_version=FINGERPRINT_VERSION,
             fingerprint=request.fingerprint,
+            fingerprint_key_id=request.fingerprint_key_id,
             attempt=attempt,
             created_at=self._now if old is None or expired else old.created_at,
             expires_at=self._now + request.ttl,

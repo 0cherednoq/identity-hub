@@ -12,26 +12,39 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
+from pydantic_core import to_jsonable_python
 
 from identity_hub._space import SpaceBase, require_actor_and_reason
 from identity_hub.crypto import associated_data, reveal
 from identity_hub.domain.data import validate_model
+from identity_hub.domain.idempotency import SECRETS_FAMILY, keyed_fingerprint, namespace
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.events import EventDraft
+from identity_hub.store.base import IdempotencyRequest, StoreTx
 
 __all__ = ["SecretsAdminMixin"]
 
 
 class SecretsAdminMixin(SpaceBase):
     async def _update_credentials(
-        self, identity_id: UUID, credentials: BaseModel | Mapping[str, Any], *, actor: str
+        self,
+        identity_id: UUID,
+        credentials: BaseModel | Mapping[str, Any],
+        *,
+        actor: str,
+        idempotency_key: str | None = None,
     ) -> None:
         """Заменить credentials (валидация схемой сервиса, шифрование до транзакции)."""
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.credentials, credentials, "credentials")
         payload = self.hub._envelope.seal_model(model, associated_data("ih_credentials", identity_id))
-        async with self._tx() as tx:
+        command = {"identity_id": identity_id}
+        async with self._tx(checked=idempotency_key is None) as tx:
+            if not await self._claim_secret_command(
+                tx, idempotency_key, "replace_credentials", command, model
+            ):
+                return
             row = await self._identity(tx, identity_id)
             await tx.put_credentials(identity_id, payload)
             await self._emit(
@@ -44,6 +57,7 @@ class SecretsAdminMixin(SpaceBase):
                     data={"fields": sorted(type(model).model_fields)},
                 ),
             )
+            await self._complete_secret_command(tx, idempotency_key)
 
     async def _update_session(
         self,
@@ -53,6 +67,7 @@ class SecretsAdminMixin(SpaceBase):
         actor: str,
         slot: str = "default",
         expires_at: datetime | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         """Replace one session slot at the current fencing boundary."""
         if not slot or len(slot) > 64:
@@ -61,7 +76,10 @@ class SecretsAdminMixin(SpaceBase):
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.session, session, "session")
         payload = self.hub._envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
-        async with self._tx() as tx:
+        command = {"identity_id": identity_id, "slot": slot, "expires_at": expires_at}
+        async with self._tx(checked=idempotency_key is None) as tx:
+            if not await self._claim_secret_command(tx, idempotency_key, "replace_session", command, model):
+                return
             row = await self._identity(tx, identity_id)
             fencing = await tx.current_fencing(identity_id, lock=True)
             if fencing is None or not await tx.put_session(
@@ -82,6 +100,47 @@ class SecretsAdminMixin(SpaceBase):
                     },
                 ),
             )
+            await self._complete_secret_command(tx, idempotency_key)
+
+    async def _claim_secret_command(
+        self, tx: StoreTx, key: str | None, operation: str, command: Mapping[str, Any], model: BaseModel
+    ) -> bool:
+        """Занять ключ команды с секретами (D-208); `False` — повтор уже выполненной команды.
+
+        Отпечаток — по HMAC-тегам секрета ключом отпечатков: ни секрет, ни тег не хранятся.
+        Ключ берётся первым (порядок блокировок, п. 0), затем сверяется `expected_revision`.
+        """
+        if key is None:
+            return True
+        if not key or len(key) > 256:
+            raise ValidationFailed("idempotency_key: от 1 до 256 символов")
+        keyring = self.hub._fingerprints
+        keyed = keyed_fingerprint(
+            operation,
+            command,
+            {"value": to_jsonable_python(reveal(model.model_dump()))},
+            tags=keyring.tags,
+            active_key_id=keyring.active_key_id,
+        )
+        claim = await tx.claim_idempotency_key(
+            IdempotencyRequest(
+                namespace=namespace(tx.space.id, SECRETS_FAMILY),
+                key=key,
+                operation=operation,
+                fingerprint=keyed.fingerprint,
+                ttl=self.hub.retention.operation_keys,
+                owner_identity_id=command["identity_id"],
+                fingerprint_key_id=keyed.key_id,
+                alternates=keyed.alternates,
+            )
+        )
+        await self._check_expected(tx)
+        return claim.claimed
+
+    @staticmethod
+    async def _complete_secret_command(tx: StoreTx, key: str | None) -> None:
+        if key is not None:
+            await tx.complete_idempotency_key(namespace(tx.space.id, SECRETS_FAMILY), key, "succeeded")
 
     async def _reveal_secret(
         self, identity_id: UUID, field: str, *, actor: str, reason: str

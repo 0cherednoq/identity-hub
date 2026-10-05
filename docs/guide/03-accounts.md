@@ -16,6 +16,21 @@ Identity, или аккаунт, — учётная запись во внешн
 ревизию не меняют, команда без реальных изменений — тоже. Ту же ревизию несут события команды
 ([События](10-events.md#событие)) и колонка `hub.read.identities.c.revision`.
 
+### Повтор замены секрета: `idempotency_key`
+
+`secrets.replace_credentials` и `secrets.replace_session` принимают `idempotency_key`. Повтор с
+тем же ключом и теми же данными ничего не пишет (нет второго события и новой ревизии), с другими
+данными — `IdempotencyConflict`. Секрет в ключ не попадает: отпечаток команды строится по его
+HMAC-тегу ключом отпечатков (`D-208`). Ключ живёт `Retention.operation_keys`; после ротации ключа
+отпечатков повтор сверяется прежним ключом, а если его убрали из конфигурации раньше срока —
+`SecretConfigurationError`.
+
+```python
+await space.secrets.replace_credentials(
+    identity_id, {"phone": "+1...", "password": new_password}, actor="ops", idempotency_key=request_id
+)
+```
+
 ### Параллельные правки: `expected_revision`
 
 Каждая команда изменения аккаунта принимает `expected_revision` — ревизию, которую видел

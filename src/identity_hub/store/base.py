@@ -19,6 +19,7 @@ from uuid import UUID
 from identity_hub.clock import Clock
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
+from identity_hub.errors import SecretConfigurationError
 from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame
@@ -460,6 +461,22 @@ class IdempotencyRequest:
     fingerprint: str  # `domain.idempotency.fingerprint`: секретов не содержит
     ttl: timedelta
     owner_identity_id: UUID | None = None
+    # команда с секретами (D-208): ключ отпечатков и отпечатки той же команды прежними ключами
+    fingerprint_key_id: str | None = None
+    alternates: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+
+    def fingerprint_for(self, key_id: str | None) -> str:
+        """Отпечаток этой команды ключом записи; нет ключа у живой записи — `SecretConfigurationError`."""
+        if key_id is None or key_id == self.fingerprint_key_id:
+            return self.fingerprint
+        found = dict(self.alternates).get(key_id)
+        if found is None:
+            raise SecretConfigurationError("нет ключа отпечатков, которым подписан ключ идемпотентности")
+        return found
+
+    @property
+    def candidates(self) -> list[str]:
+        return [self.fingerprint, *(value for _key, value in self.alternates)]
 
 
 @dataclass(frozen=True, slots=True)

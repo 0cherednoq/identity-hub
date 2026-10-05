@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeVar
 from uuid import UUID
 
+from identity_hub.crypto import reveal
+from identity_hub.domain.idempotency import canonical_json
 from identity_hub.errors import (
     AlreadyExists,
     ChallengeAlreadyOpen,
@@ -25,11 +27,12 @@ from identity_hub.hub import SpaceHandle
 from litestar import Request
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
+from pydantic_core import to_jsonable_python
 
 from identity_hub_admin.api.contracts import MutationContext
 from identity_hub_admin.auth import AdminPrincipal
 from identity_hub_admin.context import AdminCommandContext, resolve_space_context
-from identity_hub_admin.idempotency import IdempotencyCoordinator, request_fingerprint
+from identity_hub_admin.idempotency import IdempotencyCoordinator
 
 ResultT = TypeVar("ResultT")
 CommandCall = Callable[["CommandScope"], Awaitable[ResultT]]
@@ -78,8 +81,14 @@ class CommandGateway:
         if mutation.expected_revision is not None and identity_id is None:
             raise HTTPException("expected_revision requires identity_id", status_code=422)
         mutation_payload: object = mutation.model_dump(mode="json")
+        if sensitive:
+            # model_dump(mode="json") маскирует SecretStr: повтор с другим секретом выглядел бы тем же
+            # запросом. Секрет входит в отпечаток HMAC-тегом ключа отпечатков хаба (D-208), а не
+            # SHA-256: короткий код подтверждения по отпечатку не подбирается.
+            revealed = canonical_json(to_jsonable_python(reveal(mutation.model_dump())))
+            mutation_payload = resolved.handle.hub.equivalence_tag(revealed)
         fingerprint_payload = {
-            "mutation": request_fingerprint(mutation_payload) if sensitive else mutation_payload,
+            "mutation": mutation_payload,
             "identity_id": str(identity_id) if identity_id is not None else None,
             "payload": dict(payload or {}),
         }

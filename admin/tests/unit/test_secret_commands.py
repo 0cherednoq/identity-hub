@@ -156,6 +156,21 @@ def test_reveal_and_update_require_admin_reauth_never_cache_and_audit_without_va
         assert updated.status_code == 201
         assert "no-store" in updated.headers["cache-control"]
         assert "new-password" not in repr(app.state.idempotency._entries)
+        # тот же ключ с другим секретом — конфликт, а не повтор: секрет входит в отпечаток HMAC-тегом
+        conflicting = client.post(
+            f"{base}/secrets/update",
+            headers=_headers("admin", "update-credentials-0001"),
+            json={
+                "reason": "credential rotation",
+                "expected_revision": revision,
+                "kind": "credentials",
+                "value": {"username": "alice", "password": "other-password"},
+                "reauthentication": "admin-secret-token",
+                "confirmation": _confirmation("replaces_secret"),
+            },
+        )
+        assert conflicting.status_code == 409
+        assert "other-password" not in repr(app.state.idempotency._entries)
 
         revision = client.get(base, headers=_headers("admin", "read-after-update")).json()["data"]["revision"]
         profile = client.post(

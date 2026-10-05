@@ -122,12 +122,16 @@ class SpaceBase:
         return Notifications(cast("SpaceHandle", self))
 
     @asynccontextmanager
-    async def _tx(self, *, own: bool = False) -> AsyncIterator[StoreTx]:
-        """Транзакция операции. `own=True` — всегда своя (факты внешнего мира, ТЗ §7.2)."""
+    async def _tx(self, *, own: bool = False, checked: bool = True) -> AsyncIterator[StoreTx]:
+        """Транзакция операции. `own=True` — всегда своя (факты внешнего мира, ТЗ §7.2).
+
+        `checked=False` — сверку `expected_revision` команда делает сама, после ключа
+        идемпотентности: он блокируется раньше строки identity (порядок блокировок, п. 0).
+        """
         ref = await self.ref()
         session: Any = None if own else self._session
         async with self.hub._store.transaction(ref, session=session) as tx:
-            if not (own and self._session is not None):
+            if checked and not (own and self._session is not None):
                 await self._check_expected(tx)
             yield tx
 

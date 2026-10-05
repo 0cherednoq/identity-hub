@@ -83,10 +83,17 @@ class Secrets(Namespace):
         *,
         actor: str,
         expected_revision: int | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
-        """Заменить credentials целиком (валидация схемой сервиса, шифрование до транзакции)."""
+        """Заменить credentials целиком (валидация схемой сервиса, шифрование до транзакции).
+
+        `idempotency_key` — повтор с теми же данными ничего не пишет, с другими —
+        `IdempotencyConflict`; секрет в ключ не попадает, только его HMAC-тег (D-208).
+        """
         space = self._at(identity_id, expected_revision)
-        await space._update_credentials(identity_id, credentials, actor=actor)
+        await space._update_credentials(
+            identity_id, credentials, actor=actor, idempotency_key=idempotency_key
+        )
 
     async def replace_session(
         self,
@@ -97,8 +104,17 @@ class Secrets(Namespace):
         slot: str = "default",
         expires_at: datetime | None = None,
         expected_revision: int | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
-        """Заменить сессию слота вне аренды на текущей границе fencing; под арендой — `lease.save_session`."""
+        """Заменить сессию слота вне аренды на текущей границе fencing; под арендой — `lease.save_session`.
+
+        `idempotency_key` — как у `replace_credentials` (D-208).
+        """
         await self._at(identity_id, expected_revision)._update_session(
-            identity_id, session, actor=actor, slot=slot, expires_at=expires_at
+            identity_id,
+            session,
+            actor=actor,
+            slot=slot,
+            expires_at=expires_at,
+            idempotency_key=idempotency_key,
         )

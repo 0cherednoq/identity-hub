@@ -826,6 +826,7 @@ class OperationKeyRecord(IdentityHubBase):
     operation: Mapped[str] = mapped_column(String(64))
     fingerprint_version: Mapped[int] = mapped_column(SmallInteger)  # 0 — запись до протокола
     fingerprint: Mapped[str | None] = mapped_column(String(64))
+    fingerprint_key_id: Mapped[str | None] = mapped_column(String(64))  # команда с секретами, D-208
     attempt: Mapped[int] = mapped_column(Integer)
     outcome: Mapped[str | None] = mapped_column(String(32))  # None — выполняется или исход неизвестен
     result_type: Mapped[str | None] = mapped_column(String(64))
