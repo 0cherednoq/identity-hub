@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
 from identity_hub.crypto import SecretValue, associated_data, credential_associated_data
-from identity_hub.domain.credentials import ACTIVE, is_expired
+from identity_hub.domain.credentials import ACTIVE, is_expired, session_event_data, session_mode
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.redaction import sanitize_text
@@ -437,17 +437,24 @@ class Lease:
         slot: str = DEFAULT_SLOT,
         *,
         expires_at: datetime | None = None,
+        mode: str = "in_place",
     ) -> None:
-        """Сохранить результат входа; запись устаревшей аренды — StaleFencing (FR-5.3, G-1.4)."""
+        """Сохранить сессию слота; запись устаревшей аренды — StaleFencing (FR-5.3, G-1.4).
+
+        `mode="in_place"` обновляет текущую запись слота, `"replace"` создаёт новую и отзывает
+        прежнюю — она остаётся в истории (IMP-10, D-219).
+        """
         self.check()
+        mode = session_mode(mode)
         model = validate_model(self.pool.service.session, session, "session")
         aad = associated_data("ih_sessions", self.identity_id, slot)
         payload = self.pool.space.hub._envelope.seal_model(model, aad)  # до открытия транзакции (T-5)
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
-            if not await tx.put_session(
-                self.identity_id, slot, payload, fencing=self.fencing, expires_at=expires_at
-            ):
+            written = await tx.put_session(
+                self.identity_id, slot, payload, fencing=self.fencing, expires_at=expires_at, mode=mode
+            )
+            if written is None:
                 raise StaleFencing(self.identity_id, self.fencing)
             await self.pool.space._emit(
                 tx,
@@ -457,7 +464,7 @@ class Lease:
                     service=self.service,
                     identity_id=self.identity_id,
                     lease_id=self.lease_id,
-                    data={"slot": slot},
+                    data=session_event_data(slot, mode, written),
                 ),
             )
 

@@ -297,7 +297,7 @@ report.created, report.updated, report.skipped, report.failed   # списки i
 | Теги | `identities.add_tags(id, ["vip"])`, `remove_tags(id, [...])`, `set_tags(id, [...])` |
 | Заметка | `identities.set_note(id, "text")` |
 | Credentials | `secrets.replace_credentials(id, {...}, actor="admin")` |
-| Сессия вне аренды | `secrets.replace_session(id, {...}, actor="admin", slot="default")` |
+| Сессия вне аренды | `secrets.replace_session(id, {...}, actor="admin", slot="default", mode="in_place")`; `mode="replace"` — новая запись, прежняя в истории; `secrets.revoke_session(id, slot, actor=...)` — отзыв без замены |
 | Сессия в аренде | `await lease.save_session(session)` |
 
 ```python

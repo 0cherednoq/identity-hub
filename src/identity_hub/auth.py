@@ -386,7 +386,8 @@ class LoginMixin(SpaceBase):
                 await self._set_auth(lease, AuthState.NO_SESSION, "identity.login.failed", {"error": name})
                 entered = False
                 return LoginOutcome.FAILED, f"{name}: {exc}"[:500]
-            await lease.save_session(session)
+            # новый вход — новая запись сессии, прежняя остаётся в истории отозванной (D-219)
+            await lease.save_session(session, mode="replace")
             if challenge is not None:
                 await self._resolve(challenge.id)
             await self._set_auth(lease, AuthState.AUTHENTICATED, "identity.login.succeeded", {})

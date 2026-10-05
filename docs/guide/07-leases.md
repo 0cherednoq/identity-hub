@@ -203,6 +203,7 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 |---|---|
 | `lease.identity_id`, `lease.identity` | id и снимок аккаунта без секретов |
 | `await lease.credentials()`, `await lease.session(slot)` | расшифрованные секреты (`credentials()` — запись `default`) |
+| `await lease.save_session(session, slot, mode="in_place"\|"replace")` | записать сессию: обновить текущую запись слота или создать новую, отозвав прежнюю (`D-219`) |
 | `await lease.credential(kind, name)`, `await lease.active_credentials()` | запись credentials по виду и имени; все активные записи `(kind, name) → модель` (`D-216`) |
 | `await lease.save_session(...)`, `await lease.mark_authenticated()` | запись с проверкой fencing |
 | `lease.proxy` | `SecretValue` с URL прокси; строка **с логином и паролем** — `lease.proxy.reveal()`, не логируйте |

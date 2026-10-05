@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I3.3b Session: режимы в API, события, вход и обновление
-- **Начата:** 2026-10-06
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: save_session/replace_session с mode, события без payload, вход — replace, revoke_session, параллельная замена
-  - [ ] mode в lease.save_session и secrets.replace_session, secrets.revoke_session
-  - [ ] События с id записей и ревизией; вход в режиме replace
-  - [ ] Документация, CHANGELOG, IMP-10 implemented, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -54,7 +51,7 @@
 | I3.2a | Credentials под арендой, в контекстах входа и раскрытие по виду | I3.1b | done |  | разбиение D-216 |
 | I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | done |  | разбиение D-216 |
 | I3.3a | Session: схема, lifecycle и режимы в Store | I3.2b | done |  | разбиение D-218 |
-| I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | in_progress |  | разбиение D-218 |
+| I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | done |  | разбиение D-218 |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | todo |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
@@ -70,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 33 / 46 done
+**Итого:** 34 / 46 done
 
 ## Журнал сессий
 
@@ -107,3 +104,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I3.2a · done · lease.credential(kind, name) и active_credentials под полным fence (выключенная/отозванная/истёкшая — None), lease.credentials() — default (совместимость), ctx.credential в контекстах входа и проб, SecretRef.credential и раскрытие с kind/name в аудите; D-216 · дальше I3.2b
 2026-10-05 · I3.2b · done · CredentialInput и credential_records у IdentityCreate, ImportRecord (в т.ч. отложенный импорт) и make_identity: проверка и шифрование до транзакции, запись вместе с аккаунтом, импорт только новому аккаунту; AccessCard.credential_records; IMP-09 implemented, D-217 · дальше I3.3
 2026-10-06 · I3.3a · done · миграция 0023 (ih_sessions: id, revision, created_at, revoked_at; одна не отозванная запись на слот; статусы valid→active, invalid/expired→invalidated; индекс под FK), SessionStatus created/active/invalidated/revoked с псевдонимами VALID/INVALID, Store put_session(mode) → SessionWrite, revoke_session, session_history; D-218 · дальше I3.3b
+2026-10-06 · I3.3b · done · mode in_place/replace в lease.save_session и secrets.replace_session, secrets.revoke_session, вход — replace, события с mode/session_id/replaced_id/session_revision без данных сессии, параллельная замена на барьере; IMP-10 implemented, D-219 · фаза I3 закрыта, дальше I4.1

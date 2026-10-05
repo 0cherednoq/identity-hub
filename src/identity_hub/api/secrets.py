@@ -114,8 +114,11 @@ class Secrets(Namespace):
         expires_at: datetime | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
+        mode: str = "in_place",
     ) -> None:
         """Заменить сессию слота вне аренды на текущей границе fencing; под арендой — `lease.save_session`.
+
+        `mode="replace"` создаёт новую запись и отзывает прежнюю — она остаётся в истории (D-219).
 
         `idempotency_key` — как у `replace_credentials` (D-208).
         """
@@ -126,6 +129,7 @@ class Secrets(Namespace):
             slot=slot,
             expires_at=expires_at,
             idempotency_key=idempotency_key,
+            mode=mode,
         )
 
     # ------------------------------------------------------------------ несколько credentials (IMP-09)
@@ -195,4 +199,18 @@ class Secrets(Namespace):
         space = self._at(identity_id, expected_revision)
         return await space._set_credential_lifecycle(
             identity_id, kind, name, REVOKED, actor=actor, reason=reason
+        )
+
+    async def revoke_session(
+        self,
+        identity_id: UUID,
+        slot: str = "default",
+        *,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
+        """Отозвать сессию слота навсегда, без замены; `False` — отзывать нечего (IMP-10, D-219)."""
+        return await self._at(identity_id, expected_revision)._revoke_session(
+            identity_id, slot, actor=actor, reason=reason
         )

@@ -16,14 +16,21 @@ from pydantic_core import to_jsonable_python
 
 from identity_hub._space import SpaceBase, require_actor_and_reason
 from identity_hub.crypto import associated_data, credential_associated_data, reveal
-from identity_hub.domain.credentials import ACTIVE, DISABLED, REVOKED, check_transition
+from identity_hub.domain.credentials import (
+    ACTIVE,
+    DISABLED,
+    REVOKED,
+    check_transition,
+    session_event_data,
+    session_mode,
+)
 from identity_hub.domain.data import validate_json_payload, validate_model
 from identity_hub.domain.idempotency import SECRETS_FAMILY, keyed_fingerprint, namespace
 from identity_hub.errors import NotFound, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.store.base import CredentialRow, IdempotencyRequest, StoreTx
 
-__all__ = ["CredentialsMixin", "SecretsAdminMixin"]
+__all__ = ["CredentialsMixin", "SecretsAdminMixin", "SessionRevokeMixin"]
 
 
 class SecretsAdminMixin(SpaceBase):
@@ -69,23 +76,30 @@ class SecretsAdminMixin(SpaceBase):
         slot: str = "default",
         expires_at: datetime | None = None,
         idempotency_key: str | None = None,
+        mode: str = "in_place",
     ) -> None:
         """Replace one session slot at the current fencing boundary."""
+        mode = session_mode(mode)
         if not slot or len(slot) > 64:
             raise ValidationFailed("session slot must contain from 1 to 64 characters")
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.session, session, "session")
         payload = self.hub._envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
-        command = {"identity_id": identity_id, "slot": slot, "expires_at": expires_at}
+        command = {"identity_id": identity_id, "slot": slot, "expires_at": expires_at, "mode": mode}
         async with self._tx(checked=idempotency_key is None) as tx:
             if not await self._claim_secret_command(tx, idempotency_key, "replace_session", command, model):
                 return
             row = await self._identity(tx, identity_id)
             fencing = await tx.current_fencing(identity_id, lock=True)
-            if fencing is None or not await tx.put_session(
-                identity_id, slot, payload, fencing=fencing, expires_at=expires_at
-            ):
+            written = (
+                await tx.put_session(
+                    identity_id, slot, payload, fencing=fencing, expires_at=expires_at, mode=mode
+                )
+                if fencing is not None
+                else None
+            )
+            if written is None:
                 raise ValidationFailed("session update lost its fencing boundary")
             await self._emit(
                 tx,
@@ -95,7 +109,7 @@ class SecretsAdminMixin(SpaceBase):
                     service=row.service,
                     identity_id=identity_id,
                     data={
-                        "slot": slot,
+                        **session_event_data(slot, mode, written),
                         "fields": sorted(type(model).model_fields),
                         "expires_at": expires_at,
                     },
@@ -308,3 +322,27 @@ class CredentialsMixin(SpaceBase):
                 data=data,
             ),
         )
+
+
+class SessionRevokeMixin(SpaceBase):
+    """Конечный отзыв сессии слота без замены (IMP-10, D-219)."""
+
+    async def _revoke_session(self, identity_id: UUID, slot: str, *, actor: str, reason: str | None) -> bool:
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            if not await tx.revoke_session(identity_id, slot):
+                return False
+            data: dict[str, Any] = {"slot": slot, "mode": "revoke"}
+            if reason is not None:
+                data["reason"] = reason
+            await self._emit(
+                tx,
+                EventDraft(
+                    "identity.session.updated",
+                    actor=actor,
+                    service=row.service,
+                    identity_id=identity_id,
+                    data=data,
+                ),
+            )
+            return True

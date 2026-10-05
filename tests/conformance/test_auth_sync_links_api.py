@@ -199,3 +199,29 @@ async def test_verifications_status_review_requirements(space: SpaceHandle) -> N
     assert await requirements.add(identity_id, "selfie", actor="platform") is False
     assert await requirements.resolve(identity_id, "selfie", actor="admin", reason="загружено") is True
     assert await requirements.resolve(identity_id, "selfie", actor="platform") is False
+
+
+async def test_login_replaces_previous_session(login_space: SpaceHandle) -> None:
+    """IMP-10 (D-219): вход — новая запись сессии, прежняя остаётся в истории отозванной."""
+    space = login_space
+    identity = await space.identities.create(
+        IdentityCreate(
+            service="tg_login",
+            external_ref="+300",
+            credentials={"phone": "+300"},
+            session={"auth_key": "old"},
+            auth="session_invalid",
+        ),
+        actor="test",
+    )
+    assert await space.auth.login(identity.id) is LoginOutcome.CHALLENGED
+    challenge = (await space.identities.card(identity.id)).open_challenge
+    assert challenge is not None
+    assert (
+        await space.auth.answer_challenge(UUID(challenge["id"]), SMS_CODE, actor="op")
+        is LoginOutcome.SUCCEEDED
+    )
+
+    async with space._tx(own=True) as tx:
+        history = await tx.session_history(identity.id, "default")
+    assert [row.status for row in history] == ["revoked", "active"]

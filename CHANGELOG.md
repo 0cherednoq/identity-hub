@@ -12,6 +12,11 @@
 
 ### Added
 
+- Режимы записи сессии (`IMP-10`, `D-219`): `lease.save_session(..., mode=)` и
+  `secrets.replace_session(..., mode=)` — `in_place` (по умолчанию) или `replace` (новая запись,
+  прежняя в истории); `secrets.revoke_session` — отзыв без замены. Вход сохраняет сессию в режиме
+  `replace`. События `session.saved` и `identity.session.updated` несут `mode`, `session_id`,
+  `replaced_id`, `session_revision` — без данных сессии.
 - `CredentialInput` и `credential_records` у `IdentityCreate`, `ImportRecord` (в том числе
   отложенного импорта) и `make_identity`; `AccessCard.credential_records` — все записи без
   секретов (`IMP-09`, `D-217`).
