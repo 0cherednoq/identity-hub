@@ -346,18 +346,25 @@ bash scripts/check.sh
   id/kind/name/public metadata/lifecycle/revision.
 - **DoD:** end-to-end register→lease→rotate→reveal, import replay, MemoryStore/PgStore conformance.
 
-### I3.3 Два режима обновления session
+### I3.3a Session: схема, lifecycle и режимы в Store
 
-Связанное улучшение: `IMP-10`.
+Связанное улучшение: `IMP-10`. Задача `I3.3` разбита решением `D-218` на `I3.3a` и `I3.3b`.
 
 - Зафиксировать lifecycle session `created → active → invalidated → revoked`, где revoked
   terminal; мигрировать legacy statuses без потери ciphertext.
-- `save_session(mode="in_place")` обновляет активный slot и revision; `mode="replace"` создаёт
-  новую запись и атомарно отзывает старую, сохраняя историю.
+- Store: запись `in_place` обновляет активный slot и revision; `replace` создаёт новую запись и
+  атомарно отзывает старую, сохраняя историю. Чтение — только не отозванная запись слота.
+- **DoD:** обе ветки на уровне Store, rollback, zombie fence, terminal revoke, миграция; pg/memory
+  parity.
+
+### I3.3b Session: режимы в API, события, вход и обновление
+
+Связанное улучшение: `IMP-10`.
+
+- `save_session(mode="in_place")` / `mode="replace"` в аренде и `secrets.replace_session`.
 - Event data содержит slot/mode/old/new session id/revision без payload. Login/refresh явно
   выбирают режим по результату адаптера.
-- **DoD:** обе ветки, concurrent replace, rollback, zombie fence, terminal revoke и чтение только
-  новой active session; pg/memory parity.
+- **DoD:** обе ветки через API, concurrent replace, чтение только новой active session; события.
 
 ---
 
@@ -722,10 +729,10 @@ I0.3 + I1.3 → I1.4a → I1.4b
 I0.4 → I2.1 → I2.2a → I2.2b
 I0.2b + I2.1 → I2.3 → I2.4
 
-I0.3 + I0.4 + I1.2b → I3.1a → I3.1b → I3.2a → I3.2b → I3.3
+I0.3 + I0.4 + I1.2b → I3.1a → I3.1b → I3.2a → I3.2b → I3.3a → I3.3b
 
 I0.2b + I0.4 + I1.2b + I2.3 → I4.1
-I3.3 + I4.1 → I4.2
+I3.3b + I4.1 → I4.2
 I2.4 + I4.1 → I4.3
 
 I0.4 → I5.1
@@ -736,7 +743,7 @@ I1.3 + I2.2b + I2.4 → I6.1
 I1.1 + I5.1 → I6.2
 I1.4b + I3.2b → I6.3
 I5.3 + I6.1 + I6.2 + I6.3 → I6.4
-I1.4b + I2.4 + I3.3 + I4.3 + I5.3 → I6.5
+I1.4b + I2.4 + I3.3b + I4.3 + I5.3 → I6.5
 
 I0.1 → I8.1 → I8.2 → {I8.3, I8.4}
 I8.3 → I8.5
