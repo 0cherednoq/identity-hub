@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I3.2a Credentials под арендой, в контекстах входа и раскрытие по виду
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: lease.credential по виду, выключенная/отозванная/истёкшая не выдаются, active_credentials, ctx.credential, reveal по виду с аудитом
+  - [ ] Lease.credential и active_credentials под полным fence
+  - [ ] ctx.credential в LoginContext и ProbeContext
+  - [ ] SecretRef.credential и раскрытие записи с аудитом
+  - [ ] Документация, CHANGELOG, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -48,8 +52,9 @@
 | I2.4 | Семантика renew, release, revoke | I2.3 | done |  |  |
 | I3.1a | Credentials: схема, виды в Service, контракт Store, версии MemoryStore | I0.3, I0.4, I1.2b | done |  | разбиение D-214 |
 | I3.1b | Credentials: lifecycle, срок и команды space.secrets | I3.1a | done |  | разбиение D-214 |
-| I3.2 | API нескольких credentials и интеграция | I3.1b | todo |  |  |
-| I3.3 | Два режима обновления session | I3.2 | todo |  |  |
+| I3.2a | Credentials под арендой, в контекстах входа и раскрытие по виду | I3.1b | in_progress |  | разбиение D-216 |
+| I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | todo |  | разбиение D-216 |
+| I3.3 | Два режима обновления session | I3.2b | todo |  |  |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
@@ -58,14 +63,14 @@
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2b, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
-| I6.3 | Set-based import fast path | I1.4b, I3.2 | todo |  |  |
+| I6.3 | Set-based import fast path | I1.4b, I3.2b | todo |  |  |
 | I6.4 | Полный load harness и бюджеты | I5.3, I6.1, I6.2, I6.3 | todo |  |  |
 | I6.5 | Полная deterministic race matrix | I1.4b, I2.4, I3.3, I4.3, I5.3 | todo |  |  |
 | I8.10 | API: удаление legacy-алиасов | I8.9 | done |  | закрыта F6.4 (D-151) |
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 30 / 44 done
+**Итого:** 30 / 45 done
 
 ## Журнал сессий
 

@@ -327,19 +327,24 @@ bash scripts/check.sh
   Секрет, public_value и metadata изменяются атомарно с revision/event.
 - **DoD:** expiry/disable/revoke; отсутствие секретов в read models и событиях; conformance.
 
-### I3.2 API нескольких credentials и интеграция
+### I3.2a Credentials под арендой, в контекстах входа и раскрытие по виду
+
+Связанное улучшение: `IMP-09`. Задача `I3.2` разбита решением `D-216` на `I3.2a` и `I3.2b`.
+
+- Добавить `lease.credential(kind, name="default")` и `lease.active_credentials()` для всех активных
+  записей, защищённые полным fence; `lease.credentials()` остаётся доступом к записи `default`
+  (совместимость, `D-216`). То же — `ctx.credential(kind, name)` в контекстах входа и проб.
+- Reveal конкретного credential создаёт audit event с kind/name, но без значения.
+- **DoD:** чтение по виду под арендой; выключенная, отозванная и истёкшая запись не выдаётся;
+  reveal с аудитом; MemoryStore/PgStore conformance.
+
+### I3.2b Credentials в регистрации, импорте, карточке и фабриках
 
 Связанное улучшение: `IMP-09`.
 
-- Добавить `lease.credential(kind, name="default")` и `lease.credentials()` для всех активных
-  записей, защищённые полным fence. Зафиксировать совместимость старого default accessor решением
-  I0.1 и migration guide.
-- Обновить register, import, login, secret admin, rotate-key, identity card и testing factories.
-  List/read API возвращают только id/kind/name/public metadata/lifecycle/revision.
-- Идемпотентное обновление использует I1.3/I1.4b; reveal конкретного credential создаёт audit
-  event с kind/name, но без значения.
-- **DoD:** end-to-end register→lease→rotate→reveal, import replay, linked login и
-  MemoryStore/PgStore conformance.
+- Обновить register, import, identity card и testing factories. List/read API возвращают только
+  id/kind/name/public metadata/lifecycle/revision.
+- **DoD:** end-to-end register→lease→rotate→reveal, import replay, MemoryStore/PgStore conformance.
 
 ### I3.3 Два режима обновления session
 
@@ -717,7 +722,7 @@ I0.3 + I1.3 → I1.4a → I1.4b
 I0.4 → I2.1 → I2.2a → I2.2b
 I0.2b + I2.1 → I2.3 → I2.4
 
-I0.3 + I0.4 + I1.2b → I3.1a → I3.1b → I3.2 → I3.3
+I0.3 + I0.4 + I1.2b → I3.1a → I3.1b → I3.2a → I3.2b → I3.3
 
 I0.2b + I0.4 + I1.2b + I2.3 → I4.1
 I3.3 + I4.1 → I4.2
@@ -729,7 +734,7 @@ I1.2b + I5.2 → I5.3
 
 I1.3 + I2.2b + I2.4 → I6.1
 I1.1 + I5.1 → I6.2
-I1.4b + I3.2 → I6.3
+I1.4b + I3.2b → I6.3
 I5.3 + I6.1 + I6.2 + I6.3 → I6.4
 I1.4b + I2.4 + I3.3 + I4.3 + I5.3 → I6.5
 
