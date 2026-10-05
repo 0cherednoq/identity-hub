@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I2.3 Полный lease fence
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: подмена lease_id/token/fencing, истёкшая без перехвата, отозванная, перехваченная — LeaseOwnershipLost; валидный fence пишет данные и событие
+  - [ ] LeaseFence, LeaseOwnershipLost как LeaseLost и StaleFencing
+  - [ ] StoreTx.check_fence в PgStore и MemoryStore
+  - [ ] Guard во всех записях и чтении секретов от имени аренды (operation_scope, save_session, auth, verifications)
+  - [ ] Документация, CHANGELOG, R1-15, трассировка IMP-05, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -44,7 +48,7 @@
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | done |  |  |
 | I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | done |  | разбиение D-210 |
 | I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | done |  | разбиение D-210 |
-| I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
+| I2.3 | Полный lease fence | I0.2b, I2.1 | in_progress |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
 | I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
 | I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
