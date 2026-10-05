@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I1.2a Revision агрегата: колонка, рост, события, read-схема
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: рост revision один раз на команду, без роста от аренды и раскрытия, revision в событиях и read-схеме
+  - [ ] Миграция 0017 и модель: revision у identity и событий
+  - [ ] EventSpec.aggregate, emit в PgStore и MemoryStore, вставка с revision 0
+  - [ ] Event/EventReadRow/EventItem/Identity/IdentityCard/IdentityRow; read-схема v2
+  - [ ] lock_identity_revision на новой колонке и RevisionConflict; doctor
+  - [ ] Тесты, документация, CHANGELOG, проверка check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -36,22 +41,23 @@
 | I0.3 | Payload limits, versioned envelope, SecretValue | I0.2b | done |  |  |
 | I0.4 | Schema check и migration advisory lock | I0.1, I0.2b | done |  |  |
 | I1.1 | Нормализация external_ref | I0.3, I0.4 | done |  |  |
-| I1.2 | Revision агрегата и expected_revision | I0.2b, I0.4 | todo |  |  |
+| I1.2a | Revision агрегата: колонка, рост, события, read-схема | I0.2b, I0.4 | in_progress |  | разбиение D-205 |
+| I1.2b | expected_revision в API изменений | I1.2a | todo |  | разбиение D-205 |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
 | I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | todo |  |  |
-| I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2 | todo |  |  |
+| I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
 | I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
 | I3.3 | Два режима обновления session | I3.2 | todo |  |  |
-| I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2, I2.3 | todo |  |  |
+| I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
-| I5.3 | Опциональный ordered outbox | I1.2, I5.2 | todo |  |  |
+| I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
 | I6.3 | Set-based import fast path | I1.4, I3.2 | todo |  |  |
@@ -61,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 19 / 40 done
+**Итого:** 19 / 41 done
 
 ## Журнал сессий
 

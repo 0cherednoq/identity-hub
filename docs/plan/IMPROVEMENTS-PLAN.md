@@ -172,6 +172,11 @@ bash scripts/check.sh
   повышается. Регрессионный тест `F2.4` (параллельные `add_tags`) остаётся зелёным.
 - **DoD:** две admin-сессии с одной revision, один победитель; rollback/savepoint; revision в
   последовательности событий; conformance для всех mutation families.
+- **Разбиение (`D-205`).** `I1.2a` — миграция, правило роста (один раз на команду, только
+  события, меняющие агрегат), `revision` в событиях, `Identity`/`IdentityCard`, `hub.read`
+  (`R2-D23`), `lock_identity_revision` → `RevisionConflict`. `I1.2b` — `expected_revision` во
+  всех командах изменения `space.*` (в том числе через `using(session)`), conformance по
+  семействам, гонка двух сессий, документация и CHANGELOG.
 
 ### I1.3 Единый протокол идемпотентности и canonical fingerprint
 
