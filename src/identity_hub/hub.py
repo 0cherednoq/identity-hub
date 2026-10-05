@@ -43,6 +43,7 @@ from identity_hub.errors import (
     describe_error,
 )
 from identity_hub.events import EventDraft
+from identity_hub.heartbeat import HeartbeatBatcher
 from identity_hub.identities import IdentitiesMixin
 from identity_hub.identity_data import IdentityDataMixin
 from identity_hub.importing import ImportingMixin, ImportRunner
@@ -144,6 +145,7 @@ class IdentityHub:
         self._store = store
         self._envelope = Envelope(secrets)
         self._fingerprints = FingerprintKeyring(secrets)  # ключи отпечатков, не KEK (IMP-04, D-207)
+        self._heartbeats = HeartbeatBatcher(store)  # пакетный heartbeat аренд процесса (IMP-02, D-211)
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         try:

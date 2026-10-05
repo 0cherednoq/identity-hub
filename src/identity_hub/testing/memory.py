@@ -3261,6 +3261,18 @@ class MemoryStore(Store):
             )
             return [(spaces[row.space_id], row) for row in rows[:limit]]
 
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+        async with self._lock:
+            now = self.clock.now()
+            wanted = set(tokens)
+            renewed: dict[UUID, datetime] = {}
+            for identity_id, lease in list(self._state.leases.items()):
+                if lease.token in wanted and lease.expires_at > now:
+                    expires_at = now + timedelta(seconds=ttl_seconds)
+                    self._state.leases[identity_id] = replace(lease, expires_at=expires_at, heartbeat_at=now)
+                    renewed[lease.token] = expires_at
+            return renewed
+
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         async with self._lock:
             rows = sorted(

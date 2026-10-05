@@ -266,9 +266,12 @@ class Lease:
         started = clock.monotonic()
         # история и счётчики — раз в stats_flush: между ними heartbeat меняет только ih_leases (HOT)
         flush = self.pool.shared or started - self._last_flush >= self.pool.timing.stats_flush.total_seconds()
-        counters = LeaseCounters.empty()
-        if flush:
-            counters, self._counters = self._counters, LeaseCounters.empty()
+        if not flush:
+            # продление без истории — пачкой вместе с другими арендами процесса (D-211)
+            return await self.pool.space.hub._heartbeats.renew(
+                self._row.token, self.pool.timing.ttl.total_seconds()
+            )
+        counters, self._counters = self._counters, LeaseCounters.empty()
         try:
             async with self.pool.space._tx(own=True) as tx:
                 expires_at = await tx.extend_lease(
@@ -281,7 +284,7 @@ class Lease:
         except BaseException:
             self._merge_back(counters)
             raise
-        if flush and expires_at is not None:
+        if expires_at is not None:
             self._last_flush = started
         return expires_at
 

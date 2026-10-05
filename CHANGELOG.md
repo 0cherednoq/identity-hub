@@ -80,6 +80,10 @@
 
 ### Changed
 
+- Heartbeat аренд процесса продлевается пачкой: одновременные продления уходят одним
+  `UPDATE ... WHERE token = ANY(...)` (`IMP-02`, `D-211`, Store `renew_leases`). Отзыв или потеря
+  касается только своей аренды. Замер: 272 продления/с поштучно, 21 тыс./с пачками по 100,
+  58 тыс./с по 500.
 - Heartbeat эксклюзивной аренды — HOT-обновление (`IMP-02`, `D-210`): миграция `0021` удаляет
   индексы `ix_ih_leases_expires_at` и `ix_ih_lease_history_open`, у `ih_leases` — `fillfactor = 70`.
   История аренды получает время heartbeat и счётчики раз в `LeaseTiming.stats_flush` (по

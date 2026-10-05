@@ -5106,6 +5106,20 @@ class PgStore(Store):
             rows = (await _execute(session, stmt, execution_options=self.options)).mappings()
             return [(row["slug"], _proxy_row(row)) for row in rows]
 
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+        if not tokens:
+            return {}
+        async with self._own() as session:
+            rows = await _execute(
+                session,
+                update(LEASES)
+                .where(_any_of(LEASES.c.token, list(tokens)), LEASES.c.expires_at > func.now())
+                .values(heartbeat_at=func.now(), expires_at=func.now() + timedelta(seconds=ttl_seconds))
+                .returning(LEASES.c.token, LEASES.c.expires_at),
+                execution_options=self.options,
+            )
+            return {row.token: row.expires_at for row in rows}
+
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         i = IDENTITIES.c
         async with self.sessionmaker() as session:

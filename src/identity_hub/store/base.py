@@ -1878,6 +1878,14 @@ class Store(ABC):
         """(slug, прокси) с отпечатком не активным ключом или без ключа, по возрастанию id после `after`."""
 
     @abstractmethod
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+        """Пачка heartbeat (IMP-02, D-211): продлить живые эксклюзивные аренды по token одним запросом.
+
+        Возвращает token → новый `expires_at`; аренды, которой нет или срок вышел, в ответе нет.
+        Историю не трогает.
+        """
+
+    @abstractmethod
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         """(id, external_ref) identity сервиса с `normalize_version != version`, по возрастанию id."""
 

@@ -25,6 +25,12 @@ from tests.fixtures.services import FAKE_TG
 SCALE = 0.5  # пропорции по умолчанию 60/20/20 в масштабе: TTL 1,5 с, heartbeat 0,5 с, запас 0,5 с
 
 
+def patch_heartbeat(hub: IdentityHub, monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
+    """Подставить `fake` во оба пути продления: транзакцию с записью истории и пачку (D-211)."""
+    monkeypatch.setattr(tx_class(hub), "extend_lease", fake)
+    monkeypatch.setattr(type(hub._store), "renew_leases", fake)
+
+
 def tx_class(hub: IdentityHub) -> type:
     """Класс транзакции хранилища хаба: в него подставляются сбой и задержка."""
     from identity_hub.testing import MemoryStore
@@ -62,8 +68,7 @@ async def check_single_heartbeat_failure_keeps_lease(
         heartbeat=timedelta(seconds=1 * SCALE),
         safety_margin=timedelta(seconds=1 * SCALE),
     )
-    cls = tx_class(hub)
-    original = cls.extend_lease
+    originals = {tx_class(hub): tx_class(hub).extend_lease, type(hub._store): type(hub._store).renew_leases}
     calls = 0
 
     async def flaky(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -72,9 +77,10 @@ async def check_single_heartbeat_failure_keeps_lease(
         await asyncio.sleep(0.005)
         if calls == 1:
             raise ConnectionError("simulated transient DB failure")
+        original = next(fn for cls, fn in originals.items() if isinstance(self, cls))
         return await original(self, *args, **kwargs)
 
-    monkeypatch.setattr(cls, "extend_lease", flaky)
+    patch_heartbeat(hub, monkeypatch, flaky)
 
     async with pool.lease() as lease:
         await asyncio.sleep(4.5 * SCALE)  # дольше TTL: без продления аренда истекла бы
@@ -92,7 +98,6 @@ async def check_heartbeat_gives_up_at_deadline(hub: IdentityHub, monkeypatch: py
         heartbeat=timedelta(seconds=1 * SCALE),
         safety_margin=timedelta(seconds=1 * SCALE),
     )
-    cls = tx_class(hub)
     calls = 0
 
     async def broken(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -101,7 +106,7 @@ async def check_heartbeat_gives_up_at_deadline(hub: IdentityHub, monkeypatch: py
         await asyncio.sleep(0.005)
         raise ConnectionError("database is down")
 
-    monkeypatch.setattr(cls, "extend_lease", broken)
+    patch_heartbeat(hub, monkeypatch, broken)
     loop = asyncio.get_running_loop()
     marks: dict[str, float] = {}
 

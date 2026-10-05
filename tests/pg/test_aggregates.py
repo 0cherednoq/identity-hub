@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from identity_hub.errors import LeaseLost, LeaseUnavailable
 from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.postgres.models import EventRecord
-from identity_hub.postgres.store import PgTx
+from identity_hub.postgres.store import PgStore, PgTx
 from tests.pg.helpers import make_identity
 
 pytestmark = pytest.mark.pg
@@ -75,6 +75,7 @@ async def test_worker_leases_lost_aggregate(
                 await asyncio.sleep(10)
 
     monkeypatch.setattr(PgTx, "extend_lease", broken)
+    monkeypatch.setattr(PgStore, "renew_leases", broken)  # пакетный heartbeat (D-211)
     await asyncio.gather(lose(), lose())
     monkeypatch.undo()
     assert await hub.flush_lease_losses() == 1

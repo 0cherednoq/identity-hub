@@ -16,7 +16,7 @@ from identity_hub.errors import LeaseLost
 from identity_hub.hub import SpaceHandle
 from identity_hub.pool import Pool
 from identity_hub.postgres.models import EventRecord, LeaseHistoryRecord, LeaseRecord
-from identity_hub.postgres.store import PgTx
+from identity_hub.postgres.store import PgStore, PgTx
 from tests.pg.helpers import make_identity
 
 pytestmark = pytest.mark.pg
@@ -94,6 +94,7 @@ async def test_lost_before_ttl_when_heartbeat_fails(
     with pytest.raises(LeaseLost) as exc:
         async with pool.lease(on_lost=lost_called.set) as lease:
             monkeypatch.setattr(PgTx, "extend_lease", broken)
+            monkeypatch.setattr(PgStore, "renew_leases", broken)  # пакетный heartbeat (D-211)
             await asyncio.sleep(10)
     elapsed = time.monotonic() - started
     assert exc.value.lease_id == lease.lease_id
@@ -129,6 +130,7 @@ async def test_async_on_lost_and_check(space: SpaceHandle, monkeypatch: pytest.M
     with pytest.raises(LeaseLost):
         async with fast_pool(space).lease(on_lost=on_lost) as lease:
             monkeypatch.setattr(PgTx, "extend_lease", slow)
+            monkeypatch.setattr(PgStore, "renew_leases", slow)
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 await asyncio.sleep(0.05)
