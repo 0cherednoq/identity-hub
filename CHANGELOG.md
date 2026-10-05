@@ -12,6 +12,10 @@
 
 ### Added
 
+- `lease.credential(kind, name)`, `lease.active_credentials()`, `ctx.credential(kind, name)` в
+  контекстах входа и проб, `SecretRef.credential(kind, name)` для раскрытия с аудитом
+  (`IMP-09`, `D-216`). `lease.credentials()` остаётся доступом к записи `default` и, как и
+  `credential()`, не отдаёт выключенную, отозванную или истёкшую запись.
 - Команды нескольких credentials (`IMP-09`, `D-215`): `space.secrets.put_credential`,
   `credentials` (метаданные без секрета, `Credential` с `expired` по времени),
   `disable_credential`, `enable_credential`, `revoke_credential`; `revoked` — конечное состояние.

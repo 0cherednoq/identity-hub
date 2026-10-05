@@ -152,6 +152,7 @@ class SecretsAdminMixin(SpaceBase):
         """
         actor, reason = require_actor_and_reason(actor, reason, "раскрытие секрета")
         kind, _, key = field.partition(":")
+        audit: dict[str, str] = {}  # вид и имя записи credentials — в событие, значение — нет
         envelope = self.hub._envelope
         async with self._tx(own=True) as tx:
             row = await self._identity(tx, identity_id)
@@ -165,6 +166,18 @@ class SecretsAdminMixin(SpaceBase):
                     if payload
                     else None
                 )
+            elif kind == "credential" and "/" in key:
+                cred_kind, _, cred_name = key.partition("/")
+                schema = service.credential_schema(cred_kind)
+                record = await tx.get_credential(identity_id, cred_kind, cred_name)
+                value = (
+                    envelope.open_model(
+                        schema, record[0], credential_associated_data(identity_id, cred_kind, cred_name)
+                    )
+                    if record
+                    else None
+                )
+                audit = {"kind": cred_kind, "name": cred_name}
             elif kind == "session":
                 slot = key or "default"
                 found = await tx.get_session(identity_id, slot)
@@ -203,7 +216,7 @@ class SecretsAdminMixin(SpaceBase):
                     actor=actor,
                     service=row.service,
                     identity_id=identity_id,
-                    data={"field": field, "reason": reason},
+                    data={"field": field, "reason": reason, **audit},
                 ),
             )
         revealed: dict[str, Any] = reveal(value)

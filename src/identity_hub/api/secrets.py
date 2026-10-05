@@ -69,6 +69,13 @@ class SecretRef:
         return cls("session", slot)
 
     @classmethod
+    def credential(cls, kind: str, name: str = "default") -> SecretRef:
+        """Запись credentials по виду и имени (IMP-09, D-216): `credential:kind/name`."""
+        if not kind or not name:
+            raise ValidationFailed("credential: нужны вид и имя")
+        return cls("credential", f"{kind}/{name}")
+
+    @classmethod
     def evidence(cls, factor: str) -> SecretRef:
         if not factor:
             raise ValidationFailed("evidence: нужен фактор верификации")

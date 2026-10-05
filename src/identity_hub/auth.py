@@ -74,6 +74,9 @@ class _LinkedIdentity:
     async def credentials(self) -> BaseModel | None:
         return await self._lease.credentials()
 
+    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+        return await self._lease.credential(kind, name)
+
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         return await self._lease.session(slot)
 
@@ -114,6 +117,9 @@ class _LoginContext:
 
     async def credentials(self) -> BaseModel | None:
         return await self._lease.credentials()
+
+    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+        return await self._lease.credential(kind, name)
 
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         """Последняя сохранённая сессия слота, в том числе признанная недействительной: при повторном

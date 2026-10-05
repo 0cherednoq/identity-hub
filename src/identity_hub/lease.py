@@ -21,7 +21,8 @@ from pydantic import BaseModel
 
 from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
-from identity_hub.crypto import SecretValue, associated_data
+from identity_hub.crypto import SecretValue, associated_data, credential_associated_data
+from identity_hub.domain.credentials import ACTIVE, is_expired
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.redaction import sanitize_text
@@ -369,15 +370,51 @@ class Lease:
     # --------------------------------------------------------- секреты и сессии (FR-5.2, 5.3, 5.6)
 
     async def credentials(self) -> BaseModel | None:
-        """Расшифрованные credentials — только под арендой (FR-5.2)."""
+        """Расшифрованная запись credentials `default` — только под арендой (FR-5.2, D-216)."""
+        return await self.credential()
+
+    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+        """Запись credentials по виду и имени под полным fence (IMP-09, D-216).
+
+        `None` — записи нет, она выключена, отозвана или её срок вышел.
+        """
+        self.check()
+        schema = self.pool.service.credential_schema(kind)
+        async with self.pool.space._tx(own=True) as tx:
+            await self._check_ownership(tx)
+            found = await tx.get_credential(self.identity_id, kind, name)
+            now = await tx.now()
+        if (
+            found is None
+            or found[1].lifecycle != ACTIVE
+            or is_expired(found[1].lifecycle, found[1].expires_at, now)
+        ):
+            return None
+        aad = credential_associated_data(self.identity_id, kind, name)
+        return self.pool.space.hub._envelope.open_model(schema, found[0], aad)
+
+    async def active_credentials(self) -> dict[tuple[str, str], BaseModel]:
+        """Все активные записи credentials с непрошедшим сроком: `(kind, name) → модель` (D-216)."""
         self.check()
         async with self.pool.space._tx(own=True) as tx:
             await self._check_ownership(tx)
-            payload = await tx.get_credentials(self.identity_id)
-        if payload is None:
-            return None
-        aad = associated_data("ih_credentials", self.identity_id)
-        return self.pool.space.hub._envelope.open_model(self.pool.service.credentials, payload, aad)
+            rows = await tx.list_credentials(self.identity_id)
+            now = await tx.now()
+            usable = [
+                row
+                for row in rows
+                if row.lifecycle == ACTIVE and not is_expired(row.lifecycle, row.expires_at, now)
+            ]
+            payloads = [await tx.get_credential(self.identity_id, row.kind, row.name) for row in usable]
+        envelope = self.pool.space.hub._envelope
+        result: dict[tuple[str, str], BaseModel] = {}
+        for row, found in zip(usable, payloads, strict=True):
+            if found is None:
+                continue
+            schema = self.pool.service.credential_schema(row.kind)
+            aad = credential_associated_data(self.identity_id, row.kind, row.name)
+            result[(row.kind, row.name)] = envelope.open_model(schema, found[0], aad)
+        return result
 
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         """Расшифрованная действующая сессия слота или None."""

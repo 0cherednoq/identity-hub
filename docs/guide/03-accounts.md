@@ -409,6 +409,20 @@ await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="
   (`put`, `disable`, `enable`, `revoke`) — без секрета и без `public_value` — и поднимает ревизию
   аккаунта. Все команды принимают `expected_revision`.
 
+Под арендой и в `Authenticator`/пробах запись берут по виду и имени (`D-216`):
+
+```python
+key = await lease.credential("api_key", "trading")       # None: нет, выключена, отозвана, истекла
+everything = await lease.active_credentials()             # {("api_key", "trading"): ApiKey(...), ...}
+login = await ctx.credential("default")                   # то же, что ctx.credentials()
+value = await space.secrets.reveal(
+    identity_id, SecretRef.credential("api_key", "trading"), actor="admin", reason="проверка"
+)
+```
+
+`lease.credentials()` по-прежнему отдаёт запись `default`. Раскрытие пишет
+`identity.secret.revealed` с видом и именем записи, но без значения.
+
 ## Связи между аккаунтами
 
 Аккаунт может зависеть от другого: Telegram восстанавливается через почту, биржевой аккаунт

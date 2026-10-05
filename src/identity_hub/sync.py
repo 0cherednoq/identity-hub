@@ -64,6 +64,9 @@ class _ProbeContext:
     async def credentials(self) -> BaseModel | None:
         return await self._lease.credentials()
 
+    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+        return await self._lease.credential(kind, name)
+
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         return await self._lease.session(slot)
 
