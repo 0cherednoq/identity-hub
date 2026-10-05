@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I3.2b Credentials в регистрации, импорте, карточке и фабриках
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: регистрация→аренда→ротация→раскрытие, импорт и повтор импорта, отложенный импорт, describe со списком, фабрика
+  - [ ] CredentialInput, prepare_identity и запись в транзакции создания
+  - [ ] Импорт: ImportRecord.credential_records, сериализация отложенного импорта
+  - [ ] AccessCard.credential_records и make_identity
+  - [ ] Документация, CHANGELOG, IMP-09 implemented, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -49,7 +53,7 @@
 | I3.1a | Credentials: схема, виды в Service, контракт Store, версии MemoryStore | I0.3, I0.4, I1.2b | done |  | разбиение D-214 |
 | I3.1b | Credentials: lifecycle, срок и команды space.secrets | I3.1a | done |  | разбиение D-214 |
 | I3.2a | Credentials под арендой, в контекстах входа и раскрытие по виду | I3.1b | done |  | разбиение D-216 |
-| I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | todo |  | разбиение D-216 |
+| I3.2b | Credentials в регистрации, импорте, карточке и фабриках | I3.2a | in_progress |  | разбиение D-216 |
 | I3.3 | Два режима обновления session | I3.2b | todo |  |  |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3, I4.1 | todo |  |  |
