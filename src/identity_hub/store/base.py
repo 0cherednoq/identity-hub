@@ -713,6 +713,27 @@ class CredentialMetadataRow:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionWrite:
+    """Итог записи сессии (D-218): запись слота, её ревизия и отозванная предшественница при replace."""
+
+    id: UUID
+    revision: int
+    replaced_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionHistoryRow:
+    """Запись сессии слота без секрета — текущая или отозванная."""
+
+    id: UUID
+    status: str
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+    revoked_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
 class SessionMetadataRow:
     slot: str
     status: str
@@ -1085,8 +1106,21 @@ class StoreTx(ABC):
         *,
         fencing: int,
         expires_at: datetime | None = None,
-    ) -> bool:
-        """Записать сессию слота; отклоняется, если записана более новой арендой (G-1.4)."""
+        mode: str = "in_place",
+    ) -> SessionWrite | None:
+        """Записать сессию слота (G-1.4, IMP-10, D-218). `None` — запись более новой аренды не перезаписать.
+
+        `in_place` обновляет не отозванную запись слота (revision + 1) или создаёт её; `replace`
+        отзывает её и вставляет новую с revision + 1 — история слота сохраняется.
+        """
+
+    @abstractmethod
+    async def revoke_session(self, identity_id: UUID, slot: str) -> bool:
+        """Отозвать не отозванную запись слота навсегда; `False` — отзывать нечего."""
+
+    @abstractmethod
+    async def session_history(self, identity_id: UUID, slot: str) -> list[SessionHistoryRow]:
+        """Все записи слота без секретов по времени создания."""
 
     @abstractmethod
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:

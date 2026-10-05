@@ -90,6 +90,12 @@
 
 ### Changed
 
+- Сессии хранят историю (`IMP-10`, `D-218`, миграция `0023`): у записи есть `id` и ревизия, в
+  слоте одна не отозванная запись. `SessionStatus`: `created`, `active`, `invalidated`,
+  `revoked` (`VALID`/`INVALID` — псевдонимы `ACTIVE`/`INVALIDATED`, `EXPIRED` удалён; прежние
+  строки переведены миграцией). Store: `put_session(..., mode="in_place"|"replace")` возвращает
+  `SessionWrite` или `None`, `revoke_session`, `session_history`. `hub.start()` требует ревизию
+  схемы `0023`.
 - `ih_credentials` хранит несколько записей на аккаунт (`IMP-09`, `D-214`, миграция `0022`): вид
   (`kind`), имя (`name`), открытая часть, жизненный цикл, срок и ревизия; прежняя запись стала
   `default`/`default` без перешифрования. `Service.credential_kinds` объявляет виды кроме `default`

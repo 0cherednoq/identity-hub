@@ -174,7 +174,7 @@ async def test_session_invalid_and_ban(pool: Pool, sessionmaker: async_sessionma
     identity = await _identity(sessionmaker)
     assert (identity.auth_state, identity.standing) == ("session_invalid", "good")  # не бан
     async with sessionmaker() as s:
-        assert (await s.execute(select(SessionRecord.status))).scalar_one() == "invalid"
+        assert (await s.execute(select(SessionRecord.status))).scalar_one() == "invalidated"  # D-218
 
     async with sessionmaker() as s, s.begin():
         await s.execute(update(IdentityRecord).values(auth_state="authenticated"))

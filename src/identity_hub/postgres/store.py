@@ -66,6 +66,7 @@ from identity_hub.enums import (
     LeaseEndReason,
     Lifecycle,
     ProxyStatus,
+    SessionStatus,
     Severity,
     VerificationState,
 )
@@ -177,7 +178,9 @@ from identity_hub.store.base import (
     RotationBatch,
     SearchFilter,
     ServiceRow,
+    SessionHistoryRow,
     SessionMetadataRow,
+    SessionWrite,
     SpaceRef,
     Store,
     StoreTx,
@@ -610,29 +613,96 @@ class PgTx(StoreTx):
         *,
         fencing: int,
         expires_at: datetime | None = None,
-    ) -> bool:
-        stmt = insert(SESSIONS).values(
-            identity_id=identity_id,
-            space_id=self.space.id,
-            slot=slot,
-            status="valid",
-            expires_at=expires_at,
-            written_by_fencing=fencing,
-            **payload.columns(),
+        mode: str = "in_place",
+    ) -> SessionWrite | None:
+        c = SESSIONS.c
+        for _ in range(2):  # повтор — если параллельная транзакция успела вставить первую запись слота
+            current = (
+                await self.execute(
+                    select(c.id, c.revision, c.written_by_fencing)
+                    .where(
+                        c.identity_id == identity_id,
+                        c.slot == slot,
+                        c.space_id == self.space.id,
+                        c.status != SessionStatus.REVOKED,
+                    )
+                    .with_for_update()
+                )
+            ).one_or_none()
+            if current is not None and current.written_by_fencing > fencing:
+                return None
+            if current is not None and mode == "in_place":
+                revision = (
+                    await self.execute(
+                        update(SESSIONS)
+                        .where(c.id == current.id)
+                        .values(
+                            **payload.columns(),
+                            status=SessionStatus.ACTIVE,
+                            expires_at=expires_at,
+                            written_by_fencing=fencing,
+                            version=c.version + 1,
+                            revision=c.revision + 1,
+                            updated_at=func.now(),
+                        )
+                        .returning(c.revision)
+                    )
+                ).scalar_one()
+                return SessionWrite(current.id, int(revision))
+            if current is not None:
+                await self.execute(
+                    update(SESSIONS)
+                    .where(c.id == current.id)
+                    .values(status=SessionStatus.REVOKED, revoked_at=func.now(), updated_at=func.now())
+                )
+            session_id = new_id()
+            revision = current.revision + 1 if current is not None else 1
+            inserted = (
+                await self.execute(
+                    insert(SESSIONS)
+                    .values(
+                        id=session_id,
+                        identity_id=identity_id,
+                        space_id=self.space.id,
+                        slot=slot,
+                        status=SessionStatus.ACTIVE,
+                        expires_at=expires_at,
+                        written_by_fencing=fencing,
+                        revision=revision,
+                        **payload.columns(),
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=[c.identity_id, c.slot], index_where=text("status <> 'revoked'")
+                    )
+                    .returning(c.id)
+                )
+            ).scalar_one_or_none()
+            if inserted is not None:
+                return SessionWrite(session_id, revision, current.id if current is not None else None)
+        raise ConcurrentModification("session", f"{identity_id}/{slot}")
+
+    async def revoke_session(self, identity_id: UUID, slot: str) -> bool:
+        c = SESSIONS.c
+        result = await self.execute(
+            update(SESSIONS)
+            .where(
+                c.identity_id == identity_id,
+                c.slot == slot,
+                c.space_id == self.space.id,
+                c.status != SessionStatus.REVOKED,
+            )
+            .values(status=SessionStatus.REVOKED, revoked_at=func.now(), updated_at=func.now())
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[SESSIONS.c.identity_id, SESSIONS.c.slot],
-            set_={
-                **payload.columns(),
-                "status": "valid",
-                "expires_at": expires_at,
-                "written_by_fencing": fencing,
-                "version": SESSIONS.c.version + 1,
-                "updated_at": func.now(),
-            },
-            where=SESSIONS.c.written_by_fencing <= fencing,
+        return bool(result.rowcount)  # type: ignore[attr-defined]
+
+    async def session_history(self, identity_id: UUID, slot: str) -> list[SessionHistoryRow]:
+        c = SESSIONS.c
+        rows = await self.execute(
+            select(c.id, c.status, c.revision, c.created_at, c.updated_at, c.revoked_at)
+            .where(c.identity_id == identity_id, c.slot == slot, c.space_id == self.space.id)
+            .order_by(c.revision, c.created_at)
         )
-        return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
+        return [SessionHistoryRow(**dict(row)) for row in rows.mappings()]
 
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
         stmt = (
@@ -1249,7 +1319,10 @@ class PgTx(StoreTx):
         row = (
             await self.execute(
                 select(c.key_id, c.wrapped_dek, c.nonce, c.ciphertext, c.status).where(
-                    c.identity_id == identity_id, c.slot == slot, c.space_id == self.space.id
+                    c.identity_id == identity_id,
+                    c.slot == slot,
+                    c.space_id == self.space.id,
+                    c.status != SessionStatus.REVOKED,
                 )
             )
         ).one_or_none()
@@ -1284,7 +1357,11 @@ class PgTx(StoreTx):
                 SESSIONS.c.written_by_fencing,
                 SESSIONS.c.updated_at,
             )
-            .where(SESSIONS.c.identity_id == identity_id, SESSIONS.c.space_id == self.space.id)
+            .where(
+                SESSIONS.c.identity_id == identity_id,
+                SESSIONS.c.space_id == self.space.id,
+                SESSIONS.c.status != SessionStatus.REVOKED,
+            )
             .order_by(SESSIONS.c.slot)
         )
         return credential, [
@@ -1558,6 +1635,7 @@ class PgTx(StoreTx):
                 SESSIONS.c.identity_id == identity_id,
                 SESSIONS.c.slot == slot,
                 SESSIONS.c.space_id == self.space.id,
+                SESSIONS.c.status != SessionStatus.REVOKED,
             )
             .values(status=status, updated_at=func.now())
         )
@@ -5555,11 +5633,12 @@ class PgStore(Store):
                     # у challenge тем же DEK зашифрован ответ — формат AAD не меняем
                     renewed = envelope.rewrap(payload, aad_of(row), upgrade=table != "challenges")
                 except DecryptionFailed:
-                    label = (
-                        credential_label(row["identity_id"], row["kind"], row["name"])
-                        if table == "credentials"
-                        else "/".join(str(row[column.name]) for column in primary)
-                    )
+                    if table == "credentials":
+                        label = credential_label(row["identity_id"], row["kind"], row["name"])
+                    elif table == "sessions":  # запись слота: id аккаунта и слот, как до 0023
+                        label = f"{row['identity_id']}/{row['slot']}"
+                    else:
+                        label = "/".join(str(row[column.name]) for column in primary)
                     unreadable.append(UnreadableSecret(table, label))
                     continue
                 await _execute(

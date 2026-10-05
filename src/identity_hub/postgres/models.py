@@ -612,19 +612,34 @@ class SessionRecord(EncryptedPayloadMixin, IdentityHubBase):
 
     __tablename__ = "ih_sessions"
 
-    identity_id: Mapped[UUID] = mapped_column(primary_key=True)
-    slot: Mapped[str] = mapped_column(String(64), primary_key=True, default="default")
+    # запись сессии слота; replace отзывает прежнюю и вставляет новую — история сохраняется (0023)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
+    identity_id: Mapped[UUID]
+    slot: Mapped[str] = mapped_column(String(64), default="default")
     space_id: Mapped[UUID]
 
-    status: Mapped[str] = mapped_column(String(16), default=SessionStatus.VALID)
+    status: Mapped[str] = mapped_column(String(16), default=SessionStatus.ACTIVE, server_default="active")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, default=1)
+    revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))
     written_by_fencing: Mapped[int] = mapped_column(BigInteger)  # запись отклоняется, если меньше текущего
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         _identity_fk(),
         _enum_check("status", SessionStatus),
+        # история слота и индекс под FK аккаунта: частичный уникальный индекс для FK не годится
+        Index("ix_ih_sessions_identity_slot", "identity_id", "slot"),
+        # в слоте одна не отозванная запись
+        Index(
+            "uq_ih_sessions_current",
+            "identity_id",
+            "slot",
+            unique=True,
+            postgresql_where=text("status <> 'revoked'"),
+        ),
         Index(
             "ix_ih_sessions_expires_at",
             "expires_at",

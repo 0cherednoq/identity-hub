@@ -65,6 +65,24 @@ async def test_legacy_row_becomes_default_credential(db: AsyncEngine, schema: st
         "active",
     )
     assert row["id"] is not None and row["version"] == 3 and row["revision"] == 1
+    async with db.connect() as conn:
+        names = set(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace "
+                        "WHERE n.nspname = :s AND conrelid::regclass::text LIKE '%ih_credentials'"
+                    ),
+                    {"s": schema},
+                )
+            ).scalars()
+        )
+    # имена — как в моделях: соглашение об именах не применяется повторно
+    assert {
+        "pk_ih_credentials",
+        "uq_ih_credentials_identity_id",
+        "ck_ih_credentials_lifecycle_valid",
+    } <= names
     assert (row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]) == (
         "k1",
         b"dek",

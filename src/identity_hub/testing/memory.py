@@ -29,7 +29,7 @@ from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPR
 from identity_hub.domain.query import profile_sort_text
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, Lifecycle, Severity
+from identity_hub.enums import AuthState, Availability, Lifecycle, SessionStatus, Severity
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseOwnershipLost,
@@ -97,7 +97,9 @@ from identity_hub.store.base import (
     RotationBatch,
     SearchFilter,
     ServiceRow,
+    SessionHistoryRow,
     SessionMetadataRow,
+    SessionWrite,
     SpaceRef,
     Store,
     StoreTx,
@@ -133,6 +135,24 @@ class _IdempotencyRecord:
     fingerprint_key_id: str | None = None  # команда с секретами (D-208)
 
 
+@dataclass(frozen=True)
+class _SessionRecord:
+    """Запись сессии слота (D-218): версии и время как в PostgreSQL (R2-P08)."""
+
+    id: UUID
+    identity_id: UUID
+    slot: str
+    payload: EncryptedPayload
+    status: str
+    written_by_fencing: int
+    expires_at: datetime | None
+    version: int
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+    revoked_at: datetime | None = None
+
+
 @dataclass
 class _MemoryState:
     spaces: dict[str, SpaceRef] = field(default_factory=dict)
@@ -144,10 +164,9 @@ class _MemoryState:
         default_factory=dict
     )
     profile_secrets: dict[UUID, EncryptedPayload] = field(default_factory=dict)
-    # (секрет, статус, fencing записи, срок, version, updated_at) — версии как в PostgreSQL (R2-P08)
-    sessions: dict[tuple[UUID, str], tuple[EncryptedPayload, str, int, datetime | None, int, datetime]] = (
-        field(default_factory=dict)
-    )
+    # все записи сессий по id, включая отозванные (история, D-218); текущая запись слота — в session_slots
+    sessions: dict[UUID, _SessionRecord] = field(default_factory=dict)
+    session_slots: dict[tuple[UUID, str], UUID] = field(default_factory=dict)
     links: dict[tuple[UUID, str], UUID] = field(default_factory=dict)
     data: dict[tuple[UUID, str], DataRow] = field(default_factory=dict)
     leases: dict[UUID, LeaseRow] = field(default_factory=dict)
@@ -527,15 +546,72 @@ class MemoryTx(StoreTx):
         *,
         fencing: int,
         expires_at: datetime | None = None,
-    ) -> bool:
+        mode: str = "in_place",
+    ) -> SessionWrite | None:
         if self._own(identity_id) is None:
+            return None
+        current = self._current_session(identity_id, slot)
+        if current is not None and current.written_by_fencing > fencing:
+            return None
+        if current is not None and mode == "in_place":
+            updated = replace(
+                current,
+                payload=payload,
+                status=SessionStatus.ACTIVE,
+                written_by_fencing=fencing,
+                expires_at=expires_at,
+                version=current.version + 1,
+                revision=current.revision + 1,
+                updated_at=self._now,
+            )
+            self.state.sessions[current.id] = updated
+            return SessionWrite(current.id, updated.revision)
+        if current is not None:
+            self.state.sessions[current.id] = replace(
+                current, status=SessionStatus.REVOKED, revoked_at=self._now, updated_at=self._now
+            )
+        record = _SessionRecord(
+            new_id(),
+            identity_id,
+            slot,
+            payload,
+            SessionStatus.ACTIVE,
+            fencing,
+            expires_at,
+            1,
+            current.revision + 1 if current is not None else 1,
+            self._now,
+            self._now,
+        )
+        self.state.sessions[record.id] = record
+        self.state.session_slots[(identity_id, slot)] = record.id
+        return SessionWrite(record.id, record.revision, current.id if current is not None else None)
+
+    def _current_session(self, identity_id: UUID, slot: str) -> _SessionRecord | None:
+        session_id = self.state.session_slots.get((identity_id, slot))
+        record = self.state.sessions.get(session_id) if session_id is not None else None
+        return record if record is not None and record.status != SessionStatus.REVOKED else None
+
+    async def revoke_session(self, identity_id: UUID, slot: str) -> bool:
+        current = self._current_session(identity_id, slot) if self._own(identity_id) else None
+        if current is None:
             return False
-        old = self.state.sessions.get((identity_id, slot))
-        if old is not None and old[2] > fencing:
-            return False
-        version = old[4] + 1 if old is not None else 1
-        self.state.sessions[(identity_id, slot)] = (payload, "valid", fencing, expires_at, version, self._now)
+        self.state.sessions[current.id] = replace(
+            current, status=SessionStatus.REVOKED, revoked_at=self._now, updated_at=self._now
+        )
         return True
+
+    async def session_history(self, identity_id: UUID, slot: str) -> list[SessionHistoryRow]:
+        if self._own(identity_id) is None:
+            return []
+        records = sorted(
+            (r for r in self.state.sessions.values() if r.identity_id == identity_id and r.slot == slot),
+            key=lambda r: (r.revision, r.created_at),
+        )
+        return [
+            SessionHistoryRow(r.id, r.status, r.revision, r.created_at, r.updated_at, r.revoked_at)
+            for r in records
+        ]
 
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
         key = (identity_id, role)
@@ -586,8 +662,12 @@ class MemoryTx(StoreTx):
             self.state.proxy_load[bound] = max(0, self.state.proxy_load.get(bound, 0) - 1)
         for region_key in [item for item in self.state.regions if item[0] == identity_id]:
             del self.state.regions[region_key]
-        for session_key in [item for item in self.state.sessions if item[0] == identity_id]:
-            del self.state.sessions[session_key]
+        for session_id in [
+            key for key, record in self.state.sessions.items() if record.identity_id == identity_id
+        ]:
+            del self.state.sessions[session_id]
+        for slot_key in [key for key in self.state.session_slots if key[0] == identity_id]:
+            del self.state.session_slots[slot_key]
         for data_key in [item for item in self.state.data if item[0] == identity_id]:
             del self.state.data[data_key]
         for verification_key in [item for item in self.state.verifications if item[0] == identity_id]:
@@ -1067,9 +1147,9 @@ class MemoryTx(StoreTx):
 
     async def set_session_status(self, identity_id: UUID, slot: str, status: str) -> None:
         key = (identity_id, slot)
-        old = self.state.sessions.get(key)
-        if old is not None and self._own(identity_id):
-            self.state.sessions[key] = (old[0], status, old[2], old[3], old[4], self._now)
+        current = self._current_session(*key)
+        if current is not None and self._own(identity_id):
+            self.state.sessions[current.id] = replace(current, status=status, updated_at=self._now)
 
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
         known = await self.proxy_by_fingerprint([row.fingerprint, *row.aliases])
@@ -2098,8 +2178,8 @@ class MemoryTx(StoreTx):
         return found[0] if found is not None else None
 
     async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
-        row = self.state.sessions.get((identity_id, slot)) if self._own(identity_id) else None
-        return (row[0], row[1]) if row is not None else None
+        record = self._current_session(identity_id, slot) if self._own(identity_id) else None
+        return (record.payload, record.status) if record is not None else None
 
     async def access_metadata(
         self, identity_id: UUID
@@ -2112,12 +2192,11 @@ class MemoryTx(StoreTx):
             default[1].version if default is not None else None,
             default[1].updated_at if default is not None else None,
         )
+        current = [self._current_session(owner, slot) for owner, slot in sorted(self.state.session_slots)]
         sessions = [
-            SessionMetadataRow(slot, status, expires_at, version, fencing, updated_at)
-            for (owner, slot), (_, status, fencing, expires_at, version, updated_at) in sorted(
-                self.state.sessions.items()
-            )
-            if owner == identity_id
+            SessionMetadataRow(r.slot, r.status, r.expires_at, r.version, r.written_by_fencing, r.updated_at)
+            for r in current
+            if r is not None and r.identity_id == identity_id
         ]
         return credential, sessions
 
@@ -3518,8 +3597,10 @@ class MemoryStore(Store):
                 lambda key: credential_associated_data(key[0], key[1], key[2]),
             ),
             "sessions": (
-                _PayloadView(state.sessions, 0),
-                lambda key: associated_data("ih_sessions", key[0], key[1]),
+                _AttributePayloadView(state.sessions, "payload"),
+                lambda key: associated_data(
+                    "ih_sessions", state.sessions[key].identity_id, state.sessions[key].slot
+                ),
             ),
             "challenges": (
                 _AttributePayloadView(state.challenges, "context"),
@@ -3573,7 +3654,13 @@ class MemoryStore(Store):
                 try:
                     view[key] = envelope.rewrap(payload, aad(key), upgrade=table != "challenges")
                 except DecryptionFailed:
-                    label = credential_label(*key) if table == "credentials" else "/".join(cursor)
+                    if table == "credentials":
+                        label = credential_label(*key)
+                    elif table == "sessions":
+                        record = self._state.sessions[key]
+                        label = f"{record.identity_id}/{record.slot}"
+                    else:
+                        label = "/".join(cursor)
                     unreadable.append(UnreadableSecret(table, label))
                     continue
                 rotated += 1

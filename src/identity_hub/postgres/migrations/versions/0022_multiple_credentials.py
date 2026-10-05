@@ -49,13 +49,19 @@ def upgrade() -> None:
     credentials = sa.table("ih_credentials", sa.column("id"), schema=schema)
     op.execute(credentials.update().where(credentials.c.id.is_(None)).values(id=sa.func.gen_random_uuid()))
     op.alter_column("ih_credentials", "id", nullable=False, schema=schema)
-    op.drop_constraint("pk_ih_credentials", "ih_credentials", type_="primary", schema=schema)
-    op.create_primary_key("pk_ih_credentials", "ih_credentials", ["id"], schema=schema)
+    op.drop_constraint(op.f("pk_ih_credentials"), "ih_credentials", type_="primary", schema=schema)
+    op.create_primary_key(op.f("pk_ih_credentials"), "ih_credentials", ["id"], schema=schema)
     op.create_unique_constraint(
-        "uq_ih_credentials_identity_id", "ih_credentials", ["identity_id", "kind", "name"], schema=schema
+        op.f("uq_ih_credentials_identity_id"),
+        "ih_credentials",
+        ["identity_id", "kind", "name"],
+        schema=schema,
     )
     op.create_check_constraint(
-        "ck_ih_credentials_lifecycle_valid", "ih_credentials", f"lifecycle IN {LIFECYCLES}", schema=schema
+        op.f("ck_ih_credentials_lifecycle_valid"),
+        "ih_credentials",
+        f"lifecycle IN {LIFECYCLES}",
+        schema=schema,
     )
 
 
@@ -68,9 +74,11 @@ def downgrade() -> None:
     )
     if extra.scalar_one():
         raise RuntimeError("у аккаунтов есть credentials кроме default: откат 0022 потерял бы их")
-    op.drop_constraint("ck_ih_credentials_lifecycle_valid", "ih_credentials", type_="check", schema=schema)
-    op.drop_constraint("uq_ih_credentials_identity_id", "ih_credentials", type_="unique", schema=schema)
-    op.drop_constraint("pk_ih_credentials", "ih_credentials", type_="primary", schema=schema)
-    op.create_primary_key("pk_ih_credentials", "ih_credentials", ["identity_id"], schema=schema)
+    op.drop_constraint(
+        op.f("ck_ih_credentials_lifecycle_valid"), "ih_credentials", type_="check", schema=schema
+    )
+    op.drop_constraint(op.f("uq_ih_credentials_identity_id"), "ih_credentials", type_="unique", schema=schema)
+    op.drop_constraint(op.f("pk_ih_credentials"), "ih_credentials", type_="primary", schema=schema)
+    op.create_primary_key(op.f("pk_ih_credentials"), "ih_credentials", ["identity_id"], schema=schema)
     for column in ("created_at", "revision", "expires_at", "lifecycle", "public_value", "name", "kind", "id"):
         op.drop_column("ih_credentials", column, schema=schema)

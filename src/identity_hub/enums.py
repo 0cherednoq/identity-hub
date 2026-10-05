@@ -69,9 +69,14 @@ class ChangeSource(StrEnum):
 
 
 class SessionStatus(StrEnum):
-    VALID = "valid"
-    INVALID = "invalid"
-    EXPIRED = "expired"
+    """Жизненный цикл записи сессии (IMP-10, D-218): `created → active → invalidated → revoked`."""
+
+    CREATED = "created"
+    ACTIVE = "active"
+    INVALIDATED = "invalidated"
+    REVOKED = "revoked"  # конечное: запись остаётся в истории слота
+    VALID = "active"  # псевдоним ACTIVE для кода до 0023
+    INVALID = "invalidated"  # псевдоним INVALIDATED
 
 
 class VerificationState(StrEnum):
