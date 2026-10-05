@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I3.1b Credentials: lifecycle, срок и команды space.secrets
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: put нескольких ключей, disable/enable/revoke, revoked конечное, срок по времени, событие без секрета, conformance
-  - [ ] Store set_credential_lifecycle и доменные переходы
-  - [ ] Команды space.secrets: put_credential, credentials, disable/enable/revoke_credential
-  - [ ] Документация, CHANGELOG, трассировка, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -50,7 +47,7 @@
 | I2.3 | Полный lease fence | I0.2b, I2.1 | done |  |  |
 | I2.4 | Семантика renew, release, revoke | I2.3 | done |  |  |
 | I3.1a | Credentials: схема, виды в Service, контракт Store, версии MemoryStore | I0.3, I0.4, I1.2b | done |  | разбиение D-214 |
-| I3.1b | Credentials: lifecycle, срок и команды space.secrets | I3.1a | in_progress |  | разбиение D-214 |
+| I3.1b | Credentials: lifecycle, срок и команды space.secrets | I3.1a | done |  | разбиение D-214 |
 | I3.2 | API нескольких credentials и интеграция | I3.1b | todo |  |  |
 | I3.3 | Два режима обновления session | I3.2 | todo |  |  |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | todo |  |  |
@@ -68,7 +65,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 29 / 44 done
+**Итого:** 30 / 44 done
 
 ## Журнал сессий
 
@@ -101,3 +98,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I2.3 · done · LeaseFence (lease.fence), StoreTx.check_fence: lease_id+token+равенство fencing+живая аренда под FOR NO KEY UPDATE; guard в operation_scope (R1-15), save_session, auth, верификации и чтении секретов; LeaseOwnershipLost наследует LeaseLost и StaleFencing; IMP-05 implemented, D-212 · дальше I2.4
 2026-10-05 · I2.4 · done · renew через GREATEST, исход release_lease (released/expired/closed/revoked), release отозванной — LeaseRevoked, истёкшей — expired без ошибки, revoke будит аренду этого процесса, LeaseLost.body_completed (R1-16), гонка release/revoke на барьере; IMP-06 implemented, D-213 · фаза I2 закрыта, дальше I3.1
 2026-10-05 · I3.1a · done · миграция 0022 (ih_credentials: id, kind, name, public_value, lifecycle, expires_at, revision; прежняя строка — default без перешифрования, откат только без других записей), Service.credential_kinds, Store put/get/list_credential, AAD default — прежний, метка в отчёте ротации; MemoryStore version/updated_at (R2-P08), repro parity удалены, D-214 · дальше I3.1b
+2026-10-05 · I3.1b · done · жизненный цикл credentials (active↔disabled, revoked конечное), срок по времени (Credential.expired), команды space.secrets put_credential/credentials/disable/enable/revoke_credential с expected_revision и событием без секрета; Store set_credential_lifecycle; D-215 · дальше I3.2

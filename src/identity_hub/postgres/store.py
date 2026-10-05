@@ -570,6 +570,29 @@ class PgTx(StoreTx):
         payload = EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
         return payload, _credential_row(row)
 
+    async def set_credential_lifecycle(
+        self, identity_id: UUID, kind: str, name: str, lifecycle: str
+    ) -> CredentialRow | None:
+        c = CREDENTIALS.c
+        row = (
+            (
+                await self.execute(
+                    update(CREDENTIALS)
+                    .where(
+                        c.identity_id == identity_id,
+                        c.space_id == self.space.id,
+                        c.kind == kind,
+                        c.name == name,
+                    )
+                    .values(lifecycle=lifecycle, revision=c.revision + 1, updated_at=func.now())
+                    .returning(*_CREDENTIAL_COLUMNS)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _credential_row(row) if row is not None else None
+
     async def list_credentials(self, identity_id: UUID) -> list[CredentialRow]:
         c = CREDENTIALS.c
         rows = await self.execute(

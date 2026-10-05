@@ -376,6 +376,39 @@ data = await space.secrets.reveal(identity_id, SecretRef.session("web"), actor="
 `async with`, потери или отзыва аренды, а также когда аккаунт уже взял другой воркер,
 `lease.credentials()`, `lease.session()`, `lease.save_session()` и `lease.proxy` бросают `LeaseLost`.
 
+### Несколько credentials
+
+У аккаунта может быть несколько секретов: пароль, TOTP, API-ключи, коды восстановления — каждый
+со своим сроком и отзывом (`D-214`, `D-215`). Вид (`kind`) объявляет сервис со своей схемой;
+вид `default` — это прежние `credentials` сервиса. Записей одного вида может быть несколько —
+их различает имя (`name`).
+
+```python
+class ApiKey(BaseModel):
+    secret: SecretStr
+
+EXCHANGE = Service("exchange", "Exchange", credentials=Login, credential_kinds={"api_key": ApiKey})
+
+await space.secrets.put_credential(
+    identity_id, "api_key", {"secret": key}, name="trading",
+    public_value={"key_id": "AK-1"},        # открытая часть: видна в списке и админке
+    expires_at=deadline, actor="ops",
+)
+for item in await space.secrets.credentials(identity_id):   # без секретов
+    print(item.kind, item.name, item.lifecycle, item.expired, item.public_value)
+await space.secrets.disable_credential(identity_id, "api_key", "trading", actor="ops")
+await space.secrets.enable_credential(identity_id, "api_key", "trading", actor="ops")
+await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="ops", reason="утечка")
+```
+
+- Жизненный цикл: `active ↔ disabled`, `revoked` — конечное: включить или заменить отозванную
+  запись нельзя (`TransitionNotAllowed`), повторный отзыв возвращает `False`.
+- Срок считается по времени: `expired` — запись активна, но `expires_at` прошёл; отдельного
+  перехода нет.
+- Каждая команда пишет событие `identity.credentials.updated` с видом, именем и действием
+  (`put`, `disable`, `enable`, `revoke`) — без секрета и без `public_value` — и поднимает ревизию
+  аккаунта. Все команды принимают `expected_revision`.
+
 ## Связи между аккаунтами
 
 Аккаунт может зависеть от другого: Telegram восстанавливается через почту, биржевой аккаунт

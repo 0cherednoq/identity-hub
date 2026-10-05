@@ -74,7 +74,7 @@ from identity_hub.read.proxies import ProxyReadMixin
 from identity_hub.read.search import SearchMixin
 from identity_hub.read.services import ServiceDescriptor
 from identity_hub.rollups import StatsRollups
-from identity_hub.secrets_admin import SecretsAdminMixin
+from identity_hub.secrets_admin import CredentialsMixin, SecretsAdminMixin
 from identity_hub.service import Service
 from identity_hub.snapshots import StateSnapshots
 from identity_hub.state import StateMixin
@@ -450,6 +450,7 @@ class SpaceHandle(
     RequirementsMixin,
     SearchMixin,
     SecretsAdminMixin,
+    CredentialsMixin,
     StateMixin,
     SyncMixin,
     VerificationsMixin,

@@ -12,6 +12,9 @@
 
 ### Added
 
+- Команды нескольких credentials (`IMP-09`, `D-215`): `space.secrets.put_credential`,
+  `credentials` (метаданные без секрета, `Credential` с `expired` по времени),
+  `disable_credential`, `enable_credential`, `revoke_credential`; `revoked` — конечное состояние.
 - `idempotency_key` у `secrets.replace_credentials` и `secrets.replace_session`: секрет входит в
   отпечаток команды только HMAC-тегом ключом отпечатков, после ротации повтор сверяется прежним
   ключом (`IMP-04`, `D-208`, миграция `0019`). `hub.equivalence_tag(value)` — HMAC-тег значения

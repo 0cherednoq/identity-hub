@@ -502,6 +502,16 @@ class MemoryTx(StoreTx):
         found = self.state.credentials.get((identity_id, kind, name))
         return (found[0], found[1]) if found is not None else None
 
+    async def set_credential_lifecycle(
+        self, identity_id: UUID, kind: str, name: str, lifecycle: str
+    ) -> CredentialRow | None:
+        found = await self.get_credential(identity_id, kind, name)
+        if found is None:
+            return None
+        row = replace(found[1], lifecycle=lifecycle, revision=found[1].revision + 1, updated_at=self._now)
+        self.state.credentials[(identity_id, kind, name)] = (found[0], row)
+        return row
+
     async def list_credentials(self, identity_id: UUID) -> list[CredentialRow]:
         if self._own(identity_id) is None:
             return []

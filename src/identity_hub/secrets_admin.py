@@ -15,14 +15,15 @@ from pydantic import BaseModel
 from pydantic_core import to_jsonable_python
 
 from identity_hub._space import SpaceBase, require_actor_and_reason
-from identity_hub.crypto import associated_data, reveal
-from identity_hub.domain.data import validate_model
+from identity_hub.crypto import associated_data, credential_associated_data, reveal
+from identity_hub.domain.credentials import ACTIVE, DISABLED, REVOKED, check_transition
+from identity_hub.domain.data import validate_json_payload, validate_model
 from identity_hub.domain.idempotency import SECRETS_FAMILY, keyed_fingerprint, namespace
-from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.errors import NotFound, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
-from identity_hub.store.base import IdempotencyRequest, StoreTx
+from identity_hub.store.base import CredentialRow, IdempotencyRequest, StoreTx
 
-__all__ = ["SecretsAdminMixin"]
+__all__ = ["CredentialsMixin", "SecretsAdminMixin"]
 
 
 class SecretsAdminMixin(SpaceBase):
@@ -207,3 +208,90 @@ class SecretsAdminMixin(SpaceBase):
             )
         revealed: dict[str, Any] = reveal(value)
         return revealed
+
+
+class CredentialsMixin(SpaceBase):
+    """Несколько credentials аккаунта (IMP-09, D-215): запись, список, жизненный цикл."""
+
+    async def _put_credential(
+        self,
+        identity_id: UUID,
+        kind: str,
+        value: BaseModel | Mapping[str, Any],
+        *,
+        name: str,
+        public_value: Mapping[str, Any] | None,
+        expires_at: datetime | None,
+        actor: str,
+    ) -> CredentialRow:
+        async with self._tx(own=True) as tx:
+            service = self.hub.service((await self._identity(tx, identity_id)).service)
+        kind, name = service.credential_key(kind, name)
+        model = validate_model(service.credential_schema(kind), value, f"credentials {kind}")
+        public = dict(public_value) if public_value is not None else None
+        if public is not None:
+            validate_json_payload(public, "public_value")  # открытая часть: только JSON, с лимитом размера
+        payload = self.hub._envelope.seal_model(model, credential_associated_data(identity_id, kind, name))
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            current = await tx.get_credential(identity_id, kind, name)
+            if current is not None and current[1].lifecycle == REVOKED:
+                raise TransitionNotAllowed("credentials", REVOKED, ACTIVE, "revoked — конечное состояние")
+            stored = await tx.put_credential(
+                identity_id, kind, name, payload, public_value=public, expires_at=expires_at
+            )
+            await self._credential_event(
+                tx, row, kind, name, "put", actor, fields=sorted(type(model).model_fields)
+            )
+            return stored
+
+    async def _credential_list(self, identity_id: UUID) -> tuple[list[CredentialRow], datetime]:
+        async with self._tx(own=True) as tx:
+            await self._identity(tx, identity_id)
+            return await tx.list_credentials(identity_id), await tx.now()
+
+    async def _set_credential_lifecycle(
+        self, identity_id: UUID, kind: str, name: str, target: str, *, actor: str, reason: str | None = None
+    ) -> bool:
+        action = {ACTIVE: "enable", DISABLED: "disable", REVOKED: "revoke"}[target]
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            self.hub.service(row.service).credential_key(kind, name)
+            current = await tx.get_credential(identity_id, kind, name)
+            if current is None:
+                raise NotFound("credentials", f"{identity_id}/{kind}/{name}")
+            if current[1].lifecycle == REVOKED and target == REVOKED:
+                return False  # повторный отзыв детерминирован
+            if not check_transition(current[1].lifecycle, target):
+                return False
+            await tx.set_credential_lifecycle(identity_id, kind, name, target)
+            await self._credential_event(tx, row, kind, name, action, actor, reason=reason)
+            return True
+
+    async def _credential_event(
+        self,
+        tx: StoreTx,
+        row: Any,
+        kind: str,
+        name: str,
+        action: str,
+        actor: str,
+        *,
+        fields: list[str] | None = None,
+        reason: str | None = None,
+    ) -> None:
+        data: dict[str, Any] = {"kind": kind, "name": name, "action": action}
+        if fields is not None:
+            data["fields"] = fields
+        if reason is not None:
+            data["reason"] = reason
+        await self._emit(
+            tx,
+            EventDraft(
+                "identity.credentials.updated",
+                actor=actor,
+                service=row.service,
+                identity_id=row.id,
+                data=data,
+            ),
+        )

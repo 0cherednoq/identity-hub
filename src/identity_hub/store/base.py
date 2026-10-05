@@ -1067,6 +1067,12 @@ class StoreTx(ABC):
     ) -> tuple[EncryptedPayload, CredentialRow] | None: ...
 
     @abstractmethod
+    async def set_credential_lifecycle(
+        self, identity_id: UUID, kind: str, name: str, lifecycle: str
+    ) -> CredentialRow | None:
+        """Сменить жизненный цикл записи, `revision` + 1; `None` — записи нет (D-215)."""
+
+    @abstractmethod
     async def list_credentials(self, identity_id: UUID) -> list[CredentialRow]:
         """Записи credentials аккаунта пространства без секретов, по (kind, name)."""
 
