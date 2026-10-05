@@ -67,6 +67,9 @@ class LoginContext(Protocol):
     @property
     def identity_id(self) -> UUID: ...
 
+    # claim_id операции login (D-222): ключ идемпотентности, если платформа его принимает
+    attempt_id: UUID | None
+
     @property
     def external_ref(self) -> str: ...
 

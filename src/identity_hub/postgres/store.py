@@ -3876,7 +3876,13 @@ class PgTx(StoreTx):
         return row
 
     async def claim_provider_operations(
-        self, worker: str, *, limit: int, claim_for: timedelta, kinds: frozenset[str] | None = None
+        self,
+        worker: str,
+        *,
+        limit: int,
+        claim_for: timedelta,
+        kinds: frozenset[str] | None = None,
+        operation_ids: Sequence[UUID] | None = None,
     ) -> list[ProviderClaim]:
         p = PROVIDER_OPERATIONS.c
         due = (
@@ -3892,6 +3898,8 @@ class PgTx(StoreTx):
         )
         if kinds is not None:
             due = due.where(p.kind.in_(sorted(kinds)))
+        if operation_ids is not None:
+            due = due.where(_any_of(p.id, list(operation_ids)))
         ids = list((await self.execute(due)).scalars())
         if not ids:
             return []

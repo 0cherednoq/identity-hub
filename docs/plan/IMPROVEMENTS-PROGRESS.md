@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I4.2 Login, refresh и challenge через provider operations
-- **Начата:** 2026-10-06
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: вход создаёт операцию и передаёт attempt_id, поздний ответ ничего не пишет, отказ и challenge через операцию, сбой между claim и apply восстанавливается
-  - [ ] Lease: запись сессии внутри чужой транзакции; ctx.attempt_id
-  - [ ] Вход: claim до вызова адаптера, итог одной транзакцией с claim и fence; LoginReport.operations
-  - [ ] Документация, CHANGELOG, трассировка, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -56,7 +53,7 @@
 | I3.3a | Session: схема, lifecycle и режимы в Store | I3.2b | done |  | разбиение D-218 |
 | I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | done |  | разбиение D-218 |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | done |  |  |
-| I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | in_progress |  |  |
+| I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | done |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | todo |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
@@ -70,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 35 / 46 done
+**Итого:** 36 / 46 done
 
 ## Журнал сессий
 
@@ -109,3 +106,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-06 · I3.3a · done · миграция 0023 (ih_sessions: id, revision, created_at, revoked_at; одна не отозванная запись на слот; статусы valid→active, invalid/expired→invalidated; индекс под FK), SessionStatus created/active/invalidated/revoked с псевдонимами VALID/INVALID, Store put_session(mode) → SessionWrite, revoke_session, session_history; D-218 · дальше I3.3b
 2026-10-06 · I3.3b · done · mode in_place/replace в lease.save_session и secrets.replace_session, secrets.revoke_session, вход — replace, события с mode/session_id/replaced_id/session_revision без данных сессии, параллельная замена на барьере; IMP-10 implemented, D-219 · фаза I3 закрыта, дальше I4.1
 2026-10-06 · I4.1 · done · машина состояний операций провайдера и RetryPolicy (domain/provider_operations), миграция 0024 (revision, claim по пространству), Store enqueue/claim (SKIP LOCKED)/apply (claim + fence, поздний ответ — False)/recover/cancel в PgStore и MemoryStore, at-least-once в интеграциях; D-220 · дальше I4.2
+2026-10-06 · I4.2 · done · вход через очередь операций: claim операции login коммитится до Authenticator, ctx.attempt_id = claim_id, итог (сессия replace / challenge / отказ) одной транзакцией с claim и fence, поздний ответ откатывается целиком; LoginReport.operations; Store claim по operation_ids; D-222 · дальше I4.3

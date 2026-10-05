@@ -446,27 +446,36 @@ class Lease:
         """
         self.check()
         mode = session_mode(mode)
-        model = validate_model(self.pool.service.session, session, "session")
-        aad = associated_data("ih_sessions", self.identity_id, slot)
-        payload = self.pool.space.hub._envelope.seal_model(model, aad)  # до открытия транзакции (T-5)
+        payload = self._seal_session(session, slot)  # до открытия транзакции (T-5)
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
-            written = await tx.put_session(
-                self.identity_id, slot, payload, fencing=self.fencing, expires_at=expires_at, mode=mode
-            )
-            if written is None:
-                raise StaleFencing(self.identity_id, self.fencing)
-            await self.pool.space._emit(
-                tx,
-                EventDraft(
-                    "session.saved",
-                    actor=self.holder,
-                    service=self.service,
-                    identity_id=self.identity_id,
-                    lease_id=self.lease_id,
-                    data=session_event_data(slot, mode, written),
-                ),
-            )
+            await self._write_session(tx, payload, slot, mode=mode, expires_at=expires_at)
+
+    def _seal_session(self, session: BaseModel | Mapping[str, Any], slot: str) -> Any:
+        model = validate_model(self.pool.service.session, session, "session")
+        aad = associated_data("ih_sessions", self.identity_id, slot)
+        return self.pool.space.hub._envelope.seal_model(model, aad)
+
+    async def _write_session(
+        self, tx: StoreTx, payload: Any, slot: str, *, mode: str, expires_at: datetime | None = None
+    ) -> None:
+        """Запись сессии и событие `session.saved` в транзакции вызывающего (fence уже проверен)."""
+        written = await tx.put_session(
+            self.identity_id, slot, payload, fencing=self.fencing, expires_at=expires_at, mode=mode
+        )
+        if written is None:
+            raise StaleFencing(self.identity_id, self.fencing)
+        await self.pool.space._emit(
+            tx,
+            EventDraft(
+                "session.saved",
+                actor=self.holder,
+                service=self.service,
+                identity_id=self.identity_id,
+                lease_id=self.lease_id,
+                data=session_event_data(slot, mode, written),
+            ),
+        )
 
     async def mark_authenticated(self, slot: str = DEFAULT_SLOT) -> None:
         """Вход выполнен пользователем сам (без Authenticator, FR-5.6): auth → authenticated."""

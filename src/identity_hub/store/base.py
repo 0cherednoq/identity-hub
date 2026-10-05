@@ -1751,7 +1751,13 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def claim_provider_operations(
-        self, worker: str, *, limit: int, claim_for: timedelta, kinds: frozenset[str] | None = None
+        self,
+        worker: str,
+        *,
+        limit: int,
+        claim_for: timedelta,
+        kinds: frozenset[str] | None = None,
+        operation_ids: Sequence[UUID] | None = None,
     ) -> list[ProviderClaim]:
         """Взять доступные `pending`/`retryable` операции пространства (`SKIP LOCKED`): `running`,
         `attempt + 1`, новый `claim_id`, `claim_token + 1`, срок claim. Коммит — до вызова адаптера."""

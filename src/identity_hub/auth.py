@@ -20,15 +20,22 @@ from pydantic import BaseModel
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
 from identity_hub.crypto import associated_data
+from identity_hub.domain.provider_operations import RetryPolicy, safe_error_code
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, Lifecycle, Standing
-from identity_hub.errors import LeaseUnavailable, NotFound, ValidationFailed, describe_error
+from identity_hub.errors import (
+    LeaseOwnershipLost,
+    LeaseUnavailable,
+    NotFound,
+    ValidationFailed,
+    describe_error,
+)
 from identity_hub.events import EventDraft
 from identity_hub.protocols import Authenticator, LoginChallenge
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
-from identity_hub.store.base import CandidateQuery, ChallengeRow
+from identity_hub.store.base import CandidateQuery, ChallengeRow, ProviderClaim, StoreTx
 
 if TYPE_CHECKING:
     from identity_hub.lease import Lease
@@ -57,6 +64,8 @@ class LoginReport:
     succeeded: list[UUID] = field(default_factory=list)
     challenged: list[UUID] = field(default_factory=list)
     failed: dict[UUID, str] = field(default_factory=dict)
+    # identity → операция провайдера попытки (D-222): незавершённые видны в admin.provider_operations
+    operations: dict[UUID, UUID] = field(default_factory=dict)
 
 
 class _LinkedIdentity:
@@ -94,6 +103,7 @@ class _LoginContext:
         self._answer = answer
         self._context = context
         self._linked: dict[str, Lease] = {}
+        self.attempt_id: UUID | None = None  # claim_id операции: ключ идемпотентности для платформы
 
     @property
     def identity_id(self) -> UUID:
@@ -167,6 +177,10 @@ class _LoginContext:
                 )
 
 
+# вход повторяет человек или login_many: временная ошибка попытки — failed, без автоповтора
+_NO_RETRY = RetryPolicy(max_attempts=1)
+
+
 class LoginMixin(SpaceBase):
     async def _run_login(self, identity_id: UUID) -> LoginOutcome:
         """Run one explicit login attempt for a selected identity."""
@@ -216,7 +230,7 @@ class LoginMixin(SpaceBase):
                     break
                 attempts += 1
                 query = replace(query, exclude=query.exclude | {lease.identity_id})  # одна попытка на аккаунт
-                outcome, error = await self._login(lease, svc, None, None, None)
+                outcome, error = await self._login(lease, svc, None, None, None, report.operations)
                 _record(report, lease.identity_id, outcome, error)
         return report
 
@@ -354,6 +368,7 @@ class LoginMixin(SpaceBase):
         challenge: ChallengeRow | None,
         answer: str | None,
         context: Mapping[str, Any] | None,
+        operations: dict[UUID, UUID] | None = None,
     ) -> tuple[LoginOutcome, str | None]:
         """Один вход под арендой `lease`; аренда и связанные аренды освобождаются здесь.
 
@@ -367,6 +382,11 @@ class LoginMixin(SpaceBase):
         entered = False
         lease._start(None)  # heartbeat: вход с SMS-кодом легко длится дольше ttl − safety_margin
         try:
+            # D-222: операция login — claim коммитится до вызова адаптера, итог — одной транзакцией
+            claim = await self._claim_login(lease, svc)
+            ctx.attempt_id = claim.claim_id
+            if operations is not None:
+                operations[lease.identity_id] = claim.operation_id
             await self._set_auth(lease, AuthState.LOGGING_IN)
             entered = True
             try:
@@ -374,23 +394,36 @@ class LoginMixin(SpaceBase):
                     # функция входа приведена к объекту протокола в Service.__post_init__
                     session = await cast(Authenticator, svc.authenticator).login(ctx)
             except LoginChallenge as asked:
-                if challenge is not None:
-                    await self._resolve(challenge.id)
-                await self._open_challenge(lease, asked)
+                await self._open_challenge(lease, asked, claim=claim, previous=challenge)
                 entered = False
                 return LoginOutcome.CHALLENGED, None
             except Exception as exc:
                 name = "LoginTimeout" if isinstance(exc, TimeoutError) else type(exc).__name__
-                if challenge is not None:
-                    await self._resolve(challenge.id)
-                await self._set_auth(lease, AuthState.NO_SESSION, "identity.login.failed", {"error": name})
+                await self._set_auth(
+                    lease,
+                    AuthState.NO_SESSION,
+                    "identity.login.failed",
+                    {"error": name},
+                    claim=claim,
+                    outcome="failed",
+                    error_code=safe_error_code(exc) if name != "LoginTimeout" else name,
+                    previous=challenge,
+                )
                 entered = False
                 return LoginOutcome.FAILED, f"{name}: {exc}"[:500]
             # новый вход — новая запись сессии, прежняя остаётся в истории отозванной (D-219)
-            await lease.save_session(session, mode="replace")
-            if challenge is not None:
-                await self._resolve(challenge.id)
-            await self._set_auth(lease, AuthState.AUTHENTICATED, "identity.login.succeeded", {})
+            payload = lease._seal_session(session, DEFAULT_SLOT)
+            await self._set_auth(
+                lease,
+                AuthState.AUTHENTICATED,
+                "identity.login.succeeded",
+                {},
+                claim=claim,
+                outcome="succeeded",
+                result={"outcome": "succeeded"},
+                session=payload,
+                previous=challenge,
+            )
             entered = False
             return LoginOutcome.SUCCEEDED, None
         except asyncio.CancelledError:
@@ -451,11 +484,59 @@ class LoginMixin(SpaceBase):
                 describe_error(exc),
             )
 
+    async def _claim_login(self, lease: Lease, svc: Service) -> ProviderClaim:
+        """Поставить и взять операцию login одной короткой транзакцией — до вызова адаптера (D-222)."""
+        claim_for = svc.login_timeout + timedelta(minutes=1)
+        async with self._tx(own=True) as tx:
+            await lease._check_fencing(tx)
+            operation = await tx.enqueue_provider_operation(lease.identity_id, "login")
+            (claim,) = await tx.claim_provider_operations(
+                lease.holder, limit=1, claim_for=claim_for, operation_ids=[operation.id]
+            )
+        return claim
+
+    @staticmethod
+    async def _apply_login(
+        tx: StoreTx,
+        lease: Lease,
+        claim: ProviderClaim | None,
+        outcome: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        """Итог операции login в транзакции итога; поздний ответ — `LeaseOwnershipLost`, всё откатится."""
+        if claim is None:
+            return
+        applied = await tx.apply_provider_operation(
+            claim, outcome, result=result, error_code=error_code, fence=lease.fence, policy=_NO_RETRY
+        )
+        if not applied:
+            raise LeaseOwnershipLost(
+                lease.lease_id, "late", identity_id=lease.identity_id, fencing=lease.fencing
+            )
+
     async def _set_auth(
-        self, lease: Lease, state: AuthState, event: str | None = None, data: Mapping[str, Any] | None = None
+        self,
+        lease: Lease,
+        state: AuthState,
+        event: str | None = None,
+        data: Mapping[str, Any] | None = None,
+        *,
+        claim: ProviderClaim | None = None,
+        outcome: str = "succeeded",
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        session: Any = None,
+        previous: ChallengeRow | None = None,
     ) -> None:
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)
+            await self._apply_login(tx, lease, claim, outcome, result=result, error_code=error_code)
+            if session is not None:
+                await lease._write_session(tx, session, DEFAULT_SLOT, mode="replace")
+            if previous is not None:
+                await tx.resolve_challenge(previous.id)
             await apply_region_change(
                 self,
                 tx,
@@ -478,7 +559,14 @@ class LoginMixin(SpaceBase):
                     ),
                 )
 
-    async def _open_challenge(self, lease: Lease, asked: LoginChallenge) -> None:
+    async def _open_challenge(
+        self,
+        lease: Lease,
+        asked: LoginChallenge,
+        *,
+        claim: ProviderClaim | None = None,
+        previous: ChallengeRow | None = None,
+    ) -> None:
         challenge_id = new_id()
         aad = associated_data("ih_challenges", lease.identity_id, str(challenge_id))
         context = asked.context if asked.context is not None else {}
@@ -486,6 +574,10 @@ class LoginMixin(SpaceBase):
         hint = sanitize_text(asked.hint) or ""  # уходит во внешнее событие и очередь человека
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)
+            # попытка входа завершилась вопросом платформы: операция succeeded, исход — challenged
+            await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})
+            if previous is not None:
+                await tx.resolve_challenge(previous.id)
             now = await tx.now()
             expires_at = now + asked.expires_in if asked.expires_in else now + timedelta(hours=1)
             opened = await tx.open_challenge(

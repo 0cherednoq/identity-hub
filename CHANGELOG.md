@@ -100,6 +100,10 @@
 
 ### Changed
 
+- Вход идёт через очередь операций провайдера (`IMP-11`, `D-222`): claim коммитится до вызова
+  `Authenticator`, итог — одной транзакцией с проверкой claim и fence; поздний ответ зависшего
+  воркера ничего не пишет. `ctx.attempt_id` — ключ идемпотентности попытки,
+  `LoginReport.operations` — операции попыток. Store: `claim_provider_operations(operation_ids=)`.
 - Сессии хранят историю (`IMP-10`, `D-218`, миграция `0023`): у записи есть `id` и ревизия, в
   слоте одна не отозванная запись. `SessionStatus`: `created`, `active`, `invalidated`,
   `revoked` (`VALID`/`INVALID` — псевдонимы `ACTIVE`/`INVALIDATED`, `EXPIRED` удалён; прежние

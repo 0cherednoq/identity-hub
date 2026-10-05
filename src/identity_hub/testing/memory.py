@@ -2727,7 +2727,13 @@ class MemoryTx(StoreTx):
         return deepcopy(row)
 
     async def claim_provider_operations(
-        self, worker: str, *, limit: int, claim_for: timedelta, kinds: frozenset[str] | None = None
+        self,
+        worker: str,
+        *,
+        limit: int,
+        claim_for: timedelta,
+        kinds: frozenset[str] | None = None,
+        operation_ids: Sequence[UUID] | None = None,
     ) -> list[ProviderClaim]:
         due = sorted(
             (
@@ -2737,6 +2743,7 @@ class MemoryTx(StoreTx):
                 and row.state in CLAIMABLE_OPERATIONS
                 and row.available_at <= self._now
                 and (kinds is None or row.kind in kinds)
+                and (operation_ids is None or row.id in operation_ids)
             ),
             key=lambda row: (row.available_at, row.id),
         )[:limit]
