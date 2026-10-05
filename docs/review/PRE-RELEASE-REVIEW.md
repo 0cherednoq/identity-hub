@@ -568,7 +568,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-S13 | F1.7 | исправлена | `tests/unit/test_key_providers.py` |
 | R2-S14 | F1.6a | исправлена | `tests/conformance/test_secret_boundaries.py` |
 | R2-S15 | F1.5 | исправлена | `tests/unit/test_outbound.py` |
-| R2-S16 | I1.4 | открыта, очередь улучшений | — |
+| R2-S16 | I1.4a | открыта, очередь улучшений | — |
 | R2-S17 | F1.4 | исправлена | `tests/conformance/test_free_text_channels.py` |
 | R2-S18 | F3.11 | исправлена | `tests/unit/test_cli_safety.py` |
 | R2-S19 | F3.3 | исправлена | `tests/unit/test_notification_delivery.py` |

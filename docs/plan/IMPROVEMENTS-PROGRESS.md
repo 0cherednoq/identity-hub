@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I1.4a Кольцо ключей отпечатков и HMAC-отпечаток прокси
+- **Начата:** 2026-10-05
 - **Шаги:**
-  - [ ] —
+  - [ ] Падающие тесты: KEK не HMAC-ключ, HMAC-отпечаток прокси, дедупликация по старому ключу и legacy SHA-256, пересчёт, без ключей в repr
+  - [ ] FingerprintKeyring: явное кольцо провайдера и HKDF из KEK; equivalence_tag
+  - [ ] Миграция 0018 fingerprint_key_id; NewProxy с алиасами, поиск и вставка в PgStore/MemoryStore
+  - [ ] doctor.rekey_fingerprints и CLI
+  - [ ] Документация, CHANGELOG, трассировка, check.sh
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -39,7 +43,8 @@
 | I1.2a | Revision агрегата: колонка, рост, события, read-схема | I0.2b, I0.4 | done |  | разбиение D-205 |
 | I1.2b | expected_revision в API изменений | I1.2a | done |  | разбиение D-205 |
 | I1.3 | Идемпотентность и canonical fingerprint | I0.2b, I0.4 | done |  | закрыта F1.1+F1.2 (D-151) |
-| I1.4 | HMAC-equivalence tag и fingerprint keyring | I0.3, I1.3 | todo |  |  |
+| I1.4a | Кольцо ключей отпечатков и HMAC-отпечаток прокси | I0.3, I1.3 | in_progress |  | разбиение D-207 |
+| I1.4b | HMAC-тег секретов в идемпотентных командах | I1.4a | todo |  | разбиение D-207 |
 | I2.1 | Атомарная LRU-выборка аренды | I0.4 | todo |  |  |
 | I2.2 | HOT и пакетный heartbeat | I2.1 | todo |  |  |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | todo |  |  |
@@ -55,14 +60,14 @@
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
-| I6.3 | Set-based import fast path | I1.4, I3.2 | todo |  |  |
+| I6.3 | Set-based import fast path | I1.4b, I3.2 | todo |  |  |
 | I6.4 | Полный load harness и бюджеты | I5.3, I6.1, I6.2, I6.3 | todo |  |  |
-| I6.5 | Полная deterministic race matrix | I1.4, I2.4, I3.3, I4.3, I5.3 | todo |  |  |
+| I6.5 | Полная deterministic race matrix | I1.4b, I2.4, I3.3, I4.3, I5.3 | todo |  |  |
 | I8.10 | API: удаление legacy-алиасов | I8.9 | done |  | закрыта F6.4 (D-151) |
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 21 / 41 done
+**Итого:** 21 / 42 done
 
 ## Журнал сессий
 

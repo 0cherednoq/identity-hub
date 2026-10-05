@@ -201,21 +201,31 @@ bash scripts/check.sh
 - **DoD:** barrier race winner/replay, same key/different body, rollback winner, namespace
   isolation, retention; одинаковое поведение memory/pg.
 
-### I1.4 HMAC-equivalence tag и отдельное кольцо ключей
+### I1.4a Кольцо ключей отпечатков и HMAC-отпечаток прокси
+
+Связанное улучшение: `IMP-04`. Задача `I1.4` разбита решением `D-207` на `I1.4a` и `I1.4b`.
+
+- Расширить SecretsProvider отдельным fingerprint keyring с current и historical key ID; KEK
+  шифрования не используется как HMAC-ключ. Без явного кольца ключи выводятся из KEK через
+  HKDF с отдельной меткой.
+- Примитив HMAC-SHA-256 equivalence tag; тег и ключи не попадают в repr, события и логи.
+- **Дополнение из ревью (`D-151`).** `R2-S16`: fingerprint прокси считается HMAC из fingerprint keyring вместо
+  SHA-256 без ключа; миграция добавляет key ID, пересчёт значений — командой обслуживания
+  (у миграции нет ключей), до пересчёта прежние значения находятся при поиске.
+- **DoD:** KEK ≠ HMAC key; одинаковый/другой логин; rotation overlap (дедупликация по старому
+  ключу и legacy SHA-256); пересчёт; отсутствие ключа/тега в repr/log/event; conformance memory/pg.
+
+### I1.4b HMAC-тег секретов в идемпотентных командах
 
 Связанное улучшение: `IMP-04`.
 
-- Расширить SecretsProvider отдельным fingerprint keyring с current и historical key ID; KEK
-  шифрования не используется как HMAC-ключ.
 - Для секретных полей canonical command хранит только HMAC-SHA-256 equivalence tag и key ID.
   Несекретная часть остаётся обычным стабильным hash.
 - Интегрировать register/import, credentials/session update и другие идемпотентные команды с
   секретами. Ротация создаёт новые записи новым ключом, старые проверяются до expires_at.
 - Отсутствующий historical key для живой записи даёт `SecretConfigurationError`, а не cache miss.
-- **Дополнение из ревью (`D-151`).** `R2-S16`: fingerprint прокси считается HMAC из fingerprint keyring вместо
-  SHA-256 без ключа; миграция пересчитывает значения.
-- **DoD:** одинаковый/другой secret, KEK ≠ HMAC key, rotation overlap, missing key, отсутствие
-  secret/tag в repr/log/event; conformance replay.
+- **DoD:** одинаковый/другой secret, rotation overlap, missing key, отсутствие secret/tag в
+  repr/log/event; conformance replay.
 
 ---
 
@@ -312,7 +322,7 @@ bash scripts/check.sh
   I0.1 и migration guide.
 - Обновить register, import, login, secret admin, rotate-key, identity card и testing factories.
   List/read API возвращают только id/kind/name/public metadata/lifecycle/revision.
-- Идемпотентное обновление использует I1.3/I1.4; reveal конкретного credential создаёт audit
+- Идемпотентное обновление использует I1.3/I1.4b; reveal конкретного credential создаёт audit
   event с kind/name, но без значения.
 - **DoD:** end-to-end register→lease→rotate→reveal, import replay, linked login и
   MemoryStore/PgStore conformance.
@@ -688,7 +698,7 @@ I0.2b → I0.3
 I0.1 + I0.2b → I0.4
 I0.3 + I0.4 → I1.1
 I0.2b + I0.4 → {I1.2a → I1.2b, I1.3}
-I0.3 + I1.3 → I1.4
+I0.3 + I1.3 → I1.4a → I1.4b
 
 I0.4 → I2.1 → I2.2
 I0.2b + I2.1 → I2.3 → I2.4
@@ -705,9 +715,9 @@ I1.2b + I5.2 → I5.3
 
 I1.3 + I2.2 + I2.4 → I6.1
 I1.1 + I5.1 → I6.2
-I1.4 + I3.2 → I6.3
+I1.4b + I3.2 → I6.3
 I5.3 + I6.1 + I6.2 + I6.3 → I6.4
-I1.4 + I2.4 + I3.3 + I4.3 + I5.3 → I6.5
+I1.4b + I2.4 + I3.3 + I4.3 + I5.3 → I6.5
 
 I0.1 → I8.1 → I8.2 → {I8.3, I8.4}
 I8.3 → I8.5
