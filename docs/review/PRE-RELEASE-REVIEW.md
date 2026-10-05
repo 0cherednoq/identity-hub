@@ -630,7 +630,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-P05 | F2.3 | исправлена | `tests/unit/test_fake_clock.py` |
 | R2-P06 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
 | R2-P07 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
-| R2-P08 | I3.1a | открыта, очередь улучшений | — |
+| R2-P08 | I3.1a | исправлена | `tests/conformance/test_credentials_store.py` |
 | R2-P09 | F2.2 | исправлена | `tests/conformance/test_lease_cleanup.py` |
 | R2-P10 | F5.2a | исправлена | `tests/conformance/test_memory_parity.py` |
 | R2-P11 | F3.6 | исправлена | `tests/conformance/test_maintenance_timers.py` |
@@ -648,7 +648,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-P23 | F5.3b | исправлена | `tests/conformance/test_store_coverage.py`, `tests/store_coverage.py`, `tests/test_library_ci.py` |
 
 Итого: 118 из 125 находок исправлены и покрыты тестами, 7 перенесены в очередь улучшений.
-Из перенесённых закрыты: `R2-D23` (`I1.2a`), `R2-S16` (`I1.4a`), `R1-15` (`I2.3`), `R1-16` (`I2.4`).
+Из перенесённых закрыты: `R2-D23` (`I1.2a`), `R2-S16` (`I1.4a`), `R1-15` (`I2.3`), `R1-16` (`I2.4`), `R2-P08` (`I3.1a`).
 
 ## Приложение A. Уроки похожих инструментов
 

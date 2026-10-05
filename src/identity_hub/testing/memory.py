@@ -19,7 +19,12 @@ from uuid import UUID, uuid4
 
 from identity_hub._ids import new_id
 from identity_hub.clock import Clock, SystemClock
-from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
+from identity_hub.crypto.envelope import (
+    DecryptionFailed,
+    EncryptedPayload,
+    associated_data,
+    credential_associated_data,
+)
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.query import profile_sort_text
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
@@ -45,6 +50,7 @@ from identity_hub.store.base import (
     ChallengeRow,
     ChargeOutcome,
     CredentialMetadataRow,
+    CredentialRow,
     DataRow,
     DoctorIssue,
     EventReadFilter,
@@ -101,6 +107,7 @@ from identity_hub.store.base import (
     WebhookDeliveryRow,
     WebhookEndpointReadRow,
     WebhookEndpointRow,
+    credential_label,
 )
 
 __all__ = ["MemoryStore", "MemoryTx"]
@@ -132,10 +139,14 @@ class _MemoryState:
     services: dict[str, ServiceRow] = field(default_factory=dict)
     identities: dict[UUID, IdentityRow] = field(default_factory=dict)
     regions: dict[tuple[UUID, str, str], RegionState] = field(default_factory=dict)
-    credentials: dict[UUID, EncryptedPayload] = field(default_factory=dict)
-    profile_secrets: dict[UUID, EncryptedPayload] = field(default_factory=dict)
-    sessions: dict[tuple[UUID, str], tuple[EncryptedPayload, str, int, datetime | None]] = field(
+    # (identity, kind, name) → (секрет, метаданные): несколько credentials на аккаунт (D-214)
+    credentials: dict[tuple[UUID, str, str], tuple[EncryptedPayload, CredentialRow]] = field(
         default_factory=dict
+    )
+    profile_secrets: dict[UUID, EncryptedPayload] = field(default_factory=dict)
+    # (секрет, статус, fencing записи, срок, version, updated_at) — версии как в PostgreSQL (R2-P08)
+    sessions: dict[tuple[UUID, str], tuple[EncryptedPayload, str, int, datetime | None, int, datetime]] = (
+        field(default_factory=dict)
     )
     links: dict[tuple[UUID, str], UUID] = field(default_factory=dict)
     data: dict[tuple[UUID, str], DataRow] = field(default_factory=dict)
@@ -441,7 +452,62 @@ class MemoryTx(StoreTx):
 
     async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
         if self._own(identity_id):
-            self.state.credentials[identity_id] = payload
+            await self.put_credential(identity_id, "default", "default", payload)
+
+    async def put_credential(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        payload: EncryptedPayload,
+        *,
+        public_value: dict[str, Any] | None = None,
+        expires_at: datetime | None = None,
+    ) -> CredentialRow:
+        if self._own(identity_id) is None:
+            raise NotFound("identity", identity_id)
+        key = (identity_id, kind, name)
+        old = self.state.credentials.get(key)
+        if old is None:
+            row = CredentialRow(
+                new_id(),
+                identity_id,
+                kind,
+                name,
+                deepcopy(public_value),
+                "active",
+                expires_at,
+                1,
+                1,
+                self._now,
+                self._now,
+            )
+        else:
+            row = replace(
+                old[1],
+                public_value=deepcopy(public_value),
+                expires_at=expires_at,
+                revision=old[1].revision + 1,
+                version=old[1].version + 1,
+                updated_at=self._now,
+            )
+        self.state.credentials[key] = (payload, row)
+        return row
+
+    async def get_credential(
+        self, identity_id: UUID, kind: str, name: str
+    ) -> tuple[EncryptedPayload, CredentialRow] | None:
+        if self._own(identity_id) is None:
+            return None
+        found = self.state.credentials.get((identity_id, kind, name))
+        return (found[0], found[1]) if found is not None else None
+
+    async def list_credentials(self, identity_id: UUID) -> list[CredentialRow]:
+        if self._own(identity_id) is None:
+            return []
+        return [
+            row for (owner, _, _), (_, row) in sorted(self.state.credentials.items()) if owner == identity_id
+        ]
 
     async def put_session(
         self,
@@ -457,7 +523,8 @@ class MemoryTx(StoreTx):
         old = self.state.sessions.get((identity_id, slot))
         if old is not None and old[2] > fencing:
             return False
-        self.state.sessions[(identity_id, slot)] = (payload, "valid", fencing, expires_at)
+        version = old[4] + 1 if old is not None else 1
+        self.state.sessions[(identity_id, slot)] = (payload, "valid", fencing, expires_at, version, self._now)
         return True
 
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
@@ -500,7 +567,8 @@ class MemoryTx(StoreTx):
                     duration=stale.expires_at - history.acquired_at,
                     end_reason="expired",
                 )
-        self.state.credentials.pop(identity_id, None)
+        for credential_key in [key for key in self.state.credentials if key[0] == identity_id]:
+            del self.state.credentials[credential_key]
         self.state.profile_secrets.pop(identity_id, None)
         bound = self.state.bindings.pop(identity_id, None)
         self.state.binding_times.pop(identity_id, None)
@@ -991,7 +1059,7 @@ class MemoryTx(StoreTx):
         key = (identity_id, slot)
         old = self.state.sessions.get(key)
         if old is not None and self._own(identity_id):
-            self.state.sessions[key] = (old[0], status, old[2], old[3])
+            self.state.sessions[key] = (old[0], status, old[2], old[3], old[4], self._now)
 
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
         known = await self.proxy_by_fingerprint([row.fingerprint, *row.aliases])
@@ -2016,7 +2084,8 @@ class MemoryTx(StoreTx):
         return sorted(rows, key=lambda row: row.expires_at or self._now)[:limit]
 
     async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None:
-        return self.state.credentials.get(identity_id) if self._own(identity_id) else None
+        found = await self.get_credential(identity_id, "default", "default")
+        return found[0] if found is not None else None
 
     async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
         row = self.state.sessions.get((identity_id, slot)) if self._own(identity_id) else None
@@ -2027,10 +2096,17 @@ class MemoryTx(StoreTx):
     ) -> tuple[CredentialMetadataRow, list[SessionMetadataRow]]:
         if self._own(identity_id) is None:
             return CredentialMetadataRow(False, None, None), []
-        credential = CredentialMetadataRow(identity_id in self.state.credentials, 1, None)
+        default = self.state.credentials.get((identity_id, "default", "default"))
+        credential = CredentialMetadataRow(
+            default is not None,
+            default[1].version if default is not None else None,
+            default[1].updated_at if default is not None else None,
+        )
         sessions = [
-            SessionMetadataRow(slot, status, expires_at, 1, fencing, None)
-            for (owner, slot), (_, status, fencing, expires_at) in sorted(self.state.sessions.items())
+            SessionMetadataRow(slot, status, expires_at, version, fencing, updated_at)
+            for (owner, slot), (_, status, fencing, expires_at, version, updated_at) in sorted(
+                self.state.sessions.items()
+            )
             if owner == identity_id
         ]
         return credential, sessions
@@ -3427,7 +3503,10 @@ class MemoryStore(Store):
     def _rotation_views(self) -> dict[str, tuple[Any, Callable[[Any], bytes]]]:
         state = self._state
         return {
-            "credentials": (state.credentials, lambda key: associated_data("ih_credentials", key)),
+            "credentials": (
+                _PayloadView(state.credentials, 0),
+                lambda key: credential_associated_data(key[0], key[1], key[2]),
+            ),
             "sessions": (
                 _PayloadView(state.sessions, 0),
                 lambda key: associated_data("ih_sessions", key[0], key[1]),
@@ -3484,7 +3563,8 @@ class MemoryStore(Store):
                 try:
                     view[key] = envelope.rewrap(payload, aad(key), upgrade=table != "challenges")
                 except DecryptionFailed:
-                    unreadable.append(UnreadableSecret(table, "/".join(cursor)))
+                    label = credential_label(*key) if table == "credentials" else "/".join(cursor)
+                    unreadable.append(UnreadableSecret(table, label))
                     continue
                 rotated += 1
         last = page[-1][0] if len(page) >= size else None

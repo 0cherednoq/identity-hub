@@ -36,6 +36,7 @@ __all__ = [
     "EncryptedPayload",
     "Envelope",
     "associated_data",
+    "credential_associated_data",
     "reveal",
 ]
 
@@ -89,6 +90,15 @@ def associated_data(
     """AAD = (таблица, владелец, slot/factor, версия схемы полезной нагрузки) — ТЗ S-2, IMP-16."""
     current = f"identity-hub:{AAD_VERSION}:{table}:{owner_id}:{slot}:{schema_version}".encode()
     return AssociatedData(current, f"ih|{table}|{owner_id}|{slot}".encode())
+
+
+DEFAULT_CREDENTIAL = ("default", "default")
+
+
+def credential_associated_data(identity_id: UUID | str, kind: str, name: str) -> AssociatedData:
+    """AAD записи credentials (D-214): у `default`/`default` — прежний, без slot, иначе `kind/name`."""
+    slot = "" if (kind, name) == DEFAULT_CREDENTIAL else f"{kind}/{name}"
+    return associated_data("ih_credentials", identity_id, slot)
 
 
 def _candidates(aad: bytes) -> list[bytes]:

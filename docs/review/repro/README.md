@@ -11,7 +11,6 @@
 | Скрипт | Находка | Задача | Что нужно для запуска |
 |---|---|---|---|
 | `schema/sch_e9_explain.py`, `schema/sch_e6_runtime.py` | `R2-D08` (N+1 в поиске админки), `R2-D09` (список без индекса) | `I6.2` | PostgreSQL 16, адрес и порт в `schema/sch_common.py` |
-| `parity/store_parity.py`, `parity/hub_parity.py` | `R2-P08` (версии credentials и сессий в `MemoryStore`) | `I3.1a` | PostgreSQL, адрес в переменной `IH_PARITY_PG_URL`; общий код — `parity/harness.py` |
 
 Скрипты писались под API `1.0.0a1` и временные контейнеры: перед запуском подставьте свой адрес
 БД и переведите вызовы на текущий API (`hub.space(..., create=True)`, обязательный `actor`,

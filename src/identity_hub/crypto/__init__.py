@@ -1,6 +1,13 @@
 """Шифрование секретов Identity Hub (ТЗ §9)."""
 
-from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, Envelope, associated_data, reveal
+from identity_hub.crypto.envelope import (
+    DecryptionFailed,
+    EncryptedPayload,
+    Envelope,
+    associated_data,
+    credential_associated_data,
+    reveal,
+)
 from identity_hub.crypto.providers import (
     EnvSecretsProvider,
     FileSecretsProvider,
@@ -19,6 +26,7 @@ __all__ = [
     "SecretValue",
     "StaticSecretsProvider",
     "associated_data",
+    "credential_associated_data",
     "generate_key",
     "parse_keys",
     "reveal",

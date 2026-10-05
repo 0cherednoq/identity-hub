@@ -683,6 +683,28 @@ class VerificationRow:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+def credential_label(identity_id: object, kind: str, name: str) -> str:
+    """Как назвать запись credentials в отчётах: `default`/`default` — id аккаунта, как до 0022."""
+    return str(identity_id) if (kind, name) == ("default", "default") else f"{identity_id}/{kind}/{name}"
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialRow:
+    """Запись credentials без секрета (IMP-09, D-214): вид, имя, открытая часть, жизненный цикл."""
+
+    id: UUID
+    identity_id: UUID
+    kind: str
+    name: str
+    public_value: dict[str, Any] | None
+    lifecycle: str
+    expires_at: datetime | None
+    revision: int
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
 @dataclass(frozen=True, slots=True)
 class CredentialMetadataRow:
     present: bool
@@ -1022,7 +1044,31 @@ class StoreTx(ABC):
         """Какие из аккаунтов есть в этом пространстве."""
 
     @abstractmethod
-    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None: ...
+    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
+        """Запись `default`/`default` (прежний единственный blob, D-214)."""
+
+    @abstractmethod
+    async def put_credential(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        payload: EncryptedPayload,
+        *,
+        public_value: dict[str, Any] | None = None,
+        expires_at: datetime | None = None,
+    ) -> CredentialRow:
+        """Создать или заменить запись (identity, kind, name): секрет, открытая часть и срок вместе,
+        `revision` и `version` + 1 у существующей. Жизненный цикл не меняет (D-214)."""
+
+    @abstractmethod
+    async def get_credential(
+        self, identity_id: UUID, kind: str, name: str
+    ) -> tuple[EncryptedPayload, CredentialRow] | None: ...
+
+    @abstractmethod
+    async def list_credentials(self, identity_id: UUID) -> list[CredentialRow]:
+        """Записи credentials аккаунта пространства без секретов, по (kind, name)."""
 
     @abstractmethod
     async def put_session(

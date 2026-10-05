@@ -580,16 +580,28 @@ class VerificationRecord(IdentityHubBase):
 
 
 class CredentialsRecord(EncryptedPayloadMixin, IdentityHubBase):
-    """Как войти: пароль, телефон, TOTP-секрет. Одна запись на идентичность."""
+    """Как войти: пароль, TOTP, API-ключи. Несколько записей на аккаунт — по виду и имени (0022, D-214)."""
 
     __tablename__ = "ih_credentials"
 
-    identity_id: Mapped[UUID] = mapped_column(primary_key=True)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
+    identity_id: Mapped[UUID]
     space_id: Mapped[UUID]
+    kind: Mapped[str] = mapped_column(String(64), default="default", server_default="default")
+    name: Mapped[str] = mapped_column(String(128), default="default", server_default="default")
+    public_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # логин, id ключа: без секрета
+    lifecycle: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # срок — по времени
+    revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))
     version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (_identity_fk(),)
+    __table_args__ = (
+        _identity_fk(),
+        UniqueConstraint("identity_id", "kind", "name"),
+        CheckConstraint("lifecycle IN ('active', 'disabled', 'revoked')", name="lifecycle_valid"),
+    )
 
 
 class SessionRecord(EncryptedPayloadMixin, IdentityHubBase):

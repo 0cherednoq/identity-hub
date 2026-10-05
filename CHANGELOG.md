@@ -80,6 +80,12 @@
 
 ### Changed
 
+- `ih_credentials` хранит несколько записей на аккаунт (`IMP-09`, `D-214`, миграция `0022`): вид
+  (`kind`), имя (`name`), открытая часть, жизненный цикл, срок и ревизия; прежняя запись стала
+  `default`/`default` без перешифрования. `Service.credential_kinds` объявляет виды кроме `default`
+  (`credential_schema`, `credential_key`); Store: `put_credential`, `get_credential`,
+  `list_credentials`; `credential_associated_data` в `identity_hub.crypto`. `hub.start()` требует
+  ревизию схемы `0022`.
 - Семантика renew/release/revoke (`IMP-06`, `D-213`): heartbeat не укорачивает срок
   (`GREATEST`); `release()` отозванной аренды бросает `LeaseRevoked`, освобождение после
   естественного истечения закрывает историю как `expired`; `pools.revoke()` сразу будит аренду
@@ -288,6 +294,8 @@
 
 ### Fixed
 
+- `MemoryStore` ведёт `version` и `updated_at` credentials и сессий так же, как PostgreSQL
+  (`R2-P08`).
 - Полный fence аренды (`IMP-05`, `D-212`, `R1-15`): запись и чтение секретов от имени аренды
   сверяют `lease_id`, `token`, точное равенство fencing и живую аренду под блокировкой строки
   аккаунта. Истёкшая аренда, которую ещё никто не перехватил, больше не пишет; отказ —

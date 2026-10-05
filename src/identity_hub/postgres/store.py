@@ -49,7 +49,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql import Executable, Select
 
 from identity_hub._ids import new_id
-from identity_hub.crypto.envelope import DecryptionFailed, EncryptedPayload, associated_data
+from identity_hub.crypto.envelope import (
+    DecryptionFailed,
+    EncryptedPayload,
+    associated_data,
+    credential_associated_data,
+)
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
@@ -125,6 +130,7 @@ from identity_hub.store.base import (
     ChallengeRow,
     ChargeOutcome,
     CredentialMetadataRow,
+    CredentialRow,
     DataRow,
     DoctorIssue,
     EventReadFilter,
@@ -181,6 +187,7 @@ from identity_hub.store.base import (
     WebhookDeliveryRow,
     WebhookEndpointReadRow,
     WebhookEndpointRow,
+    credential_label,
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
@@ -504,14 +511,73 @@ class PgTx(StoreTx):
         return set(rows.scalars())
 
     async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
+        await self.put_credential(identity_id, "default", "default", payload)
+
+    async def put_credential(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        payload: EncryptedPayload,
+        *,
+        public_value: dict[str, Any] | None = None,
+        expires_at: datetime | None = None,
+    ) -> CredentialRow:
+        c = CREDENTIALS.c
         stmt = insert(CREDENTIALS).values(
-            identity_id=identity_id, space_id=self.space.id, **payload.columns()
+            id=new_id(),
+            identity_id=identity_id,
+            space_id=self.space.id,
+            kind=kind,
+            name=name,
+            public_value=public_value,
+            expires_at=expires_at,
+            **payload.columns(),
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[CREDENTIALS.c.identity_id],
-            set_={**payload.columns(), "version": CREDENTIALS.c.version + 1, "updated_at": func.now()},
+        upsert = stmt.on_conflict_do_update(
+            index_elements=[c.identity_id, c.kind, c.name],
+            set_={
+                **payload.columns(),
+                "public_value": stmt.excluded.public_value,
+                "expires_at": stmt.excluded.expires_at,
+                "version": c.version + 1,
+                "revision": c.revision + 1,
+                "updated_at": func.now(),
+            },
+        ).returning(*_CREDENTIAL_COLUMNS)
+        return _credential_row((await self.execute(upsert)).mappings().one())
+
+    async def get_credential(
+        self, identity_id: UUID, kind: str, name: str
+    ) -> tuple[EncryptedPayload, CredentialRow] | None:
+        c = CREDENTIALS.c
+        row = (
+            (
+                await self.execute(
+                    select(*_CREDENTIAL_COLUMNS, c.key_id, c.wrapped_dek, c.nonce, c.ciphertext).where(
+                        c.identity_id == identity_id,
+                        c.space_id == self.space.id,
+                        c.kind == kind,
+                        c.name == name,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
         )
-        await self.execute(stmt)
+        if row is None:
+            return None
+        payload = EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
+        return payload, _credential_row(row)
+
+    async def list_credentials(self, identity_id: UUID) -> list[CredentialRow]:
+        c = CREDENTIALS.c
+        rows = await self.execute(
+            select(*_CREDENTIAL_COLUMNS)
+            .where(c.identity_id == identity_id, c.space_id == self.space.id)
+            .order_by(c.kind, c.name)
+        )
+        return [_credential_row(row) for row in rows.mappings()]
 
     async def put_session(
         self,
@@ -1152,17 +1218,8 @@ class PgTx(StoreTx):
         return _lease_row(row)
 
     async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None:
-        row = (
-            await self.execute(
-                select(
-                    CREDENTIALS.c.key_id,
-                    CREDENTIALS.c.wrapped_dek,
-                    CREDENTIALS.c.nonce,
-                    CREDENTIALS.c.ciphertext,
-                ).where(CREDENTIALS.c.identity_id == identity_id, CREDENTIALS.c.space_id == self.space.id)
-            )
-        ).one_or_none()
-        return EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext) if row else None
+        found = await self.get_credential(identity_id, "default", "default")
+        return found[0] if found is not None else None
 
     async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
         c = SESSIONS.c
@@ -1185,6 +1242,8 @@ class PgTx(StoreTx):
                 select(CREDENTIALS.c.version, CREDENTIALS.c.updated_at).where(
                     CREDENTIALS.c.identity_id == identity_id,
                     CREDENTIALS.c.space_id == self.space.id,
+                    CREDENTIALS.c.kind == "default",
+                    CREDENTIALS.c.name == "default",
                 )
             )
         ).one_or_none()
@@ -3850,6 +3909,14 @@ class PgTx(StoreTx):
         return len(drafts)
 
 
+_CREDENTIAL_FIELDS = tuple(f.name for f in fields(CredentialRow))
+_CREDENTIAL_COLUMNS = tuple(CREDENTIALS.c[name] for name in _CREDENTIAL_FIELDS)
+
+
+def _credential_row(row: Any) -> CredentialRow:
+    return CredentialRow(**{name: row[name] for name in _CREDENTIAL_FIELDS})
+
+
 def _event(row: Any) -> Event:
     return Event(
         id=row["id"],
@@ -5385,7 +5452,11 @@ class PgStore(Store):
 
     def _rotation_specs(self) -> dict[str, tuple[Table, str, Callable[[Any], bytes]]]:
         return {
-            "credentials": (CREDENTIALS, "", lambda r: associated_data("ih_credentials", r["identity_id"])),
+            "credentials": (
+                CREDENTIALS,
+                "",
+                lambda r: credential_associated_data(r["identity_id"], r["kind"], r["name"]),
+            ),
             "sessions": (
                 SESSIONS,
                 "",
@@ -5461,9 +5532,12 @@ class PgStore(Store):
                     # у challenge тем же DEK зашифрован ответ — формат AAD не меняем
                     renewed = envelope.rewrap(payload, aad_of(row), upgrade=table != "challenges")
                 except DecryptionFailed:
-                    unreadable.append(
-                        UnreadableSecret(table, "/".join(str(row[column.name]) for column in primary))
+                    label = (
+                        credential_label(row["identity_id"], row["kind"], row["name"])
+                        if table == "credentials"
+                        else "/".join(str(row[column.name]) for column in primary)
                     )
+                    unreadable.append(UnreadableSecret(table, label))
                     continue
                 await _execute(
                     session,

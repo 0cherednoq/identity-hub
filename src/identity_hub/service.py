@@ -177,6 +177,24 @@ class Service:
     # требует новой версии и перенормализации (`hub.doctor.renormalize`), см. D-149.
     normalize_ref: Callable[[str], str] = str.strip
     normalize_ref_version: int = 0
+    # виды credentials кроме `default` (его схема — `credentials`): пароль, TOTP, API-ключи (IMP-09)
+    credential_kinds: Mapping[str, type[BaseModel]] = field(default_factory=dict)
+
+    def credential_schema(self, kind: str) -> type[BaseModel]:
+        """Схема секрета вида credentials; неизвестный вид — `ValidationFailed` (D-214)."""
+        if kind == "default":
+            return self.credentials
+        schema = self.credential_kinds.get(kind)
+        if schema is None:
+            raise ValidationFailed(f"у сервиса {self.name} нет вида credentials {kind!r}")
+        return schema
+
+    def credential_key(self, kind: str, name: str) -> tuple[str, str]:
+        """Проверенные (kind, name): вид объявлен, имя — от 1 до 128 символов."""
+        self.credential_schema(kind)
+        if not isinstance(name, str) or not 1 <= len(name) <= 128:
+            raise ValidationFailed("имя credentials: от 1 до 128 символов")
+        return kind, name
 
     def __post_init__(self) -> None:
         errors = self._validate()
