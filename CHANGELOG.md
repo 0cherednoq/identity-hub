@@ -12,6 +12,11 @@
 
 ### Added
 
+- Назначение аренды (`N1.1`, задача 6 из `ISSUES-INTEGRATION.md`): `pool.lease(purpose=, ref=)`,
+  `pool.acquire(purpose=, ref=)` и значение по умолчанию `pools.define(purpose=)`. Поля видны как
+  `lease.purpose` и `lease.ref`, в истории, событиях `lease.*`, read-схеме (версия 3) и админке;
+  `lease_dashboard(group_by="purpose")`. Миграция `0024` добавляет колонки в `ih_leases` и
+  `ih_lease_history`.
 - Причина отказа и причина потери аренды (`N0.1`, задачи 1, 4, 5 из `ISSUES-INTEGRATION.md`):
   `LeaseUnavailable.reason` — `busy`, `no_candidates` или `no_proxy` (`LeaseUnavailableReason`);
   держатель, чья аренда истекла до heartbeat, получает `LeaseExpired` с причиной `expired`, а не

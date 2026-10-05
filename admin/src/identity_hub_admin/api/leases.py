@@ -75,6 +75,8 @@ class LiveLeaseResponse(ContractModel):
     succeeded: int
     failed: int
     expired_unclosed: bool
+    purpose: str | None
+    ref: str | None
 
 
 class LeaseDashboardResponse(ContractModel):
@@ -108,6 +110,8 @@ class LeaseHistoryItemResponse(ContractModel):
     succeeded: int
     failed: int
     last_error: str | None
+    purpose: str | None
+    ref: str | None
 
 
 class LeaseHistoryPageResponse(ContractModel):
@@ -145,6 +149,8 @@ def _history_item(row: LeaseReadRow) -> LeaseHistoryItemResponse:
         succeeded=row.succeeded,
         failed=row.failed,
         last_error=row.last_error,
+        purpose=row.purpose,
+        ref=row.ref,
     )
 
 
@@ -158,7 +164,7 @@ def _history_item(row: LeaseReadRow) -> LeaseHistoryItemResponse:
 async def leases_dashboard(
     request: Request[Any, Any, Any],
     space_slug: FromPath[str],
-    group_by: Literal["pool", "service", "holder"] = Parameter(default="pool"),
+    group_by: Literal["pool", "service", "holder", "purpose"] = Parameter(default="pool"),
     pool: str | None = Parameter(default=None, max_length=128),
     service: str | None = Parameter(default=None, max_length=64),
     holder: str | None = Parameter(default=None, max_length=255),

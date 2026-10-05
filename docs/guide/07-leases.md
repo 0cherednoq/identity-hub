@@ -69,6 +69,26 @@ flowchart TD
 | `wait` | Сколько ждать свободный аккаунт (секунды или `timedelta`); `None` — сразу `LeaseUnavailable` |
 | `idempotency_key` | Повторный вызов с тем же ключом, пока аренда жива, вернёт ту же аренду — тому же пулу, сервису и `holder`. Другой пул или `holder` с этим ключом получит `IdempotencyConflict`. Ключ действует в пределах пространства |
 | `on_lost` (только `lease`) | Колбэк при потере аренды — например, закрыть соединение с платформой |
+| `purpose` | Метка вида работы: 1–64 символа из `a-z`, `0-9`, `_ . : -`. По умолчанию — `purpose` пула |
+| `ref` | Ссылка на задачу держателя, до 256 символов; учётные данные из URL вырезаются |
+
+**Чем занят аккаунт.** `purpose` и `ref` отвечают на вопрос, зачем взята аренда, без угадывания
+по имени пула и без шифрования задачи в `holder`:
+
+```python
+pool = space.pools.define("downloads", service=SVC, purpose="download")
+
+async with pool.lease(ref="job:42") as lease:   # purpose="download" из пула
+    ...
+
+await space.admin.lease_dashboard(group_by="purpose")   # сводка по видам работы
+```
+
+Оба значения доступны как `lease.purpose` и `lease.ref`, попадают в строку живой аренды, в
+историю, в события `lease.*` и в read-схему (`hub.read.leases`, `hub.read.lease_history`).
+`purpose` — для группировки, поэтому набор символов узкий; `ref` — свободная ссылка, по ней не
+группируют. Повтор захвата с тем же `idempotency_key` возвращает исходные значения. Неверный
+формат — `ValidationFailed` до захвата.
 
 `LeaseUnavailable.reason` говорит, почему аккаунт не выдан:
 

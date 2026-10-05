@@ -124,6 +124,7 @@ from identity_hub.postgres.models import (
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
+    NO_LEASE_OPTIONS,
     NOTIFY_CHANNEL,
     UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
@@ -146,6 +147,7 @@ from identity_hub.store.base import (
     LeaseCounters,
     LeaseFence,
     LeaseHistoryRow,
+    LeaseOptions,
     LeaseReadRow,
     LeaseRenewal,
     LeaseRow,
@@ -1054,6 +1056,7 @@ class PgTx(StoreTx):
         idempotency_key: str | None,
         shared: bool,
         proxy_id: UUID | None = None,
+        options: LeaseOptions = NO_LEASE_OPTIONS,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         now = await self.now()
         expires_at = now + timedelta(seconds=ttl_seconds)
@@ -1101,6 +1104,8 @@ class PgTx(StoreTx):
                 "pool": pool,
                 "holder": holder,
                 "idempotency_key": idempotency_key,
+                "purpose": options.purpose,
+                "ref": options.ref,
                 "acquired_at": now,
                 "heartbeat_at": now,
                 "expires_at": expires_at,
@@ -1125,6 +1130,8 @@ class PgTx(StoreTx):
                 pool=pool,
                 holder=holder,
                 proxy_id=proxy_id,
+                purpose=options.purpose,
+                ref=options.ref,
                 acquired_at=now,
                 last_heartbeat_at=now,
             )
@@ -1141,6 +1148,8 @@ class PgTx(StoreTx):
             idempotency_key=idempotency_key,
             proxy_id=proxy_id,
             heartbeat_at=now,
+            purpose=options.purpose,
+            ref=options.ref,
         )
         return lease, reclaimed
 
@@ -4191,6 +4200,8 @@ def _lease_row(row: Any) -> LeaseRow:
         idempotency_key=row["idempotency_key"],
         proxy_id=row.get("proxy_id"),
         heartbeat_at=row.get("heartbeat_at", row["acquired_at"]),
+        purpose=row.get("purpose"),
+        ref=row.get("ref"),
     )
 
 

@@ -801,7 +801,7 @@ export type LeaseDashboardResponse = {
     [key: string]: string | null;
   };
   generated_at: string;
-  group_by: "pool" | "service" | "holder";
+  group_by: "pool" | "service" | "holder" | "purpose";
   live: Array<LiveLeaseResponse>;
   operation_timestamps_available: boolean;
   slices: Array<LeaseSliceResponse>;
@@ -828,6 +828,8 @@ export type LeaseHistoryItemResponse = {
   };
   pool: string;
   proxy_id: string | null;
+  purpose: string | null;
+  ref: string | null;
   released_at: string | null;
   service: string;
   succeeded: number;
@@ -929,6 +931,8 @@ export type LiveLeaseResponse = {
   };
   pool: string;
   proxy_id: string | null;
+  purpose: string | null;
+  ref: string | null;
   service: string;
   succeeded: number;
 };
@@ -4640,7 +4644,7 @@ export type AdminV1LeasesGetData = {
     space_slug: string;
   };
   query?: {
-    group_by?: "pool" | "service" | "holder";
+    group_by?: "pool" | "service" | "holder" | "purpose";
     pool?: string | null;
     service?: string | null;
     holder?: string | null;

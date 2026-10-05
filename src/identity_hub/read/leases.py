@@ -13,7 +13,7 @@ from identity_hub._space import SpaceBase
 from identity_hub.errors import ValidationFailed
 from identity_hub.store.base import LeaseReadRow
 
-LeaseGroup = Literal["pool", "service", "holder"]
+LeaseGroup = Literal["pool", "service", "holder", "purpose"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +78,8 @@ class LiveLease:
     succeeded: int
     failed: int
     expired_unclosed: bool
+    purpose: str | None = None
+    ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +197,8 @@ def _live(row: LeaseReadRow, now: datetime) -> LiveLease:
         succeeded=row.succeeded,
         failed=row.failed,
         expired_unclosed=expired,
+        purpose=row.purpose,
+        ref=row.ref,
     )
 
 
@@ -206,8 +210,8 @@ class LeasesMixin(SpaceBase):
         group_by: LeaseGroup = "pool",
     ) -> LeaseDashboard:
         selected = filters or LeaseFilters()
-        if group_by not in ("pool", "service", "holder"):
-            raise ValidationFailed("group_by: ожидается pool, service или holder")
+        if group_by not in ("pool", "service", "holder", "purpose"):
+            raise ValidationFailed("group_by: ожидается pool, service, holder или purpose")
         async with self._tx(own=True) as tx:
             now = await tx.now()
             rows = [
@@ -230,7 +234,7 @@ class LeasesMixin(SpaceBase):
         )
         grouped: dict[str, list[LeaseReadRow]] = defaultdict(list)
         for row in rows:
-            grouped[str(getattr(row, group_by))].append(row)
+            grouped[str(getattr(row, group_by) or "")].append(row)  # аренда без назначения — ""
         overall_completed = windows[-1].completed
         overall_lost = sum(windows[-1].end_reasons.get(reason, 0) for reason in ("lost", "expired"))
         overall_loss_rate = overall_lost / overall_completed if overall_completed else 0.0

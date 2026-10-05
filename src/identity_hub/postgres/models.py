@@ -710,6 +710,8 @@ class LeaseRecord(IdentityHubBase):
     pool: Mapped[str] = mapped_column(String(128))  # для админки: кто и зачем держит
     holder: Mapped[str] = mapped_column(String(256))  # hostname:pid:worker
     idempotency_key: Mapped[str | None] = mapped_column(String(256))
+    purpose: Mapped[str | None] = mapped_column(String(64))  # метка вида работы (N1.1)
+    ref: Mapped[str | None] = mapped_column(String(256))  # ссылка на задачу держателя
 
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -747,6 +749,8 @@ class LeaseHistoryRecord(IdentityHubBase):
     pool: Mapped[str] = mapped_column(String(128))
     holder: Mapped[str] = mapped_column(String(256))
     proxy_id: Mapped[UUID | None]  # через какой прокси работали
+    purpose: Mapped[str | None] = mapped_column(String(64))  # метка вида работы (N1.1)
+    ref: Mapped[str | None] = mapped_column(String(256))  # ссылка на задачу держателя
 
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -30,6 +30,7 @@ NOTIFY_CHANNEL = "ih_events"
 
 __all__ = [
     "NOTIFY_CHANNEL",
+    "NO_LEASE_OPTIONS",
     "ROTATION_TABLES",
     "UNREADABLE_IMPORT_ITEM",
     "AttentionChallengeRow",
@@ -49,6 +50,7 @@ __all__ = [
     "ImportRunRow",
     "LeaseCounters",
     "LeaseHistoryRow",
+    "LeaseOptions",
     "LeaseReadRow",
     "LeaseRenewal",
     "LeaseRow",
@@ -416,7 +418,19 @@ class LeaseRow:
     idempotency_key: str | None = None
     proxy_id: UUID | None = None
     heartbeat_at: datetime | None = None
+    purpose: str | None = None  # метка вида работы, по ней группируют
+    ref: str | None = None  # ссылка на задачу держателя
 
+
+@dataclass(frozen=True, slots=True)
+class LeaseOptions:
+    """Необязательные свойства новой аренды, которые хранятся в её строке и в истории."""
+
+    purpose: str | None = None
+    ref: str | None = None
+
+
+NO_LEASE_OPTIONS = LeaseOptions()
 
 RELEASE_OUTCOMES = frozenset({"released", "expired", "closed", "revoked"})
 
@@ -812,6 +826,8 @@ class LeaseHistoryRow:
     succeeded: int
     failed: int
     last_error: str | None
+    purpose: str | None = None
+    ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -836,6 +852,8 @@ class LeaseReadRow:
     failed: int
     last_error: str | None
     expires_at: datetime | None
+    purpose: str | None = None
+    ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1221,6 +1239,7 @@ class StoreTx(ABC):
         idempotency_key: str | None,
         shared: bool,
         proxy_id: UUID | None = None,
+        options: LeaseOptions = NO_LEASE_OPTIONS,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         """Захватить аренду заблокированного кандидата: fencing + 1, ih_leases, строка истории (G-4.2).
 

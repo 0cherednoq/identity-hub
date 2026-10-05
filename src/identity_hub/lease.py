@@ -144,6 +144,16 @@ class Lease:
         return self._row.acquired_at
 
     @property
+    def purpose(self) -> str | None:
+        """Метка вида работы, с которой взята аренда."""
+        return self._row.purpose
+
+    @property
+    def ref(self) -> str | None:
+        """Ссылка на задачу держателя."""
+        return self._row.ref
+
+    @property
     def service(self) -> str:
         return self.pool.service.name
 
@@ -570,6 +580,8 @@ class Lease:
                                 "pool": self.pool.name,
                                 "reason": str(end),
                                 "error": counters.last_error,
+                                "purpose": self._row.purpose,
+                                "ref": self._row.ref,
                             },
                         ),
                     )
@@ -692,6 +704,8 @@ async def acquire(
     wait: timedelta | float | None = None,
     idempotency_key: str | None = None,
     query: CandidateQuery | None = None,
+    purpose: str | None = None,
+    ref: str | None = None,
 ) -> Lease:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
@@ -702,6 +716,7 @@ async def acquire(
     """
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
+    options = pool.lease_options(purpose=purpose, ref=ref)  # формат проверяется до транзакции
     explicit_query = query
     if callable(among):  # предикат от Identity: заранее превращается в список id (F5.1)
         among = await _matching_ids(pool, among)
@@ -771,6 +786,7 @@ async def acquire(
                             idempotency_key=idempotency_key,
                             shared=pool.shared,
                             proxy_id=proxy.id if proxy else None,
+                            options=options,
                         )
                     except LeaseUnavailable:
                         # JOIN с ih_leases читает снимок начала SELECT. Под высокой конкуренцией
@@ -954,5 +970,12 @@ def _lease_event(event_type: str, pool: Pool, row: LeaseRow, extra: Mapping[str,
         service=pool.service.name,
         identity_id=row.identity_id,
         lease_id=row.lease_id,
-        data={"pool": row.pool, "holder": row.holder, "fencing": row.fencing, **extra},
+        data={
+            "pool": row.pool,
+            "holder": row.holder,
+            "fencing": row.fencing,
+            "purpose": row.purpose,
+            "ref": row.ref,
+            **extra,
+        },
     )

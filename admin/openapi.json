@@ -3019,7 +3019,8 @@
             "enum": [
               "pool",
               "service",
-              "holder"
+              "holder",
+              "purpose"
             ],
             "type": "string"
           },
@@ -3140,6 +3141,26 @@
               }
             ]
           },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "released_at": {
             "oneOf": [
               {
@@ -3173,6 +3194,8 @@
           "operations",
           "pool",
           "proxy_id",
+          "purpose",
+          "ref",
           "released_at",
           "service",
           "succeeded"
@@ -3535,6 +3558,26 @@
               }
             ]
           },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "service": {
             "type": "string"
           },
@@ -3557,6 +3600,8 @@
           "operations",
           "pool",
           "proxy_id",
+          "purpose",
+          "ref",
           "service",
           "succeeded"
         ],
@@ -13593,7 +13638,8 @@
               "enum": [
                 "pool",
                 "service",
-                "holder"
+                "holder",
+                "purpose"
               ],
               "type": "string"
             }

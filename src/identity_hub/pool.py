@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
@@ -13,12 +14,13 @@ from uuid import UUID
 
 from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.data import validate_labels
+from identity_hub.domain.redaction import sanitize_text
 from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.service import LeaseMode, Pacing, ProxyDownPolicy, ProxyPolicy, Service
-from identity_hub.store.base import CandidateQuery, IdentityRow
+from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseOptions
 
 if TYPE_CHECKING:
     from sqlalchemy import Select
@@ -61,6 +63,24 @@ class LeaseTiming:
             raise ValidationFailed("safety_margin должен быть меньше TTL")
 
 
+PURPOSE_PATTERN = re.compile(r"[a-z0-9_.:-]{1,64}")
+REF_LIMIT = 256
+
+
+def check_purpose(value: str) -> str:
+    """Метка вида работы: по ней группируют, поэтому набор символов узкий."""
+    if not isinstance(value, str) or PURPOSE_PATTERN.fullmatch(value) is None:
+        raise ValidationFailed("purpose: от 1 до 64 символов из a-z, 0-9 и _ . : -")
+    return value
+
+
+def check_ref(value: str) -> str:
+    """Ссылка на задачу: свободный текст до 256 символов, без встроенных секретов."""
+    if not isinstance(value, str) or not value or len(value) > REF_LIMIT:
+        raise ValidationFailed(f"ref: от 1 до {REF_LIMIT} символов")
+    return sanitize_text(value, limit=REF_LIMIT) or value
+
+
 @dataclass
 class Pool:
     """Выборка аккаунтов сервиса по тегам и политикам для конкретного применения."""
@@ -76,12 +96,15 @@ class Pool:
     timing: LeaseTiming = field(default_factory=LeaseTiming)
     holder: str = field(default_factory=default_holder)
     capacity_low: int | None = None  # порог события pool.capacity.low (P8.2)
+    purpose: str | None = None  # назначение аренд пула по умолчанию (N1.1)
     _capacity_state: str = field(default="ok", init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.name or len(self.name) > 128:
             raise ValidationFailed("имя пула: от 1 до 128 символов")
         self.labels = dict(validate_labels(self.labels))
+        if self.purpose is not None:
+            self.purpose = check_purpose(self.purpose)
         _check_profile_filter(self.service, self.profile)
         if self.proxy_policy is None:
             self.proxy_policy = self.service.proxy_policy
@@ -141,13 +164,16 @@ class Pool:
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,
         on_lost: OnLost | None = None,
+        purpose: str | None = None,
+        ref: str | None = None,
     ) -> AbstractAsyncContextManager[Lease]:
         """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
 
         `for_operation` отбирает только допустимые для операции identity; `tags`/`labels`/`profile`
         сужают фильтры пула; `exclude` — не выдавать эти id; `wait` — ждать освобождения, иначе
         `LeaseUnavailable`; `idempotency_key` — повтор вернёт ту же живую аренду; `on_lost` —
-        колбэк при потере аренды.
+        колбэк при потере аренды; `purpose` — метка вида работы (по умолчанию из пула), `ref` —
+        ссылка на задачу: оба значения видны в истории, событиях и админке.
         """
         from identity_hub.lease import lease_scope
 
@@ -162,6 +188,8 @@ class Pool:
             exclude=exclude,
             wait=wait,
             idempotency_key=idempotency_key,
+            purpose=purpose,
+            ref=ref,
         )
 
     async def acquire(
@@ -177,6 +205,8 @@ class Pool:
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,
         query: CandidateQuery | None = None,
+        purpose: str | None = None,
+        ref: str | None = None,
     ) -> Lease:
         """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
 
@@ -195,6 +225,15 @@ class Pool:
             wait=wait,
             idempotency_key=idempotency_key,
             query=query,
+            purpose=purpose,
+            ref=ref,
+        )
+
+    def lease_options(self, *, purpose: str | None, ref: str | None) -> LeaseOptions:
+        """Свойства новой аренды: значения вызова поверх значений пула, проверенные и очищенные."""
+        return LeaseOptions(
+            purpose=check_purpose(purpose) if purpose is not None else self.purpose,
+            ref=check_ref(ref) if ref is not None else None,
         )
 
     async def capacity(self) -> int:
@@ -288,6 +327,7 @@ class PoolsMixin:
         holder: str | None = None,
         capacity_low: int | None = None,
         stats_flush: timedelta | None = None,
+        purpose: str | None = None,
     ) -> Pool:
         defaults = LeaseTiming()
         timing = LeaseTiming(
@@ -308,4 +348,5 @@ class PoolsMixin:
             timing=timing,
             holder=holder or default_holder(),
             capacity_low=capacity_low,
+            purpose=purpose,
         )

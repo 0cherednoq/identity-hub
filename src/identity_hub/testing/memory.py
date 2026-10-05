@@ -51,6 +51,7 @@ from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
+    NO_LEASE_OPTIONS,
     UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
@@ -72,6 +73,7 @@ from identity_hub.store.base import (
     LeaseCounters,
     LeaseFence,
     LeaseHistoryRow,
+    LeaseOptions,
     LeaseReadRow,
     LeaseRenewal,
     LeaseRow,
@@ -884,6 +886,7 @@ class MemoryTx(StoreTx):
         idempotency_key: str | None,
         shared: bool,
         proxy_id: UUID | None = None,
+        options: LeaseOptions = NO_LEASE_OPTIONS,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         current = self._own(identity.id)
         if current is None:
@@ -926,6 +929,8 @@ class MemoryTx(StoreTx):
             idempotency_key,
             proxy_id,
             self._now,
+            purpose=options.purpose,
+            ref=options.ref,
         )
         if not shared:
             self.state.leases[identity.id] = lease
@@ -947,6 +952,8 @@ class MemoryTx(StoreTx):
             0,
             0,
             None,
+            purpose=options.purpose,
+            ref=options.ref,
         )
         return lease, reclaimed
 
