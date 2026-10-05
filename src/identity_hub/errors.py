@@ -232,9 +232,11 @@ class LeaseLost(IdentityHubError):
     code = "lease_lost"
     context_fields: ClassVar[tuple[str, ...]] = ("lease_id", "reason")
 
-    def __init__(self, lease_id: UUID, reason: str) -> None:
+    def __init__(self, lease_id: UUID, reason: str, *, body_completed: bool = False) -> None:
         self.lease_id = lease_id
         self.reason = reason
+        # R1-16: тело `async with pool.lease()` завершилось, аренду потеряли по пути (D-213)
+        self.body_completed = body_completed
         super().__init__(f"аренда {lease_id} потеряна: {reason}")
 
 
@@ -278,6 +280,7 @@ class LeaseOwnershipLost(LeaseLost, StaleFencing):
         # LeaseLost.__init__ в цепочке super() дошёл бы до StaleFencing с чужой сигнатурой
         self.lease_id = lease_id
         self.reason = reason
+        self.body_completed = False
         self.identity_id = identity_id  # type: ignore[assignment]
         self.fencing = fencing  # type: ignore[assignment]
         self.current = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import weakref
 from collections import Counter
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
@@ -84,6 +85,7 @@ from identity_hub.verifications import RequirementsMixin, VerificationsMixin
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from identity_hub.lease import Lease
     from identity_hub.postgres.read_schema import ReadSchema
     from identity_hub.read.overview import SpaceInfo, SpacesMatrix
 
@@ -146,6 +148,8 @@ class IdentityHub:
         self._envelope = Envelope(secrets)
         self._fingerprints = FingerprintKeyring(secrets)  # ключи отпечатков, не KEK (IMP-04, D-207)
         self._heartbeats = HeartbeatBatcher(store)  # пакетный heartbeat аренд процесса (IMP-02, D-211)
+        # живые аренды этого процесса по lease_id: отзыв будит их heartbeat сразу (D-213)
+        self._live_leases: weakref.WeakValueDictionary[UUID, Lease] = weakref.WeakValueDictionary()
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         try:

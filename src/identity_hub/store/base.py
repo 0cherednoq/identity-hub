@@ -416,6 +416,9 @@ class LeaseRow:
     heartbeat_at: datetime | None = None
 
 
+RELEASE_OUTCOMES = frozenset({"released", "expired", "closed", "revoked"})
+
+
 @dataclass(frozen=True, slots=True)
 class LeaseFence:
     """Кому принадлежит аренда (IMP-05, D-212): запись от её имени принимается при полном совпадении.
@@ -1143,8 +1146,13 @@ class StoreTx(ABC):
     @abstractmethod
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
-    ) -> bool:
-        """Освободить аренду по token (повтор и чужой token — no-op) и закрыть историю (G-4.2)."""
+    ) -> str:
+        """Освободить аренду по token и закрыть историю (G-4.2, D-213). Исход — `RELEASE_OUTCOMES`.
+
+        `released` — своя живая аренда закрыта с `reason`; `expired` — срок вышел, аккаунт никто не
+        взял: история закрыта как `expired` на момент `expires_at`; `closed` — история уже закрыта
+        (повтор или перехват после истечения); `revoked` — аренду отозвали.
+        """
 
     @abstractmethod
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:

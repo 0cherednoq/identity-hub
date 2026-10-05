@@ -80,6 +80,13 @@
 
 ### Changed
 
+- Семантика renew/release/revoke (`IMP-06`, `D-213`): heartbeat не укорачивает срок
+  (`GREATEST`); `release()` отозванной аренды бросает `LeaseRevoked`, освобождение после
+  естественного истечения закрывает историю как `expired`; `pools.revoke()` сразу будит аренду
+  этого же процесса. Store: `release_lease` возвращает исход (`released`/`expired`/`closed`/
+  `revoked`) вместо `bool` — собственные реализации Store нужно обновить.
+- `LeaseLost.body_completed`: потеря аренды после успешного тела `async with pool.lease()`
+  (`R1-16`).
 - Heartbeat аренд процесса продлевается пачкой: одновременные продления уходят одним
   `UPDATE ... WHERE token = ANY(...)` (`IMP-02`, `D-211`, Store `renew_leases`). Отзыв или потеря
   касается только своей аренды. Замер: 272 продления/с поштучно, 21 тыс./с пачками по 100,

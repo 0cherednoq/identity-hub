@@ -30,6 +30,7 @@ from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionSt
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseLost,
+    LeaseRevoked,
     LeaseUnavailable,
     StaleFencing,
     ValidationFailed,
@@ -98,6 +99,8 @@ class Lease:
         self.identity = identity
         self._counters = LeaseCounters.empty()
         self._lost: str | None = None
+        self._revoked_on_release = False
+        self._revoke_task: asyncio.Task[None] | None = None  # отзыв в этом же процессе (D-213)
         self._closed = False
         self._last_ok = pool.space.hub.clock.monotonic()
         self._last_flush = self._last_ok  # последняя запись времени и счётчиков в историю (D-210)
@@ -190,6 +193,7 @@ class Lease:
     def _start(self, on_lost: OnLost | None) -> None:
         self._on_lost = on_lost
         self._owner = asyncio.current_task()
+        self.pool.space.hub._live_leases[self.lease_id] = self  # отзыв в этом процессе будит heartbeat
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(), name=f"ih-heartbeat-{self.lease_id}"
         )
@@ -235,6 +239,15 @@ class Lease:
             if not confirmed and self._deadline_passed():
                 await self._mark_lost("heartbeat")
                 return
+
+    def _revoked_elsewhere(self) -> None:
+        """Аренду отозвали в этом же процессе: потеря сразу, как если бы её нашёл heartbeat (D-213)."""
+        if asyncio.current_task() is self._owner:
+            return  # отзыв изнутри своего же блока: владелец знает о нём, потерю найдёт heartbeat
+        if self._lost is None and not self._closed:
+            self._revoke_task = asyncio.create_task(
+                self._mark_lost("revoked"), name=f"ih-revoked-{self.lease_id}"
+            )
 
     async def _flush_logs(self, *, final: bool = False) -> None:
         """Пачка логов аренды в ih_lease_logs (FR-12.2). Ошибка записи не влияет на аренду."""
@@ -453,6 +466,14 @@ class Lease:
         пробрасывается после завершения. Если запись не удалась, в лог пишется предупреждение,
         а повторный вызов пробует снова; после успеха повтор — no-op.
         """
+        await self._release_quietly(reason, error)
+        if self._revoked_on_release:
+            # освобождение отозванной аренды: воркер должен узнать, что его сняли (IMP-06, D-213)
+            self._revoked_on_release = False
+            raise LeaseRevoked(self.lease_id, "revoked")
+
+    async def _release_quietly(self, reason: LeaseEndReason | str, error: str | None = None) -> None:
+        """Освобождение без `LeaseRevoked`: выход из `async with` сообщает потерю своей веткой."""
         end = _end_reason(reason)
         self._closed = True  # с этого момента check() бросает LeaseLost
         if self._released:
@@ -481,8 +502,10 @@ class Lease:
         }.get(end, "lease.released")
         try:
             async with asyncio.timeout(RELEASE_TIMEOUT), self.pool.space._tx(own=True) as tx:
-                closed = await tx.release_lease(self._row, str(end), counters, shared=self.pool.shared)
-                if closed:
+                outcome = await tx.release_lease(self._row, str(end), counters, shared=self.pool.shared)
+                if outcome == "expired":
+                    event_type, end = "lease.expired", LeaseEndReason.EXPIRED
+                if outcome in ("released", "expired"):
                     await self.pool.space._emit(
                         tx,
                         EventDraft(
@@ -503,6 +526,9 @@ class Lease:
             logger.warning("не удалось освободить аренду %s: %s", self.lease_id, describe_error(exc))
             return
         self._released = True  # только после успешной записи: иначе повтор был бы no-op (R1-14)
+        self.pool.space.hub._live_leases.pop(self.lease_id, None)
+        if outcome == "revoked":
+            self._revoked_on_release = True
         hub = self.pool.space.hub
         record_metric(
             hub.metrics,
@@ -536,27 +562,30 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         yield lease
     except asyncio.CancelledError as exc:
         if not lease._cancelled_by_us:
-            await lease.release(LeaseEndReason.FAILED, "cancelled")
+            await lease._release_quietly(LeaseEndReason.FAILED, "cancelled")
             raise
         owner = asyncio.current_task()
         if owner is not None:
             owner.uncancel()
-        await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost}")
-        raise LeaseLost(lease.lease_id, lease._lost or "heartbeat") from exc
+        await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost}")
+        error = LeaseRevoked if lease._lost == "revoked" else LeaseLost
+        raise error(lease.lease_id, lease._lost or "heartbeat") from exc
     except LeaseLost:
         await lease._fire_on_lost()
-        await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost or 'heartbeat'}")
+        await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost or 'heartbeat'}")
         raise
     except BaseException as exc:
         # только имя типа: текст исключения пользователя бывает с URL, ключами и паролем прокси (S-8)
-        await lease.release(LeaseEndReason.FAILED, type(exc).__name__)
+        await lease._release_quietly(LeaseEndReason.FAILED, type(exc).__name__)
         raise
     else:
         if lease._lost is not None:
             await lease._fire_on_lost()
-            await lease.release(LeaseEndReason.LOST, f"lost: {lease._lost}")
-            raise LeaseLost(lease.lease_id, lease._lost)
-        await lease.release(LeaseEndReason.RELEASED)
+            await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost}")
+            # R1-16: тело завершилось успешно, но аренду потеряли по пути — признак для вызывающего
+            error = LeaseRevoked if lease._lost == "revoked" else LeaseLost
+            raise error(lease.lease_id, lease._lost, body_completed=True)
+        await lease._release_quietly(LeaseEndReason.RELEASED)
     finally:
         _current.reset(token)
 

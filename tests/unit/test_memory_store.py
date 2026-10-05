@@ -183,7 +183,8 @@ async def test_lease_dashboard_clips_boundaries_and_uses_stable_cursor(
         session={"auth_key": "fake", "dc_id": 1},
     )
     async with boundary.pools.define("workers", service="fake_tg", holder="worker-a").lease():
-        clock.advance(timedelta(minutes=20))
+        # живой воркер 20 минут: sleep даёт ход heartbeat, иначе аренда истекла бы (D-213)
+        await clock.sleep(timedelta(minutes=20).total_seconds())
     dashboard = await boundary.admin.lease_dashboard(group_by="holder")
     quarter = dashboard.windows[0]
     assert quarter.acquired == 0

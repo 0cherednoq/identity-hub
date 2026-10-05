@@ -266,7 +266,11 @@ class PoolsMixin:
                     data={"pool": revoked.pool, "holder": revoked.holder, "reason": reason},
                 ),
             )
-            return True
+        # после коммита: аренда этого процесса узнаёт об отзыве сразу, а не на следующем heartbeat
+        live = self.hub._live_leases.get(revoked.lease_id)
+        if live is not None:
+            live._revoked_elsewhere()
+        return True
 
     def _pool(
         self: Any,

@@ -1000,7 +1000,12 @@ class PgTx(StoreTx):
                         LEASES.c.token == lease.token,
                         LEASES.c.expires_at > func.now(),
                     )
-                    .values(heartbeat_at=func.now(), expires_at=func.now() + timedelta(seconds=ttl_seconds))
+                    .values(
+                        heartbeat_at=func.now(),
+                        expires_at=func.greatest(
+                            LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)
+                        ),
+                    )
                     .returning(LEASES.c.expires_at)
                 )
             ).scalar_one_or_none()
@@ -1023,27 +1028,50 @@ class PgTx(StoreTx):
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
-    ) -> bool:
-        if not shared:
+    ) -> str:
+        history = (
             await self.execute(
-                update(LEASES)
-                .where(
-                    LEASES.c.identity_id == lease.identity_id,
-                    LEASES.c.token == lease.token,
-                    LEASES.c.expires_at > func.now(),
+                select(HISTORY.c.released_at, HISTORY.c.end_reason)
+                .where(HISTORY.c.lease_id == lease.lease_id, HISTORY.c.token == lease.token)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if history is None or history.released_at is not None:
+            revoked = history is not None and history.end_reason == LeaseEndReason.REVOKED
+            return "revoked" if revoked else "closed"
+        released_at: Any = func.now()
+        end_reason = reason
+        if not shared:
+            live = (
+                await self.execute(
+                    update(LEASES)
+                    .where(
+                        LEASES.c.identity_id == lease.identity_id,
+                        LEASES.c.token == lease.token,
+                        LEASES.c.expires_at > func.now(),
+                    )
+                    .values(expires_at=func.now(), idempotency_key=None)
+                    .returning(LEASES.c.lease_id)
                 )
-                .values(expires_at=func.now(), idempotency_key=None)
-            )
-        closed = await self.execute(
+            ).scalar_one_or_none()
+            if live is None:
+                # срок вышел, аккаунт никто не взял: история закрывается как истёкшая (D-213)
+                expired_at = (
+                    await self.execute(
+                        update(LEASES)
+                        .where(LEASES.c.identity_id == lease.identity_id, LEASES.c.token == lease.token)
+                        .values(idempotency_key=None)
+                        .returning(LEASES.c.expires_at)
+                    )
+                ).scalar_one_or_none()
+                released_at = expired_at if expired_at is not None else func.now()
+                end_reason = LeaseEndReason.EXPIRED
+        await self.execute(
             update(HISTORY)
-            .where(
-                HISTORY.c.lease_id == lease.lease_id,
-                HISTORY.c.token == lease.token,
-                HISTORY.c.released_at.is_(None),
-            )
-            .values(released_at=func.now(), end_reason=reason, **_counter_values(counters))
+            .where(HISTORY.c.lease_id == lease.lease_id, HISTORY.c.released_at.is_(None))
+            .values(released_at=released_at, end_reason=end_reason, **_counter_values(counters))
         )
-        return bool(closed.rowcount)  # type: ignore[attr-defined]
+        return "expired" if end_reason == LeaseEndReason.EXPIRED else "released"
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         ordered = sorted(set(identity_ids))
@@ -5143,7 +5171,13 @@ class PgStore(Store):
                 session,
                 update(LEASES)
                 .where(_any_of(LEASES.c.token, list(tokens)), LEASES.c.expires_at > func.now())
-                .values(heartbeat_at=func.now(), expires_at=func.now() + timedelta(seconds=ttl_seconds))
+                .values(
+                    heartbeat_at=func.now(),
+                    # продление никогда не укорачивает аренду (IMP-06, D-213)
+                    expires_at=func.greatest(
+                        LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)
+                    ),
+                )
                 .returning(LEASES.c.token, LEASES.c.expires_at),
                 execution_options=self.options,
             )

@@ -784,6 +784,7 @@ class MemoryTx(StoreTx):
             return None
         expires_at = self._now + timedelta(seconds=ttl_seconds)
         if not shared and current is not None:
+            expires_at = max(expires_at, current.expires_at)  # продление не укорачивает (D-213)
             self.state.leases[lease.identity_id] = replace(
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
@@ -796,23 +797,26 @@ class MemoryTx(StoreTx):
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
-    ) -> bool:
+    ) -> str:
         history = self.state.history.get(lease.lease_id)
         if history is None or history.released_at is not None:
-            return False
+            return "revoked" if history is not None and history.end_reason == "revoked" else "closed"
+        released_at, end_reason = self._now, reason
         if not shared:
             current = self.state.leases.get(lease.identity_id)
             if current is None or current.token != lease.token:
-                return False
+                return "closed"
             self.state.leases.pop(lease.identity_id)
+            if current.expires_at <= self._now:  # срок вышел, аккаунт никто не взял (D-213)
+                released_at, end_reason = current.expires_at, "expired"
         self.state.history[lease.lease_id] = replace(
             history,
-            released_at=self._now,
-            duration=self._now - history.acquired_at,
-            end_reason=reason,
+            released_at=released_at,
+            duration=released_at - history.acquired_at,
+            end_reason=end_reason,
             **_merge_counters(history, counters),
         )
-        return True
+        return "expired" if end_reason == "expired" else "released"
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""
@@ -3298,7 +3302,7 @@ class MemoryStore(Store):
             renewed: dict[UUID, datetime] = {}
             for identity_id, lease in list(self._state.leases.items()):
                 if lease.token in wanted and lease.expires_at > now:
-                    expires_at = now + timedelta(seconds=ttl_seconds)
+                    expires_at = max(lease.expires_at, now + timedelta(seconds=ttl_seconds))
                     self._state.leases[identity_id] = replace(lease, expires_at=expires_at, heartbeat_at=now)
                     renewed[lease.token] = expires_at
             return renewed

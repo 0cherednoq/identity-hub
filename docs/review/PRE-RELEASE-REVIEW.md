@@ -536,7 +536,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R1-13 | F1.2 | исправлена | `tests/conformance/test_lease_idempotency.py` |
 | R1-14 | F2.1 | исправлена | `tests/fixtures/lease_resilience.py`, `tests/pg/test_lease_resilience.py`, `tests/unit/test_lease_resilience.py` |
 | R1-15 | I2.3 | исправлена | `tests/conformance/test_lease_fence.py` |
-| R1-16 | I2.4 | открыта, очередь улучшений | — |
+| R1-16 | I2.4 | исправлена | `tests/conformance/test_lease_semantics.py` |
 | R1-17 | F4.3 | исправлена | `tests/pg/test_schema_check.py` |
 | R1-18 | F3.1 | исправлена | `tests/unit/test_public_contract_docs.py` |
 | R1-19 | F0.2 | исправлена | `tests/test_library_ci.py` |
@@ -648,7 +648,7 @@ tests admin/tests .github`). Находки, перенесённые в оче�
 | R2-P23 | F5.3b | исправлена | `tests/conformance/test_store_coverage.py`, `tests/store_coverage.py`, `tests/test_library_ci.py` |
 
 Итого: 118 из 125 находок исправлены и покрыты тестами, 7 перенесены в очередь улучшений.
-Из перенесённых закрыты: `R2-D23` (`I1.2a`), `R2-S16` (`I1.4a`), `R1-15` (`I2.3`).
+Из перенесённых закрыты: `R2-D23` (`I1.2a`), `R2-S16` (`I1.4a`), `R1-15` (`I2.3`), `R1-16` (`I2.4`).
 
 ## Приложение A. Уроки похожих инструментов
 

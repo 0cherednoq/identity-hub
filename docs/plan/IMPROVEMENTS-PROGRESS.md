@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I2.4 Семантика renew, release, revoke
-- **Начата:** 2026-10-05
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: продление не укорачивает, исходы release (своя, повтор, истёкшая, перехваченная, отозванная), отзыв будит heartbeat, гонка release/revoke, body_completed
-  - [ ] renew GREATEST и исход release_lease в PgStore/MemoryStore
-  - [ ] Lease.release: LeaseRevoked, lease.expired; LeaseLost.body_completed
-  - [ ] Отзыв будит heartbeat аренды этого процесса
-  - [ ] Таблица сценариев в руководстве, R1-16, CHANGELOG, трассировка IMP-06, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -49,7 +45,7 @@
 | I2.2a | HOT heartbeat: индексы, fillfactor, редкая запись истории | I2.1 | done |  | разбиение D-210 |
 | I2.2b | Пакетный heartbeat и координатор процесса | I2.2a | done |  | разбиение D-210 |
 | I2.3 | Полный lease fence | I0.2b, I2.1 | done |  |  |
-| I2.4 | Семантика renew, release, revoke | I2.3 | in_progress |  |  |
+| I2.4 | Семантика renew, release, revoke | I2.3 | done |  |  |
 | I3.1 | Схема и lifecycle нескольких credentials | I0.3, I0.4, I1.2b | todo |  |  |
 | I3.2 | API нескольких credentials и интеграция | I3.1 | todo |  |  |
 | I3.3 | Два режима обновления session | I3.2 | todo |  |  |
@@ -68,7 +64,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 27 / 43 done
+**Итого:** 28 / 43 done
 
 ## Журнал сессий
 
@@ -99,3 +95,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-05 · I2.2a · done · миграция 0021 (без индексов expires_at и истории по last_heartbeat_at, fillfactor 70), LeaseTiming.stats_flush 5 мин: история и счётчики раз в интервал и при release, heartbeat в списке живых аренд из ih_leases; HOT 0/300 → ≥0.9, D-210 · дальше I2.2b
 2026-10-05 · I2.2b · done · Store.renew_leases (UPDATE по token = ANY, до 500), HeartbeatBatcher хаба: одновременные heartbeat одной пачкой, отзыв — только своей аренде, ошибка — каждой по её backoff; тесты сбоев heartbeat переведены на оба пути; замер 272 → 21 313 (100) → 57 841 (500) продлений/с; IMP-02 implemented, D-211 · дальше I2.3
 2026-10-05 · I2.3 · done · LeaseFence (lease.fence), StoreTx.check_fence: lease_id+token+равенство fencing+живая аренда под FOR NO KEY UPDATE; guard в operation_scope (R1-15), save_session, auth, верификации и чтении секретов; LeaseOwnershipLost наследует LeaseLost и StaleFencing; IMP-05 implemented, D-212 · дальше I2.4
+2026-10-05 · I2.4 · done · renew через GREATEST, исход release_lease (released/expired/closed/revoked), release отозванной — LeaseRevoked, истёкшей — expired без ошибки, revoke будит аренду этого процесса, LeaseLost.body_completed (R1-16), гонка release/revoke на барьере; IMP-06 implemented, D-213 · фаза I2 закрыта, дальше I3.1

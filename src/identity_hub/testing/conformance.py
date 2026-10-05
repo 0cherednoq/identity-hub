@@ -146,7 +146,8 @@ class StoreConformanceSuite:
             )
         async with _tx(store_under_test, conformance_space) as transaction:
             assert await transaction.pick_candidate(query) is None  # единственный аккаунт занят
-            assert await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
+            released = await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
+            assert released == "released"
         async with _tx(store_under_test, conformance_space) as transaction:
             assert await transaction.pick_candidate(query) is not None
 
@@ -213,8 +214,9 @@ class StoreConformanceSuite:
             assert reclaimed is None and lease.fencing == 1
             assert await transaction.find_live_lease("lease-1") == lease
             assert await transaction.current_fencing(row.id) == 1
-            assert await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
-            assert not await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
+            first = await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
+            again = await transaction.release_lease(lease, "released", LeaseCounters.empty(), shared=False)
+            assert (first, again) == ("released", "closed")  # повтор — no-op (D-213)
 
     async def test_quota_charge_is_atomic_and_idempotent(
         self, store_under_test: Store, conformance_space: SpaceRef
