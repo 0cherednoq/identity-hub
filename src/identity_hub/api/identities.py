@@ -35,6 +35,7 @@ __all__ = [
     "IdentityRef",
     "OnConflict",
     "Page",
+    "UpdateManyResult",
 ]
 
 # Счётчик `count()` точный до этого значения; дальше возвращается `COUNT_CAP + 1`.
@@ -175,6 +176,14 @@ class CreateManyResult:
 
     created: list[Identity]
     skipped: list[IdentityRef]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateManyResult:
+    """Итог атомарного массового изменения identity."""
+
+    changed: int
+    skipped: int
 
 
 def _values(value: str | Collection[str] | None) -> frozenset[str]:
@@ -458,6 +467,50 @@ class Identities(Namespace):
     ) -> Identity:
         space = self._at(identity_id, expected_revision)
         return Identity.from_row(await space._set_note(identity_id, note, actor=actor))
+
+    async def update_many(
+        self,
+        target: IdentityFilter | Sequence[UUID],
+        *,
+        add_tags: Iterable[str] = (),
+        remove_tags: Iterable[str] = (),
+        set_labels: Mapping[str, Any] | None = None,
+        lifecycle: Lifecycle | str | None = None,
+        actor: str,
+        limit: int = 1000,
+    ) -> UpdateManyResult:
+        """Атомарно изменить identity по фильтру или списку id.
+
+        Охват больше ``limit`` отклоняется без изменений. Строки блокируются в
+        порядке UUID; ошибка или запрещённый lifecycle-переход откатывает всю пачку.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValidationFailed("limit: от 1 до 1000")
+        added = tuple(add_tags)
+        removed = tuple(remove_tags)
+        labels = None if set_labels is None else dict(set_labels)
+        if not added and not removed and labels is None and lifecycle is None:
+            raise ValidationFailed("update_many требует хотя бы одно изменение")
+        lifecycle_value: Lifecycle | None = None
+        if lifecycle is not None:
+            try:
+                lifecycle_value = Lifecycle(lifecycle)
+            except ValueError as exc:
+                raise ValidationFailed(f"неизвестный lifecycle: {lifecycle}") from exc
+        query = self._query(target) if isinstance(target, IdentityFilter) else None
+        search_filter = self._space._search_filter(query) if query is not None else None
+        ids = None if search_filter is not None else tuple(target)
+        changed, skipped = await self._space._update_many(
+            search_filter=search_filter,
+            identity_ids=ids,
+            add_tags=added,
+            remove_tags=removed,
+            set_labels=labels,
+            lifecycle=lifecycle_value,
+            actor=actor,
+            limit=limit,
+        )
+        return UpdateManyResult(changed=changed, skipped=skipped)
 
     async def delete(
         self, identity_id: UUID, *, actor: str, revoke: bool = False, expected_revision: int | None = None

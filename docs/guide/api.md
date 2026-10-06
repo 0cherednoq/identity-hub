@@ -33,7 +33,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 
 | Неймспейс | Сущность | Ключевые методы | Раздел |
 |---|---|---|---|
-| `space.identities` | identity | `get`, `find`, `get_by_ref`, `card`, `search`, `list`, `count`, `create`, `ensure`, `create_many`, `update`, `replace_*`, `add_tags`, `remove_tags`, `set_tags`, `set_note`, `delete`, `activate`, `retire`, `set_lifecycle`, `restore_standing`, `override`, `unpin` | [Аккаунты](03-accounts.md), [Состояния](04-states.md) |
+| `space.identities` | identity | `get`, `find`, `get_by_ref`, `card`, `search`, `list`, `count`, `create`, `ensure`, `create_many`, `update`, `update_many`, `replace_*`, `add_tags`, `remove_tags`, `set_tags`, `set_note`, `delete`, `activate`, `retire`, `set_lifecycle`, `restore_standing`, `ban`, `freeze`, `cool_down`, `observe`, `override`, `unpin` | [Аккаунты](03-accounts.md), [Состояния](04-states.md) |
 | `space.imports` | импорт | `run`, `run_files`, `stage`, `get`, `cancel` | [Аккаунты](03-accounts.md#импорт) |
 | `space.secrets` | credentials, сессии | `describe`, `reveal`, `replace_credentials`, `replace_session` | [Аккаунты](03-accounts.md#секреты) |
 | `space.pools` | пул и аренда | `define` → `Pool.lease()` / `Pool.acquire()`; `revoke` | [Аренда](07-leases.md) |
@@ -143,6 +143,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `ensure(spec)` | вернуть существующий без изменений или создать → `(obj, created)` |
 | `create_many(specs, on_conflict=)` | массовое создание одной транзакцией: `"fail"` или `"skip"` |
 | `update(id, ...)` | частичное изменение со слиянием |
+| `update_many(target, ..., limit=1000)` | атомарно изменить теги, метки или lifecycle по фильтру/списку id |
 | `replace_<часть>(id, ...)` | полная замена части |
 | `delete(id)` | физическое удаление |
 | `add` / `remove` | только для членства: теги, связи |

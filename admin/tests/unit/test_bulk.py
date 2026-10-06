@@ -92,7 +92,7 @@ def _preview(client: TestClient[Litestar], key: str = "bulk-preview-0001") -> di
     return cast(dict[str, object], response.json()["data"])
 
 
-def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
+def test_bulk_snapshot_freezes_filter_and_rejects_stale_batch_atomically() -> None:
     hub = _hub()
     asyncio.run(_seed(hub))
     space = hub.space("bulk-space", create=True)
@@ -132,18 +132,12 @@ def test_bulk_snapshot_freezes_filter_and_retry_skips_successes() -> None:
             json=payload,
         )
     assert first.status_code == 201
-    assert (
-        first.json()["data"]
-        | {
-            "succeeded": 1,
-            "failed": 1,
-            "complete": False,
-        }
-        == first.json()["data"]
-    )
-    assert retried.json()["data"]["skipped_already_succeeded"] == 1
-    assert retried.json()["data"]["succeeded"] == 1
-    assert "processed" in asyncio.run(space.identities.card(FIRST)).identity.tags
+    assert first.json()["data"]["succeeded"] == 0
+    assert first.json()["data"]["failed"] == 2
+    assert first.json()["data"]["complete"] is False
+    assert retried.json()["data"]["skipped_already_succeeded"] == 0
+    assert retried.json()["data"]["succeeded"] == 0
+    assert "processed" not in asyncio.run(space.identities.card(FIRST)).identity.tags
     assert "processed" not in asyncio.run(space.identities.card(SECOND)).identity.tags
     assert "processed" not in asyncio.run(space.identities.card(LATE)).identity.tags
 

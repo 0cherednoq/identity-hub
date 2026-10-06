@@ -8,6 +8,7 @@ from identity_hub.api.identities import (
     IdentityRef,
     OnConflict,
     Page,
+    UpdateManyResult,
 )
 from identity_hub.api.proxies import Proxy, ProxyCreateManyResult, RecheckReport
 from identity_hub.api.secrets import SecretRef
@@ -224,6 +225,7 @@ __all__ = [
     "TelegramTransport",
     "TelegramUnavailable",
     "TransitionNotAllowed",
+    "UpdateManyResult",
     "ValidationFailed",
     "Verification",
     "VerificationMode",

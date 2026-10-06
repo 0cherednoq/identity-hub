@@ -306,6 +306,29 @@ identity = await space.identities.update(
 )
 ```
 
+### Изменить массово
+
+```python
+from identity_hub import IdentityFilter
+
+result = await space.identities.update_many(
+    IdentityFilter(service="telegram", tags=["batch-17"]),
+    add_tags=["checked"],
+    remove_tags=["pending"],
+    set_labels={"owner": "ops", "old": None},
+    lifecycle="ready",
+    actor="operator",
+    limit=500,
+)
+result.changed, result.skipped
+```
+
+Вместо фильтра можно передать список UUID. Вся выбранная пачка меняется одной транзакцией:
+строки блокируются в порядке UUID, событие и ревизия создаются для каждой реально изменённой
+identity. Если выборка больше `limit` (допустимо `1..1000`), один id отсутствует или хотя бы один
+lifecycle-переход запрещён, метод бросает ошибку и не меняет ничего. `set_labels` сливает метки,
+`None` удаляет ключ; если тег одновременно добавлен и удалён, удаление имеет приоритет.
+
 Метки — плоский словарь: ключ `[A-Za-z0-9_.-]{1,64}`, значение `str/int/float/bool`. Теги —
 `[A-Za-z0-9_.:-]{1,64}`. Каждое реальное изменение пишет событие `identity.updated`.
 Сменить `external_ref` нельзя.

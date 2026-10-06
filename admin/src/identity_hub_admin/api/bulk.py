@@ -260,28 +260,12 @@ async def bulk_preview(
     )
 
 
-async def _run_one(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUID, revision: int) -> None:
+async def _run_resync(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUID, revision: int) -> None:
     card = await scope.handle.identities.card(identity_id)
     if card.revision != revision:
         raise ValueError("account revision changed after preview")
     parameters = snapshot.parameters
-    if snapshot.operation == "lifecycle":
-        await scope.handle.identities.set_lifecycle(
-            identity_id,
-            cast(str, parameters["target"]),
-            actor=scope.actor,
-            reason=scope.reason,
-        )
-    elif snapshot.operation == "resync":
-        await scope.handle.sync.refresh(identity_id, cast(list[str], parameters["regions"]))
-    elif snapshot.operation == "tag_add":
-        await scope.handle.identities.add_tags(
-            identity_id, cast(list[str], parameters["tags"]), actor=scope.actor
-        )
-    else:
-        await scope.handle.identities.remove_tags(
-            identity_id, cast(list[str], parameters["tags"]), actor=scope.actor
-        )
+    await scope.handle.sync.refresh(identity_id, cast(list[str], parameters["regions"]))
 
 
 def _failure(exc: Exception) -> tuple[str, str]:
@@ -311,15 +295,60 @@ async def bulk_execute(
             already = len(snapshot.succeeded)
             succeeded: set[UUID] = set()
             failures: dict[UUID, tuple[str, str]] = {}
-            for entry in snapshot.entries:
-                if entry.id in snapshot.succeeded:
-                    continue
-                try:
-                    await _run_one(scope, snapshot, entry.id, entry.revision)
-                except Exception as exc:  # one bad account must not abort the bounded batch
-                    failures[entry.id] = _failure(exc)
-                else:
-                    succeeded.add(entry.id)
+            pending = [entry for entry in snapshot.entries if entry.id not in snapshot.succeeded]
+            if snapshot.operation == "resync":
+                for entry in pending:
+                    try:
+                        await _run_resync(scope, snapshot, entry.id, entry.revision)
+                    except Exception as exc:
+                        failures[entry.id] = _failure(exc)
+                    else:
+                        succeeded.add(entry.id)
+            else:
+                for entry in pending:
+                    try:
+                        card = await scope.handle.identities.card(entry.id)
+                    except Exception as exc:
+                        failures[entry.id] = _failure(exc)
+                    else:
+                        if card.revision != entry.revision:
+                            failures[entry.id] = ("revision_mismatch", "account changed after preview")
+                if failures:
+                    for entry in pending:
+                        failures.setdefault(
+                            entry.id,
+                            ("batch_aborted", "atomic bulk action rejected before changes"),
+                        )
+                elif pending:
+                    parameters = snapshot.parameters
+                    ids = [entry.id for entry in pending]
+                    try:
+                        if snapshot.operation == "lifecycle":
+                            await scope.handle.identities.update_many(
+                                ids,
+                                lifecycle=cast(str, parameters["target"]),
+                                actor=scope.actor,
+                                limit=len(pending),
+                            )
+                        elif snapshot.operation == "tag_add":
+                            await scope.handle.identities.update_many(
+                                ids,
+                                add_tags=cast(list[str], parameters["tags"]),
+                                actor=scope.actor,
+                                limit=len(pending),
+                            )
+                        else:
+                            await scope.handle.identities.update_many(
+                                ids,
+                                remove_tags=cast(list[str], parameters["tags"]),
+                                actor=scope.actor,
+                                limit=len(pending),
+                            )
+                    except Exception as exc:
+                        failure = _failure(exc)
+                        failures.update((entry.id, failure) for entry in pending)
+                    else:
+                        succeeded.update(entry.id for entry in pending)
             await _coordinator(state).update(snapshot, succeeded=succeeded, failures=failures)
             await scope.handle.admin.record_bulk(
                 snapshot.operation,
