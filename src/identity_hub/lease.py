@@ -58,6 +58,7 @@ from identity_hub.store.base import (
     LeaseRow,
     ProxyRow,
     StoreTx,
+    expiry_reason,
 )
 
 if TYPE_CHECKING:
@@ -112,6 +113,7 @@ class Lease:
         self._revoke_task: asyncio.Task[None] | None = None  # отзыв в этом же процессе (D-213)
         self._closed = False
         self._last_ok = pool.space.hub.clock.monotonic()
+        self._hold_cutoff = self._cutoff_of(row)
         self._last_flush = self._last_ok  # последняя запись времени и счётчиков в историю (D-210)
         self._started_at = self._last_ok
         self._owner: asyncio.Task[Any] | None = None
@@ -142,6 +144,11 @@ class Lease:
     @property
     def acquired_at(self) -> datetime:
         return self._row.acquired_at
+
+    @property
+    def hold_deadline(self) -> datetime | None:
+        """Потолок удержания: позже этого момента аренда не продлевается. `None` — потолка нет."""
+        return self._row.hold_deadline
 
     @property
     def purpose(self) -> str | None:
@@ -190,7 +197,7 @@ class Lease:
         if self._closed:  # release() вызван: работать под арендой нельзя, даже если запись не прошла
             raise LeaseLost(self.lease_id, self._lost or "released")
         if self._deadline_passed() and self._lost is None:
-            self._lost = "heartbeat"
+            self._lost = self._deadline_reason()
         if self._lost is not None:
             raise LeaseLost(self.lease_id, self._lost)
 
@@ -204,7 +211,27 @@ class Lease:
 
     def _deadline(self) -> float:
         timing = self.pool.timing
-        return self._last_ok + (timing.ttl - timing.safety_margin).total_seconds()
+        deadline = self._last_ok + (timing.ttl - timing.safety_margin).total_seconds()
+        return deadline if self._hold_cutoff is None else min(deadline, self._hold_cutoff)
+
+    def _cutoff_of(self, row: LeaseRow) -> float | None:
+        """Момент по монотонным часам, когда держатель сам признаёт аренду потерянной по потолку.
+
+        Это `hold_deadline − safety_margin`: раньше, чем аккаунт сможет взять другой (G-1.2). Остаток
+        берётся меньший из двух — от времени захвата и от локальных часов: расхождение часов с БД
+        сдвигает потерю только в безопасную сторону.
+        """
+        if row.hold_deadline is None:
+            return None
+        clock = self.pool.space.hub.clock
+        left = min(row.hold_deadline - row.acquired_at, row.hold_deadline - clock.now())
+        return clock.monotonic() + (left - self.pool.timing.safety_margin).total_seconds()
+
+    def _hold_passed(self) -> bool:
+        return self._hold_cutoff is not None and self.pool.space.hub.clock.monotonic() >= self._hold_cutoff
+
+    def _deadline_reason(self) -> str:
+        return str(LeaseEndReason.MAX_HOLD) if self._hold_passed() else "heartbeat"
 
     def _deadline_passed(self) -> bool:
         return self.pool.space.hub.clock.monotonic() >= self._deadline()
@@ -235,6 +262,9 @@ class Lease:
             await clock.idle(max(0.0, pause))  # под FakeClock будит advance(), а не реальное время
             if self._closed:
                 return
+            if self._hold_passed():  # потолок удержания: heartbeat идёт, но срок больше не растёт
+                await self._mark_lost(str(LeaseEndReason.MAX_HOLD))
+                return
             sent_at = clock.monotonic()
             confirmed = False
             try:
@@ -256,7 +286,7 @@ class Lease:
                 self._last_ok = sent_at
                 self._row = replace(self._row, expires_at=renewal.expires_at)
             if not confirmed and self._deadline_passed():
-                await self._mark_lost("heartbeat")
+                await self._mark_lost(self._deadline_reason())
                 return
 
     def _revoked_elsewhere(self) -> None:
@@ -561,6 +591,7 @@ class Lease:
             LeaseEndReason.RELEASED: "lease.released",
             LeaseEndReason.FAILED: "lease.failed",
             LeaseEndReason.LOST: "lease.lost",
+            LeaseEndReason.MAX_HOLD: "lease.expired",
         }.get(end, "lease.released")
         try:
             async with asyncio.timeout(RELEASE_TIMEOUT), self.pool.space._tx(own=True) as tx:
@@ -625,6 +656,11 @@ def _lost_reason(end_reason: LeaseEndReason | None) -> str:
     return str(end_reason or LeaseEndReason.REVOKED)
 
 
+def _lost_end(reason: str | None) -> LeaseEndReason:
+    """Причина в истории для аренды, которую держатель сам признал потерянной."""
+    return LeaseEndReason.MAX_HOLD if reason == LeaseEndReason.MAX_HOLD else LeaseEndReason.LOST
+
+
 def _lost_error(reason: str | None) -> type[LeaseLost]:
     if reason == LeaseEndReason.REVOKED:
         return LeaseRevoked
@@ -646,11 +682,11 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
         owner = asyncio.current_task()
         if owner is not None:
             owner.uncancel()
-        await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost}")
+        await lease._release_quietly(_lost_end(lease._lost), f"lost: {lease._lost}")
         raise _lost_error(lease._lost)(lease.lease_id, lease._lost or "heartbeat") from exc
     except LeaseLost:
         await lease._fire_on_lost()
-        await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost or 'heartbeat'}")
+        await lease._release_quietly(_lost_end(lease._lost), f"lost: {lease._lost or 'heartbeat'}")
         raise
     except BaseException as exc:
         # только имя типа: текст исключения пользователя бывает с URL, ключами и паролем прокси (S-8)
@@ -659,7 +695,7 @@ async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> Asyn
     else:
         if lease._lost is not None:
             await lease._fire_on_lost()
-            await lease._release_quietly(LeaseEndReason.LOST, f"lost: {lease._lost}")
+            await lease._release_quietly(_lost_end(lease._lost), f"lost: {lease._lost}")
             # R1-16: тело завершилось успешно, но аренду потеряли по пути — признак для вызывающего
             raise _lost_error(lease._lost)(lease.lease_id, lease._lost, body_completed=True)
         await lease._release_quietly(LeaseEndReason.RELEASED)
@@ -706,6 +742,7 @@ async def acquire(
     query: CandidateQuery | None = None,
     purpose: str | None = None,
     ref: str | None = None,
+    max_hold: timedelta | None = None,
 ) -> Lease:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
@@ -716,7 +753,8 @@ async def acquire(
     """
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
-    options = pool.lease_options(purpose=purpose, ref=ref)  # формат проверяется до транзакции
+    # формат проверяется до транзакции
+    options = pool.lease_options(purpose=purpose, ref=ref, max_hold=max_hold)
     explicit_query = query
     if callable(among):  # предикат от Identity: заранее превращается в список id (F5.1)
         among = await _matching_ids(pool, among)
@@ -796,7 +834,15 @@ async def acquire(
                     if reclaimed is not None:
                         drafts.append(
                             _lease_event(
-                                "lease.expired", pool, reclaimed, {"expired_at": reclaimed.expires_at}
+                                "lease.expired",
+                                pool,
+                                reclaimed,
+                                {
+                                    "expired_at": reclaimed.expires_at,
+                                    "reason": str(
+                                        expiry_reason(reclaimed.hold_deadline, reclaimed.expires_at)
+                                    ),
+                                },
                             )
                         )
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))

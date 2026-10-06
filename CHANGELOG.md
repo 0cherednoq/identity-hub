@@ -12,6 +12,11 @@
 
 ### Added
 
+- Потолок удержания аренды (`N1.2`, задача 4 из `ISSUES-INTEGRATION.md`): `pools.define(max_hold=)`,
+  `pool.lease(max_hold=)`, `pool.acquire(max_hold=)` и `lease.hold_deadline`. Продление не ставит
+  срок позже дедлайна; держатель получает `LeaseLost` с причиной `max_hold`, в истории —
+  `LeaseEndReason.MAX_HOLD`. Дедлайн есть в списке живых аренд и read-схеме (версия 4). Миграция
+  `0025` добавляет `hold_deadline` в `ih_leases` и `ih_lease_history`.
 - Назначение аренды (`N1.1`, задача 6 из `ISSUES-INTEGRATION.md`): `pool.lease(purpose=, ref=)`,
   `pool.acquire(purpose=, ref=)` и значение по умолчанию `pools.define(purpose=)`. Поля видны как
   `lease.purpose` и `lease.ref`, в истории, событиях `lease.*`, read-схеме (версия 3) и админке;

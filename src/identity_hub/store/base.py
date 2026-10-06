@@ -94,6 +94,7 @@ __all__ = [
     "WebhookDeliveryRow",
     "WebhookEndpointReadRow",
     "WebhookEndpointRow",
+    "expiry_reason",
 ]
 
 
@@ -420,6 +421,7 @@ class LeaseRow:
     heartbeat_at: datetime | None = None
     purpose: str | None = None  # метка вида работы, по ней группируют
     ref: str | None = None  # ссылка на задачу держателя
+    hold_deadline: datetime | None = None  # потолок удержания: продление за него не выходит
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,6 +430,14 @@ class LeaseOptions:
 
     purpose: str | None = None
     ref: str | None = None
+    max_hold_seconds: float | None = None  # хранилище превращает в `hold_deadline` от своего времени
+
+
+def expiry_reason(hold_deadline: datetime | None, expired_at: datetime) -> LeaseEndReason:
+    """Причина для аренды, чей срок вышел: на своём потолке удержания или просто без heartbeat."""
+    if hold_deadline is not None and hold_deadline <= expired_at:
+        return LeaseEndReason.MAX_HOLD
+    return LeaseEndReason.EXPIRED
 
 
 NO_LEASE_OPTIONS = LeaseOptions()
@@ -472,8 +482,8 @@ class LeaseRenewal:
     """Ответ продления аренды (heartbeat).
 
     `expires_at` — новый срок живой аренды; `None` — аренды с этим token больше нет. Тогда
-    `end_reason` говорит, чем она кончилась: причина из закрытой истории, `expired` — срок вышел, а
-    строку ещё никто не забрал, `None` — строки нет, а история открыта или неизвестна.
+    `end_reason` говорит, чем она кончилась: причина из закрытой истории, `expired` или `max_hold`
+    — срок вышел, а строку ещё никто не забрал, `None` — строки нет, а история открыта или неизвестна.
     """
 
     expires_at: datetime | None
@@ -828,6 +838,7 @@ class LeaseHistoryRow:
     last_error: str | None
     purpose: str | None = None
     ref: str | None = None
+    hold_deadline: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -854,6 +865,7 @@ class LeaseReadRow:
     expires_at: datetime | None
     purpose: str | None = None
     ref: str | None = None
+    hold_deadline: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

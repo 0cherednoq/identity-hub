@@ -121,6 +121,7 @@ from identity_hub.store.base import (
     WebhookEndpointReadRow,
     WebhookEndpointRow,
     credential_label,
+    expiry_reason,
 )
 
 __all__ = ["MemoryStore", "MemoryTx"]
@@ -296,8 +297,10 @@ def _gone(state: Any, token: UUID) -> LeaseRenewal:
     if history.released_at is not None:
         return LeaseRenewal(None, LeaseEndReason(history.end_reason))
     current = state.leases.get(history.identity_id)
-    held = current is not None and current.token == token  # строка наша, но срок вышел
-    return LeaseRenewal(None, LeaseEndReason.EXPIRED if held else None)
+    if current is None or current.token != token:
+        return LeaseRenewal(None)
+    # строка наша, но срок вышел
+    return LeaseRenewal(None, expiry_reason(history.hold_deadline, current.expires_at))
 
 
 def _merge_counters(row: LeaseHistoryRow, counters: LeaseCounters) -> dict[str, Any]:
@@ -675,7 +678,7 @@ class MemoryTx(StoreTx):
                     history,
                     released_at=stale.expires_at,
                     duration=stale.expires_at - history.acquired_at,
-                    end_reason="expired",
+                    end_reason=str(expiry_reason(history.hold_deadline, stale.expires_at)),
                 )
         for credential_key in [key for key in self.state.credentials if key[0] == identity_id]:
             del self.state.credentials[credential_key]
@@ -907,7 +910,7 @@ class MemoryTx(StoreTx):
                     history,
                     released_at=old.expires_at,
                     duration=old.expires_at - history.acquired_at,
-                    end_reason="expired",
+                    end_reason=str(expiry_reason(history.hold_deadline, old.expires_at)),
                 )
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
         fencing = current.fencing_seq if shared else current.fencing_seq + 1
@@ -917,6 +920,11 @@ class MemoryTx(StoreTx):
         )
         self.state.lease_order[identity.id] = self.state.next_lease_order
         self.state.next_lease_order += 1
+        expires_at = self._now + timedelta(seconds=ttl_seconds)
+        hold_deadline: datetime | None = None
+        if options.max_hold_seconds is not None:
+            hold_deadline = self._now + timedelta(seconds=options.max_hold_seconds)
+            expires_at = min(expires_at, hold_deadline)
         lease = LeaseRow(
             new_id(),  # публичный id аренды упорядочен по времени, как в PostgreSQL (R2-P10)
             uuid4(),  # token — секрет аренды, случайный
@@ -925,12 +933,13 @@ class MemoryTx(StoreTx):
             pool,
             holder,
             self._now,
-            self._now + timedelta(seconds=ttl_seconds),
+            expires_at,
             idempotency_key,
             proxy_id,
             self._now,
             purpose=options.purpose,
             ref=options.ref,
+            hold_deadline=hold_deadline,
         )
         if not shared:
             self.state.leases[identity.id] = lease
@@ -954,6 +963,7 @@ class MemoryTx(StoreTx):
             None,
             purpose=options.purpose,
             ref=options.ref,
+            hold_deadline=hold_deadline,
         )
         return lease, reclaimed
 
@@ -974,8 +984,13 @@ class MemoryTx(StoreTx):
         if history is None or history.released_at is not None:
             return _gone(self.state, lease.token)
         expires_at = self._now + timedelta(seconds=ttl_seconds)
+        if shared and history.hold_deadline is not None and history.hold_deadline <= self._now:
+            return LeaseRenewal(None, LeaseEndReason.MAX_HOLD)  # потолок разделяемой — в истории
         if not shared and current is not None:
             expires_at = max(expires_at, current.expires_at)  # продление не укорачивает (D-213)
+        if history.hold_deadline is not None:
+            expires_at = min(expires_at, history.hold_deadline)  # и не выходит за потолок удержания
+        if not shared and current is not None:
             self.state.leases[lease.identity_id] = replace(
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
@@ -992,14 +1007,15 @@ class MemoryTx(StoreTx):
         history = self.state.history.get(lease.lease_id)
         if history is None or history.released_at is not None:
             return "revoked" if history is not None and history.end_reason == "revoked" else "closed"
-        released_at, end_reason = self._now, reason
+        released_at, end_reason, expired = self._now, reason, False
         if not shared:
             current = self.state.leases.get(lease.identity_id)
             if current is None or current.token != lease.token:
                 return "closed"
             self.state.leases.pop(lease.identity_id)
             if current.expires_at <= self._now:  # срок вышел, аккаунт никто не взял (D-213)
-                released_at, end_reason = current.expires_at, "expired"
+                released_at, expired = current.expires_at, True
+                end_reason = str(expiry_reason(history.hold_deadline, released_at))
         self.state.history[lease.lease_id] = replace(
             history,
             released_at=released_at,
@@ -1007,7 +1023,7 @@ class MemoryTx(StoreTx):
             end_reason=end_reason,
             **_merge_counters(history, counters),
         )
-        return "expired" if end_reason == "expired" else "released"
+        return "expired" if expired else "released"
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""
@@ -2795,7 +2811,7 @@ class MemoryTx(StoreTx):
                     history,
                     released_at=lease.expires_at,
                     duration=lease.expires_at - history.acquired_at,
-                    end_reason="expired",
+                    end_reason=str(expiry_reason(history.hold_deadline, lease.expires_at)),
                 )
                 identity = self.state.identities[lease.identity_id]
                 drafts.append(
@@ -2809,6 +2825,7 @@ class MemoryTx(StoreTx):
                             "pool": lease.pool,
                             "holder": lease.holder,
                             "fencing": lease.fencing,
+                            "reason": str(expiry_reason(history.hold_deadline, lease.expires_at)),
                             "expired_at": lease.expires_at.isoformat(),
                         },
                     )
@@ -3501,6 +3518,8 @@ class MemoryStore(Store):
             for identity_id, lease in list(self._state.leases.items()):
                 if lease.token in wanted and lease.expires_at > now:
                     expires_at = max(lease.expires_at, now + timedelta(seconds=ttl_seconds))
+                    if lease.hold_deadline is not None:
+                        expires_at = min(expires_at, lease.hold_deadline)
                     self._state.leases[identity_id] = replace(lease, expires_at=expires_at, heartbeat_at=now)
                     renewed[lease.token] = LeaseRenewal(expires_at)
             for token in wanted - set(renewed):

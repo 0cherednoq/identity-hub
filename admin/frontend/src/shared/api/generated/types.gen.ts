@@ -818,6 +818,7 @@ export type LeaseHistoryItemResponse = {
   external_ref: string;
   failed: number;
   fencing: number;
+  hold_deadline: string | null;
   holder: string;
   identity_id: string;
   last_error: string | null;
@@ -922,6 +923,7 @@ export type LiveLeaseResponse = {
   failed: number;
   heartbeat_lag_seconds: number;
   heartbeat_stale: boolean;
+  hold_deadline: string | null;
   holder: string;
   identity_id: string;
   last_heartbeat_at: string;

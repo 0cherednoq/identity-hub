@@ -77,6 +77,7 @@ class LiveLeaseResponse(ContractModel):
     expired_unclosed: bool
     purpose: str | None
     ref: str | None
+    hold_deadline: datetime | None
 
 
 class LeaseDashboardResponse(ContractModel):
@@ -112,6 +113,7 @@ class LeaseHistoryItemResponse(ContractModel):
     last_error: str | None
     purpose: str | None
     ref: str | None
+    hold_deadline: datetime | None
 
 
 class LeaseHistoryPageResponse(ContractModel):
@@ -151,6 +153,7 @@ def _history_item(row: LeaseReadRow) -> LeaseHistoryItemResponse:
         last_error=row.last_error,
         purpose=row.purpose,
         ref=row.ref,
+        hold_deadline=row.hold_deadline,
     )
 
 

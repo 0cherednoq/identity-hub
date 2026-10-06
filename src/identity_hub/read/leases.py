@@ -80,6 +80,7 @@ class LiveLease:
     expired_unclosed: bool
     purpose: str | None = None
     ref: str | None = None
+    hold_deadline: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +200,7 @@ def _live(row: LeaseReadRow, now: datetime) -> LiveLease:
         expired_unclosed=expired,
         purpose=row.purpose,
         ref=row.ref,
+        hold_deadline=row.hold_deadline,
     )
 
 

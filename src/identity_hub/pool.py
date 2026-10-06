@@ -81,6 +81,13 @@ def check_ref(value: str) -> str:
     return sanitize_text(value, limit=REF_LIMIT) or value
 
 
+def check_max_hold(value: timedelta, timing: LeaseTiming) -> timedelta:
+    """Потолок удержания: держатель теряет аренду за `safety_margin` до него, поэтому он длиннее запаса."""
+    if not isinstance(value, timedelta) or value <= timing.safety_margin:
+        raise ValidationFailed("max_hold должен быть больше safety_margin")
+    return value
+
+
 @dataclass
 class Pool:
     """Выборка аккаунтов сервиса по тегам и политикам для конкретного применения."""
@@ -97,6 +104,7 @@ class Pool:
     holder: str = field(default_factory=default_holder)
     capacity_low: int | None = None  # порог события pool.capacity.low (P8.2)
     purpose: str | None = None  # назначение аренд пула по умолчанию (N1.1)
+    max_hold: timedelta | None = None  # потолок удержания аренд пула по умолчанию (N1.2)
     _capacity_state: str = field(default="ok", init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -105,6 +113,8 @@ class Pool:
         self.labels = dict(validate_labels(self.labels))
         if self.purpose is not None:
             self.purpose = check_purpose(self.purpose)
+        if self.max_hold is not None:
+            check_max_hold(self.max_hold, self.timing)
         _check_profile_filter(self.service, self.profile)
         if self.proxy_policy is None:
             self.proxy_policy = self.service.proxy_policy
@@ -166,6 +176,7 @@ class Pool:
         on_lost: OnLost | None = None,
         purpose: str | None = None,
         ref: str | None = None,
+        max_hold: timedelta | None = None,
     ) -> AbstractAsyncContextManager[Lease]:
         """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
 
@@ -173,7 +184,8 @@ class Pool:
         сужают фильтры пула; `exclude` — не выдавать эти id; `wait` — ждать освобождения, иначе
         `LeaseUnavailable`; `idempotency_key` — повтор вернёт ту же живую аренду; `on_lost` —
         колбэк при потере аренды; `purpose` — метка вида работы (по умолчанию из пула), `ref` —
-        ссылка на задачу: оба значения видны в истории, событиях и админке.
+        ссылка на задачу: оба значения видны в истории, событиях и админке; `max_hold` — потолок
+        удержания: после него аренда не продлевается и держатель получает `LeaseLost("max_hold")`.
         """
         from identity_hub.lease import lease_scope
 
@@ -190,6 +202,7 @@ class Pool:
             idempotency_key=idempotency_key,
             purpose=purpose,
             ref=ref,
+            max_hold=max_hold,
         )
 
     async def acquire(
@@ -207,6 +220,7 @@ class Pool:
         query: CandidateQuery | None = None,
         purpose: str | None = None,
         ref: str | None = None,
+        max_hold: timedelta | None = None,
     ) -> Lease:
         """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
 
@@ -227,13 +241,18 @@ class Pool:
             query=query,
             purpose=purpose,
             ref=ref,
+            max_hold=max_hold,
         )
 
-    def lease_options(self, *, purpose: str | None, ref: str | None) -> LeaseOptions:
+    def lease_options(
+        self, *, purpose: str | None, ref: str | None, max_hold: timedelta | None = None
+    ) -> LeaseOptions:
         """Свойства новой аренды: значения вызова поверх значений пула, проверенные и очищенные."""
+        hold = check_max_hold(max_hold, self.timing) if max_hold is not None else self.max_hold
         return LeaseOptions(
             purpose=check_purpose(purpose) if purpose is not None else self.purpose,
             ref=check_ref(ref) if ref is not None else None,
+            max_hold_seconds=hold.total_seconds() if hold is not None else None,
         )
 
     async def capacity(self) -> int:
@@ -328,6 +347,7 @@ class PoolsMixin:
         capacity_low: int | None = None,
         stats_flush: timedelta | None = None,
         purpose: str | None = None,
+        max_hold: timedelta | None = None,
     ) -> Pool:
         defaults = LeaseTiming()
         timing = LeaseTiming(
@@ -349,4 +369,5 @@ class PoolsMixin:
             holder=holder or default_holder(),
             capacity_low=capacity_low,
             purpose=purpose,
+            max_hold=max_hold,
         )

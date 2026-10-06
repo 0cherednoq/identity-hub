@@ -195,6 +195,7 @@ from identity_hub.store.base import (
     WebhookEndpointReadRow,
     WebhookEndpointRow,
     credential_label,
+    expiry_reason,
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
@@ -776,7 +777,7 @@ class PgTx(StoreTx):
                 LEASES.c.space_id == self.space.id,
                 HISTORY.c.released_at.is_(None),
             )
-            .values(released_at=LEASES.c.expires_at, end_reason=LeaseEndReason.EXPIRED)
+            .values(released_at=LEASES.c.expires_at, end_reason=_expiry_reason(LEASES.c.expires_at))
         )
         result = await self.execute(
             delete(IDENTITIES).where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
@@ -1060,6 +1061,10 @@ class PgTx(StoreTx):
     ) -> tuple[LeaseRow, LeaseRow | None]:
         now = await self.now()
         expires_at = now + timedelta(seconds=ttl_seconds)
+        hold_deadline: datetime | None = None
+        if options.max_hold_seconds is not None:
+            hold_deadline = now + timedelta(seconds=options.max_hold_seconds)
+            expires_at = min(expires_at, hold_deadline)
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140);
         # время захвата ставят обе — по нему идёт LRU-выборка (IMP-01, D-209)
         values: dict[str, Any] = {"last_leased_at": func.clock_timestamp()}
@@ -1092,7 +1097,7 @@ class PgTx(StoreTx):
                 closed = await self.execute(
                     update(HISTORY)
                     .where(HISTORY.c.lease_id == old["lease_id"], HISTORY.c.released_at.is_(None))
-                    .values(released_at=old["expires_at"], end_reason=LeaseEndReason.EXPIRED)
+                    .values(released_at=old["expires_at"], end_reason=_expiry_reason(old["expires_at"]))
                 )
                 if closed.rowcount:  # type: ignore[attr-defined]
                     reclaimed = _lease_row(old)
@@ -1106,6 +1111,7 @@ class PgTx(StoreTx):
                 "idempotency_key": idempotency_key,
                 "purpose": options.purpose,
                 "ref": options.ref,
+                "hold_deadline": hold_deadline,
                 "acquired_at": now,
                 "heartbeat_at": now,
                 "expires_at": expires_at,
@@ -1132,6 +1138,7 @@ class PgTx(StoreTx):
                 proxy_id=proxy_id,
                 purpose=options.purpose,
                 ref=options.ref,
+                hold_deadline=hold_deadline,
                 acquired_at=now,
                 last_heartbeat_at=now,
             )
@@ -1150,6 +1157,7 @@ class PgTx(StoreTx):
             heartbeat_at=now,
             purpose=options.purpose,
             ref=options.ref,
+            hold_deadline=hold_deadline,
         )
         return lease, reclaimed
 
@@ -1163,8 +1171,10 @@ class PgTx(StoreTx):
         flush: bool = True,
     ) -> LeaseRenewal:
         expires_at: datetime | None
+        now: datetime | None = None
         if shared:
-            expires_at = await self.now() + timedelta(seconds=ttl_seconds)
+            now = await self.now()
+            expires_at = now + timedelta(seconds=ttl_seconds)
         else:
             expires_at = (
                 await self.execute(
@@ -1174,12 +1184,7 @@ class PgTx(StoreTx):
                         LEASES.c.token == lease.token,
                         LEASES.c.expires_at > func.now(),
                     )
-                    .values(
-                        heartbeat_at=func.now(),
-                        expires_at=func.greatest(
-                            LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)
-                        ),
-                    )
+                    .values(heartbeat_at=func.now(), expires_at=_renewed_until(ttl_seconds))
                     .returning(LEASES.c.expires_at)
                 )
             ).scalar_one_or_none()
@@ -1195,9 +1200,16 @@ class PgTx(StoreTx):
                 HISTORY.c.released_at.is_(None),
             )
             .values(last_heartbeat_at=func.now(), **_counter_values(counters))
+            .returning(HISTORY.c.hold_deadline)
         )
-        if shared and not updated.rowcount:  # type: ignore[attr-defined]
-            return await self._gone(lease.token)
+        if shared and now is not None:
+            row = updated.first()
+            if row is None:
+                return await self._gone(lease.token)
+            if row.hold_deadline is not None:  # у разделяемой аренды потолок хранит только история
+                if row.hold_deadline <= now:
+                    return LeaseRenewal(None, LeaseEndReason.MAX_HOLD)
+                expires_at = min(expires_at, row.hold_deadline)
         return LeaseRenewal(expires_at)
 
     async def _gone(self, token: UUID) -> LeaseRenewal:
@@ -1218,7 +1230,8 @@ class PgTx(StoreTx):
             revoked = history is not None and history.end_reason == LeaseEndReason.REVOKED
             return "revoked" if revoked else "closed"
         released_at: Any = func.now()
-        end_reason = reason
+        end_reason: Any = reason
+        expired = False
         if not shared:
             live = (
                 await self.execute(
@@ -1243,13 +1256,13 @@ class PgTx(StoreTx):
                     )
                 ).scalar_one_or_none()
                 released_at = expired_at if expired_at is not None else func.now()
-                end_reason = LeaseEndReason.EXPIRED
+                end_reason, expired = _expiry_reason(released_at), True
         await self.execute(
             update(HISTORY)
             .where(HISTORY.c.lease_id == lease.lease_id, HISTORY.c.released_at.is_(None))
             .values(released_at=released_at, end_reason=end_reason, **_counter_values(counters))
         )
-        return "expired" if end_reason == LeaseEndReason.EXPIRED else "released"
+        return "expired" if expired else "released"
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         ordered = sorted(set(identity_ids))
@@ -4003,7 +4016,7 @@ class PgTx(StoreTx):
             closed = await self.execute(
                 update(HISTORY)
                 .where(HISTORY.c.lease_id == row["lease_id"], HISTORY.c.released_at.is_(None))
-                .values(released_at=row["expires_at"], end_reason=LeaseEndReason.EXPIRED)
+                .values(released_at=row["expires_at"], end_reason=_expiry_reason(row["expires_at"]))
             )
             if not closed.rowcount:  # type: ignore[attr-defined]
                 continue
@@ -4021,6 +4034,7 @@ class PgTx(StoreTx):
                         "pool": row["pool"],
                         "holder": row["holder"],
                         "fencing": row["fencing"],
+                        "reason": str(expiry_reason(row["hold_deadline"], row["expires_at"])),
                         "expired_at": row["expires_at"].isoformat(),
                     },
                 )
@@ -4166,7 +4180,14 @@ def _merge_operations(delta: dict[str, int]) -> Any:
 def _end_reasons(tokens: Sequence[UUID]) -> Any:
     """Чем кончились аренды с этими token: причина из истории и жива ли ещё строка с тем же token."""
     return (
-        select(HISTORY.c.token, HISTORY.c.released_at, HISTORY.c.end_reason, LEASES.c.token.label("held"))
+        select(
+            HISTORY.c.token,
+            HISTORY.c.released_at,
+            HISTORY.c.end_reason,
+            HISTORY.c.hold_deadline,
+            LEASES.c.token.label("held"),
+            LEASES.c.expires_at,
+        )
         .select_from(
             HISTORY.outerjoin(
                 LEASES,
@@ -4183,8 +4204,27 @@ def _renewals_of_gone(tokens: Sequence[UUID], rows: Any) -> dict[UUID, LeaseRene
         if row.released_at is not None:
             gone[row.token] = LeaseRenewal(None, LeaseEndReason(row.end_reason))
         elif row.held is not None:  # строка наша, но срок вышел: её ещё никто не забрал
-            gone[row.token] = LeaseRenewal(None, LeaseEndReason.EXPIRED)
+            gone[row.token] = LeaseRenewal(None, expiry_reason(row.hold_deadline, row.expires_at))
     return gone
+
+
+def _renewed_until(ttl_seconds: float) -> Any:
+    """Новый `expires_at` при продлении: не короче прежнего (D-213) и не позже потолка удержания.
+
+    `least` в PostgreSQL пропускает NULL: аренда без `hold_deadline` продлевается как раньше.
+    """
+    return func.least(
+        func.greatest(LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)),
+        LEASES.c.hold_deadline,
+    )
+
+
+def _expiry_reason(expired_at: Any) -> Any:
+    """SQL-причина закрытия истёкшей аренды: `max_hold`, если срок вышел на её потолке удержания."""
+    return case(
+        (HISTORY.c.hold_deadline <= expired_at, LeaseEndReason.MAX_HOLD.value),
+        else_=LeaseEndReason.EXPIRED.value,
+    )
 
 
 def _lease_row(row: Any) -> LeaseRow:
@@ -4202,6 +4242,7 @@ def _lease_row(row: Any) -> LeaseRow:
         heartbeat_at=row.get("heartbeat_at", row["acquired_at"]),
         purpose=row.get("purpose"),
         ref=row.get("ref"),
+        hold_deadline=row.get("hold_deadline"),
     )
 
 
@@ -5384,13 +5425,7 @@ class PgStore(Store):
                 session,
                 update(LEASES)
                 .where(_any_of(LEASES.c.token, list(tokens)), LEASES.c.expires_at > func.now())
-                .values(
-                    heartbeat_at=func.now(),
-                    # продление никогда не укорачивает аренду (IMP-06, D-213)
-                    expires_at=func.greatest(
-                        LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)
-                    ),
-                )
+                .values(heartbeat_at=func.now(), expires_at=_renewed_until(ttl_seconds))
                 .returning(LEASES.c.token, LEASES.c.expires_at),
                 execution_options=self.options,
             )

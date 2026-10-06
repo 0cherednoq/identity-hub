@@ -3096,6 +3096,17 @@
           "fencing": {
             "type": "integer"
           },
+          "hold_deadline": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "holder": {
             "type": "string"
           },
@@ -3186,6 +3197,7 @@
           "external_ref",
           "failed",
           "fencing",
+          "hold_deadline",
           "holder",
           "identity_id",
           "last_error",
@@ -3523,6 +3535,17 @@
           "heartbeat_stale": {
             "type": "boolean"
           },
+          "hold_deadline": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "holder": {
             "type": "string"
           },
@@ -3593,6 +3616,7 @@
           "failed",
           "heartbeat_lag_seconds",
           "heartbeat_stale",
+          "hold_deadline",
           "holder",
           "identity_id",
           "last_heartbeat_at",
