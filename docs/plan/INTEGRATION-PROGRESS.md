@@ -18,7 +18,7 @@
   - [ ] реализовать priority/request_yield в pg и memory
   - [ ] добавить быстрые memory и pg race-тесты
   - [ ] обновить docs и быстрый gate
-- **Заметки для следующей сессии:** —
+- **Заметки для следующей сессии:** Изучены LeaseRow/LeaseOptions/LeaseRenewal, acquire и миграции; следующий шаг: D-305, миграция 0027 (priority/yield_requested_*), затем StoreTx.request_yield для Pg/Memory. Тяжёлые тесты не запускать.
 
 ## Статус задач
 
