@@ -20,7 +20,7 @@ from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.service import LeaseMode, Pacing, ProxyDownPolicy, ProxyPolicy, Service
-from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseOptions
+from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseOptions, QuotaCharge
 
 if TYPE_CHECKING:
     from sqlalchemy import Select
@@ -133,11 +133,23 @@ class Pool:
         # список id, подзапрос read-схемы (только PostgreSQL) или предикат от Identity (F5.1)
         among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
+        require_quota: bool = False,
     ) -> CandidateQuery:
-        """Фильтры пула + фильтры вызова; `for_operation` компилирует правило операции в выборку."""
+        """Фильтры пула + фильтры вызова; `for_operation` компилирует правило операции в выборку.
+
+        `require_quota` добавляет к выборке окна квот операции: аккаунт с исчерпанным окном не выдаётся.
+        """
+        quotas: tuple[QuotaCharge, ...] = ()
         if for_operation is not None:
             rule = compile_rule(self.service, for_operation)
             standing, needs_auth, factors = rule.standing, rule.needs_auth, rule.required_factors
+            if require_quota:
+                quotas = tuple(
+                    QuotaCharge(for_operation, quota.window_seconds, quota.origin, quota.limit)
+                    for quota in self.service.rule(for_operation).quotas
+                )
+        elif require_quota:
+            raise ValidationFailed("require_quota задаётся вместе с for_operation")
         else:
             standing, needs_auth, factors = DEFAULT_STANDING, True, frozenset[str]()
         merged_labels = {**self.labels, **validate_labels(labels or {})}
@@ -159,6 +171,7 @@ class Pool:
                 and self.proxy_policy.sticky
                 and self.proxy_policy.on_proxy_down is ProxyDownPolicy.WAIT
             ),
+            quotas=quotas,
         )
 
     def lease(
@@ -177,6 +190,7 @@ class Pool:
         purpose: str | None = None,
         ref: str | None = None,
         max_hold: timedelta | None = None,
+        require_quota: bool = False,
     ) -> AbstractAsyncContextManager[Lease]:
         """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
 
@@ -185,7 +199,8 @@ class Pool:
         `LeaseUnavailable`; `idempotency_key` — повтор вернёт ту же живую аренду; `on_lost` —
         колбэк при потере аренды; `purpose` — метка вида работы (по умолчанию из пула), `ref` —
         ссылка на задачу: оба значения видны в истории, событиях и админке; `max_hold` — потолок
-        удержания: после него аренда не продлевается и держатель получает `LeaseLost("max_hold")`.
+        удержания: после него аренда не продлевается и держатель получает `LeaseLost("max_hold")`;
+        `require_quota` (вместе с `for_operation`) — не выдавать аккаунты с исчерпанной квотой операции.
         """
         from identity_hub.lease import lease_scope
 
@@ -203,6 +218,7 @@ class Pool:
             purpose=purpose,
             ref=ref,
             max_hold=max_hold,
+            require_quota=require_quota,
         )
 
     async def acquire(
@@ -221,6 +237,7 @@ class Pool:
         purpose: str | None = None,
         ref: str | None = None,
         max_hold: timedelta | None = None,
+        require_quota: bool = False,
     ) -> Lease:
         """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
 
@@ -242,6 +259,7 @@ class Pool:
             purpose=purpose,
             ref=ref,
             max_hold=max_hold,
+            require_quota=require_quota,
         )
 
     def lease_options(

@@ -402,6 +402,8 @@ class CandidateQuery:
     proxy_wait: bool = False  # FR-8.3 on_proxy_down=wait: аккаунт с прокси не в alive недоступен
     lifecycles: frozenset[str] = frozenset({"ready"})
     auth_states: frozenset[str] | None = None  # задано — вместо needs_auth (выборка для входа, FR-5.4)
+    # окна квот операции: аккаунт с исчерпанным текущим окном не выдаётся (require_quota, N1.3)
+    quotas: tuple[QuotaCharge, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1235,6 +1237,14 @@ class StoreTx(ABC):
     @abstractmethod
     async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
         """Сколько подходящих аккаунтов сейчас имеют живую аренду."""
+
+    @abstractmethod
+    async def quota_reopens_at(self, query: CandidateQuery) -> datetime | None:
+        """Когда откроется квота у ближайшего из аккаунтов, которых отсекает только `query.quotas`.
+
+        Для аккаунта это конец самого позднего из исчерпанных окон; ответ — минимум по аккаунтам.
+        `None` — таких аккаунтов нет: отказ вызван не квотой. Считается только на пути отказа.
+        """
 
     @abstractmethod
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:

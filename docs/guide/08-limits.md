@@ -109,19 +109,32 @@ operations = {
 - При расходе последней единицы пишется событие `identity.quota.exhausted`.
 - Текущий расход: `(await space.identities.card(id)).quotas`.
 
-**Важно:** квоты не учитываются при выборе аккаунта в `pool.lease(for_operation=...)`. Аккаунт с
-исчерпанной квотой может быть выдан — ловите `QuotaExhausted` и берите следующий аккаунт:
+**Квоты при выборе аккаунта.** По умолчанию `pool.lease(for_operation=...)` квоты не смотрит и
+может выдать аккаунт с исчерпанным окном. `require_quota=True` отсекает такие аккаунты на этапе
+выборки:
 
 ```python
-for _ in range(5):
-    try:
-        async with pool.lease(for_operation="send_message", wait=10) as lease:
-            async with lease.operation("send_message", key=key):
-                await send(...)
-        break
-    except QuotaExhausted:
-        continue
+try:
+    async with pool.lease(for_operation="send_message", require_quota=True, wait=10) as lease:
+        async with lease.operation("send_message", key=key):
+            await send(...)
+except LeaseUnavailable as exc:
+    if exc.reason == "quota":            # свободные аккаунты есть, но квота исчерпана у всех
+        await asyncio.sleep(exc.retry_after)   # секунды до ближайшего открытия окна
 ```
+
+- Учитываются все окна квот операции; pacing в фильтр не входит.
+- `require_quota` без `for_operation` — `ValidationFailed`.
+- Если подходящие аккаунты заняты, причина — `busy`, а не `quota`: `retry_after` заполняется только
+  для квоты.
+- Фильтр — оценка на момент выборки, а не резерв. В эксклюзивном режиме этого достаточно: аккаунт
+  держит один воркер. В `SHARED` параллельные держатели могут исчерпать окно уже после выдачи,
+  поэтому `QuotaExhausted` из `lease.operation()` обрабатывать всё равно нужно.
+- **Цена.** Выборка идёт по порядку LRU и проверяет счётчик у каждого аккаунта, пока не найдёт
+  свободный. Исчерпанные аккаунты не арендуются и со временем собираются в начале этого порядка,
+  так что стоимость растёт с их числом. Замер на 100 000 аккаунтов с половиной исчерпанных: p95
+  захвата 20 мс, когда исчерпанные перемешаны со свободными (как и без фильтра), и 187 мс, когда
+  все 50 000 стоят впереди. Для парка до нескольких тысяч аккаунтов разница незаметна.
 
 ## Pacing — имитация живого человека
 

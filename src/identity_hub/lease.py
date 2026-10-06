@@ -743,6 +743,7 @@ async def acquire(
     purpose: str | None = None,
     ref: str | None = None,
     max_hold: timedelta | None = None,
+    require_quota: bool = False,
 ) -> Lease:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
@@ -766,7 +767,10 @@ async def acquire(
             profile=profile,
             among=among,
             exclude=exclude,
+            require_quota=require_quota,
         )
+    elif require_quota:
+        raise ValidationFailed("require_quota не сочетается с готовым запросом")
     space = pool.space
     clock = space.hub.clock
     started = clock.monotonic()
@@ -900,9 +904,11 @@ async def acquire(
             if explicit_query is None:  # внутренние выборки (вход, сверка) ёмкость пула не оценивают
                 with contextlib.suppress(Exception):
                     await pool._check_capacity()
+            reason, retry_after = await _unavailable_reason(
+                pool, requested, proxy_exhausted=exhausted_reported
+            )
             raise LeaseUnavailable(
-                f"пул {pool.name}: нет свободного аккаунта",
-                reason=await _unavailable_reason(pool, requested, proxy_exhausted=exhausted_reported),
+                f"пул {pool.name}: нет свободного аккаунта", reason=reason, retry_after=retry_after
             )
         await clock.sleep(min(remaining, delay * (0.5 + random.random())))
         delay = min(delay * 2, 2.0)
@@ -910,16 +916,24 @@ async def acquire(
 
 async def _unavailable_reason(
     pool: Pool, query: CandidateQuery, *, proxy_exhausted: bool
-) -> LeaseUnavailableReason | None:
-    """Почему аренда не выдана. Считается только на пути отказа; сбой подсчёта причину не даёт."""
+) -> tuple[LeaseUnavailableReason | None, float | None]:
+    """Почему аренда не выдана и через сколько секунд повторить, если это известно.
+
+    Считается только на пути отказа; сбой подсчёта причину не даёт.
+    """
     if proxy_exhausted:
-        return LeaseUnavailableReason.NO_PROXY
+        return LeaseUnavailableReason.NO_PROXY, None
     try:
         async with pool.space._tx(own=True) as tx:
-            busy = await tx.count_live_candidates(query, 1)
+            if query.quotas:
+                reopens_at = await tx.quota_reopens_at(query)
+                if reopens_at is not None:  # свободные аккаунты есть, мешает только квота
+                    wait = (reopens_at - await tx.now()).total_seconds()
+                    return LeaseUnavailableReason.QUOTA, max(0.0, wait)
+            busy = await tx.count_live_candidates(replace(query, quotas=()), 1)
     except Exception:
-        return None
-    return LeaseUnavailableReason.BUSY if busy else LeaseUnavailableReason.NO_CANDIDATES
+        return None, None
+    return (LeaseUnavailableReason.BUSY if busy else LeaseUnavailableReason.NO_CANDIDATES), None
 
 
 def _observe_acquisition(pool: Pool, started: float, wait_seconds: float, status: str) -> None:

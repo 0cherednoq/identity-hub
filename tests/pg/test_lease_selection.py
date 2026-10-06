@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -12,7 +13,7 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from identity_hub.hub import IdentityHub
-from identity_hub.service import OperationRule, Service
+from identity_hub.service import OperationRule, Quota, Service
 
 pytestmark = [pytest.mark.anyio, pytest.mark.pg]
 
@@ -36,7 +37,11 @@ def _captured(engine: AsyncEngine) -> Iterator[list[tuple[str, Any]]]:
 
 
 async def _space(hub: IdentityHub, db: AsyncEngine, count: int) -> Any:
-    service = Service("pick", "Pick", operations={"work": OperationRule()})
+    service = Service(
+        "pick",
+        "Pick",
+        operations={"work": OperationRule(), "send": OperationRule(quotas=(Quota(5, timedelta(hours=1)),))},
+    )
     hub.register_service(service)
     await hub.start()
     space = hub.space("pick", create=True)
@@ -75,3 +80,38 @@ async def test_pick_uses_lru_index(hub: IdentityHub, db: AsyncEngine) -> None:
         )
     plan_text = "\n".join(row[0] for row in plan)
     assert "ix_ih_identities_pick" in plan_text, plan_text
+
+
+async def test_require_quota_keeps_lru_index_and_probes_quota_by_index(
+    hub: IdentityHub, db: AsyncEngine
+) -> None:
+    """N1.3: фильтр квот не меняет обход LRU-индекса, а счётчик ищется по индексу, без seq scan."""
+    space = await _space(hub, db, 5000)
+    pool = space.pools.define("p", service="pick", holder="w")
+    with _captured(db) as picks:
+        lease = await pool.acquire(for_operation="send", require_quota=True)
+    await lease.release()
+    statement, parameters = picks[0]
+    assert "ih_quota_usage" in statement
+
+    async with db.connect() as conn:
+        raw = await conn.get_raw_connection()
+        plan = await raw.driver_connection.fetch(  # type: ignore[union-attr]
+            "EXPLAIN " + statement, *parameters
+        )
+    plan_text = "\n".join(row[0] for row in plan)
+    assert "ix_ih_identities_pick" in plan_text, plan_text
+    assert "Seq Scan on ih_quota_usage" not in plan_text, plan_text
+
+
+async def test_pick_without_require_quota_does_not_touch_quota_table(
+    hub: IdentityHub, db: AsyncEngine
+) -> None:
+    """N1.3: по умолчанию SQL выборки прежний — таблица счётчиков в нём не участвует."""
+    space = await _space(hub, db, 50)
+    pool = space.pools.define("p", service="pick", holder="w")
+    with _captured(db) as picks:
+        lease = await pool.acquire(for_operation="send")
+    await lease.release()
+
+    assert "ih_quota_usage" not in picks[0][0]

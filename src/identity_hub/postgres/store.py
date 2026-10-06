@@ -997,7 +997,27 @@ class PgTx(StoreTx):
                 .where(BINDINGS.c.identity_id == i.id, PROXIES.c.status != ProxyStatus.ALIVE)
             )
             conditions.append(~down.exists())
+        # исчерпанное текущее окно квоты: поиск по первичному ключу ih_quota_usage (N1.3)
+        conditions.extend(~_exhausted_window(charge).exists() for charge in query.quotas)
         return conditions
+
+    async def quota_reopens_at(self, query: CandidateQuery) -> datetime | None:
+        if not query.quotas:
+            return None
+        ends = [
+            case(
+                (
+                    _exhausted_window(charge).exists(),
+                    _window_start_sql(charge) + timedelta(seconds=charge.window_seconds),
+                ),
+                else_=None,
+            )
+            for charge in query.quotas
+        ]
+        # `greatest` пропускает NULL: у аккаунта без исчерпанных окон значение пустое и в минимум не идёт
+        reopens = func.greatest(*ends) if len(ends) > 1 else ends[0]
+        stmt = select(func.min(reopens)).where(*self._candidate_conditions(replace(query, quotas=())))
+        return cast("datetime | None", (await self.execute(stmt)).scalar_one())
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         i = IDENTITIES.c
@@ -4206,6 +4226,27 @@ def _renewals_of_gone(tokens: Sequence[UUID], rows: Any) -> dict[UUID, LeaseRene
         elif row.held is not None:  # строка наша, но срок вышел: её ещё никто не забрал
             gone[row.token] = LeaseRenewal(None, expiry_reason(row.hold_deadline, row.expires_at))
     return gone
+
+
+def _window_start_sql(charge: QuotaCharge) -> Any:
+    """Начало текущего окна квоты — то же выражение, что при списании."""
+    return func.date_bin(
+        timedelta(seconds=charge.window_seconds),
+        func.now(),
+        sa_cast(charge.origin, DateTime(timezone=True)),
+        type_=DateTime(timezone=True),
+    )
+
+
+def _exhausted_window(charge: QuotaCharge) -> Any:
+    """Строка счётчика аккаунта из внешнего запроса, если текущее окно квоты исчерпано."""
+    return select(QUOTAS.c.identity_id).where(
+        QUOTAS.c.identity_id == IDENTITIES.c.id,
+        QUOTAS.c.kind == charge.kind,
+        QUOTAS.c.window_seconds == charge.window_seconds,
+        QUOTAS.c.window_start == _window_start_sql(charge),
+        QUOTAS.c.used >= charge.limit,
+    )
 
 
 def _renewed_until(ttl_seconds: float) -> Any:

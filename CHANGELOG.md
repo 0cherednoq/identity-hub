@@ -12,6 +12,10 @@
 
 ### Added
 
+- Учёт квот при выборе аккаунта (`N1.3`, задача 5 из `ISSUES-INTEGRATION.md`):
+  `pool.lease(for_operation=..., require_quota=True)` и то же у `pool.acquire()` не выдают аккаунты
+  с исчерпанным окном квоты операции. Если мешает только квота — `LeaseUnavailable` с
+  `reason="quota"` и `retry_after` до ближайшего открытия окна. По умолчанию поведение прежнее.
 - Потолок удержания аренды (`N1.2`, задача 4 из `ISSUES-INTEGRATION.md`): `pools.define(max_hold=)`,
   `pool.lease(max_hold=)`, `pool.acquire(max_hold=)` и `lease.hold_deadline`. Продление не ставит
   срок позже дедлайна; держатель получает `LeaseLost` с причиной `max_hold`, в истории —

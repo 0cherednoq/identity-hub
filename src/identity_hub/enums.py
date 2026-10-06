@@ -110,6 +110,7 @@ class LeaseUnavailableReason(StrEnum):
     BUSY = "busy"  # допустимые аккаунты есть, но все заняты
     NO_CANDIDATES = "no_candidates"  # допустимых нет: состояние, фильтр или пустой пул
     NO_PROXY = "no_proxy"  # аккаунт есть, но в пуле прокси нет свободного живого прокси
+    QUOTA = "quota"  # свободные аккаунты есть, но у всех исчерпана квота операции
 
 
 class Severity(StrEnum):

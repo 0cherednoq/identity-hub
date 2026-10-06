@@ -823,7 +823,24 @@ class MemoryTx(StoreTx):
             proxy_id = self.state.bindings.get(row.id)
             if proxy_id is not None and self.state.proxies[proxy_id].status != "alive":
                 return False
-        return True
+        return not any(self._exhausted_until(row.id, charge) for charge in query.quotas)
+
+    def _exhausted_until(self, identity_id: UUID, charge: QuotaCharge) -> datetime | None:
+        """Конец текущего окна квоты, если оно исчерпано."""
+        start = _window_start(self._now, charge)
+        used = self.state.quotas.get((identity_id, charge.kind, charge.window_seconds, start), 0)
+        return start + timedelta(seconds=charge.window_seconds) if used >= charge.limit else None
+
+    async def quota_reopens_at(self, query: CandidateQuery) -> datetime | None:
+        free = replace(_with_among_ids(query), quotas=())
+        reopens: list[datetime] = []
+        for row in self.state.identities.values():
+            if row.space_id != self.space.id or not self._candidate(row, free):
+                continue
+            ends = [end for charge in query.quotas if (end := self._exhausted_until(row.id, charge))]
+            if ends:
+                reopens.append(max(ends))
+        return min(reopens, default=None)
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         query = _with_among_ids(query)
