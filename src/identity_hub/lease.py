@@ -122,6 +122,7 @@ class Lease:
         self._cancelled_by_us = False
         self._released = False
         self._on_lost_fired = False
+        self._renew_lock = asyncio.Lock()
 
     # --------------------------------------------------------- свойства
 
@@ -236,6 +237,24 @@ class Lease:
     def _deadline_passed(self) -> bool:
         return self.pool.space.hub.clock.monotonic() >= self._deadline()
 
+    async def renew(self) -> datetime:
+        """Внеочередно продлить аренду и вернуть новый ``expires_at``.
+
+        Для аренды из :meth:`Pool.acquire` этот метод заменяет фоновый heartbeat: вызывающий код
+        должен повторять его чаще, чем истечёт локальный safety deadline. Внутри
+        ``async with pool.lease()`` вызов допустим и использует тот же путь, что heartbeat.
+        """
+        self.check()
+        renewal = await self._extend()
+        if renewal.expires_at is None:
+            reason = _lost_reason(renewal.end_reason)
+            self._lost = reason
+            await self._fire_on_lost()
+            raise _lost_error(reason)(self.lease_id, reason)
+        self._last_ok = self.pool.space.hub.clock.monotonic()
+        self._row = replace(self._row, expires_at=renewal.expires_at)
+        return renewal.expires_at
+
     def _start(self, on_lost: OnLost | None) -> None:
         self._on_lost = on_lost
         self._owner = asyncio.current_task()
@@ -283,7 +302,7 @@ class Lease:
                     return
                 confirmed = True
                 failures = 0
-                self._last_ok = sent_at
+                self._last_ok = max(self._last_ok, sent_at)
                 self._row = replace(self._row, expires_at=renewal.expires_at)
             if not confirmed and self._deadline_passed():
                 await self._mark_lost(self._deadline_reason())
@@ -323,6 +342,10 @@ class Lease:
             logging.getLogger("identity_hub.sink").debug("sink ih_lease_logs недоступен", exc_info=True)
 
     async def _extend(self) -> LeaseRenewal:
+        async with self._renew_lock:
+            return await self._extend_unlocked()
+
+    async def _extend_unlocked(self) -> LeaseRenewal:
         await self._flush_logs()
         clock = self.pool.space.hub.clock
         started = clock.monotonic()
