@@ -11,8 +11,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from identity_hub import (
+    ChangeSource,
     IdentityCreate,
     ImportRecord,
+    Observation,
     Override,
     RevisionConflict,
     SpaceHandle,
@@ -124,6 +126,22 @@ CASES: dict[str, Case] = {
         lambda s, i, r: s.identities.override(
             i,
             Override(region="standing", key="", state=Standing.LIMITED, reason="r", actor="admin"),
+            expected_revision=r,
+        )
+    ),
+    "ban": Case(lambda s, i, r: s.identities.ban(i, reason="r", actor="admin", expected_revision=r)),
+    "freeze": Case(lambda s, i, r: s.identities.freeze(i, reason="r", actor="admin", expected_revision=r)),
+    "cool_down": Case(
+        lambda s, i, r: s.identities.cool_down(
+            i, for_=timedelta(minutes=5), actor="worker", expected_revision=r
+        )
+    ),
+    "observe": Case(
+        lambda s, i, r: s.identities.observe(
+            i,
+            Observation("standing", "", Standing.LIMITED),
+            actor="probe",
+            source=ChangeSource.PROBE,
             expected_revision=r,
         )
     ),

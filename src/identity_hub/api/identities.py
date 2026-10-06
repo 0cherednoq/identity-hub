@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -16,11 +16,11 @@ from identity_hub.api._base import Namespace
 from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.domain.regions import RegionDecision
-from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
+from identity_hub.enums import AuthState, Availability, ChangeSource, Lifecycle, Standing
 from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
 from identity_hub.identities import UNSET, PreparedIdentity, _Unset, prepare_identity
 from identity_hub.service import Service
-from identity_hub.state import DEFAULT_SLOT, Override
+from identity_hub.state import DEFAULT_SLOT, Observation, Override
 from identity_hub.store.base import IdentityRow, StoreTx
 
 if TYPE_CHECKING:
@@ -511,6 +511,63 @@ class Identities(Namespace):
         """Вернуть `banned → good` командой (sticky-бан наблюдения не снимают)."""
         space = self._at(identity_id, expected_revision)
         return await space._restore_standing(identity_id, actor=actor, reason=reason)
+
+    async def ban(
+        self,
+        identity_id: UUID,
+        *,
+        reason: str,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Вручную установить `standing=banned` с теми же событиями, что у override."""
+        return await self.override(
+            identity_id,
+            Override("standing", "", Standing.BANNED, reason=reason, actor=actor),
+            expected_revision=expected_revision,
+        )
+
+    async def freeze(
+        self,
+        identity_id: UUID,
+        *,
+        reason: str,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Вручную установить `standing=frozen` с теми же событиями, что у override."""
+        return await self.override(
+            identity_id,
+            Override("standing", "", Standing.FROZEN, reason=reason, actor=actor),
+            expected_revision=expected_revision,
+        )
+
+    async def cool_down(
+        self,
+        identity_id: UUID,
+        *,
+        until: datetime | None = None,
+        for_: timedelta | None = None,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Временно исключить identity из выдачи; задайте ровно один срок `until` или `for_`."""
+        space = self._at(identity_id, expected_revision)
+        return await space._cool_down(identity_id, until=until, for_=for_, actor=actor, reason=reason)
+
+    async def observe(
+        self,
+        identity_id: UUID,
+        observation: Observation,
+        *,
+        actor: str,
+        source: ChangeSource,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Сообщить факт от платформы через ту же машину, что используют операции и пробы."""
+        space = self._at(identity_id, expected_revision)
+        return await space._public_observe(identity_id, observation, actor=actor, source=source)
 
     async def override(
         self, identity_id: UUID, override: Override, *, expected_revision: int | None = None

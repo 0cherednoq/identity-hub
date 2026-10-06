@@ -111,7 +111,7 @@ from identity_hub.service import (
     Quota,
     Service,
 )
-from identity_hub.state import Override
+from identity_hub.state import Observation, Override
 from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
@@ -175,6 +175,7 @@ __all__ = [
     "MetricsHook",
     "NotFound",
     "NullMetrics",
+    "Observation",
     "OnConflict",
     "OnExisting",
     "Operation",

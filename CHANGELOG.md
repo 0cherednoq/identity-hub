@@ -12,6 +12,10 @@
 
 ### Added
 
+- Команды состояния и публичные наблюдения (`N2.2`, задача 7 из `ISSUES-INTEGRATION.md`):
+  `identities.ban()`, `freeze()` и `cool_down()` дают именованные операции поверх существующей
+  машины регионов; `identities.observe()` принимает экспортируемый из корня `Observation` и
+  проводит внешние факты через те же правила stale/pin/sticky/confirmation, что операции и пробы.
 - Ручное продление аренды (`N2.1`, задача 7 из `ISSUES-INTEGRATION.md`): `await lease.renew()`
   продлевает аренду из `pool.acquire()`, возвращает новый `expires_at`, соблюдает `max_hold` и
   `stats_flush`, а при потере бросает `LeaseLost` с причиной. В управляемой аренде работает как

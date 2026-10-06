@@ -168,17 +168,16 @@ class TgErrors:
 `identity.standing.changed` (CRITICAL) → аккаунт больше не выдаётся. Исключение при этом
 пробрасывается дальше в ваш код.
 
-**Вручную (бан из вашего кода или админки)** — через override. Отдельного метода `ban()` в
-1.0.0a1 нет:
+**Вручную (бан или заморозка из вашего кода или админки)** — именованной командой:
 
 ```python
-from identity_hub import Override, Standing
-
-await space.identities.override(identity_id, Override(
-    region="standing", key="", state=Standing.BANNED,
-    reason="жалоба клиента", actor="admin:ivan",
-))
+await space.identities.ban(identity_id, reason="жалоба клиента", actor="admin:ivan")
+await space.identities.freeze(identity_id, reason="нужны документы", actor="admin:ivan")
 ```
+
+Обе команды — тонкие обёртки над ручным override региона `standing`: `ban` ставит `banned`,
+`freeze` — `frozen`. Поэтому проверки, ревизия и события (`identity.standing.changed` и
+`identity.state.overridden`) совпадают с прямым `override`. Живую аренду команда сама не отзывает.
 
 **Разбан** — только человеком, с причиной:
 
@@ -208,13 +207,13 @@ await space.identities.unpin(identity_id, "standing", "", actor="admin:ivan", re
 |---|---|
 | Забанить автоматически по ответу платформы | `ErrorClassifier` → `Fault(Blame.IDENTITY_BANNED)` |
 | Узнать о бане фоном | `Probes.standing` + `sync.refresh_many()` |
-| Забанить вручную | `override(Override("standing", "", "banned", ...))` |
+| Забанить вручную | `ban(reason=..., actor=...)` |
 | Ограничить временно | `Fault(IDENTITY_BANNED, standing="limited")` или проба с `until` |
-| Заморозить | override в `frozen` или проба |
+| Заморозить | `freeze(reason=..., actor=...)` или проба |
 | Разбанить | `restore_standing(reason=...)` |
 | Запретить пробам менять статус | override с `pin_for` |
 | Вывести из работы (не бан) | `retire()` |
-| Снять с нагрузки на время | `op.cool_down(...)` в операции |
+| Снять с нагрузки на время | `identities.cool_down(until=... \| for_=..., actor=...)` или `op.cool_down(...)` |
 
 ## Синхронизация статусов с платформой
 
@@ -238,6 +237,29 @@ flowchart LR
     O --> M{{"Машина состояний:<br/>stale? pinned? sticky?<br/>нужно подтверждение?"}}
     M --> S[("Состояние<br/>+ событие")]
 ```
+
+Факт, полученный вне операции или плановой пробы, можно передать публичной точке входа. Например,
+адаптер уже проверенного входящего сообщения платформы сообщает наблюдение так:
+
+```python
+from identity_hub import ChangeSource, Observation, Standing
+
+await space.identities.observe(
+    identity_id,
+    Observation(
+        region="standing", key="", state=Standing.LIMITED,
+        raw_status="FLOOD_WAIT", code="rate_limit",
+    ),
+    actor="telegram-webhook-adapter",
+    source=ChangeSource.WEBHOOK,
+)
+```
+
+`Observation` проходит ту же машину, что факты из операций и проб: действуют отсечение устаревших
+фактов, sticky-состояния, закрепление и подтверждение выхода. Если `observed_at` не задан, берётся
+время хранилища. `actor` и `source` передаются отдельно, чтобы входные данные платформы не могли
+подменить происхождение. Метод принимает уже проверенный факт; HTTP-сервер для входящих вебхуков
+в библиотеку v1 не входит.
 
 ### Пробы
 

@@ -199,8 +199,11 @@ await space.identities.delete(identity_id, actor="operator")
 | вывести из работы | `identities.retire(id, actor=..., reason=...)` |
 | произвольный lifecycle | `identities.set_lifecycle(id, state, actor=...)` |
 | разбанить | `identities.restore_standing(id, actor=..., reason=...)` |
-| забанить, заморозить, снять карантин | `identities.override(id, Override(region, key, state, reason=..., actor=...))` |
+| забанить / заморозить | `identities.ban(id, reason=..., actor=...)` / `identities.freeze(...)` |
+| снять с выдачи на время | `identities.cool_down(id, until=... \| for_=..., actor=...)` |
+| произвольная ручная правка | `identities.override(id, Override(region, key, state, reason=..., actor=...))` |
 | закрепить статус от проб | `Override(..., pin_for=timedelta(hours=6))`, снять — `identities.unpin(...)` |
+| сообщить факт от платформы | `identities.observe(id, Observation(...), actor=..., source=...)` |
 | узнать статус у платформы | `sync.refresh(id)`, по расписанию — `sync.refresh_many(...)` |
 | автоматически по ошибкам платформы | `Service(error_classifier=...)` |
 

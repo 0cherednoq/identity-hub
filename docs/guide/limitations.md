@@ -6,8 +6,6 @@
 
 | Что | Как обойти сейчас |
 |---|---|
-| Нет команды `ban()` / `freeze()` | `space.identities.override(id, Override("standing", "", "banned", reason=..., actor=...))` |
-| Нет публичного метода «сообщить наблюдение» (например, из вебхука платформы) | Классификатор ошибок в операциях, пробы + `sync.refresh`, либо `identities.override` |
 | Библиотека не запускает сверку, вход и перепроверку прокси сама | Периодически вызывайте `sync.refresh_many()`, `auth.login_many()`, `proxies.recheck_due()` |
 | Проба (`sync.refresh`/`sync.refresh_many`) не работает для аккаунтов в `provisioning`: бросает `OperationNotAllowed(lifecycle)` | Логиньте через `auth.login` (он работает), проверку делайте после перевода в `ready` |
 | Обновление сессии без входа (`SessionRefresher.refresh`) библиотека не вызывает | Обновляйте сессию своим кодом через `lease.save_session` |
