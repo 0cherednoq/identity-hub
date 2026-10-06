@@ -1239,6 +1239,12 @@ class StoreTx(ABC):
         """
 
     @abstractmethod
+    async def pick_candidate_reserving(
+        self, query: CandidateQuery, reserve: int
+    ) -> tuple[IdentityRow | None, bool]:
+        """Заблокировать до ``reserve + 1`` кандидатов; вернуть (первый, reserve_blocked)."""
+
+    @abstractmethod
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
         """Сколько аккаунтов сейчас можно выдать под запрос (до `limit`) — ёмкость пула."""
 

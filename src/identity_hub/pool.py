@@ -7,7 +7,7 @@ import re
 import socket
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from identity_hub._space import SpaceBase
     from identity_hub.lease import Lease, OnLost
 
-__all__ = ["DEFAULT_STANDING", "LeaseTiming", "Pool", "PoolsMixin", "default_holder"]
+__all__ = ["DEFAULT_STANDING", "LeaseTiming", "Pool", "PoolCapacity", "PoolsMixin", "default_holder"]
 
 DEFAULT_STANDING = frozenset({Standing.GOOD, Standing.LIMITED})
 
@@ -88,6 +88,21 @@ def check_max_hold(value: timedelta, timing: LeaseTiming) -> timedelta:
     return value
 
 
+def check_reserve(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000:
+        raise ValidationFailed("reserve/keep_free: целое число от 0 до 1000")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class PoolCapacity:
+    """Свободная ёмкость пула до и после применения резерва."""
+
+    free: int
+    reserved: int
+    available: int
+
+
 @dataclass
 class Pool:
     """Выборка аккаунтов сервиса по тегам и политикам для конкретного применения."""
@@ -105,6 +120,8 @@ class Pool:
     capacity_low: int | None = None  # порог события pool.capacity.low (P8.2)
     purpose: str | None = None  # назначение аренд пула по умолчанию (N1.1)
     max_hold: timedelta | None = None  # потолок удержания аренд пула по умолчанию (N1.2)
+    reserve: int = 0
+    reserve_strict: bool = False
     _capacity_state: str = field(default="ok", init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -115,6 +132,9 @@ class Pool:
             self.purpose = check_purpose(self.purpose)
         if self.max_hold is not None:
             check_max_hold(self.max_hold, self.timing)
+        self.reserve = check_reserve(self.reserve)
+        if self.reserve and self.shared:
+            raise ValidationFailed("reserve не поддерживается для SHARED-пула")
         _check_profile_filter(self.service, self.profile)
         if self.proxy_policy is None:
             self.proxy_policy = self.service.proxy_policy
@@ -191,6 +211,7 @@ class Pool:
         ref: str | None = None,
         max_hold: timedelta | None = None,
         require_quota: bool = False,
+        keep_free: int | None = None,
     ) -> AbstractAsyncContextManager[Lease]:
         """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
 
@@ -219,6 +240,7 @@ class Pool:
             ref=ref,
             max_hold=max_hold,
             require_quota=require_quota,
+            keep_free=keep_free,
         )
 
     async def acquire(
@@ -238,6 +260,7 @@ class Pool:
         ref: str | None = None,
         max_hold: timedelta | None = None,
         require_quota: bool = False,
+        keep_free: int | None = None,
     ) -> Lease:
         """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
 
@@ -260,6 +283,7 @@ class Pool:
             ref=ref,
             max_hold=max_hold,
             require_quota=require_quota,
+            keep_free=keep_free,
         )
 
     def lease_options(
@@ -278,11 +302,29 @@ class Pool:
         пишутся при смене состояния (FR-13.3, D-119)."""
         return await self._check_capacity()
 
+    async def capacity_detail(self) -> PoolCapacity:
+        """Точная свободная ёмкость и часть, удерживаемая резервом."""
+        async with self.space._tx(own=True) as tx:
+            query = self.candidate_query()
+            free = await tx.count_candidates(query, 1_000_000)
+            effective = await self._effective_reserve(tx, query, self.reserve)
+        reserved = min(free, effective)
+        return PoolCapacity(free=free, reserved=reserved, available=free - reserved)
+
+    async def _effective_reserve(self, tx: Any, query: CandidateQuery, reserve: int) -> int:
+        if reserve == 0 or self.reserve_strict:
+            return reserve
+        total = await tx.count_candidates(replace(query, shared=True), reserve + 1)
+        return 0 if total <= reserve else reserve
+
     async def _check_capacity(self) -> int:
         """Свободная ёмкость пула; `pool.capacity.low/empty` — при смене состояния (FR-13.3, D-119)."""
         threshold = self.capacity_low or 0
         async with self.space._tx(own=True) as tx:
-            available = await tx.count_candidates(self.candidate_query(), threshold + 1)
+            query = self.candidate_query()
+            free = await tx.count_candidates(query, threshold + self.reserve + 1)
+            effective = await self._effective_reserve(tx, query, self.reserve)
+            available = max(0, free - effective)
             state = "empty" if available == 0 else ("low" if available <= threshold else "ok")
             if state != self._capacity_state:
                 if state != "ok":
@@ -366,6 +408,8 @@ class PoolsMixin:
         stats_flush: timedelta | None = None,
         purpose: str | None = None,
         max_hold: timedelta | None = None,
+        reserve: int = 0,
+        reserve_strict: bool = False,
     ) -> Pool:
         defaults = LeaseTiming()
         timing = LeaseTiming(
@@ -388,4 +432,6 @@ class PoolsMixin:
             capacity_low=capacity_low,
             purpose=purpose,
             max_hold=max_hold,
+            reserve=reserve,
+            reserve_strict=reserve_strict,
         )

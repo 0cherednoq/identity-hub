@@ -1073,6 +1073,25 @@ class PgTx(StoreTx):
         row = (await self.execute(stmt)).mappings().one_or_none()
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
 
+    async def pick_candidate_reserving(
+        self, query: CandidateQuery, reserve: int
+    ) -> tuple[IdentityRow | None, bool]:
+        if reserve == 0:
+            return await self.pick_candidate(query), False
+        i = IDENTITIES.c
+        stmt = (
+            select(IDENTITIES)
+            .where(*self._candidate_conditions(query))
+            .order_by(i.pick_order_at.asc().nulls_first(), i.id)
+            .limit(reserve + 1)
+            .with_for_update(of=IDENTITIES, skip_locked=True)
+        )
+        rows = (await self.execute(stmt)).mappings().all()
+        if len(rows) <= reserve:
+            return None, bool(rows)
+        row = rows[0]
+        return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}), False
+
     async def _demote_exhausted(self, query: CandidateQuery) -> None:
         """Перенести аккаунты с исчерпанной квотой из головы порядка выборки в хвост (N1.3b).
 

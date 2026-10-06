@@ -91,6 +91,7 @@ finally:
 | `purpose` | Метка вида работы: 1–64 символа из `a-z`, `0-9`, `_ . : -`. По умолчанию — `purpose` пула |
 | `ref` | Ссылка на задачу держателя, до 256 символов; учётные данные из URL вырезаются |
 | `require_quota` | Вместе с `for_operation`: не выдавать аккаунты с исчерпанной квотой операции ([подробнее](08-limits.md)) |
+| `keep_free` | Оставить N свободных identity; переопределяет `reserve` пула для этого захвата |
 | `max_hold` | Потолок удержания (`timedelta`): позже аренда не продлевается. По умолчанию — `max_hold` пула, а если и он не задан — потолка нет |
 
 **Чем занят аккаунт.** `purpose` и `ref` отвечают на вопрос, зачем взята аренда, без угадывания
@@ -141,10 +142,34 @@ async with pool.lease() as lease:
 | `no_candidates` | Допустимых нет: пул пуст, аккаунты не в том состоянии или не прошли фильтр | Ожидание не поможет — проверить парк и фильтры |
 | `no_proxy` | Аккаунт есть, но в пуле прокси нет свободного живого прокси | Добавить прокси или дождаться перепроверки |
 | `quota` | Свободные аккаунты есть, но у всех исчерпана квота операции (`require_quota`) | Повторить через `retry_after` секунд |
+| `reserve` | Свободные identity удерживаются резервом пула | Использовать приоритетный пул/вызов или дождаться роста ёмкости |
 | `None` | Причину определить не удалось | Обработать как временный отказ |
 
 Без `require_quota=True` квоты при выборе аккаунта **не учитываются** — аккаунт с исчерпанной
 квотой может быть выдан, а `QuotaExhausted` бросит `operation()`. См. [лимиты](08-limits.md).
+
+### Резерв свободной ёмкости
+
+```python
+pool = space.pools.define(
+    "background",
+    service=TELEGRAM,
+    reserve=5,
+    reserve_strict=False,
+)
+
+detail = await pool.capacity_detail()
+detail.free, detail.reserved, detail.available
+
+async with pool.lease(keep_free=10) as lease:  # резерв только для этого захвата
+    ...
+```
+
+При положительном резерве хранилище одним запросом блокирует `N + 1` кандидатов и выдаёт первый
+только когда вся пачка найдена. Поэтому параллельный захват может получить безопасный ложный
+`LeaseUnavailable(reason="reserve")`, но не заберёт зарезервированную ёмкость. В нестрогом режиме
+резерв отключается, если всех допустимых identity не больше N; `reserve_strict=True` всегда
+оставляет N. Резерв не поддерживается для `SHARED`-сервисов.
 
 ## Типичный цикл воркера
 
@@ -324,7 +349,8 @@ async with space.pools.define("inbox", service=MAIL).lease(among=[mailbox_id]) a
 await space.admin.lease_history(identity_id, limit=50)       # аренды аккаунта: кто, сколько, чем кончилась
 await space.admin.lease_stats(identity_id, since=...)        # число, длительность, загрузка
 await space.admin.lease_dashboard(group_by="pool")           # сводка по пулам: p95, доля потерь, живые аренды
-await pool.capacity()                            # сколько свободных аккаунтов
+await pool.capacity()                            # доступно после резерва (значение ограничено threshold + 1)
+await pool.capacity_detail()                     # PoolCapacity(free, reserved, available), точные значения
 ```
 
 Дальше: [лимиты](08-limits.md).

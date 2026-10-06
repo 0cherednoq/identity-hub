@@ -83,7 +83,7 @@ from identity_hub.logging import LeaseContextFilter, LeaseLogPolicy, structlog_p
 from identity_hub.maintenance import MaintenanceSchedule
 from identity_hub.metrics import Metric, MetricsHook, NullMetrics, RecordingMetrics
 from identity_hub.operation import Operation
-from identity_hub.pool import LeaseTiming, Pool
+from identity_hub.pool import LeaseTiming, Pool, PoolCapacity
 from identity_hub.protocols import (
     Authenticator,
     AuthProbe,
@@ -186,6 +186,7 @@ __all__ = [
     "Pacing",
     "Page",
     "Pool",
+    "PoolCapacity",
     "ProbeContext",
     "ProbeResult",
     "Probes",

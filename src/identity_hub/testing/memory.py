@@ -856,6 +856,16 @@ class MemoryTx(StoreTx):
         candidates = self._ordered_candidates(query)
         return candidates[0] if candidates else None
 
+    async def pick_candidate_reserving(
+        self, query: CandidateQuery, reserve: int
+    ) -> tuple[IdentityRow | None, bool]:
+        if reserve == 0:
+            return await self.pick_candidate(query), False
+        candidates = self._ordered_candidates(_with_among_ids(query))
+        if len(candidates) <= reserve:
+            return None, bool(candidates)
+        return candidates[0], False
+
     def _ordered_candidates(self, query: CandidateQuery) -> list[IdentityRow]:
         candidates = [
             row

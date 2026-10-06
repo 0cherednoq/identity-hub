@@ -12,6 +12,10 @@
 
 ### Added
 
+- Резерв ёмкости пула (`N3.1`, задача 2 из `ISSUES-INTEGRATION.md`):
+  `pools.define(reserve=, reserve_strict=)`, разовый `pool.lease(keep_free=)`, атомарная выборка
+  `N + 1` кандидатов и `LeaseUnavailable(reason="reserve")`. `pool.capacity_detail()` возвращает
+  точные `free`, `reserved` и `available`; `SHARED` резерв не поддерживает.
 - Атомарные массовые изменения (`N2.3`, задача 7 из `ISSUES-INTEGRATION.md`):
   `identities.update_many()` меняет теги, метки и lifecycle по `IdentityFilter` или списку UUID,
   ограничивает охват через `limit`, блокирует строки в порядке id и откатывает всю пачку при

@@ -767,6 +767,7 @@ async def acquire(
     ref: str | None = None,
     max_hold: timedelta | None = None,
     require_quota: bool = False,
+    keep_free: int | None = None,
 ) -> Lease:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
@@ -777,6 +778,11 @@ async def acquire(
     """
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
+    from identity_hub.pool import check_reserve
+
+    reserve = pool.reserve if keep_free is None else check_reserve(keep_free)
+    if reserve and pool.shared:
+        raise ValidationFailed("keep_free не поддерживается для SHARED-пула")
     # формат проверяется до транзакции
     options = pool.lease_options(purpose=purpose, ref=ref, max_hold=max_hold)
     explicit_query = query
@@ -801,6 +807,7 @@ async def acquire(
     deadline = clock.monotonic() + wait_seconds
     delay = 0.05
     exhausted_reported = False
+    reserve_blocked = False
     requested = query  # без кандидатов, пропущенных из-за гонки: они заняты, а не недопустимы
     while True:
         try:
@@ -839,7 +846,9 @@ async def acquire(
                             existing = replace(existing, proxy_id=proxy.id)
                         _observe_acquisition(pool, started, wait_seconds, "reused")
                         return Lease(pool, existing, identity, proxy)
-                candidate = await tx.pick_candidate(query)
+                effective_reserve = await pool._effective_reserve(tx, query, reserve)
+                candidate, blocked = await tx.pick_candidate_reserving(query, effective_reserve)
+                reserve_blocked |= blocked
                 if candidate is not None:
                     proxy, drafts = await _resolve_proxy(pool, tx, candidate)
                     try:
@@ -928,7 +937,10 @@ async def acquire(
                 with contextlib.suppress(Exception):
                     await pool._check_capacity()
             reason, retry_after = await _unavailable_reason(
-                pool, requested, proxy_exhausted=exhausted_reported
+                pool,
+                requested,
+                proxy_exhausted=exhausted_reported,
+                reserve_blocked=reserve_blocked,
             )
             raise LeaseUnavailable(
                 f"пул {pool.name}: нет свободного аккаунта", reason=reason, retry_after=retry_after
@@ -938,7 +950,7 @@ async def acquire(
 
 
 async def _unavailable_reason(
-    pool: Pool, query: CandidateQuery, *, proxy_exhausted: bool
+    pool: Pool, query: CandidateQuery, *, proxy_exhausted: bool, reserve_blocked: bool
 ) -> tuple[LeaseUnavailableReason | None, float | None]:
     """Почему аренда не выдана и через сколько секунд повторить, если это известно.
 
@@ -946,6 +958,8 @@ async def _unavailable_reason(
     """
     if proxy_exhausted:
         return LeaseUnavailableReason.NO_PROXY, None
+    if reserve_blocked:
+        return LeaseUnavailableReason.RESERVE, None
     try:
         async with pool.space._tx(own=True) as tx:
             if query.quotas:

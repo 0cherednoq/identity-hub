@@ -213,7 +213,7 @@ await space.identities.delete(identity_id, actor="operator")
 ### Аренда
 
 ```python
-pool = space.pools.define("senders", service=TELEGRAM, tags=["sender"])
+pool = space.pools.define("senders", service=TELEGRAM, tags=["sender"], reserve=2)
 async with pool.lease(for_operation="send_message", wait=30) as lease:
     session = await lease.session()
     async with lease.operation("send_message", key=f"send:{job.id}"):
@@ -230,6 +230,7 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 | квота N за окно | сервис | `OperationRule(quotas=(Quota(20, timedelta(hours=1)),))` |
 | допуск по статусу и верификации | сервис | `OperationRule(standing=..., needs_auth=..., verified=..., tiers=...)` |
 | отдых после серии операций | пул | `pools.define(..., pacing=Pacing(work=Quota(...), pause=(15, 40)))` |
+| резерв для приоритетной работы | пул | `pools.define(..., reserve=N)`; разово `pool.lease(keep_free=N)` |
 | пауза по требованию платформы | операция | `await op.cool_down(seconds)` или `Fault(retry_after=...)` |
 | карантин за ошибки | сервис | `quarantine_threshold` + `ErrorClassifier` |
 
