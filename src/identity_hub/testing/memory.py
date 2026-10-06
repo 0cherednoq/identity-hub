@@ -52,6 +52,7 @@ from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
     NO_LEASE_OPTIONS,
+    PICK_DEMOTE_CHUNK,
     UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
@@ -844,6 +845,18 @@ class MemoryTx(StoreTx):
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         query = _with_among_ids(query)
+        if query.quotas:
+            head = self._ordered_candidates(replace(query, quotas=()))
+            if not head:
+                return None
+            first = head[0]
+            if not any(self._exhausted_until(first.id, charge) for charge in query.quotas):
+                return first
+            self._demote_exhausted(query)
+        candidates = self._ordered_candidates(query)
+        return candidates[0] if candidates else None
+
+    def _ordered_candidates(self, query: CandidateQuery) -> list[IdentityRow]:
         candidates = [
             row
             for row in self.state.identities.values()
@@ -853,13 +866,25 @@ class MemoryTx(StoreTx):
         order = self.state.lease_order
         candidates.sort(
             key=lambda row: (
-                row.last_leased_at is not None,
-                row.last_leased_at or self._now,
+                row.pick_order_at is not None,
+                row.pick_order_at or self._now,
                 order.get(row.id, 0),
                 row.id,
             )
         )
-        return candidates[0] if candidates else None
+        return candidates
+
+    def _demote_exhausted(self, query: CandidateQuery) -> None:
+        """Перенести исчерпанные аккаунты из головы порядка в хвост — тот же проход, что в PostgreSQL."""
+        free = replace(query, quotas=())
+        head = self._ordered_candidates(free)[:PICK_DEMOTE_CHUNK]
+        exhausted = [
+            row for row in head if any(self._exhausted_until(row.id, charge) for charge in query.quotas)
+        ]
+        for row in exhausted:
+            self.state.identities[row.id] = replace(row, pick_order_at=self._now)
+            self.state.lease_order[row.id] = self.state.next_lease_order
+            self.state.next_lease_order += 1
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
         query = _with_among_ids(query)
@@ -933,7 +958,11 @@ class MemoryTx(StoreTx):
         fencing = current.fencing_seq if shared else current.fencing_seq + 1
         # время захвата ставят обе аренды — по нему идёт LRU-выборка (IMP-01, D-209)
         self.state.identities[identity.id] = replace(
-            current, fencing_seq=fencing, last_leased_at=self._now, updated_at=self._now
+            current,
+            fencing_seq=fencing,
+            last_leased_at=self._now,
+            pick_order_at=self._now,
+            updated_at=self._now,
         )
         self.state.lease_order[identity.id] = self.state.next_lease_order
         self.state.next_lease_order += 1

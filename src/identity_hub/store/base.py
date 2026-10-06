@@ -31,6 +31,7 @@ NOTIFY_CHANNEL = "ih_events"
 __all__ = [
     "NOTIFY_CHANNEL",
     "NO_LEASE_OPTIONS",
+    "PICK_DEMOTE_CHUNK",
     "ROTATION_TABLES",
     "UNREADABLE_IMPORT_ITEM",
     "AttentionChallengeRow",
@@ -334,7 +335,9 @@ class IdentityRow:
     normalized_ref: str = ""  # Service.normalize_ref(external_ref), IMP-08
     normalize_version: int = 0
     revision: int = 0  # число команд, изменивших агрегат (IMP-07, D-205)
-    last_leased_at: datetime | None = None  # последний захват аренды: выборка LRU (IMP-01, D-209)
+    last_leased_at: datetime | None = None  # последний захват аренды (IMP-01, D-209)
+    # место в порядке выборки LRU: захват ставит время, исчерпанная квота переносит в хвост (N1.3b)
+    pick_order_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +446,10 @@ def expiry_reason(hold_deadline: datetime | None, expired_at: datetime) -> Lease
 
 
 NO_LEASE_OPTIONS = LeaseOptions()
+# Перенос исчерпанных аккаунтов из головы порядка выборки (N1.3b): столько строк головы
+# переносит один захват. 1024 строк достаточно, чтобы прогреть худший случай на 50k аккаунтов
+# за 50 захватов, но работа одного запроса остаётся ограниченной независимо от размера парка.
+PICK_DEMOTE_CHUNK = 1024
 
 RELEASE_OUTCOMES = frozenset({"released", "expired", "closed", "revoked"})
 
@@ -1226,8 +1233,9 @@ class StoreTx(ABC):
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         """Свободный допустимый аккаунт, заблокированный до конца транзакции (FOR UPDATE SKIP LOCKED).
 
-        Порядок — наименее недавно арендованный (D-007). Истёкшие временные состояния availability
-        считаются доступными (ленивое снятие, ТЗ §3.4).
+        Порядок — наименее недавно арендованный (D-007). При `query.quotas` аккаунты с исчерпанной
+        квотой из головы порядка сначала переносятся в хвост (N1.3b). Истёкшие временные состояния
+        availability считаются доступными (ленивое снятие, ТЗ §3.4).
         """
 
     @abstractmethod

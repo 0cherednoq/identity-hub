@@ -126,6 +126,7 @@ from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
     NO_LEASE_OPTIONS,
     NOTIFY_CHANNEL,
+    PICK_DEMOTE_CHUNK,
     UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
@@ -1021,18 +1022,83 @@ class PgTx(StoreTx):
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         i = IDENTITIES.c
+        order = (i.pick_order_at.asc().nulls_first(), i.id)
+        if query.quotas:
+            # Быстрый установившийся путь: проверяем квоты только у первого LRU-кандидата.
+            # Если голова свободна, отдельного запроса на перенос нет. Если исчерпана — строка
+            # уже заблокирована, переносим ограниченную пачку и выбираем первого свободного.
+            quota_windows = or_(
+                *(
+                    and_(
+                        QUOTAS.c.kind == charge.kind,
+                        QUOTAS.c.window_seconds == charge.window_seconds,
+                        QUOTAS.c.window_start == _window_start_sql(charge),
+                        QUOTAS.c.used >= charge.limit,
+                    )
+                    for charge in query.quotas
+                )
+            )
+            quota_hit = (
+                select(literal(True).label("exhausted"))
+                .select_from(QUOTAS)
+                .where(QUOTAS.c.identity_id == i.id, quota_windows)
+                .limit(1)
+                .lateral("quota_hit")
+            )
+            probe_stmt = (
+                select(IDENTITIES, quota_hit.c.exhausted.is_not(None).label("_quota_exhausted"))
+                .select_from(IDENTITIES.outerjoin(quota_hit, literal(True)))
+                .where(*self._candidate_conditions(replace(query, quotas=())))
+                .order_by(*order)
+                .limit(1)
+                .with_for_update(of=IDENTITIES, skip_locked=True)
+            )
+            probe = (await self.execute(probe_stmt)).mappings().one_or_none()
+            if probe is None:
+                return None
+            if not probe["_quota_exhausted"]:
+                return IdentityRow(**{f: probe[f] for f in IDENTITY_FIELDS})
+            await self._demote_exhausted(query)
+
         conditions = self._candidate_conditions(query)
-        # IMP-01 (D-209): наименее недавно арендованный по `last_leased_at` — порядок индекса
+        # IMP-01 (D-209): наименее недавно арендованный по `pick_order_at` — порядок индекса
         # ix_ih_identities_pick. Захват ставит время, и занятые уходят в хвост: выборка не перебирает их.
         stmt = (
             select(IDENTITIES)
             .where(*conditions)
-            .order_by(i.last_leased_at.asc().nulls_first(), i.id)
+            .order_by(*order)
             .limit(1)
             .with_for_update(of=IDENTITIES, skip_locked=True)
         )
         row = (await self.execute(stmt)).mappings().one_or_none()
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
+
+    async def _demote_exhausted(self, query: CandidateQuery) -> None:
+        """Перенести аккаунты с исчерпанной квотой из головы порядка выборки в хвост (N1.3b).
+
+        Исчерпанные аккаунты не арендуются, поэтому сами из головы не уходят, и выборка проходила бы
+        мимо каждого. Проход смотрит только первые `PICK_DEMOTE_CHUNK` строк порядка — стоимость не
+        зависит от размера парка. `SKIP LOCKED` не даёт двум захватам ждать друг друга на одних строках.
+        `last_leased_at` не меняется.
+        """
+        i = IDENTITIES.c
+        head = (
+            select(i.id)
+            .where(*self._candidate_conditions(replace(query, quotas=())))
+            .order_by(i.pick_order_at.asc().nulls_first(), i.id)
+            .limit(PICK_DEMOTE_CHUNK)
+            .with_for_update(of=IDENTITIES, skip_locked=True)
+            .cte("pick_head")
+        )
+        exhausted = or_(
+            *(_exhausted_window(charge, head.c.id).correlate(head).exists() for charge in query.quotas)
+        )
+        stmt = (
+            update(IDENTITIES)
+            .where(i.id.in_(select(head.c.id).where(exhausted)))
+            .values(pick_order_at=func.clock_timestamp(), updated_at=i.updated_at)
+        )
+        await self.execute(stmt)
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
         i = IDENTITIES.c
@@ -1087,7 +1153,8 @@ class PgTx(StoreTx):
             expires_at = min(expires_at, hold_deadline)
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140);
         # время захвата ставят обе — по нему идёт LRU-выборка (IMP-01, D-209)
-        values: dict[str, Any] = {"last_leased_at": func.clock_timestamp()}
+        leased_at = func.clock_timestamp()
+        values: dict[str, Any] = {"last_leased_at": leased_at, "pick_order_at": leased_at}
         if not shared:
             values["fencing_seq"] = IDENTITIES.c.fencing_seq + 1
         fencing_stmt = (
@@ -4238,10 +4305,10 @@ def _window_start_sql(charge: QuotaCharge) -> Any:
     )
 
 
-def _exhausted_window(charge: QuotaCharge) -> Any:
+def _exhausted_window(charge: QuotaCharge, identity_id: Any = IDENTITIES.c.id) -> Any:
     """Строка счётчика аккаунта из внешнего запроса, если текущее окно квоты исчерпано."""
     return select(QUOTAS.c.identity_id).where(
-        QUOTAS.c.identity_id == IDENTITIES.c.id,
+        QUOTAS.c.identity_id == identity_id,
         QUOTAS.c.kind == charge.kind,
         QUOTAS.c.window_seconds == charge.window_seconds,
         QUOTAS.c.window_start == _window_start_sql(charge),

@@ -87,6 +87,19 @@ async def test_require_quota_keeps_lru_index_and_probes_quota_by_index(
 ) -> None:
     """N1.3: фильтр квот не меняет обход LRU-индекса, а счётчик ищется по индексу, без seq scan."""
     space = await _space(hub, db, 5000)
+    ref = await space.ref()
+    async with db.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO ih_quota_usage "
+                "(identity_id, kind, window_seconds, window_start, space_id, used) "
+                "SELECT id, 'send', 3600, "
+                "date_bin(interval '3600 seconds', now(), timestamptz '2000-01-03 00:00:00+00'), "
+                "space_id, 5 FROM ih_identities WHERE space_id = :space ORDER BY id LIMIT 2500"
+            ),
+            {"space": ref.id},
+        )
+        await conn.execute(text("ANALYZE ih_quota_usage"))
     pool = space.pools.define("p", service="pick", holder="w")
     with _captured(db) as picks:
         lease = await pool.acquire(for_operation="send", require_quota=True)
