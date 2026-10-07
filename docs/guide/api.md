@@ -231,7 +231,7 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 | допуск по статусу и верификации | сервис | `OperationRule(standing=..., needs_auth=..., verified=..., tiers=...)` |
 | отдых после серии операций | пул | `pools.define(..., pacing=Pacing(work=Quota(...), pause=(15, 40)))` |
 | резерв для приоритетной работы | пул | `pools.define(..., reserve=N)`; разово `pool.lease(keep_free=N)` |
-| кооперативная уступка срочной работе | пул | `pools.define(..., priority=N)`; разово `pool.lease(priority=N)`; флаг `lease.yield_requested` |
+| кооперативная уступка срочной работе | пул | `pools.define(..., priority=N, yield_grace=...)`; разово `pool.lease(priority=N, on_yield_requested=...)`; флаг `lease.yield_requested` |
 | пауза по требованию платформы | операция | `await op.cool_down(seconds)` или `Fault(retry_after=...)` |
 | карантин за ошибки | сервис | `quarantine_threshold` + `ErrorClassifier` |
 

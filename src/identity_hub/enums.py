@@ -102,6 +102,7 @@ class LeaseEndReason(StrEnum):
     EXPIRED = "expired"  # TTL истёк, аренду перезаписал следующий арендатор или чистильщик
     REVOKED = "revoked"  # отозвана из админки
     MAX_HOLD = "max_hold"  # достигнут потолок удержания: продление за него не выходит
+    YIELDED = "yielded"  # держатель уступил аренду более приоритетному запросу
 
 
 class LeaseUnavailableReason(StrEnum):

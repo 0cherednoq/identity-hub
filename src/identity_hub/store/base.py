@@ -95,6 +95,7 @@ __all__ = [
     "WebhookDeliveryRow",
     "WebhookEndpointReadRow",
     "WebhookEndpointRow",
+    "YieldRequest",
     "expiry_reason",
 ]
 
@@ -338,6 +339,8 @@ class IdentityRow:
     last_leased_at: datetime | None = None  # последний захват аренды (IMP-01, D-209)
     # место в порядке выборки LRU: захват ставит время, исчерпанная квота переносит в хвост (N1.3b)
     pick_order_at: datetime | None = None
+    yield_reserved_priority: int | None = None
+    yield_reserved_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +410,7 @@ class CandidateQuery:
     auth_states: frozenset[str] | None = None  # задано — вместо needs_auth (выборка для входа, FR-5.4)
     # окна квот операции: аккаунт с исчерпанным текущим окном не выдаётся (require_quota, N1.3)
     quotas: tuple[QuotaCharge, ...] = ()
+    priority: int = 0  # учитывает короткую бронь после кооперативной уступки (N3.2b)
 
 
 @dataclass(frozen=True, slots=True)
@@ -502,6 +506,14 @@ class LeaseRenewal:
     expires_at: datetime | None
     end_reason: LeaseEndReason | None = None
     yield_requested: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class YieldRequest:
+    """Результат запроса уступить: цель нужна для немедленной доставки внутри процесса."""
+
+    lease_id: UUID
+    forced: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1252,7 +1264,9 @@ class StoreTx(ABC):
         """Заблокировать до ``reserve + 1`` кандидатов; вернуть (первый, reserve_blocked)."""
 
     @abstractmethod
-    async def request_yield(self, query: CandidateQuery, priority: int) -> bool:
+    async def request_yield(
+        self, query: CandidateQuery, priority: int, grace_seconds: float | None = None
+    ) -> YieldRequest | None:
         """Попросить одну живую допустимую аренду с меньшим priority кооперативно уступить."""
 
     @abstractmethod

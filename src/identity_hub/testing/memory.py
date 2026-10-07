@@ -121,6 +121,7 @@ from identity_hub.store.base import (
     WebhookDeliveryRow,
     WebhookEndpointReadRow,
     WebhookEndpointRow,
+    YieldRequest,
     credential_label,
     expiry_reason,
 )
@@ -820,6 +821,14 @@ class MemoryTx(StoreTx):
         lease = self.state.leases.get(row.id)
         if not query.shared and lease is not None and lease.expires_at > now:
             return False
+        if (
+            not query.shared
+            and row.yield_reserved_until is not None
+            and row.yield_reserved_until > now
+            and row.yield_reserved_priority is not None
+            and row.yield_reserved_priority > query.priority
+        ):
+            return False
         if query.proxy_wait:
             proxy_id = self.state.bindings.get(row.id)
             if proxy_id is not None and self.state.proxies[proxy_id].status != "alive":
@@ -866,7 +875,9 @@ class MemoryTx(StoreTx):
             return None, bool(candidates)
         return candidates[0], False
 
-    async def request_yield(self, query: CandidateQuery, priority: int) -> bool:
+    async def request_yield(
+        self, query: CandidateQuery, priority: int, grace_seconds: float | None = None
+    ) -> YieldRequest | None:
         admissible = replace(_with_among_ids(query), shared=True)
         victims = [
             lease
@@ -878,13 +889,34 @@ class MemoryTx(StoreTx):
         ]
         victims.sort(key=lambda lease: (lease.priority, lease.acquired_at, lease.identity_id))
         if not victims:
-            return False
+            return None
         victim = victims[0]
+        if (
+            grace_seconds is not None
+            and victim.yield_requested_at is not None
+            and victim.yield_requested_at + timedelta(seconds=grace_seconds) <= self._now
+        ):
+            history = self.state.history[victim.lease_id]
+            self.state.history[victim.lease_id] = replace(
+                history,
+                released_at=self._now,
+                duration=self._now - history.acquired_at,
+                end_reason=str(LeaseEndReason.YIELDED),
+            )
+            self.state.leases.pop(victim.identity_id)
+            identity = self._own(victim.identity_id)
+            assert identity is not None
+            self.state.identities[identity.id] = replace(
+                identity,
+                yield_reserved_priority=priority,
+                yield_reserved_until=self._now + timedelta(seconds=max(1.0, grace_seconds)),
+            )
+            return YieldRequest(victim.lease_id, forced=True)
         if (
             victim.yield_requested_priority is not None
             and victim.yield_requested_priority >= priority
         ):
-            return False
+            return None
         updated = replace(
             victim, yield_requested_at=self._now, yield_requested_priority=priority
         )
@@ -908,7 +940,7 @@ class MemoryTx(StoreTx):
                 )
             ]
         )
-        return True
+        return YieldRequest(victim.lease_id)
 
     def _ordered_candidates(self, query: CandidateQuery) -> list[IdentityRow]:
         candidates = [
@@ -1017,6 +1049,8 @@ class MemoryTx(StoreTx):
             last_leased_at=self._now,
             pick_order_at=self._now,
             updated_at=self._now,
+            yield_reserved_priority=None,
+            yield_reserved_until=None,
         )
         self.state.lease_order[identity.id] = self.state.next_lease_order
         self.state.next_lease_order += 1

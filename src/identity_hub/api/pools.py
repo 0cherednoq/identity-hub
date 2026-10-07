@@ -40,6 +40,7 @@ class Pools(Namespace):
         reserve: int = 0,
         reserve_strict: bool = False,
         priority: int = 0,
+        yield_grace: timedelta | None = None,
     ) -> Pool:
         """Объявить пул: фильтры отбора и политики аренды. В БД не хранится, создаётся дёшево.
 
@@ -67,6 +68,7 @@ class Pools(Namespace):
             reserve=reserve,
             reserve_strict=reserve_strict,
             priority=priority,
+            yield_grace=yield_grace,
         )
 
     async def revoke(self, identity_id: UUID, *, reason: str, actor: str) -> bool:

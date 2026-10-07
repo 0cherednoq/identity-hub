@@ -71,6 +71,8 @@ __all__ = ["Lease", "OnLost", "acquire", "lease_scope"]
 
 OnLost = Callable[[], Any]
 """Колбэк потери аренды: синхронный или async (например, `client.disconnect`)."""
+OnYieldRequested = Callable[[], Any]
+"""Колбэк кооперативного запроса уступить аренду."""
 
 HEARTBEAT_RETRY_BASE = 0.5
 """Пауза перед первым повтором неудачного heartbeat, секунды; дальше удваивается."""
@@ -111,6 +113,7 @@ class Lease:
         self._lost: str | None = None
         self._revoked_on_release = False
         self._revoke_task: asyncio.Task[None] | None = None  # отзыв в этом же процессе (D-213)
+        self._yield_task: asyncio.Task[None] | None = None
         self._closed = False
         self._last_ok = pool.space.hub.clock.monotonic()
         self._hold_cutoff = self._cutoff_of(row)
@@ -119,6 +122,7 @@ class Lease:
         self._owner: asyncio.Task[Any] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._on_lost: OnLost | None = None
+        self._on_yield_requested: OnYieldRequested | None = None
         self._cancelled_by_us = False
         self._released = False
         self._on_lost_fired = False
@@ -268,10 +272,15 @@ class Lease:
             if renewal.yield_requested
             else None,
         )
+        if renewal.yield_requested:
+            await self._fire_on_yield_requested()
         return renewal.expires_at
 
-    def _start(self, on_lost: OnLost | None) -> None:
+    def _start(
+        self, on_lost: OnLost | None, on_yield_requested: OnYieldRequested | None = None
+    ) -> None:
         self._on_lost = on_lost
+        self._on_yield_requested = on_yield_requested
         self._owner = asyncio.current_task()
         self.pool.space.hub._live_leases[self.lease_id] = self  # отзыв в этом процессе будит heartbeat
         self._heartbeat_task = asyncio.create_task(
@@ -325,6 +334,8 @@ class Lease:
                     if renewal.yield_requested
                     else None,
                 )
+                if renewal.yield_requested:
+                    await self._fire_on_yield_requested()
             if not confirmed and self._deadline_passed():
                 await self._mark_lost(self._deadline_reason())
                 return
@@ -337,6 +348,32 @@ class Lease:
             self._revoke_task = asyncio.create_task(
                 self._mark_lost("revoked"), name=f"ih-revoked-{self.lease_id}"
             )
+
+    def _yield_requested_elsewhere(self, *, forced: bool = False) -> None:
+        """Немедленно доставить локальному держателю запрос или принудительный отзыв."""
+        if self._closed:
+            return
+        if forced:
+            self._revoke_task = asyncio.create_task(
+                self._mark_lost("yielded"), name=f"ih-yielded-{self.lease_id}"
+            )
+            return
+        if self._row.yield_requested_at is None:
+            self._row = replace(self._row, yield_requested_at=self.pool.space.hub.clock.now())
+        self._yield_task = asyncio.create_task(
+            self._fire_on_yield_requested(), name=f"ih-yield-requested-{self.lease_id}"
+        )
+
+    async def _fire_on_yield_requested(self) -> None:
+        callback, self._on_yield_requested = self._on_yield_requested, None
+        if callback is None:
+            return
+        try:
+            result = callback()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("on_yield_requested аренды %s завершился ошибкой", self.lease_id)
 
     async def _flush_logs(self, *, final: bool = False) -> None:
         """Пачка логов аренды в ih_lease_logs (FR-12.2). Ошибка записи не влияет на аренду."""
@@ -611,6 +648,8 @@ class Lease:
     async def _release_quietly(self, reason: LeaseEndReason | str, error: str | None = None) -> None:
         """Освобождение без `LeaseRevoked`: выход из `async with` сообщает потерю своей веткой."""
         end = _end_reason(reason)
+        if end is LeaseEndReason.RELEASED and self.yield_requested:
+            end = LeaseEndReason.YIELDED
         self._closed = True  # с этого момента check() бросает LeaseLost
         if self._released:
             return
@@ -636,6 +675,7 @@ class Lease:
             LeaseEndReason.FAILED: "lease.failed",
             LeaseEndReason.LOST: "lease.lost",
             LeaseEndReason.MAX_HOLD: "lease.expired",
+            LeaseEndReason.YIELDED: "lease.released",
         }.get(end, "lease.released")
         try:
             async with asyncio.timeout(RELEASE_TIMEOUT), self.pool.space._tx(own=True) as tx:
@@ -712,11 +752,16 @@ def _lost_error(reason: str | None) -> type[LeaseLost]:
 
 
 @contextlib.asynccontextmanager
-async def lease_scope(pool: Pool, on_lost: OnLost | None, **kwargs: Any) -> AsyncIterator[Lease]:
+async def lease_scope(
+    pool: Pool,
+    on_lost: OnLost | None,
+    on_yield_requested: OnYieldRequested | None = None,
+    **kwargs: Any,
+) -> AsyncIterator[Lease]:
     """Тело `pool.lease()`: захват → heartbeat и контекст логов → освобождение с причиной."""
     lease = await acquire(pool, **kwargs)
     token = _current.set(lease.context)
-    lease._start(on_lost)
+    lease._start(on_lost, on_yield_requested)
     try:
         yield lease
     except asyncio.CancelledError as exc:
@@ -822,6 +867,7 @@ async def acquire(
         )
     elif require_quota:
         raise ValidationFailed("require_quota не сочетается с готовым запросом")
+    query = replace(query, priority=options.priority)
     space = pool.space
     clock = space.hub.clock
     started = clock.monotonic()
@@ -917,7 +963,15 @@ async def acquire(
                     _observe_acquisition(pool, started, wait_seconds, "acquired")
                     return Lease(pool, row, candidate, proxy)
                 if not pool.shared:
-                    await tx.request_yield(requested, options.priority)
+                    result = await tx.request_yield(
+                        requested,
+                        options.priority,
+                        pool.yield_grace.total_seconds() if pool.yield_grace is not None else None,
+                    )
+                    if result is not None:
+                        live = space.hub._live_leases.get(result.lease_id)
+                        if live is not None:
+                            live._yield_requested_elsewhere(forced=result.forced)
         except _SkipCandidate as skip:
             query = replace(query, exclude=query.exclude | {skip.identity_id})
             continue

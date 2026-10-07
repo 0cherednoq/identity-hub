@@ -129,6 +129,7 @@ class Pool:
     reserve: int = 0
     reserve_strict: bool = False
     priority: int = 0
+    yield_grace: timedelta | None = None
     _capacity_state: str = field(default="ok", init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -141,10 +142,16 @@ class Pool:
             check_max_hold(self.max_hold, self.timing)
         self.reserve = check_reserve(self.reserve)
         self.priority = check_priority(self.priority)
+        if self.yield_grace is not None and (
+            not isinstance(self.yield_grace, timedelta) or self.yield_grace <= timedelta(0)
+        ):
+            raise ValidationFailed("yield_grace должен быть положительным timedelta")
         if self.reserve and self.shared:
             raise ValidationFailed("reserve не поддерживается для SHARED-пула")
         if self.priority and self.shared:
             raise ValidationFailed("priority не поддерживается для SHARED-пула")
+        if self.yield_grace is not None and self.shared:
+            raise ValidationFailed("yield_grace не поддерживается для SHARED-пула")
         _check_profile_filter(self.service, self.profile)
         if self.proxy_policy is None:
             self.proxy_policy = self.service.proxy_policy
@@ -217,6 +224,7 @@ class Pool:
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,
         on_lost: OnLost | None = None,
+        on_yield_requested: Callable[[], Any] | None = None,
         purpose: str | None = None,
         ref: str | None = None,
         max_hold: timedelta | None = None,
@@ -239,6 +247,7 @@ class Pool:
         return lease_scope(
             self,
             on_lost,
+            on_yield_requested,
             for_operation=for_operation,
             tags=tags,
             labels=labels,
@@ -433,6 +442,7 @@ class PoolsMixin:
         reserve: int = 0,
         reserve_strict: bool = False,
         priority: int = 0,
+        yield_grace: timedelta | None = None,
     ) -> Pool:
         defaults = LeaseTiming()
         timing = LeaseTiming(
@@ -458,4 +468,5 @@ class PoolsMixin:
             reserve=reserve,
             reserve_strict=reserve_strict,
             priority=priority,
+            yield_grace=yield_grace,
         )

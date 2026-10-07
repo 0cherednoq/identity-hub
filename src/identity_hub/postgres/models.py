@@ -328,6 +328,9 @@ class IdentityRecord(IdentityHubBase):
     # место в порядке выборки LRU: захват ставит то же время, что last_leased_at, а аккаунт с
     # исчерпанной квотой переносится в хвост без изменения last_leased_at (N1.3b, 0026)
     pick_order_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Короткая бронь после уступки: менее приоритетный ожидающий не перехватит identity (N3.2b).
+    yield_reserved_priority: Mapped[int | None] = mapped_column(Integer)
+    yield_reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # число команд, изменивших агрегат (IMP-07, D-205); новая строка — 0, событие создания даёт 1
     revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("1"))
 

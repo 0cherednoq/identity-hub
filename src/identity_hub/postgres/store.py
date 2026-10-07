@@ -195,6 +195,7 @@ from identity_hub.store.base import (
     WebhookDeliveryRow,
     WebhookEndpointReadRow,
     WebhookEndpointRow,
+    YieldRequest,
     credential_label,
     expiry_reason,
 )
@@ -991,6 +992,13 @@ class PgTx(StoreTx):
             # соединяет хешем все живые аренды с сортировкой вместо обхода индекса LRU (D-209)
             live = select(lease.identity_id).where(lease.identity_id == i.id, lease.expires_at > now)
             conditions.append(~live.exists())
+            conditions.append(
+                or_(
+                    i.yield_reserved_until.is_(None),
+                    i.yield_reserved_until <= now,
+                    i.yield_reserved_priority <= query.priority,
+                )
+            )
         if query.proxy_wait:
             down = (
                 select(BINDINGS.c.identity_id)
@@ -1092,7 +1100,9 @@ class PgTx(StoreTx):
         row = rows[0]
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}), False
 
-    async def request_yield(self, query: CandidateQuery, priority: int) -> bool:
+    async def request_yield(
+        self, query: CandidateQuery, priority: int, grace_seconds: float | None = None
+    ) -> YieldRequest | None:
         i, lease = IDENTITIES.c, LEASES.c
         stmt = (
             select(
@@ -1102,6 +1112,7 @@ class PgTx(StoreTx):
                 lease.holder,
                 lease.priority,
                 lease.yield_requested_priority,
+                lease.yield_requested_at,
                 i.service,
             )
             .select_from(LEASES.join(IDENTITIES, i.id == lease.identity_id))
@@ -1116,11 +1127,35 @@ class PgTx(StoreTx):
             .with_for_update(of=LEASES, skip_locked=True)
         )
         victim = (await self.execute(stmt)).mappings().one_or_none()
-        if victim is None or (
+        if victim is None:
+            return None
+        if (
+            grace_seconds is not None
+            and victim["yield_requested_at"] is not None
+            and victim["yield_requested_at"] + timedelta(seconds=grace_seconds) <= await self.now()
+        ):
+            now = await self.now()
+            await self.execute(
+                update(HISTORY)
+                .where(HISTORY.c.lease_id == victim["lease_id"], HISTORY.c.released_at.is_(None))
+                .values(released_at=now, end_reason=LeaseEndReason.YIELDED)
+            )
+            await self.execute(delete(LEASES).where(LEASES.c.identity_id == victim["identity_id"]))
+            await self.execute(
+                update(IDENTITIES)
+                .where(IDENTITIES.c.id == victim["identity_id"])
+                .values(
+                    yield_reserved_priority=priority,
+                    yield_reserved_until=now + timedelta(seconds=max(1.0, grace_seconds)),
+                    updated_at=IDENTITIES.c.updated_at,
+                )
+            )
+            return YieldRequest(victim["lease_id"], forced=True)
+        if (
             victim["yield_requested_priority"] is not None
             and victim["yield_requested_priority"] >= priority
         ):
-            return False
+            return None
         await self.execute(
             update(LEASES)
             .where(LEASES.c.identity_id == victim["identity_id"])
@@ -1143,7 +1178,7 @@ class PgTx(StoreTx):
                 )
             ]
         )
-        return True
+        return YieldRequest(victim["lease_id"])
 
     async def _demote_exhausted(self, query: CandidateQuery) -> None:
         """Перенести аккаунты с исчерпанной квотой из головы порядка выборки в хвост (N1.3b).
@@ -1226,7 +1261,12 @@ class PgTx(StoreTx):
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140);
         # время захвата ставят обе — по нему идёт LRU-выборка (IMP-01, D-209)
         leased_at = func.clock_timestamp()
-        values: dict[str, Any] = {"last_leased_at": leased_at, "pick_order_at": leased_at}
+        values: dict[str, Any] = {
+            "last_leased_at": leased_at,
+            "pick_order_at": leased_at,
+            "yield_reserved_priority": None,
+            "yield_reserved_until": None,
+        }
         if not shared:
             values["fencing_seq"] = IDENTITIES.c.fencing_seq + 1
         fencing_stmt = (
