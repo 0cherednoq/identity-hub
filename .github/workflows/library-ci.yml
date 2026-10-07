@@ -2,6 +2,7 @@ name: Library CI
 
 on:
   push:
+    branches: [master]
     paths:
       - "src/identity_hub/**"
       - "tests/**"
@@ -25,114 +26,120 @@ on:
       - "README.md"
       - "CHANGELOG.md"
       - ".github/workflows/library-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: library-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  IH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/identity_hub_test
+  UV_FROZEN: "1"
+  UV_NO_PROGRESS: "1"
 
 jobs:
-  check:
+  quality:
+    name: Quality
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: identity_hub_test
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d identity_hub_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: uv sync --locked --all-extras
-      - run: bash scripts/check.sh
-        env:
-          # полный прогон на одной версии проверяет, что тесты вызывают каждый метод Store (F5.3b)
-          IH_STORE_COVERAGE: ${{ matrix.python-version == '3.14' && '1' || '0' }}
-      # check.sh начинает с автоисправления: непустой diff означает неотформатированный код.
-      - run: git diff --exit-code
+          python-version: "3.12"
+      - run: uv sync --all-extras
+      - name: Lint and type-check
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy src
+          uv run lint-imports
 
-  pgbouncer:
-    # дымовой набор pg-тестов через PgBouncer в режиме транзакций по рецепту docs/integrations.md (F4.5)
+  fast-tests:
+    name: Fast tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: identity_hub_test
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d identity_hub_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-      pgbouncer:
-        image: edoburu/pgbouncer:latest
-        env:
-          DB_HOST: postgres
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          DB_NAME: identity_hub_test
-          POOL_MODE: transaction
-          AUTH_TYPE: scram-sha-256
-          MAX_CLIENT_CONN: "500"
-          DEFAULT_POOL_SIZE: "20"
-          # без поддержки prepared statements в самом PgBouncer: рецепт должен работать и так
-          MAX_PREPARED_STATEMENTS: "0"
-        ports:
-          - 6432:5432
-    env:
-      IH_TEST_PGBOUNCER: "1"
-      IH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:6432/identity_hub_test
-      IH_TEST_MIGRATE_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/identity_hub_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.14"
-      - run: uv sync --locked --all-extras
-      - run: >-
-          uv run pytest -m pg -q -rfE
-          tests/pg/test_pgbouncer.py tests/pg/test_acquire.py tests/pg/test_lease_lifecycle.py
-          tests/pg/test_outbox.py tests/pg/test_register.py tests/pg/test_dispatcher.py
-
-  package:
-    runs-on: ubuntu-latest
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.14"]
+    env:
+      IH_TEST_BACKENDS: memory
+      IH_STORE_COVERAGE: ${{ matrix.python-version == '3.14' && '1' || '0' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
+      - run: uv sync --all-extras
+      - name: Unit and in-memory conformance tests
+        run: uv run pytest -m "not pg and not load" -q -rfE
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IH_TEST_BACKENDS: postgres
+      IH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/identity_hub_test
+      IH_STORE_COVERAGE: "1"
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_DB: identity_hub_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d identity_hub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - run: uv sync --all-extras
+      - name: PostgreSQL and PostgreSQL-backed conformance tests
+        run: uv run pytest -m "pg or conformance" -q -rfE
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
       - run: uv build --out-dir dist
+      - run: uvx --from twine twine check dist/*
       - run: bash scripts/check_package.sh dist

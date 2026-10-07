@@ -497,9 +497,12 @@ class Identities(Namespace):
                 lifecycle_value = Lifecycle(lifecycle)
             except ValueError as exc:
                 raise ValidationFailed(f"неизвестный lifecycle: {lifecycle}") from exc
-        query = self._query(target) if isinstance(target, IdentityFilter) else None
-        search_filter = self._space._search_filter(query) if query is not None else None
-        ids = None if search_filter is not None else tuple(target)
+        if isinstance(target, IdentityFilter):
+            search_filter = self._space._search_filter(self._query(target))
+            ids = None
+        else:
+            search_filter = None
+            ids = tuple(target)
         changed, skipped = await self._space._update_many(
             search_filter=search_filter,
             identity_ids=ids,

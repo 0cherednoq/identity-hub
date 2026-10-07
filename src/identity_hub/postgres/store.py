@@ -1153,10 +1153,7 @@ class PgTx(StoreTx):
                 )
             )
             return YieldRequest(victim["lease_id"], forced=True)
-        if (
-            victim["yield_requested_priority"] is not None
-            and victim["yield_requested_priority"] >= priority
-        ):
+        if victim["yield_requested_priority"] is not None and victim["yield_requested_priority"] >= priority:
             return None
         await self.execute(
             update(LEASES)
@@ -1476,9 +1473,7 @@ class PgTx(StoreTx):
         )
         return "expired" if expired else "released"
 
-    async def get_throttle_state(
-        self, identity_id: UUID, names: Sequence[str]
-    ) -> dict[str, datetime]:
+    async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
         if not names:
             return {}
         rows = (
@@ -1533,17 +1528,20 @@ class PgTx(StoreTx):
             .values(identity_id=identity_id, space_id=self.space.id, name=name, tat=now)
             .on_conflict_do_nothing(index_elements=[THROTTLES.c.identity_id, THROTTLES.c.name])
         )
-        tat = (
-            await self.execute(
-                select(THROTTLES.c.tat)
-                .where(
-                    THROTTLES.c.identity_id == identity_id,
-                    THROTTLES.c.space_id == self.space.id,
-                    THROTTLES.c.name == name,
+        tat = cast(
+            datetime,
+            (
+                await self.execute(
+                    select(THROTTLES.c.tat)
+                    .where(
+                        THROTTLES.c.identity_id == identity_id,
+                        THROTTLES.c.space_id == self.space.id,
+                        THROTTLES.c.name == name,
+                    )
+                    .with_for_update()
                 )
-                .with_for_update()
-            )
-        ).scalar_one()
+            ).scalar_one(),
+        )
         allowed_at = tat - timedelta(seconds=interval_seconds * (burst - 1))
         if now < allowed_at:
             return max(0.0, (allowed_at - now).total_seconds())
@@ -5745,9 +5743,7 @@ class PgStore(Store):
                 execution_options=self.options,
             )
             renewed = {
-                row.token: LeaseRenewal(
-                    row.expires_at, yield_requested=row.yield_requested_at is not None
-                )
+                row.token: LeaseRenewal(row.expires_at, yield_requested=row.yield_requested_at is not None)
                 for row in rows
             }
             gone = [token for token in tokens if token not in renewed]

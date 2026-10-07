@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests._backends import selected_backends
 
 from identity_hub.clock import FakeClock
 from identity_hub.postgres.store import PgStore
@@ -19,15 +20,15 @@ pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
 
 
 class TestStoreConformance(StoreConformanceSuite):
-    @pytest.fixture(params=["memory", "postgres"], ids=["memory", "postgres"])
+    @pytest.fixture(params=selected_backends(), ids=str)
     async def store_under_test(
         self,
         request: pytest.FixtureRequest,
-        sessionmaker: async_sessionmaker[AsyncSession],
     ) -> AsyncIterator[Store]:
         if request.param == "memory":
             yield MemoryStore(FakeClock(datetime(2026, 1, 1, tzinfo=UTC)))
         else:
+            sessionmaker: async_sessionmaker[AsyncSession] = request.getfixturevalue("sessionmaker")
             yield PgStore(sessionmaker)
 
 

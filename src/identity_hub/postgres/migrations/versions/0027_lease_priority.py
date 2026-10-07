@@ -28,9 +28,7 @@ def upgrade() -> None:
     op.add_column(
         "ih_leases", sa.Column("priority", sa.Integer(), nullable=False, server_default="0"), schema=schema
     )
-    op.add_column(
-        "ih_leases", sa.Column("yield_requested_at", sa.DateTime(timezone=True)), schema=schema
-    )
+    op.add_column("ih_leases", sa.Column("yield_requested_at", sa.DateTime(timezone=True)), schema=schema)
     op.add_column("ih_leases", sa.Column("yield_requested_priority", sa.Integer()), schema=schema)
     op.add_column(
         "ih_lease_history",

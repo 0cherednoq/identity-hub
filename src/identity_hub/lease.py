@@ -279,9 +279,7 @@ class Lease:
             await self._fire_on_yield_requested()
         return renewal.expires_at
 
-    def _start(
-        self, on_lost: OnLost | None, on_yield_requested: OnYieldRequested | None = None
-    ) -> None:
+    def _start(self, on_lost: OnLost | None, on_yield_requested: OnYieldRequested | None = None) -> None:
         self._on_lost = on_lost
         self._on_yield_requested = on_yield_requested
         self._owner = asyncio.current_task()
@@ -498,9 +496,7 @@ class Lease:
         try:
             limit = self.pool.service.throttles[name]
         except KeyError:
-            raise ValidationFailed(
-                f"сервис {self.service}: неизвестный троттлинг {name!r}"
-            ) from None
+            raise ValidationFailed(f"сервис {self.service}: неизвестный троттлинг {name!r}") from None
         lock = self._throttle_locks.setdefault(name, asyncio.Lock())
         async with lock:
             while True:

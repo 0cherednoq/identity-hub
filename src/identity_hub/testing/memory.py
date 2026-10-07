@@ -915,14 +915,9 @@ class MemoryTx(StoreTx):
                 yield_reserved_until=self._now + timedelta(seconds=max(1.0, grace_seconds)),
             )
             return YieldRequest(victim.lease_id, forced=True)
-        if (
-            victim.yield_requested_priority is not None
-            and victim.yield_requested_priority >= priority
-        ):
+        if victim.yield_requested_priority is not None and victim.yield_requested_priority >= priority:
             return None
-        updated = replace(
-            victim, yield_requested_at=self._now, yield_requested_priority=priority
-        )
+        updated = replace(victim, yield_requested_at=self._now, yield_requested_priority=priority)
         self.state.leases[victim.identity_id] = updated
         identity = self._own(victim.identity_id)
         assert identity is not None
@@ -1134,17 +1129,13 @@ class MemoryTx(StoreTx):
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
             if not flush:
-                return LeaseRenewal(
-                    expires_at, yield_requested=current.yield_requested_at is not None
-                )
+                return LeaseRenewal(expires_at, yield_requested=current.yield_requested_at is not None)
         self.state.history[lease.lease_id] = replace(
             history, last_heartbeat_at=self._now, **_merge_counters(history, counters)
         )
         return LeaseRenewal(
             expires_at,
-            yield_requested=(
-                not shared and current is not None and current.yield_requested_at is not None
-            ),
+            yield_requested=(not shared and current is not None and current.yield_requested_at is not None),
         )
 
     async def release_lease(
@@ -1171,9 +1162,7 @@ class MemoryTx(StoreTx):
         )
         return "expired" if expired else "released"
 
-    async def get_throttle_state(
-        self, identity_id: UUID, names: Sequence[str]
-    ) -> dict[str, datetime]:
+    async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
         return {
             name: tat
             for name in names

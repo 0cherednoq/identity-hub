@@ -1337,9 +1337,7 @@ class StoreTx(ABC):
         """
 
     @abstractmethod
-    async def get_throttle_state(
-        self, identity_id: UUID, names: Sequence[str]
-    ) -> dict[str, datetime]:
+    async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
         """Сохранённые TAT для именованных троттлов identity."""
 
     @abstractmethod

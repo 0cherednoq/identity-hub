@@ -58,9 +58,7 @@ async def test_grace_forces_yield_and_reserves_for_requester(
     grace = timedelta(seconds=2)
     background = space.pools.define("background", service="fake_tg", priority=0)
     opportunistic = space.pools.define("opportunistic", service="fake_tg", priority=1)
-    urgent = space.pools.define(
-        "urgent", service="fake_tg", priority=10, yield_grace=grace
-    )
+    urgent = space.pools.define("urgent", service="fake_tg", priority=10, yield_grace=grace)
     victim = await background.acquire()
 
     with pytest.raises(LeaseUnavailable):

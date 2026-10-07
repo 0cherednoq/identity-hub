@@ -157,6 +157,7 @@ uv run python examples/telegram_service.py
 - [Трассировка требований](docs/traceability.md) — каждый FR/G/T/S и его
   исполняемое тестовое доказательство.
 - [CHANGELOG](CHANGELOG.md) — пользовательские изменения по версиям.
+- [Публикация релиза](RELEASING.md) — проверка артефактов, GitHub Release и PyPI Trusted Publishing.
 
 Для быстрых тестов без БД установите extra `testing`. Pytest-плагин предоставляет
 фикстуры с префиксом `identity_hub_`, а пользовательский пример можно выполнить

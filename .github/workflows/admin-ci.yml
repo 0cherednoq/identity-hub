@@ -2,6 +2,7 @@ name: Admin CI
 
 on:
   push:
+    branches: [master]
     paths:
       - "admin/**"
       - "src/identity_hub/**"
@@ -13,23 +14,28 @@ on:
       - "src/identity_hub/**"
       - "docs/admin/**"
       - ".github/workflows/admin-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: admin-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
   IH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/identity_hub_test
+  UV_FROZEN: "1"
+  UV_NO_PROGRESS: "1"
 
 jobs:
   backend:
+    name: Backend
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.14"]
+    timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
         env:
           POSTGRES_DB: identity_hub_test
           POSTGRES_PASSWORD: postgres
@@ -41,22 +47,34 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           cache-dependency-glob: admin/uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: uv sync --project admin --locked --all-groups
-      - run: uv run --project admin poe -C admin check-backend
+          python-version: "3.12"
+      - run: uv sync --project admin --all-groups
+      - name: Quality checks
+        run: |
+          uv run --project admin poe -C admin lint-backend
+          uv run --project admin poe -C admin format-backend
+          uv run --project admin poe -C admin typecheck-backend
+      - name: Unit and integration tests
+        run: uv run --project admin pytest -m "not contract" admin/tests
 
   frontend:
+    name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
@@ -64,47 +82,56 @@ jobs:
       - run: npm ci --prefix admin/frontend
       - run: npm run api:check --prefix admin/frontend
       - run: npm run check --prefix admin/frontend
-      - run: npm audit --prefix admin/frontend
+      - run: npm audit --audit-level=high --prefix admin/frontend
 
   contract:
+    name: API contract
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           cache-dependency-glob: admin/uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - run: uv sync --project admin --locked --all-groups
+      - run: uv sync --project admin --all-groups
       - run: uv run --project admin poe -C admin test-contract
       - run: uv run python docs/admin/progress_tool.py validate
 
   e2e:
+    name: Browser end-to-end
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: true
           cache-dependency-glob: admin/uv.lock
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: admin/frontend/package-lock.json
-      - run: uv sync --project admin --locked --all-groups
+      - run: uv sync --project admin --all-groups
       - run: npm ci --prefix admin/frontend
       - run: npx playwright install --with-deps chromium
         working-directory: admin/frontend
       - run: npm run test:e2e --prefix admin/frontend
       - name: Upload Playwright diagnostics
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: playwright-diagnostics
           path: admin/test-results

@@ -91,9 +91,7 @@ async def test_expired_holder_recovers_conservative_bound(
     await successor.release()
 
 
-async def test_shared_holders_use_one_atomic_state(
-    hub_under_test: IdentityHub, space: SpaceHandle
-) -> None:
+async def test_shared_holders_use_one_atomic_state(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
     hub_under_test.register_service(
         replace(
             FAKE_TG,

@@ -1,8 +1,8 @@
-"""F5.3b (R2-P23): каждый метод Store и StoreTx вызывается тестами на обоих бэкендах.
+"""F5.3b (R2-P23): каждый метод Store и StoreTx вызывается тестами на выбранных бэкендах.
 
-Плагин включается переменной `IH_STORE_COVERAGE=1` (CI, job `check` на Python 3.14) и имеет смысл
-только при полном прогоне: в конце сессии он перечисляет методы контракта без вызова на
-`MemoryStore` или PostgreSQL и делает прогон неуспешным.
+Плагин включается переменной `IH_STORE_COVERAGE=1` и имеет смысл только при полном прогоне
+выбранного через `IH_TEST_BACKENDS` бэкенда. В конце сессии он перечисляет методы контракта без
+вызова и делает прогон неуспешным.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import pytest
 from identity_hub.postgres.store import PgStore, PgTx
 from identity_hub.store.base import Store, StoreTx
 from identity_hub.testing.memory import MemoryStore, MemoryTx
+from tests._backends import selected_backends
 
 _CALLED: dict[str, set[str]] = {"memory": set(), "postgres": set()}
 
@@ -52,7 +53,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     missing = {
-        backend: [name for name in required() if name not in called] for backend, called in _CALLED.items()
+        backend: [name for name in required() if name not in _CALLED[backend]]
+        for backend in selected_backends()
     }
     lines = [f"{backend}: {', '.join(names)}" for backend, names in missing.items() if names]
     if not lines:

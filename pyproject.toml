@@ -64,23 +64,16 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/identity_hub"]
 
-# sdist — только библиотека: без админки (не готова к релизу), планов агента и кэшей.
+# The source distribution contains only files required to build and describe the library.
 [tool.hatch.build.targets.sdist]
 only-include = [
     "src/identity_hub",
-    "tests",
-    "examples",
-    "docs/guide",
-    "docs/cli.md",
-    "docs/integrations.md",
-    "docs/perf.md",
-    "docs/traceability.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
 ]
-exclude = ["__pycache__", "*.pyc"]
+exclude = ["**/__pycache__", "**/*.pyc"]
 
 [tool.ruff]
 line-length = 110
