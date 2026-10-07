@@ -12,6 +12,9 @@
 
 ### Added
 
+- Приоритет аренды (`N3.2a`): `pools.define(priority=)` и разовый `pool.lease(priority=)`;
+  более приоритетный запрос атомарно помечает одну низкоприоритетную аренду, а держатель получает
+  `lease.yield_requested` через `renew()`/heartbeat. Миграция `0027` хранит приоритет и запрос.
 - Резерв ёмкости пула (`N3.1`, задача 2 из `ISSUES-INTEGRATION.md`):
   `pools.define(reserve=, reserve_strict=)`, разовый `pool.lease(keep_free=)`, атомарная выборка
   `N + 1` кандидатов и `LeaseUnavailable(reason="reserve")`. `pool.capacity_detail()` возвращает

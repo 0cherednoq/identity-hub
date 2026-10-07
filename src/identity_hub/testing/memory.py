@@ -866,6 +866,50 @@ class MemoryTx(StoreTx):
             return None, bool(candidates)
         return candidates[0], False
 
+    async def request_yield(self, query: CandidateQuery, priority: int) -> bool:
+        admissible = replace(_with_among_ids(query), shared=True)
+        victims = [
+            lease
+            for lease in self.state.leases.values()
+            if lease.expires_at > self._now
+            and lease.priority < priority
+            and (identity := self._own(lease.identity_id)) is not None
+            and self._candidate(identity, admissible)
+        ]
+        victims.sort(key=lambda lease: (lease.priority, lease.acquired_at, lease.identity_id))
+        if not victims:
+            return False
+        victim = victims[0]
+        if (
+            victim.yield_requested_priority is not None
+            and victim.yield_requested_priority >= priority
+        ):
+            return False
+        updated = replace(
+            victim, yield_requested_at=self._now, yield_requested_priority=priority
+        )
+        self.state.leases[victim.identity_id] = updated
+        identity = self._own(victim.identity_id)
+        assert identity is not None
+        await self.emit(
+            [
+                EventDraft(
+                    "lease.yield_requested",
+                    actor="system",
+                    service=identity.service,
+                    identity_id=identity.id,
+                    lease_id=victim.lease_id,
+                    data={
+                        "pool": victim.pool,
+                        "holder": victim.holder,
+                        "priority": victim.priority,
+                        "requested_priority": priority,
+                    },
+                )
+            ]
+        )
+        return True
+
     def _ordered_candidates(self, query: CandidateQuery) -> list[IdentityRow]:
         candidates = [
             row
@@ -996,6 +1040,7 @@ class MemoryTx(StoreTx):
             purpose=options.purpose,
             ref=options.ref,
             hold_deadline=hold_deadline,
+            priority=options.priority,
         )
         if not shared:
             self.state.leases[identity.id] = lease
@@ -1020,6 +1065,7 @@ class MemoryTx(StoreTx):
             purpose=options.purpose,
             ref=options.ref,
             hold_deadline=hold_deadline,
+            priority=options.priority,
         )
         return lease, reclaimed
 
@@ -1051,11 +1097,18 @@ class MemoryTx(StoreTx):
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
             if not flush:
-                return LeaseRenewal(expires_at)
+                return LeaseRenewal(
+                    expires_at, yield_requested=current.yield_requested_at is not None
+                )
         self.state.history[lease.lease_id] = replace(
             history, last_heartbeat_at=self._now, **_merge_counters(history, counters)
         )
-        return LeaseRenewal(expires_at)
+        return LeaseRenewal(
+            expires_at,
+            yield_requested=(
+                not shared and current is not None and current.yield_requested_at is not None
+            ),
+        )
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
@@ -3577,7 +3630,9 @@ class MemoryStore(Store):
                     if lease.hold_deadline is not None:
                         expires_at = min(expires_at, lease.hold_deadline)
                     self._state.leases[identity_id] = replace(lease, expires_at=expires_at, heartbeat_at=now)
-                    renewed[lease.token] = LeaseRenewal(expires_at)
+                    renewed[lease.token] = LeaseRenewal(
+                        expires_at, yield_requested=lease.yield_requested_at is not None
+                    )
             for token in wanted - set(renewed):
                 renewed[token] = _gone(self._state, token)
             return renewed

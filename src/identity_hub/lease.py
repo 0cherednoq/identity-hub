@@ -162,6 +162,15 @@ class Lease:
         return self._row.ref
 
     @property
+    def priority(self) -> int:
+        return self._row.priority
+
+    @property
+    def yield_requested(self) -> bool:
+        """Запрошена ли кооперативная уступка более приоритетному арендатору."""
+        return self._row.yield_requested_at is not None
+
+    @property
     def service(self) -> str:
         return self.pool.service.name
 
@@ -252,7 +261,13 @@ class Lease:
             await self._fire_on_lost()
             raise _lost_error(reason)(self.lease_id, reason)
         self._last_ok = self.pool.space.hub.clock.monotonic()
-        self._row = replace(self._row, expires_at=renewal.expires_at)
+        self._row = replace(
+            self._row,
+            expires_at=renewal.expires_at,
+            yield_requested_at=(self._row.yield_requested_at or self._row.acquired_at)
+            if renewal.yield_requested
+            else None,
+        )
         return renewal.expires_at
 
     def _start(self, on_lost: OnLost | None) -> None:
@@ -303,7 +318,13 @@ class Lease:
                 confirmed = True
                 failures = 0
                 self._last_ok = max(self._last_ok, sent_at)
-                self._row = replace(self._row, expires_at=renewal.expires_at)
+                self._row = replace(
+                    self._row,
+                    expires_at=renewal.expires_at,
+                    yield_requested_at=(self._row.yield_requested_at or self._row.acquired_at)
+                    if renewal.yield_requested
+                    else None,
+                )
             if not confirmed and self._deadline_passed():
                 await self._mark_lost(self._deadline_reason())
                 return
@@ -768,6 +789,7 @@ async def acquire(
     max_hold: timedelta | None = None,
     require_quota: bool = False,
     keep_free: int | None = None,
+    priority: int | None = None,
 ) -> Lease:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
@@ -784,7 +806,7 @@ async def acquire(
     if reserve and pool.shared:
         raise ValidationFailed("keep_free не поддерживается для SHARED-пула")
     # формат проверяется до транзакции
-    options = pool.lease_options(purpose=purpose, ref=ref, max_hold=max_hold)
+    options = pool.lease_options(purpose=purpose, ref=ref, max_hold=max_hold, priority=priority)
     explicit_query = query
     if callable(among):  # предикат от Identity: заранее превращается в список id (F5.1)
         among = await _matching_ids(pool, among)
@@ -894,6 +916,8 @@ async def acquire(
                         )
                     _observe_acquisition(pool, started, wait_seconds, "acquired")
                     return Lease(pool, row, candidate, proxy)
+                if not pool.shared:
+                    await tx.request_yield(requested, options.priority)
         except _SkipCandidate as skip:
             query = replace(query, exclude=query.exclude | {skip.identity_id})
             continue

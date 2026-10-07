@@ -107,6 +107,7 @@ def _specs() -> dict[str, EventSpec]:
         "lease.lost",
         "lease.expired",
         "lease.revoked",
+        "lease.yield_requested",
         "operation.succeeded",
         "operation.failed",
         "session.saved",

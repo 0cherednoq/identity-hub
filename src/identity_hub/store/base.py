@@ -427,6 +427,9 @@ class LeaseRow:
     purpose: str | None = None  # метка вида работы, по ней группируют
     ref: str | None = None  # ссылка на задачу держателя
     hold_deadline: datetime | None = None  # потолок удержания: продление за него не выходит
+    priority: int = 0
+    yield_requested_at: datetime | None = None
+    yield_requested_priority: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -436,6 +439,7 @@ class LeaseOptions:
     purpose: str | None = None
     ref: str | None = None
     max_hold_seconds: float | None = None  # хранилище превращает в `hold_deadline` от своего времени
+    priority: int = 0
 
 
 def expiry_reason(hold_deadline: datetime | None, expired_at: datetime) -> LeaseEndReason:
@@ -497,6 +501,7 @@ class LeaseRenewal:
 
     expires_at: datetime | None
     end_reason: LeaseEndReason | None = None
+    yield_requested: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -848,6 +853,7 @@ class LeaseHistoryRow:
     purpose: str | None = None
     ref: str | None = None
     hold_deadline: datetime | None = None
+    priority: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -875,6 +881,7 @@ class LeaseReadRow:
     purpose: str | None = None
     ref: str | None = None
     hold_deadline: datetime | None = None
+    priority: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1243,6 +1250,10 @@ class StoreTx(ABC):
         self, query: CandidateQuery, reserve: int
     ) -> tuple[IdentityRow | None, bool]:
         """Заблокировать до ``reserve + 1`` кандидатов; вернуть (первый, reserve_blocked)."""
+
+    @abstractmethod
+    async def request_yield(self, query: CandidateQuery, priority: int) -> bool:
+        """Попросить одну живую допустимую аренду с меньшим priority кооперативно уступить."""
 
     @abstractmethod
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:

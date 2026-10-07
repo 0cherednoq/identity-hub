@@ -1092,6 +1092,59 @@ class PgTx(StoreTx):
         row = rows[0]
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}), False
 
+    async def request_yield(self, query: CandidateQuery, priority: int) -> bool:
+        i, lease = IDENTITIES.c, LEASES.c
+        stmt = (
+            select(
+                lease.identity_id,
+                lease.lease_id,
+                lease.pool,
+                lease.holder,
+                lease.priority,
+                lease.yield_requested_priority,
+                i.service,
+            )
+            .select_from(LEASES.join(IDENTITIES, i.id == lease.identity_id))
+            .where(
+                lease.space_id == self.space.id,
+                lease.expires_at > func.now(),
+                lease.priority < priority,
+                *self._candidate_conditions(replace(query, shared=True)),
+            )
+            .order_by(lease.priority, lease.acquired_at, lease.identity_id)
+            .limit(1)
+            .with_for_update(of=LEASES, skip_locked=True)
+        )
+        victim = (await self.execute(stmt)).mappings().one_or_none()
+        if victim is None or (
+            victim["yield_requested_priority"] is not None
+            and victim["yield_requested_priority"] >= priority
+        ):
+            return False
+        await self.execute(
+            update(LEASES)
+            .where(LEASES.c.identity_id == victim["identity_id"])
+            .values(yield_requested_at=func.now(), yield_requested_priority=priority)
+        )
+        await self.emit(
+            [
+                EventDraft(
+                    "lease.yield_requested",
+                    actor="system",
+                    service=victim["service"],
+                    identity_id=victim["identity_id"],
+                    lease_id=victim["lease_id"],
+                    data={
+                        "pool": victim["pool"],
+                        "holder": victim["holder"],
+                        "priority": victim["priority"],
+                        "requested_priority": priority,
+                    },
+                )
+            ]
+        )
+        return True
+
     async def _demote_exhausted(self, query: CandidateQuery) -> None:
         """Перенести аккаунты с исчерпанной квотой из головы порядка выборки в хвост (N1.3b).
 
@@ -1218,6 +1271,9 @@ class PgTx(StoreTx):
                 "purpose": options.purpose,
                 "ref": options.ref,
                 "hold_deadline": hold_deadline,
+                "priority": options.priority,
+                "yield_requested_at": None,
+                "yield_requested_priority": None,
                 "acquired_at": now,
                 "heartbeat_at": now,
                 "expires_at": expires_at,
@@ -1245,6 +1301,7 @@ class PgTx(StoreTx):
                 purpose=options.purpose,
                 ref=options.ref,
                 hold_deadline=hold_deadline,
+                priority=options.priority,
                 acquired_at=now,
                 last_heartbeat_at=now,
             )
@@ -1264,6 +1321,7 @@ class PgTx(StoreTx):
             purpose=options.purpose,
             ref=options.ref,
             hold_deadline=hold_deadline,
+            priority=options.priority,
         )
         return lease, reclaimed
 
@@ -1278,11 +1336,12 @@ class PgTx(StoreTx):
     ) -> LeaseRenewal:
         expires_at: datetime | None
         now: datetime | None = None
+        renewed: Any = None
         if shared:
             now = await self.now()
             expires_at = now + timedelta(seconds=ttl_seconds)
         else:
-            expires_at = (
+            renewed = (
                 await self.execute(
                     update(LEASES)
                     .where(
@@ -1291,13 +1350,15 @@ class PgTx(StoreTx):
                         LEASES.c.expires_at > func.now(),
                     )
                     .values(heartbeat_at=func.now(), expires_at=_renewed_until(ttl_seconds))
-                    .returning(LEASES.c.expires_at)
+                    .returning(LEASES.c.expires_at, LEASES.c.yield_requested_at)
                 )
-            ).scalar_one_or_none()
-            if expires_at is None:
+            ).one_or_none()
+            if renewed is None:
                 return await self._gone(lease.token)
+            expires_at = renewed.expires_at
+            yield_requested = renewed.yield_requested_at is not None
             if not flush:
-                return LeaseRenewal(cast(datetime, expires_at))
+                return LeaseRenewal(cast(datetime, expires_at), yield_requested=yield_requested)
         updated = await self.execute(
             update(HISTORY)
             .where(
@@ -1316,7 +1377,10 @@ class PgTx(StoreTx):
                 if row.hold_deadline <= now:
                     return LeaseRenewal(None, LeaseEndReason.MAX_HOLD)
                 expires_at = min(expires_at, row.hold_deadline)
-        return LeaseRenewal(expires_at)
+        return LeaseRenewal(
+            expires_at,
+            yield_requested=(not shared and renewed is not None and renewed.yield_requested_at is not None),
+        )
 
     async def _gone(self, token: UUID) -> LeaseRenewal:
         rows = await self.execute(_end_reasons([token]))
@@ -4370,6 +4434,9 @@ def _lease_row(row: Any) -> LeaseRow:
         purpose=row.get("purpose"),
         ref=row.get("ref"),
         hold_deadline=row.get("hold_deadline"),
+        priority=row.get("priority", 0),
+        yield_requested_at=row.get("yield_requested_at"),
+        yield_requested_priority=row.get("yield_requested_priority"),
     )
 
 
@@ -5553,10 +5620,15 @@ class PgStore(Store):
                 update(LEASES)
                 .where(_any_of(LEASES.c.token, list(tokens)), LEASES.c.expires_at > func.now())
                 .values(heartbeat_at=func.now(), expires_at=_renewed_until(ttl_seconds))
-                .returning(LEASES.c.token, LEASES.c.expires_at),
+                .returning(LEASES.c.token, LEASES.c.expires_at, LEASES.c.yield_requested_at),
                 execution_options=self.options,
             )
-            renewed = {row.token: LeaseRenewal(row.expires_at) for row in rows}
+            renewed = {
+                row.token: LeaseRenewal(
+                    row.expires_at, yield_requested=row.yield_requested_at is not None
+                )
+                for row in rows
+            }
             gone = [token for token in tokens if token not in renewed]
             if gone:  # редкий путь: причина нужна держателю, чтобы отличить отзыв от истечения
                 reasons = await _execute(session, _end_reasons(gone), execution_options=self.options)

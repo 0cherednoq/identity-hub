@@ -94,6 +94,12 @@ def check_reserve(value: int) -> int:
     return value
 
 
+def check_priority(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not -(2**31) <= value < 2**31:
+        raise ValidationFailed("priority: знаковое 32-битное целое")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class PoolCapacity:
     """Свободная ёмкость пула до и после применения резерва."""
@@ -122,6 +128,7 @@ class Pool:
     max_hold: timedelta | None = None  # потолок удержания аренд пула по умолчанию (N1.2)
     reserve: int = 0
     reserve_strict: bool = False
+    priority: int = 0
     _capacity_state: str = field(default="ok", init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -133,8 +140,11 @@ class Pool:
         if self.max_hold is not None:
             check_max_hold(self.max_hold, self.timing)
         self.reserve = check_reserve(self.reserve)
+        self.priority = check_priority(self.priority)
         if self.reserve and self.shared:
             raise ValidationFailed("reserve не поддерживается для SHARED-пула")
+        if self.priority and self.shared:
+            raise ValidationFailed("priority не поддерживается для SHARED-пула")
         _check_profile_filter(self.service, self.profile)
         if self.proxy_policy is None:
             self.proxy_policy = self.service.proxy_policy
@@ -212,6 +222,7 @@ class Pool:
         max_hold: timedelta | None = None,
         require_quota: bool = False,
         keep_free: int | None = None,
+        priority: int | None = None,
     ) -> AbstractAsyncContextManager[Lease]:
         """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
 
@@ -241,6 +252,7 @@ class Pool:
             max_hold=max_hold,
             require_quota=require_quota,
             keep_free=keep_free,
+            priority=priority,
         )
 
     async def acquire(
@@ -261,6 +273,7 @@ class Pool:
         max_hold: timedelta | None = None,
         require_quota: bool = False,
         keep_free: int | None = None,
+        priority: int | None = None,
     ) -> Lease:
         """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
 
@@ -284,17 +297,26 @@ class Pool:
             max_hold=max_hold,
             require_quota=require_quota,
             keep_free=keep_free,
+            priority=priority,
         )
 
     def lease_options(
-        self, *, purpose: str | None, ref: str | None, max_hold: timedelta | None = None
+        self,
+        *,
+        purpose: str | None,
+        ref: str | None,
+        max_hold: timedelta | None = None,
+        priority: int | None = None,
     ) -> LeaseOptions:
         """Свойства новой аренды: значения вызова поверх значений пула, проверенные и очищенные."""
         hold = check_max_hold(max_hold, self.timing) if max_hold is not None else self.max_hold
+        if priority is not None and self.shared:
+            raise ValidationFailed("priority не поддерживается для SHARED-пула")
         return LeaseOptions(
             purpose=check_purpose(purpose) if purpose is not None else self.purpose,
             ref=check_ref(ref) if ref is not None else None,
             max_hold_seconds=hold.total_seconds() if hold is not None else None,
+            priority=check_priority(priority) if priority is not None else self.priority,
         )
 
     async def capacity(self) -> int:
@@ -410,6 +432,7 @@ class PoolsMixin:
         max_hold: timedelta | None = None,
         reserve: int = 0,
         reserve_strict: bool = False,
+        priority: int = 0,
     ) -> Pool:
         defaults = LeaseTiming()
         timing = LeaseTiming(
@@ -434,4 +457,5 @@ class PoolsMixin:
             max_hold=max_hold,
             reserve=reserve,
             reserve_strict=reserve_strict,
+            priority=priority,
         )
