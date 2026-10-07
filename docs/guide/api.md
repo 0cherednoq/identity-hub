@@ -228,6 +228,7 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 | Лимит | Где | Как |
 |---|---|---|
 | квота N за окно | сервис | `OperationRule(quotas=(Quota(20, timedelta(hours=1)),))` |
+| частота запросов | сервис/аренда | `Service(throttles={"api": Throttle(...)})`; `await lease.throttle("api")` |
 | допуск по статусу и верификации | сервис | `OperationRule(standing=..., needs_auth=..., verified=..., tiers=...)` |
 | отдых после серии операций | пул | `pools.define(..., pacing=Pacing(work=Quota(...), pause=(15, 40)))` |
 | резерв для приоритетной работы | пул | `pools.define(..., reserve=N)`; разово `pool.lease(keep_free=N)` |
