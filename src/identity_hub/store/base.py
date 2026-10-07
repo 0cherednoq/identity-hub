@@ -434,6 +434,7 @@ class LeaseRow:
     priority: int = 0
     yield_requested_at: datetime | None = None
     yield_requested_priority: int | None = None
+    throttle_state: dict[str, datetime] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1334,6 +1335,16 @@ class StoreTx(ABC):
         взял: история закрыта как `expired` на момент `expires_at`; `closed` — история уже закрыта
         (повтор или перехват после истечения); `revoked` — аренду отозвали.
         """
+
+    @abstractmethod
+    async def get_throttle_state(
+        self, identity_id: UUID, names: Sequence[str]
+    ) -> dict[str, datetime]:
+        """Сохранённые TAT для именованных троттлов identity."""
+
+    @abstractmethod
+    async def save_throttle_state(self, identity_id: UUID, state: Mapping[str, datetime]) -> None:
+        """Сохранить TAT монотонно (greatest), не укорачивая состояние другого держателя."""
 
     @abstractmethod
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:

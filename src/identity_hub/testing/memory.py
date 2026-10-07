@@ -189,6 +189,7 @@ class _MemoryState:
     history_spaces: dict[UUID, UUID] = field(default_factory=dict)
     # token аренды по lease_id: в строке истории его нет, а fence разделяемой аренды сверяет его (D-212)
     history_tokens: dict[UUID, UUID] = field(default_factory=dict)
+    throttle_state: dict[tuple[UUID, str], datetime] = field(default_factory=dict)
     # identity → (время, порядковый номер) последней попытки фоновой сверки
     probe_attempts: dict[UUID, tuple[datetime, int]] = field(default_factory=dict)
     next_probe_attempt: int = 1
@@ -699,6 +700,8 @@ class MemoryTx(StoreTx):
             del self.state.session_slots[slot_key]
         for data_key in [item for item in self.state.data if item[0] == identity_id]:
             del self.state.data[data_key]
+        for throttle_key in [item for item in self.state.throttle_state if item[0] == identity_id]:
+            del self.state.throttle_state[throttle_key]
         for verification_key in [item for item in self.state.verifications if item[0] == identity_id]:
             del self.state.verifications[verification_key]
         for verification_key, verification in list(self.state.verifications.items()):
@@ -1167,6 +1170,21 @@ class MemoryTx(StoreTx):
             **_merge_counters(history, counters),
         )
         return "expired" if expired else "released"
+
+    async def get_throttle_state(
+        self, identity_id: UUID, names: Sequence[str]
+    ) -> dict[str, datetime]:
+        return {
+            name: tat
+            for name in names
+            if (tat := self.state.throttle_state.get((identity_id, name))) is not None
+        }
+
+    async def save_throttle_state(self, identity_id: UUID, state: Mapping[str, datetime]) -> None:
+        for name, tat in state.items():
+            key = (identity_id, name)
+            current = self.state.throttle_state.get(key)
+            self.state.throttle_state[key] = max(current, tat) if current is not None else tat
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""

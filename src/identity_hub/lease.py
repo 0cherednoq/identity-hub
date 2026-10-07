@@ -27,6 +27,7 @@ from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
+from identity_hub.domain.throttling import gcra_take
 from identity_hub.enums import (
     AuthState,
     LeaseEndReason,
@@ -127,6 +128,8 @@ class Lease:
         self._released = False
         self._on_lost_fired = False
         self._renew_lock = asyncio.Lock()
+        self._throttle_state = dict(row.throttle_state)
+        self._throttle_locks: dict[str, asyncio.Lock] = {}
 
     # --------------------------------------------------------- свойства
 
@@ -490,6 +493,27 @@ class Lease:
 
         return operation_scope(self, kind, key)
 
+    async def throttle(self, name: str, *, wait: bool = True) -> timedelta:
+        """Занять GCRA-слот; при ``wait=False`` вернуть задержку, не занимая будущий слот."""
+        try:
+            limit = self.pool.service.throttles[name]
+        except KeyError:
+            raise ValidationFailed(
+                f"сервис {self.service}: неизвестный троттлинг {name!r}"
+            ) from None
+        lock = self._throttle_locks.setdefault(name, asyncio.Lock())
+        async with lock:
+            while True:
+                self.check()
+                now = self.pool.space.hub.clock.now()
+                delay, tat = gcra_take(now, self._throttle_state.get(name), limit)
+                if delay <= timedelta(0):
+                    self._throttle_state[name] = tat
+                    return timedelta(0)
+                if not wait:
+                    return delay
+                await self.pool.space.hub.clock.sleep(delay.total_seconds())
+
     def verification(self, factor: str) -> Verification:
         """Фактор верификации под арендой (FR-10): start/submit/reconcile/…."""
         from identity_hub.verifications import Verification
@@ -679,6 +703,8 @@ class Lease:
         }.get(end, "lease.released")
         try:
             async with asyncio.timeout(RELEASE_TIMEOUT), self.pool.space._tx(own=True) as tx:
+                if self.pool.service.throttles and self._throttle_state:
+                    await tx.save_throttle_state(self.identity_id, self._throttle_state)
                 outcome = await tx.release_lease(self._row, str(end), counters, shared=self.pool.shared)
                 if outcome == "expired":
                     event_type, end = "lease.expired", LeaseEndReason.EXPIRED
@@ -912,6 +938,13 @@ async def acquire(
                         )
                         if proxy is not None:
                             existing = replace(existing, proxy_id=proxy.id)
+                        if pool.service.throttles:
+                            existing = replace(
+                                existing,
+                                throttle_state=await tx.get_throttle_state(
+                                    existing.identity_id, tuple(pool.service.throttles)
+                                ),
+                            )
                         _observe_acquisition(pool, started, wait_seconds, "reused")
                         return Lease(pool, existing, identity, proxy)
                 effective_reserve = await pool._effective_reserve(tx, query, reserve)
@@ -950,6 +983,13 @@ async def acquire(
                             )
                         )
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
+                    if pool.service.throttles:
+                        row = replace(
+                            row,
+                            throttle_state=await tx.get_throttle_state(
+                                row.identity_id, tuple(pool.service.throttles)
+                            ),
+                        )
                     await space._emit(tx, *drafts)
                     if idempotency_key is not None:
                         await tx.complete_idempotency_key(

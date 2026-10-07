@@ -85,6 +85,7 @@ __all__ = [
     "StateSnapshotRecord",
     "StatsMetricBatchRecord",
     "StatsRollupRecord",
+    "ThrottleStateRecord",
     "VerificationRecord",
     "WebhookDeliveryRecord",
     "WebhookEndpointRecord",
@@ -851,6 +852,19 @@ class QuotaUsageRecord(IdentityHubBase):
         # чистка завершившихся окон: отдельно по каждому размеру окна (миграция 0015)
         Index("ix_ih_quota_usage_window", "window_seconds", "window_start"),
     )
+
+
+class ThrottleStateRecord(IdentityHubBase):
+    """Сохранённый theoretical arrival time GCRA для аккаунта и имени лимита."""
+
+    __tablename__ = "ih_throttle_state"
+
+    identity_id: Mapped[UUID] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    space_id: Mapped[UUID]
+    tat: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (_identity_fk(),)
 
 
 class OperationKeyRecord(IdentityHubBase):

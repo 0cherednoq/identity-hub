@@ -1,16 +1,38 @@
 # 8. Лимиты и реакция на ошибки
 
 Платформы банят за слишком частые действия. Identity Hub ограничивает нагрузку на каждый
-аккаунт четырьмя механизмами:
+аккаунт пятью механизмами:
 
 | Механизм | Где задаётся | Что делает | Состояние аккаунта |
 |---|---|---|---|
 | **Квота** | `OperationRule.quotas` в сервисе | Не больше N операций вида за окно | не меняется; `operation()` бросает `QuotaExhausted` |
+| **Троттлинг** | `Service.throttles` | Равномерно ограничивает частоту вызовов по скользящему окну | не меняется; `lease.throttle()` ждёт слот |
 | **Pacing** | `space.pools.define(..., pacing=)` | После N операций — отдых на случайное время | `availability = paused` |
 | **Cooldown** | `op.cool_down()` или `Fault(retry_after=)` | Пауза по требованию платформы (flood-wait) | `availability = cooling` |
 | **Карантин** | `Service.quarantine_threshold` | Слишком много ошибок по вине аккаунта | `availability = quarantined` |
 
 Все лимиты считаются **на аккаунт**. Квот на пул, прокси или сервис целиком нет.
+
+## Троттлинг частоты
+
+```python
+from datetime import timedelta
+from identity_hub import Service, Throttle
+
+TELEGRAM = Service(
+    ...,
+    throttles={"api": Throttle(30, timedelta(minutes=1))},
+)
+
+await lease.throttle("api")                 # дождаться и занять слот
+retry_after = await lease.throttle("api", wait=False)  # timedelta; будущий слот не занят
+```
+
+Троттлинг использует GCRA. При `burst=1` в любом окне `per` допускается не больше `limit`
+вызовов; `burst=N` добавляет до `N − 1` вызовов краткого всплеска. Для эксклюзивной аренды счёт
+идёт в памяти держателя без запроса к БД на каждый вызов. TAT читается при захвате и монотонно
+сохраняется при освобождении, поэтому лимит продолжается после смены воркера. Неизвестное имя —
+`ValidationFailed`; потеря аренды во время ожидания — `LeaseLost`.
 
 ## Операция
 

@@ -45,6 +45,7 @@ __all__ = [
     "ProxyPolicy",
     "Quota",
     "Service",
+    "Throttle",
 ]
 
 PROBE_OPERATION = "probe"
@@ -95,6 +96,27 @@ class Quota:
         """Начало окна, как `date_bin(per, now, origin)` в PostgreSQL."""
         elapsed = (now - self.origin).total_seconds()
         return self.origin + timedelta(seconds=(elapsed // self.window_seconds) * self.window_seconds)
+
+
+@dataclass(frozen=True)
+class Throttle:
+    """GCRA-ограничение частоты: ``limit`` вызовов за ``per`` с допустимым всплеском."""
+
+    limit: int
+    per: timedelta
+    burst: int = 1
+
+    def __post_init__(self) -> None:
+        if isinstance(self.limit, bool) or self.limit < 1:
+            raise ValueError("limit троттлинга должен быть ≥ 1")
+        if not isinstance(self.per, timedelta) or self.per.total_seconds() <= 0:
+            raise ValueError("per троттлинга должен быть положительным timedelta")
+        if isinstance(self.burst, bool) or self.burst < 1:
+            raise ValueError("burst троттлинга должен быть ≥ 1")
+
+    @property
+    def interval(self) -> timedelta:
+        return self.per / self.limit
 
 
 @dataclass(frozen=True)
@@ -156,6 +178,7 @@ class Service:
     filterable_profile: frozenset[str] = frozenset()
     searchable_profile: frozenset[str] = frozenset()
     operations: Mapping[str, OperationRule] = field(default_factory=dict)
+    throttles: Mapping[str, Throttle] = field(default_factory=dict)
     standing_codes: Mapping[str, str] = field(default_factory=dict)
     verifications: tuple[VerificationSpec, ...] = ()
     tiers: tuple[VerificationTier, ...] = ()
@@ -321,6 +344,11 @@ class Service:
                 errors.append(f"operation {kind}: неизвестные факторы {sorted(rule.verified - known)}")
             if rule.tiers - tier_names:
                 errors.append(f"operation {kind}: неизвестные уровни {sorted(rule.tiers - tier_names)}")
+        for name, throttle in self.throttles.items():
+            if not _NAME.match(name):
+                errors.append(f"throttles[{name!r}]: некорректное имя")
+            if not isinstance(throttle, Throttle):
+                errors.append(f"throttles[{name!r}]: нужен Throttle")
         for region in self.normalizers:
             if region not in REGIONS and region != VERIFICATION.name:
                 errors.append(f"normalizers: неизвестный регион {region!r}")

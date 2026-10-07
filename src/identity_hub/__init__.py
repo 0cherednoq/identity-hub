@@ -111,6 +111,7 @@ from identity_hub.service import (
     ProxyPolicy,
     Quota,
     Service,
+    Throttle,
 )
 from identity_hub.state import Observation, Override
 from identity_hub.store.base import LeaseFence
@@ -225,6 +226,7 @@ __all__ = [
     "TelegramRejected",
     "TelegramTransport",
     "TelegramUnavailable",
+    "Throttle",
     "TransitionNotAllowed",
     "UpdateManyResult",
     "ValidationFailed",

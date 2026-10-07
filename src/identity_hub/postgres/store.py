@@ -117,6 +117,7 @@ from identity_hub.postgres.models import (
     StateSnapshotRecord,
     StatsMetricBatchRecord,
     StatsRollupRecord,
+    ThrottleStateRecord,
     VerificationRecord,
     WebhookDeliveryRecord,
     WebhookEndpointRecord,
@@ -214,6 +215,7 @@ LEASES = cast(Table, LeaseRecord.__table__)
 HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 LEASE_LOGS = cast(Table, LeaseLogRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
+THROTTLES = cast(Table, ThrottleStateRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROVIDER_OPERATIONS = cast(Table, ProviderOperationRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
@@ -1473,6 +1475,34 @@ class PgTx(StoreTx):
             .values(released_at=released_at, end_reason=end_reason, **_counter_values(counters))
         )
         return "expired" if expired else "released"
+
+    async def get_throttle_state(
+        self, identity_id: UUID, names: Sequence[str]
+    ) -> dict[str, datetime]:
+        if not names:
+            return {}
+        rows = (
+            await self.execute(
+                select(THROTTLES.c.name, THROTTLES.c.tat).where(
+                    THROTTLES.c.identity_id == identity_id,
+                    THROTTLES.c.space_id == self.space.id,
+                    THROTTLES.c.name.in_(list(names)),
+                )
+            )
+        ).all()
+        return {row.name: row.tat for row in rows}
+
+    async def save_throttle_state(self, identity_id: UUID, state: Mapping[str, datetime]) -> None:
+        for name, tat in state.items():
+            stmt = insert(THROTTLES).values(
+                identity_id=identity_id, space_id=self.space.id, name=name, tat=tat
+            )
+            await self.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[THROTTLES.c.identity_id, THROTTLES.c.name],
+                    set_={"tat": func.greatest(THROTTLES.c.tat, stmt.excluded.tat)},
+                )
+            )
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         ordered = sorted(set(identity_ids))
