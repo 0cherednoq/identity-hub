@@ -505,6 +505,21 @@ class Lease:
         async with lock:
             while True:
                 self.check()
+                if self.pool.shared:
+                    async with self.pool.space._tx(own=True) as tx:
+                        seconds = await tx.take_shared_throttle(
+                            self.identity_id,
+                            name,
+                            limit.interval.total_seconds(),
+                            limit.burst,
+                        )
+                    delay = timedelta(seconds=seconds)
+                    if delay <= timedelta(0):
+                        return timedelta(0)
+                    if not wait:
+                        return delay
+                    await self.pool.space.hub.clock.sleep(delay.total_seconds())
+                    continue
                 now = self.pool.space.hub.clock.now()
                 delay, tat = gcra_take(now, self._throttle_state.get(name), limit)
                 if delay <= timedelta(0):
@@ -903,6 +918,18 @@ async def acquire(
     exhausted_reported = False
     reserve_blocked = False
     requested = query  # без кандидатов, пропущенных из-за гонки: они заняты, а не недопустимы
+
+    async def with_throttles(tx: StoreTx, row: LeaseRow) -> LeaseRow:
+        if not pool.service.throttles or pool.shared:
+            return row
+        state = await tx.get_throttle_state(row.identity_id, tuple(pool.service.throttles))
+        unclean = await tx.last_unclean_lease_end(row.identity_id)
+        if unclean is not None:
+            for name, throttle in pool.service.throttles.items():
+                bound = unclean + throttle.interval * throttle.burst
+                state[name] = max(state.get(name, bound), bound)
+        return replace(row, throttle_state=state)
+
     while True:
         try:
             async with space._tx(own=True) as tx:
@@ -938,13 +965,7 @@ async def acquire(
                         )
                         if proxy is not None:
                             existing = replace(existing, proxy_id=proxy.id)
-                        if pool.service.throttles:
-                            existing = replace(
-                                existing,
-                                throttle_state=await tx.get_throttle_state(
-                                    existing.identity_id, tuple(pool.service.throttles)
-                                ),
-                            )
+                        existing = await with_throttles(tx, existing)
                         _observe_acquisition(pool, started, wait_seconds, "reused")
                         return Lease(pool, existing, identity, proxy)
                 effective_reserve = await pool._effective_reserve(tx, query, reserve)
@@ -983,13 +1004,7 @@ async def acquire(
                             )
                         )
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
-                    if pool.service.throttles:
-                        row = replace(
-                            row,
-                            throttle_state=await tx.get_throttle_state(
-                                row.identity_id, tuple(pool.service.throttles)
-                            ),
-                        )
+                    row = await with_throttles(tx, row)
                     await space._emit(tx, *drafts)
                     if idempotency_key is not None:
                         await tx.complete_idempotency_key(

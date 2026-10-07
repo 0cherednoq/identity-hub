@@ -1186,6 +1186,28 @@ class MemoryTx(StoreTx):
             current = self.state.throttle_state.get(key)
             self.state.throttle_state[key] = max(current, tat) if current is not None else tat
 
+    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+        ends = [
+            row.released_at
+            for row in self.state.history.values()
+            if row.identity_id == identity_id
+            and row.end_reason in {"expired", "lost", "revoked"}
+            and row.released_at is not None
+            and self.state.history_spaces.get(row.lease_id) == self.space.id
+        ]
+        return max(ends, default=None)
+
+    async def take_shared_throttle(
+        self, identity_id: UUID, name: str, interval_seconds: float, burst: int
+    ) -> float:
+        key = (identity_id, name)
+        tat = self.state.throttle_state.get(key, self._now)
+        allowed_at = tat - timedelta(seconds=interval_seconds * (burst - 1))
+        if self._now < allowed_at:
+            return max(0.0, (allowed_at - self._now).total_seconds())
+        self.state.throttle_state[key] = max(tat, self._now) + timedelta(seconds=interval_seconds)
+        return 0.0
+
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""
 

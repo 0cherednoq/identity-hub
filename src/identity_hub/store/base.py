@@ -1347,6 +1347,16 @@ class StoreTx(ABC):
         """Сохранить TAT монотонно (greatest), не укорачивая состояние другого держателя."""
 
     @abstractmethod
+    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+        """Конец последней истёкшей/потерянной аренды для консервативного восстановления TAT."""
+
+    @abstractmethod
+    async def take_shared_throttle(
+        self, identity_id: UUID, name: str, interval_seconds: float, burst: int
+    ) -> float:
+        """Атомарно занять общий GCRA-слот или вернуть секунды ожидания, не меняя TAT."""
+
+    @abstractmethod
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Эксклюзивно (FOR NO KEY UPDATE) заблокировать identity этого пространства по возрастанию id.
 

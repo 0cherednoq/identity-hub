@@ -1504,6 +1504,57 @@ class PgTx(StoreTx):
                 )
             )
 
+    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+        return cast(
+            "datetime | None",
+            (
+                await self.execute(
+                    select(HISTORY.c.released_at)
+                    .where(
+                        HISTORY.c.space_id == self.space.id,
+                        HISTORY.c.identity_id == identity_id,
+                        HISTORY.c.end_reason.in_(
+                            [LeaseEndReason.EXPIRED, LeaseEndReason.LOST, LeaseEndReason.REVOKED]
+                        ),
+                        HISTORY.c.released_at.is_not(None),
+                    )
+                    .order_by(HISTORY.c.released_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none(),
+        )
+
+    async def take_shared_throttle(
+        self, identity_id: UUID, name: str, interval_seconds: float, burst: int
+    ) -> float:
+        now = await self.now()
+        await self.execute(
+            insert(THROTTLES)
+            .values(identity_id=identity_id, space_id=self.space.id, name=name, tat=now)
+            .on_conflict_do_nothing(index_elements=[THROTTLES.c.identity_id, THROTTLES.c.name])
+        )
+        tat = (
+            await self.execute(
+                select(THROTTLES.c.tat)
+                .where(
+                    THROTTLES.c.identity_id == identity_id,
+                    THROTTLES.c.space_id == self.space.id,
+                    THROTTLES.c.name == name,
+                )
+                .with_for_update()
+            )
+        ).scalar_one()
+        allowed_at = tat - timedelta(seconds=interval_seconds * (burst - 1))
+        if now < allowed_at:
+            return max(0.0, (allowed_at - now).total_seconds())
+        next_tat = max(tat, now) + timedelta(seconds=interval_seconds)
+        await self.execute(
+            update(THROTTLES)
+            .where(THROTTLES.c.identity_id == identity_id, THROTTLES.c.name == name)
+            .values(tat=next_tat)
+        )
+        return 0.0
+
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         ordered = sorted(set(identity_ids))
         if not ordered:
