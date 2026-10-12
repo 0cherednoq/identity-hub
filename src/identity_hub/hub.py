@@ -149,7 +149,10 @@ class IdentityHub:
 
             store = PgStore(sessionmaker, db_schema=db_schema)
         if secrets is None:
-            raise ValidationFailed("нужен SecretsProvider (мастер-ключи)")
+            raise ValidationFailed(
+                "нужен SecretsProvider (мастер-ключи): создайте ключ командой `identity-hub keygen`, "
+                "сохраните его в IDENTITY_HUB_KEK и передайте secrets=EnvSecretsProvider()"
+            )
         self._store = store
         self._envelope = Envelope(secrets)
         self._fingerprints = FingerprintKeyring(secrets)  # ключи отпечатков, не KEK (IMP-04, D-207)

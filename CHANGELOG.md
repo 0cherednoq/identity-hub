@@ -15,6 +15,10 @@
 
 ### Added
 
+- CLI (`C6.2`): `identity-hub keygen [--key-id k1]` печатает мастер-ключ для
+  `IDENTITY_HUB_KEK`; `identity-hub migrate` берёт адрес из
+  `IDENTITY_HUB_MIGRATE_DATABASE_URL` раньше общего — для миграций в обход PgBouncer. Ошибка
+  создания хаба без мастер-ключа называет команду и переменную окружения.
 - Режим миграций при старте (`C6.1`): `IdentityHub(..., migrate="check" | "auto" | "off")`.
   `"check"` (по умолчанию) — прежняя сверка ревизии; `"auto"` — `hub.start()` сам применяет
   миграции под блокировкой миграции; `"off"` — без сверки.

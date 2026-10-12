@@ -40,7 +40,7 @@ uv run pytest
 1. Создайте 32-байтовый мастер-ключ. Не коммитьте его и не выводите в логи:
 
    ```bash
-   uv run python -c "from identity_hub.crypto import generate_key; print(generate_key())"
+   uv run identity-hub keygen
    ```
 
 2. Сохраните результат в `IDENTITY_HUB_KEK`. Первый ключ в строке активен;
@@ -58,6 +58,14 @@ uv run pytest
    `IdentityHub(..., migrate="auto")` — тогда `hub.start()` доводит схему до нужной ревизии.
    В рабочей системе с несколькими воркерами оставьте режим по умолчанию (`"check"`) и
    применяйте миграции отдельным шагом развёртывания.
+
+   Три строки, которые стоит добавить сразу:
+
+   - **Своя схема.** `IdentityHub(..., db_schema="identity_hub")` и `identity-hub migrate
+     --db-schema identity_hub` — таблицы библиотеки лежат отдельно от таблиц приложения.
+   - **Alembic приложения.** В `env.py`: `from identity_hub.alembic import exclude_identity_hub` и
+     `context.configure(..., include_object=exclude_identity_hub)` — autogenerate не трогает `ih_*`.
+   - **Пространство.** `space = await hub.spaces.ensure("main")` при старте создаёт его, если нет.
 
 4. Объявите сервис в коде и создайте один `IdentityHub` на процесс:
 

@@ -144,3 +144,45 @@ def test_doctor_reports_rows_under_inactive_key(capsys: pytest.CaptureFixture[st
     for extra in ([], ["--fix"]):  # --fix ключи не меняет: это работа rotate-key
         assert main(["doctor", "--factory", f"{__name__}:rotation_hub_factory", *extra]) == 1
         assert "issue: inactive-key proxies k1 1" in capsys.readouterr().out.splitlines()
+
+
+def test_keygen_prints_usable_key(capsys: pytest.CaptureFixture[str]) -> None:
+    """C6.2: `keygen` печатает ключ в формате `IDENTITY_HUB_KEK` и ничего лишнего."""
+    from identity_hub.crypto import parse_keys
+
+    assert main(["keygen", "--key-id", "k7"]) == 0
+    out = capsys.readouterr()
+    line = out.out.strip()
+    active, keys = parse_keys(line)
+    assert active == "k7" and len(keys["k7"]) == 32 and out.err == ""
+    assert main(["keygen"]) == 0
+    assert capsys.readouterr().out.startswith("k1:")
+
+
+def test_missing_secrets_error_tells_how_to_create_a_key() -> None:
+    """C6.2: ошибка без мастер-ключа называет переменную окружения и команду создания ключа."""
+    from identity_hub import ValidationFailed
+
+    with pytest.raises(ValidationFailed) as error:
+        IdentityHub(store=MemoryStore())
+    message = str(error.value)
+    assert "identity-hub keygen" in message and "IDENTITY_HUB_KEK" in message
+
+
+def test_migrate_prefers_dedicated_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """C6.2: отдельный адрес миграций (в обход PgBouncer) важнее общего адреса базы."""
+    from identity_hub import cli
+
+    monkeypatch.setenv("IDENTITY_HUB_DATABASE_URL", "postgresql+asyncpg://bouncer/app")
+    monkeypatch.setenv("IDENTITY_HUB_MIGRATE_DATABASE_URL", "postgresql+asyncpg://direct/app")
+    args = _parser().parse_args(["migrate"])
+    assert cli._migrate_url(args) == "postgresql+asyncpg://direct/app"
+    assert cli._migrate_url(_parser().parse_args(["migrate", "--url", "postgresql+asyncpg://x/y"])) == (
+        "postgresql+asyncpg://x/y"
+    )
+    monkeypatch.delenv("IDENTITY_HUB_MIGRATE_DATABASE_URL")
+    assert cli._migrate_url(args) == "postgresql+asyncpg://bouncer/app"
+    monkeypatch.delenv("IDENTITY_HUB_DATABASE_URL")
+    with pytest.raises(SystemExit) as stopped:  # адрес не задан — ошибка аргументов
+        main(["migrate"])
+    assert stopped.value.code == 2

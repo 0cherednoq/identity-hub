@@ -23,6 +23,8 @@ Factory = Callable[[], IdentityHub | Awaitable[IdentityHub]]
 logger = logging.getLogger("identity_hub")
 
 DATABASE_URL_ENV = "IDENTITY_HUB_DATABASE_URL"
+# прямой адрес PostgreSQL для миграций, когда приложение ходит через PgBouncer в режиме транзакций
+MIGRATE_URL_ENV = "IDENTITY_HUB_MIGRATE_DATABASE_URL"
 DAEMON_BACKOFF_BASE = 1.0  # пауза после первого сбоя тика, секунды; дальше удваивается
 DAEMON_BACKOFF_MAX = 60.0
 MAINTENANCE_INTERVAL = 1.0
@@ -48,6 +50,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     migrate.add_argument("--db-schema")
     migrate.add_argument("--revision", default="head")
+
+    keygen = sub.add_parser("keygen", help="создать мастер-ключ для IDENTITY_HUB_KEK")
+    keygen.add_argument("--key-id", default="k1", help="идентификатор ключа в кольце")
 
     dispatcher = sub.add_parser("dispatcher", help="запустить диспетчер событий")
     _factory_argument(dispatcher)
@@ -128,8 +133,10 @@ def _check_arguments(args: argparse.Namespace) -> None:
     """Проверить и разобрать аргументы до подключения к базе; ошибки — только `_UsageError`."""
     command = args.command
     if command == "migrate":
-        if not (args.url or os.environ.get(DATABASE_URL_ENV)):
-            raise _UsageError(f"укажите --url или {DATABASE_URL_ENV}")
+        if not _migrate_url(args):
+            raise _UsageError(f"укажите --url, {MIGRATE_URL_ENV} или {DATABASE_URL_ENV}")
+        return
+    if command == "keygen":
         return
     if command == "rotate-key" and args.batch_size < 1:
         raise _UsageError("--batch-size должен быть положительным")
@@ -226,6 +233,18 @@ async def _daemon(
         await hub.clock.sleep(pause)
 
 
+def _migrate_url(args: argparse.Namespace) -> str | None:
+    """Адрес для миграций: `--url`, затем отдельный прямой адрес, затем общий адрес базы."""
+    return args.url or os.environ.get(MIGRATE_URL_ENV) or os.environ.get(DATABASE_URL_ENV)
+
+
+def _keygen(args: argparse.Namespace) -> int:
+    from identity_hub.crypto import generate_key
+
+    print(generate_key(args.key_id))  # ключ идёт только в stdout: его забирает вызывающий
+    return 0
+
+
 async def _migrate(args: argparse.Namespace) -> int:
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -237,7 +256,7 @@ async def _migrate(args: argparse.Namespace) -> int:
             f"передавайте адрес базы через {DATABASE_URL_ENV}",
             file=sys.stderr,
         )
-    engine = create_async_engine(args.url or os.environ[DATABASE_URL_ENV])
+    engine = create_async_engine(_migrate_url(args) or "")
     try:
         await migrations.migrate(engine, db_schema=args.db_schema, revision=args.revision)
     finally:
@@ -255,6 +274,8 @@ def _has_password(url: str) -> bool:
 async def async_main(args: argparse.Namespace) -> int:
     if args.command == "migrate":
         return await _migrate(args)
+    if args.command == "keygen":
+        return _keygen(args)
     hub = await _hub(args.factory)
     try:
         return await _run(hub, args)
