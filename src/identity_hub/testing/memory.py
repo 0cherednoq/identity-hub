@@ -337,6 +337,17 @@ class MemoryTx(StoreTx):
     async def now(self) -> datetime:
         return self._now
 
+    @asynccontextmanager
+    async def savepoint(self) -> AsyncIterator[None]:
+        snapshot = _snapshot(self.state)
+        revised, notify = set(self._revised), self._notify
+        try:
+            yield
+        except BaseException:
+            _restore(self.state, snapshot)
+            self._revised, self._notify = revised, notify
+            raise
+
     def _own(self, identity_id: UUID) -> IdentityRow | None:
         row = self.state.identities.get(identity_id)
         return row if row is not None and row.space_id == self.space.id else None

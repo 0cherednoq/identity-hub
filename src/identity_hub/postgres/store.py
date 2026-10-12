@@ -311,6 +311,16 @@ class PgTx(StoreTx):
             self._now = (await _execute(self.session, select(func.now()))).scalar_one()
         return self._now
 
+    @asynccontextmanager
+    async def savepoint(self) -> AsyncIterator[None]:
+        revised = set(self._revised)
+        try:
+            async with self.session.begin_nested():
+                yield
+        except BaseException:
+            self._revised = revised  # ревизии, поднятые в откатанном блоке, не подняты
+            raise
+
     async def emit(self, drafts: Sequence[EventDraft]) -> list[UUID]:
         if not drafts:
             return []

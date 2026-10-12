@@ -1,5 +1,6 @@
 """Публичный API Identity Hub."""
 
+from identity_hub.api.batch import BatchRejection, BatchResult
 from identity_hub.api.identities import (
     CreateManyResult,
     Identity,
@@ -124,6 +125,8 @@ __all__ = [
     "AuthState",
     "Authenticator",
     "Availability",
+    "BatchRejection",
+    "BatchResult",
     "Blame",
     "Blocker",
     "ChallengeAlreadyOpen",

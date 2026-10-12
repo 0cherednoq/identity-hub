@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import UUID
 
+from identity_hub.api.batch import MAX_BATCH, BatchRejection, BatchResult
 from identity_hub.domain.data import validate_json_payload
 from identity_hub.domain.redaction import REDACTED
-from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.errors import (
+    DatabaseBusy,
+    IdentityHubError,
+    NotFound,
+    SchemaIncompatible,
+    SecretConfigurationError,
+    StorageError,
+    ValidationFailed,
+)
 from identity_hub.events import EventDraft, scrub
 from identity_hub.store.base import IdentityRow, SpaceRef, StoreTx
 
@@ -29,6 +38,14 @@ logger = logging.getLogger("identity_hub")
 
 # поля событий с идентификаторами людей: телефон, email, произвольные метки (R2-S17)
 _REF_FIELDS = ("external_ref", "normalized_ref", "labels")
+
+
+# ошибки, которые не относятся к одной сущности пачки: они отменяют пачку целиком (D-224)
+_BATCH_FATAL = (DatabaseBusy, StorageError, SchemaIncompatible, SecretConfigurationError)
+
+
+def _batch_order(key: Any) -> Any:
+    return key
 
 
 def _without_refs(data: Mapping[str, Any]) -> dict[str, Any]:
@@ -65,6 +82,8 @@ class SpaceBase:
         self._create = create  # создать пространство при первом обращении, если его нет
         # (identity, ревизия), которую сверяет каждая транзакция команды (IMP-07, D-206)
         self._expected: tuple[UUID, int] | None = None
+        # транзакция пакетной команды: команды этого хэндла идут в ней точками сохранения (D-224)
+        self._batch_tx: StoreTx | None = None
 
     def using(self, session: AsyncSession) -> Self:
         """Операции общей группы (ТЗ §7.2) выполняются в транзакции пользователя (savepoint)."""
@@ -94,7 +113,7 @@ class SpaceBase:
         return handle
 
     def _copy(self) -> Self:
-        return type(self)(
+        handle = type(self)(
             self.hub,
             self.slug,
             title=self._title,
@@ -102,6 +121,8 @@ class SpaceBase:
             session=self._session,
             create=self._create,
         )
+        handle._batch_tx = self._batch_tx
+        return handle
 
     async def ref(self) -> SpaceRef:
         """Строка пространства; без `create=True` несуществующее пространство — `NotFound` (R1-07)."""
@@ -128,12 +149,56 @@ class SpaceBase:
         `checked=False` — сверку `expected_revision` команда делает сама, после ключа
         идемпотентности: он блокируется раньше строки identity (порядок блокировок, п. 0).
         """
+        if self._batch_tx is not None and not own:
+            async with self._batch_tx.savepoint():
+                if checked:
+                    await self._check_expected(self._batch_tx)
+                yield self._batch_tx
+            return
         ref = await self.ref()
         session: Any = None if own else self._session
         async with self.hub._store.transaction(ref, session=session) as tx:
             if checked and not (own and self._session is not None):
                 await self._check_expected(tx)
             yield tx
+
+    async def _run_batch[K](
+        self,
+        keys: Iterable[K],
+        command: Callable[[Self, K], Awaitable[object]],
+        *,
+        atomic: bool = False,
+    ) -> BatchResult[K]:
+        """Выполнить `command(handle, key)` для каждого ключа одной транзакцией (`D-224`).
+
+        Ключи дедуплицируются и идут по возрастанию — единый порядок блокировок для
+        пересекающихся пачек. Команды `handle` работают в транзакции пачки, каждая сущность —
+        в своей точке сохранения. Ошибка библиотеки по сущности откатывает только её и попадает
+        в `rejected`; при `atomic=True` она отменяет пачку и пробрасывается. Сбой хранилища,
+        конфигурации и чужое исключение отменяют пачку всегда.
+        """
+        unique = sorted(set(keys), key=_batch_order)
+        if len(unique) > MAX_BATCH:
+            raise ValidationFailed(f"пачка: не больше {MAX_BATCH} элементов")
+        result: BatchResult[K] = BatchResult()
+        if not unique:
+            return result
+        async with self._tx() as tx:
+            handle = self._copy()
+            handle._batch_tx = tx
+            for key in unique:
+                try:
+                    async with tx.savepoint():
+                        await command(handle, key)
+                except _BATCH_FATAL:
+                    raise
+                except IdentityHubError as exc:
+                    if atomic:
+                        raise
+                    result.rejected.append(BatchRejection(key, exc.code, str(exc)))
+                else:
+                    result.applied.append(key)
+        return result
 
     async def _check_expected(self, tx: StoreTx) -> None:
         if self._expected is not None:
