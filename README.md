@@ -1,5 +1,10 @@
 # Identity Hub
 
+[![CI](https://github.com/0cherednoq/identity-hub/actions/workflows/library-ci.yml/badge.svg)](https://github.com/0cherednoq/identity-hub/actions/workflows/library-ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/identity-hub.svg?cacheSeconds=300)](https://pypi.org/project/identity-hub/)
+[![Python](https://img.shields.io/pypi/pyversions/identity-hub.svg?cacheSeconds=300)](https://pypi.org/project/identity-hub/)
+[![License](https://img.shields.io/pypi/l/identity-hub.svg?cacheSeconds=300)](LICENSE)
+
 Identity Hub — асинхронная Python-библиотека для управления парком внешних
 аккаунтов: их состояниями, эксклюзивной арендой, квотами, прокси, зашифрованными
 сессиями и событиями. Основной читатель этого руководства — разработчик Python
@@ -157,6 +162,7 @@ uv run python examples/telegram_service.py
 - [Трассировка требований](docs/traceability.md) — каждый FR/G/T/S и его
   исполняемое тестовое доказательство.
 - [CHANGELOG](CHANGELOG.md) — пользовательские изменения по версиям.
+- [Публикация релиза](RELEASING.md) — проверка артефактов, GitHub Release и PyPI Trusted Publishing.
 
 Для быстрых тестов без БД установите extra `testing`. Pytest-плагин предоставляет
 фикстуры с префиксом `identity_hub_`, а пользовательский пример можно выполнить
