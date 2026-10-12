@@ -29,12 +29,19 @@ on:
 permissions:
   contents: read
 
+# новый пуш в ту же ветку отменяет устаревший прогон
+concurrency:
+  group: library-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   IH_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/identity_hub_test
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    # обычный прогон — около 6 минут; зависший не должен жить часами
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +69,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --all-extras
-      - run: bash scripts/check.sh
+      # каскад ошибок подготовки обрывается сразу, а не идёт по всем тестам
+      - run: bash scripts/check.sh --maxfail=20
         env:
           # полный прогон на одной версии проверяет, что тесты вызывают каждый метод Store (F5.3b)
           IH_STORE_COVERAGE: ${{ matrix.python-version == '3.14' && '1' || '0' }}
@@ -72,6 +80,7 @@ jobs:
   pgbouncer:
     # дымовой набор pg-тестов через PgBouncer в режиме транзакций по рецепту docs/integrations.md (F4.5)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16-alpine
@@ -121,6 +130,7 @@ jobs:
 
   package:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
