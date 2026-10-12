@@ -43,7 +43,11 @@ __all__ = [
 ]
 
 BatchHook = Callable[[Any, list[UUID]], Awaitable[None]]
-"""on_batch_committed(session, created_ids): доменные строки после каждой пачки (FR-2.7)."""
+"""Хук пачки импорта `(session, created_ids)`.
+
+`on_batch` вызывается внутри транзакции пачки: `session` — её сессия, исключение откатывает
+пачку. `on_batch_committed` — после фиксации, в отдельной транзакции (FR-2.7).
+"""
 
 
 @dataclass(slots=True)
@@ -113,6 +117,7 @@ class ImportingMixin(SpaceBase):
         actor: str = "import",
         run_id: UUID | None = None,
         max_identities: int = 3,
+        on_batch: BatchHook | None = None,
     ) -> ImportReport:
         """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`.
 
@@ -137,11 +142,21 @@ class ImportingMixin(SpaceBase):
                     report,
                     run_id,
                     max_identities,
+                    on_batch=on_batch,
                 )
                 batch = []
         if batch:
             await self._import_batch(
-                svc, batch, mode, verify_sessions, on_batch_committed, actor, report, run_id, max_identities
+                svc,
+                batch,
+                mode,
+                verify_sessions,
+                on_batch_committed,
+                actor,
+                report,
+                run_id,
+                max_identities,
+                on_batch=on_batch,
             )
         return report
 
@@ -268,6 +283,8 @@ class ImportingMixin(SpaceBase):
         report: ImportReport,
         run_id: UUID | None,
         max_identities: int = 3,
+        *,
+        on_batch: BatchHook | None = None,
     ) -> None:
         from identity_hub.identities import prepare_identity
 
@@ -389,6 +406,9 @@ class ImportingMixin(SpaceBase):
                             },
                         ),
                     )
+                if on_batch is not None and created:
+                    # хук приложения в транзакции пачки: его исключение откатывает пачку целиком
+                    await on_batch(getattr(tx, "session", None), list(created))
         except Exception as exc:
             # Текст чужого исключения в лог и отчёт не идёт: в нём бывают параметры SQL и секреты.
             # Сообщения ошибок библиотеки безопасны по контракту (S-8) и объясняют причину отказа.

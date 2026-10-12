@@ -112,6 +112,30 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
   `__table_args__ = {"schema": "public"}`), иначе они будут искаться в схеме библиотеки.
 - `among=Select` работает только с PostgreSQL; `MemoryStore` принимает список id.
 
+## Импорт вместе со строками приложения
+
+Если у приложения есть своя таблица аккаунтов, её строки должны появляться одной фиксацией с
+аккаунтами библиотеки. Хук `on_batch` вызывается внутри транзакции пачки импорта:
+
+```python
+async def add_rows(session, created):                 # session — сессия транзакции пачки
+    await session.execute(insert(ConsoleAccount), [{"identity_id": i} for i in created])
+
+report = await space.imports.run(
+    service=TELEGRAM, records=records, batch_size=500, on_batch=add_rows, actor="import"
+)
+```
+
+- Хук получает id аккаунтов, созданных пачкой, до её фиксации; пишите через переданную
+  `session` и не фиксируйте её сами.
+- Исключение хука откатывает пачку целиком: аккаунтов нет, её записи попадают в
+  `report.failed` (в причине — только тип исключения), следующие пачки идут дальше. Повторный
+  запуск импорта доведёт дело до конца.
+- `on_batch_committed(session, created)` вызывается после фиксации, в отдельной транзакции:
+  его сбой аккаунты не откатывает, пачка попадает в `report.hook_failed`.
+- Фоновый импорт (`imports.stage`) хуки не принимает: его исполняет диспетчер. На `MemoryStore`
+  хук получает `session=None`.
+
 ## Alembic приложения
 
 Identity Hub владеет своей веткой миграций. Запускайте её отдельной командой или

@@ -40,8 +40,14 @@ class Imports(Namespace):
         actor: str,
         run_id: UUID | None = None,
         max_identities: int = 3,
+        on_batch: BatchHook | None = None,
     ) -> ImportReport:
         """Импортировать поток записей пачками по `batch_size`, каждая — своя транзакция.
+
+        `on_batch(session, created)` вызывается внутри транзакции пачки перед фиксацией: строки
+        приложения, записанные через `session`, появляются одной фиксацией с identity. Его
+        исключение откатывает пачку — её записи попадают в `failed`, остальные пачки идут дальше.
+        `on_batch_committed` вызывается после фиксации в отдельной транзакции.
 
         Повтор идемпотентен: существующие попадают в `skipped` (или обновляют сессии при
         `on_existing="update_session"`, или падают в `failed` при `"fail"`). Негодная запись —
@@ -58,6 +64,7 @@ class Imports(Namespace):
             actor=actor,
             run_id=run_id,
             max_identities=max_identities,
+            on_batch=on_batch,
         )
 
     async def run_files(
@@ -74,6 +81,7 @@ class Imports(Namespace):
         max_identities: int = 3,
         base_dir: str | Path | None = None,
         max_bytes: int | None = None,
+        on_batch: BatchHook | None = None,
     ) -> ImportReport:
         """Прочитать файлы импортёрами `Service.importers` и импортировать; параметры — как у `run`.
 
@@ -93,6 +101,7 @@ class Imports(Namespace):
             actor=actor,
             run_id=run_id,
             max_identities=max_identities,
+            on_batch=on_batch,
         )
 
     async def stage(
