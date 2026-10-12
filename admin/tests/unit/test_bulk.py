@@ -195,3 +195,81 @@ def test_exports_escape_csv_formulas_are_audited_and_viewer_is_denied() -> None:
     assert audits[0].data["count"] == 2
     assert "=2+2" not in json.dumps(audits[0].data)
     assert len([event for event, _, _ in store._state.events if event.type == "admin.events.exported"]) == 1
+
+
+def test_bulk_lifecycle_runs_as_one_batch_and_reports_each_account() -> None:
+    """C2.2b: массовая смена жизненного цикла идёт пакетной командой ядра; отчёт прежнего формата."""
+    hub = _hub()
+    asyncio.run(_seed(hub))
+    space = hub.space("bulk-space", create=True)
+    app = create_admin_app(_settings(), hub=hub)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/spaces/bulk-space/bulk/preview",
+            headers=_headers("operator", "bulk-lifecycle-preview"),
+            json={
+                "reason": "retire the batch",
+                "filter": {"tag": "selected"},
+                "operation": {"kind": "lifecycle", "target": "retired"},
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 201
+        snapshot_id = response.json()["data"]["snapshot_id"]
+        asyncio.run(space.identities.add_tags(SECOND, ["changed-after-preview"], actor="test:race"))
+        payload = {
+            "reason": "retire the batch",
+            "snapshot_id": snapshot_id,
+            "confirmation": {"confirmed": True, "consequence_codes": ["changes_many_accounts"]},
+        }
+        first = client.post(
+            "/api/v1/spaces/bulk-space/bulk/execute",
+            headers=_headers("operator", "bulk-lifecycle-execute"),
+            json=payload,
+        )
+    report = first.json()["data"]
+    assert first.status_code == 201
+    assert (report["total"], report["succeeded"], report["failed"], report["complete"]) == (2, 1, 1, False)
+    assert report["failures"] == [
+        {"identity_id": str(SECOND), "code": "revision_mismatch", "message": "account changed after preview"}
+    ]
+    assert asyncio.run(space.identities.get(FIRST)).lifecycle == "retired"
+    assert asyncio.run(space.identities.get(SECOND)).lifecycle == "ready"
+
+
+def test_bulk_lifecycle_keeps_domain_failure_codes() -> None:
+    """C2.2b: отказ команды ядра приходит в отчёт прежним кодом — именем класса ошибки."""
+    hub = _hub()
+    asyncio.run(_seed(hub))
+    space = hub.space("bulk-space", create=True)
+    asyncio.run(space.identities.retire(SECOND, actor="test:seed", reason="seed"))
+    app = create_admin_app(_settings(), hub=hub)
+    with TestClient(app) as client:
+        preview = client.post(
+            "/api/v1/spaces/bulk-space/bulk/preview",
+            headers=_headers("operator", "bulk-activate-preview"),
+            json={
+                "reason": "activate the batch",
+                "filter": {"tag": "selected"},
+                "operation": {"kind": "lifecycle", "target": "provisioning"},
+                "limit": 100,
+            },
+        ).json()["data"]
+        executed = client.post(
+            "/api/v1/spaces/bulk-space/bulk/execute",
+            headers=_headers("operator", "bulk-activate-execute"),
+            json={
+                "reason": "activate the batch",
+                "snapshot_id": preview["snapshot_id"],
+                "confirmation": {"confirmed": True, "consequence_codes": ["changes_many_accounts"]},
+            },
+        ).json()["data"]
+    # ready и retired в provisioning не возвращаются: обе строки — отказ ядра
+    assert (executed["succeeded"], executed["failed"]) == (0, 2)
+    assert {item["code"] for item in executed["failures"]} == {"transitionnotallowed"}
+    assert {item["message"] for item in executed["failures"]} == {"domain command rejected"}
+    # отказ пакетной команды ядра приходит стабильным кодом и переводится в тот же формат
+    from identity_hub_admin.api.bulk import _failure_name
+
+    assert _failure_name("invalid_transition") == "transitionnotallowed"
+    assert _failure_name("not_found") == "notfound"

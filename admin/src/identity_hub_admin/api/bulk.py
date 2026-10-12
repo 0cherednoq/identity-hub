@@ -260,10 +260,54 @@ async def bulk_preview(
     )
 
 
-async def _run_one(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUID, revision: int) -> None:
-    card = await scope.handle.identities.card(identity_id)
-    if card.revision != revision:
-        raise ValueError("account revision changed after preview")
+REVISION_MISMATCH = ("revision_mismatch", "account changed after preview")
+# стабильный код ошибки ядра -> прежний код отчёта (имя класса ошибки строчными буквами)
+_FAILURE_NAMES: dict[str, str] = {}
+
+
+def _failure_name(code: str) -> str:
+    if not _FAILURE_NAMES:
+        pending: list[type[IdentityHubError]] = [IdentityHubError]
+        while pending:
+            cls = pending.pop()
+            _FAILURE_NAMES.setdefault(cls.code, cls.__name__.lower())
+            pending.extend(cls.__subclasses__())
+    return _FAILURE_NAMES.get(code, code)
+
+
+async def _run_batch(
+    scope: CommandScope, snapshot: BulkSnapshot, ready: list[UUID]
+) -> tuple[set[UUID], dict[UUID, tuple[str, str]]]:
+    """Выполнить операцию для аккаунтов с неизменной ревизией; вернуть успешные и отказы."""
+    succeeded: set[UUID] = set()
+    failures: dict[UUID, tuple[str, str]] = {}
+    target = snapshot.parameters.get("target")
+    if snapshot.operation == "lifecycle" and target in ("ready", "retired") and ready:
+        # одна транзакция и одна команда ядра вместо цикла по аккаунтам
+        command = (
+            scope.handle.identities.activate_many
+            if target == "ready"
+            else scope.handle.identities.retire_many
+        )
+        try:
+            result = await command(ready, actor=scope.actor, reason=scope.reason)
+        except Exception as exc:  # сбой зависимости откатывает пачку: ни один аккаунт не изменён
+            return succeeded, dict.fromkeys(ready, _failure(exc))
+        succeeded.update(result.applied)
+        for rejection in result.rejected:
+            failures[rejection.key] = (_failure_name(rejection.code), "domain command rejected")
+        return succeeded, failures
+    for identity_id in ready:
+        try:
+            await _run_one(scope, snapshot, identity_id)
+        except Exception as exc:  # one bad account must not abort the bounded batch
+            failures[identity_id] = _failure(exc)
+        else:
+            succeeded.add(identity_id)
+    return succeeded, failures
+
+
+async def _run_one(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUID) -> None:
     parameters = snapshot.parameters
     if snapshot.operation == "lifecycle":
         await scope.handle.identities.set_lifecycle(
@@ -285,8 +329,6 @@ async def _run_one(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUI
 
 
 def _failure(exc: Exception) -> tuple[str, str]:
-    if isinstance(exc, ValueError):
-        return "revision_mismatch", "account changed after preview"
     if isinstance(exc, IdentityHubError):
         return type(exc).__name__.lower(), "domain command rejected"
     return "dependency_failure", "command dependency failed"
@@ -309,17 +351,21 @@ async def bulk_execute(
         snapshot = await _coordinator(state).get(data.snapshot_id, space_slug=space_slug, actor=scope.actor)
         async with snapshot.execution_lock:
             already = len(snapshot.succeeded)
-            succeeded: set[UUID] = set()
+            pending = [entry for entry in snapshot.entries if entry.id not in snapshot.succeeded]
+            # ревизии всей пачки — одним запросом вместо карточки на каждый аккаунт
+            current = await scope.handle.identities.get_many([entry.id for entry in pending])
             failures: dict[UUID, tuple[str, str]] = {}
-            for entry in snapshot.entries:
-                if entry.id in snapshot.succeeded:
-                    continue
-                try:
-                    await _run_one(scope, snapshot, entry.id, entry.revision)
-                except Exception as exc:  # one bad account must not abort the bounded batch
-                    failures[entry.id] = _failure(exc)
+            ready: list[UUID] = []
+            for entry in pending:
+                found = current.get(entry.id)
+                if found is None:
+                    failures[entry.id] = ("notfound", "domain command rejected")
+                elif found.revision != entry.revision:
+                    failures[entry.id] = REVISION_MISMATCH
                 else:
-                    succeeded.add(entry.id)
+                    ready.append(entry.id)
+            succeeded, rejected = await _run_batch(scope, snapshot, ready)
+            failures.update(rejected)
             await _coordinator(state).update(snapshot, succeeded=succeeded, failures=failures)
             await scope.handle.admin.record_bulk(
                 snapshot.operation,
