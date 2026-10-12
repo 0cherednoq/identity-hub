@@ -135,7 +135,13 @@ class IdentityHub:
         maintenance: MaintenanceSchedule | None = None,
         metrics: MetricsHook | None = None,
         timezone: str = "UTC",
+        migrate: str = "check",
     ) -> None:
+        if migrate not in ("check", "auto", "off"):
+            raise ValidationFailed("migrate: check, auto или off")
+        if migrate == "auto" and store is not None:
+            raise ValidationFailed("migrate='auto' работает только с PostgreSQL (sessionmaker), не со store")
+        self._migrate = migrate
         if store is None:
             if sessionmaker is None:
                 raise ValidationFailed("нужен sessionmaker (PostgreSQL) или store")
@@ -262,12 +268,25 @@ class IdentityHub:
         """Проверить ревизию схемы и синхронизировать реестр сервисов (FR-1.3, IMP-15).
 
         Схема БД должна быть одной из ревизий, с которыми работает код (`SCHEMA_COMPATIBLE`):
-        иначе `SchemaIncompatible` (без URL и SQL) с указанием, что делать. Миграции `start()`
-        не применяет — это `identity-hub migrate`.
+        иначе `SchemaIncompatible` (без URL и SQL) с указанием, что делать.
+
+        Режим задаёт `IdentityHub(migrate=...)`. `"check"` (по умолчанию) — только сверка,
+        миграции применяет `identity-hub migrate`. `"auto"` — сначала применить миграции (под
+        той же блокировкой, что у команды: одновременные старты ждут друг друга), затем сверить;
+        для разработки и одиночного процесса. `"off"` — без сверки.
         """
-        expected, actual = await self._store.schema_revisions()
-        if len(actual) != 1 or actual[0] not in self._store.compatible_revisions(expected):
-            raise SchemaIncompatible(expected, ", ".join(actual) or None)
+        if self._migrate == "auto":
+            from identity_hub.postgres.migrate import migrate
+
+            maker = self.sessionmaker
+            engine = maker.kw.get("bind") if maker is not None else None
+            if engine is None:
+                raise ValidationFailed("migrate='auto': у sessionmaker нет привязанного engine")
+            await migrate(engine, db_schema=self.db_schema)
+        if self._migrate != "off":
+            expected, actual = await self._store.schema_revisions()
+            if len(actual) != 1 or actual[0] not in self._store.compatible_revisions(expected):
+                raise SchemaIncompatible(expected, ", ".join(actual) or None)
         await self._store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
 
     async def flush_metrics(self) -> int:
