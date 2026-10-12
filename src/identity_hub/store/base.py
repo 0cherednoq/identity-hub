@@ -658,6 +658,7 @@ class ProxyPoolCapacityRow:
     max_identities: int
     bound_count: int
     in_lease_count: int
+    disabled: int = 0  # выключено оператором; статусы считаются по всем прокси группы
 
 
 @dataclass(frozen=True, slots=True)

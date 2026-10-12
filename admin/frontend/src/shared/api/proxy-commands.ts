@@ -1,4 +1,6 @@
 import {
+  adminV1ProxyDisablePost,
+  adminV1ProxyEnablePost,
   adminV1ProxyOverridePost,
   adminV1ProxyRecheckPost,
 } from "./generated/sdk.gen";
@@ -30,6 +32,23 @@ export async function executeProxyAction(
     headers: { "Idempotency-Key": idempotencyKey },
   };
   const body = { reason: variables.reason };
+  const confirmation = {
+    confirmed: true as const,
+    consequence_codes: variables.action.consequence_codes ?? [],
+  };
+  if (variables.action.kind === "disable") {
+    const disabled = await adminV1ProxyDisablePost({
+      ...common,
+      body: { ...body, confirmation },
+    });
+    return unwrapApiResult<ResourceEnvelopeResourceCommandResponse>(disabled)
+      .data;
+  }
+  if (variables.action.kind === "enable") {
+    const enabled = await adminV1ProxyEnablePost({ ...common, body });
+    return unwrapApiResult<ResourceEnvelopeResourceCommandResponse>(enabled)
+      .data;
+  }
   const result =
     variables.action.kind === "recheck"
       ? await adminV1ProxyRecheckPost({ ...common, body })
@@ -41,10 +60,7 @@ export async function executeProxyAction(
             ...(variables.pinSeconds === undefined
               ? {}
               : { pin_seconds: variables.pinSeconds }),
-            confirmation: {
-              confirmed: true,
-              consequence_codes: variables.action.consequence_codes ?? [],
-            },
+            confirmation,
           },
         });
   return unwrapApiResult<ResourceEnvelopeResourceCommandResponse>(result).data;

@@ -62,7 +62,11 @@ export function ProxyDetailPage() {
               }}
             />
             <ProxyActions
-              actions={data.actions ?? []}
+              actions={(data.actions ?? []).filter(
+                (action) =>
+                  action.kind !==
+                  (data.proxy.enabled === false ? "disable" : "enable"),
+              )}
               proxyId={proxyId}
               spaceSlug={spaceSlug}
             />

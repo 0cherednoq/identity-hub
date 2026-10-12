@@ -50,8 +50,26 @@ class ProxyOverrideCommand(MutationContext):
     confirmation: Confirmation
 
 
+class ProxyDisableCommand(MutationContext):
+    unbind: bool = False
+    confirmation: Confirmation
+
+
+class ProxyEnableCommand(MutationContext):
+    pass
+
+
 class ResourceCommandResponse(ContractModel):
-    action: Literal["lease_revoke", "proxy_rebind", "link", "unlink", "proxy_recheck", "proxy_override"]
+    action: Literal[
+        "lease_revoke",
+        "proxy_rebind",
+        "link",
+        "unlink",
+        "proxy_recheck",
+        "proxy_override",
+        "proxy_disable",
+        "proxy_enable",
+    ]
     changed: bool
     outcome: str
     affected_identity_ids: list[UUID] = Field(default_factory=list)
@@ -280,6 +298,84 @@ async def override_proxy_command(
     )
 
 
+@post(
+    "/api/v1/spaces/{space_slug:str}/proxies/{proxy_id:uuid}/commands/disable",
+    operation_id="admin_v1_proxy_disable_post",
+    tags=["resource-commands"],
+    opt=route_meta("operator", "admin", space_scoped=True),
+    responses=error_responses(401, 403, 404, 409, 422),
+)
+async def disable_proxy_command(
+    request: Request[AdminPrincipal, object, State],
+    state: State,
+    space_slug: FromPath[str],
+    proxy_id: FromPath[UUID],
+    data: ProxyDisableCommand,
+) -> ResourceEnvelope[ResourceCommandResponse]:
+    """Выключить прокси: он не выдаётся, статус здоровья и привязки сохраняются."""
+
+    async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
+        before = await scope.handle.proxies.get(proxy_id)
+        await scope.handle.proxies.disable(
+            proxy_id, reason=scope.reason, actor=scope.actor, unbind=data.unbind
+        )
+        return ResourceEnvelope(
+            data=ResourceCommandResponse(
+                action="proxy_disable",
+                changed=before.enabled,
+                outcome="disabled" if before.enabled else "unchanged",
+            )
+        )
+
+    return await _gateway(state).execute(
+        request=request,
+        state=state,
+        space_slug=space_slug,
+        operation="proxy.enabled.disable",
+        mutation=data,
+        call=apply,
+        payload={"proxy_id": str(proxy_id), "unbind": data.unbind},
+    )
+
+
+@post(
+    "/api/v1/spaces/{space_slug:str}/proxies/{proxy_id:uuid}/commands/enable",
+    operation_id="admin_v1_proxy_enable_post",
+    tags=["resource-commands"],
+    opt=route_meta("operator", "admin", space_scoped=True),
+    responses=error_responses(401, 403, 404, 409, 422),
+)
+async def enable_proxy_command(
+    request: Request[AdminPrincipal, object, State],
+    state: State,
+    space_slug: FromPath[str],
+    proxy_id: FromPath[UUID],
+    data: ProxyEnableCommand,
+) -> ResourceEnvelope[ResourceCommandResponse]:
+    """Включить прокси с прежним статусом здоровья."""
+
+    async def apply(scope: CommandScope) -> ResourceEnvelope[ResourceCommandResponse]:
+        before = await scope.handle.proxies.get(proxy_id)
+        await scope.handle.proxies.enable(proxy_id, actor=scope.actor)
+        return ResourceEnvelope(
+            data=ResourceCommandResponse(
+                action="proxy_enable",
+                changed=not before.enabled,
+                outcome="unchanged" if before.enabled else "enabled",
+            )
+        )
+
+    return await _gateway(state).execute(
+        request=request,
+        state=state,
+        space_slug=space_slug,
+        operation="proxy.enabled.enable",
+        mutation=data,
+        call=apply,
+        payload={"proxy_id": str(proxy_id)},
+    )
+
+
 RESOURCE_COMMAND_ROUTE_HANDLERS = [
     revoke_lease_command,
     rebind_proxy_command,
@@ -287,4 +383,6 @@ RESOURCE_COMMAND_ROUTE_HANDLERS = [
     unlink_account_command,
     recheck_proxy_command,
     override_proxy_command,
+    disable_proxy_command,
+    enable_proxy_command,
 ]

@@ -49,6 +49,10 @@ class ProxyCardResponse(ContractModel):
     created_at: datetime
     actions_available: bool
     actions_unavailable_reason: str
+    enabled: bool = True
+    disabled_reason: str | None = None
+    disabled_by: str | None = None
+    disabled_at: datetime | None = None
 
 
 class ProxyPoolCapacityResponse(ContractModel):
@@ -63,6 +67,7 @@ class ProxyPoolCapacityResponse(ContractModel):
     available_capacity: int
     in_lease_count: int
     utilization: float
+    disabled: int = 0
 
 
 class ProxyPageResponse(ContractModel):
@@ -93,7 +98,7 @@ class ProxyBindingHistoryResponse(ContractModel):
 
 class ProxyActionResponse(ContractModel):
     id: str
-    kind: Literal["recheck", "override"]
+    kind: Literal["recheck", "override", "disable", "enable"]
     label: str
     required_role: Literal["operator", "admin"]
     allowed_targets: list[str] = Field(default_factory=list)
@@ -120,6 +125,19 @@ def _actions(request: Request[Any, Any, Any]) -> list[ProxyActionResponse]:
                 id="proxy:recheck", kind="recheck", label="Проверить сейчас", required_role="operator"
             )
         )
+    actions.append(
+        ProxyActionResponse(
+            id="proxy:disable",
+            kind="disable",
+            label="Выключить",
+            required_role="operator",
+            requires_confirmation=True,
+            consequence_codes=["stops_proxy_issuing"],
+        )
+    )
+    actions.append(
+        ProxyActionResponse(id="proxy:enable", kind="enable", label="Включить", required_role="operator")
+    )
     if role == AdminRole.ADMIN:
         actions.append(
             ProxyActionResponse(
@@ -185,12 +203,13 @@ async def proxies_overview(
     pool: str | None = Parameter(default=None, max_length=128),
     status: FromQuery[Literal["alive", "quarantined", "dead", "unknown"] | None] = None,
     capacity: FromQuery[ProxyCapacity | None] = None,
+    enabled: FromQuery[bool | None] = None,
     cursor: str | None = Parameter(default=None, max_length=2048),
     limit: int = Parameter(default=50, ge=1, le=200),
 ) -> ResourceEnvelope[ProxyPageResponse]:
     try:
         page = await _handle(request, space_slug).admin.proxy_overview(
-            filters=ProxyFilters(pool=pool, status=status, capacity=capacity),
+            filters=ProxyFilters(pool=pool, status=status, capacity=capacity, enabled=enabled),
             limit=limit,
             before=_cursor(cursor, "created_at"),
         )

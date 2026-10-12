@@ -3997,7 +3997,9 @@
           "kind": {
             "enum": [
               "recheck",
-              "override"
+              "override",
+              "disable",
+              "enable"
             ],
             "type": "string"
           },
@@ -4171,6 +4173,41 @@
             "format": "date-time",
             "type": "string"
           },
+          "disabled_at": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disabled_by": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disabled_reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "default": true,
+            "type": "boolean"
+          },
           "error_score": {
             "type": "number"
           },
@@ -4316,6 +4353,70 @@
         "title": "ProxyDetailResponse",
         "type": "object"
       },
+      "ProxyDisableCommand": {
+        "properties": {
+          "confirmation": {
+            "$ref": "#/components/schemas/Confirmation"
+          },
+          "dry_run": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 3,
+            "type": "string"
+          },
+          "unbind": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmation",
+          "reason"
+        ],
+        "title": "ProxyDisableCommand",
+        "type": "object"
+      },
+      "ProxyEnableCommand": {
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ProxyEnableCommand",
+        "type": "object"
+      },
       "ProxyOverrideCommand": {
         "properties": {
           "confirmation": {
@@ -4414,6 +4515,10 @@
             "type": "integer"
           },
           "dead": {
+            "type": "integer"
+          },
+          "disabled": {
+            "default": 0,
             "type": "integer"
           },
           "in_lease_count": {
@@ -4642,7 +4747,9 @@
               "link",
               "unlink",
               "proxy_recheck",
-              "proxy_override"
+              "proxy_override",
+              "proxy_disable",
+              "proxy_enable"
             ],
             "type": "string"
           },
@@ -15610,6 +15717,24 @@
             "allowReserved": false,
             "deprecated": false,
             "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "allowEmptyValue": false,
+            "allowReserved": false,
+            "deprecated": false,
+            "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
@@ -15832,6 +15957,292 @@
         "summary": "ProxyDetail",
         "tags": [
           "proxies"
+        ]
+      }
+    },
+    "/api/v1/spaces/{space_slug}/proxies/{proxy_id}/commands/disable": {
+      "post": {
+        "deprecated": false,
+        "description": "Выключить прокси: он не выдаётся, статус здоровья и привязки сохраняются.",
+        "operationId": "admin_v1_proxy_disable_post",
+        "parameters": [
+          {
+            "deprecated": false,
+            "in": "path",
+            "name": "space_slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "deprecated": false,
+            "in": "path",
+            "name": "proxy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyDisableCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceEnvelope_ResourceCommandResponse_"
+                }
+              }
+            },
+            "description": "Document created, URL follows",
+            "headers": {}
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Validation Exception",
+                  "examples": [
+                    {
+                      "detail": "Bad Request",
+                      "extra": {},
+                      "status_code": 400
+                    }
+                  ],
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": {},
+                      "type": [
+                        "null",
+                        "object",
+                        "array"
+                      ]
+                    },
+                    "status_code": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "detail",
+                    "status_code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad request syntax or unsupported method"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          }
+        },
+        "summary": "DisableProxyCommand",
+        "tags": [
+          "resource-commands"
+        ]
+      }
+    },
+    "/api/v1/spaces/{space_slug}/proxies/{proxy_id}/commands/enable": {
+      "post": {
+        "deprecated": false,
+        "description": "Включить прокси с прежним статусом здоровья.",
+        "operationId": "admin_v1_proxy_enable_post",
+        "parameters": [
+          {
+            "deprecated": false,
+            "in": "path",
+            "name": "space_slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "deprecated": false,
+            "in": "path",
+            "name": "proxy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProxyEnableCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceEnvelope_ResourceCommandResponse_"
+                }
+              }
+            },
+            "description": "Document created, URL follows",
+            "headers": {}
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Validation Exception",
+                  "examples": [
+                    {
+                      "detail": "Bad Request",
+                      "extra": {},
+                      "status_code": 400
+                    }
+                  ],
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": {},
+                      "type": [
+                        "null",
+                        "object",
+                        "array"
+                      ]
+                    },
+                    "status_code": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "detail",
+                    "status_code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad request syntax or unsupported method"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Stable admin error envelope"
+          }
+        },
+        "summary": "EnableProxyCommand",
+        "tags": [
+          "resource-commands"
         ]
       }
     },

@@ -78,4 +78,44 @@ describe("proxy actions", () => {
       proxyId: "00000000-0000-0000-0000-000000000088",
     });
   });
+
+  it("disables a proxy only after acknowledgement", async () => {
+    const disable: ProxyActionResponse = {
+      id: "proxy:disable",
+      kind: "disable",
+      label: "Выключить",
+      required_role: "operator",
+      requires_confirmation: true,
+      consequence_codes: ["stops_proxy_issuing"],
+    };
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <ProxyActions
+        actions={[disable]}
+        proxyId="00000000-0000-0000-0000-000000000088"
+        spaceSlug="demo-large"
+      />,
+      { wrapper: wrapper(client) },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Выключить" }));
+    fireEvent.change(screen.getByLabelText("Причина"), {
+      target: { value: "provider maintenance" },
+    });
+    const submit = screen.getByRole("button", { name: "Выполнить" });
+    expect(submit).toBeDisabled();
+    fireEvent.click(
+      screen.getByLabelText("Я понимаю, что прокси перестанет выдаваться"),
+    );
+    fireEvent.click(submit);
+
+    await waitFor(() => {
+      expect(executeProxyAction).toHaveBeenCalledOnce();
+    });
+    expect(vi.mocked(executeProxyAction).mock.calls[0]?.[0]).toMatchObject({
+      action: { kind: "disable" },
+      reason: "provider maintenance",
+    });
+  });
 });

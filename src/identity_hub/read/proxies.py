@@ -24,6 +24,7 @@ class ProxyFilters:
     pool: str | None = None
     status: str | None = None
     capacity: ProxyCapacity | None = None
+    enabled: bool | None = None  # None — все; False — только выключенные оператором
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,10 @@ class ProxyCard:
     created_at: datetime
     actions_available: bool
     actions_unavailable_reason: str
+    enabled: bool = True
+    disabled_reason: str | None = None
+    disabled_by: str | None = None
+    disabled_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +71,7 @@ class ProxyPoolCapacity:
     available_capacity: int
     in_lease_count: int
     utilization: float
+    disabled: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +120,10 @@ def _card(row: ProxyReadRow) -> ProxyCard:
         created_at=row.created_at,
         actions_available=False,
         actions_unavailable_reason="Действия станут доступны после A3.4.",
+        enabled=row.enabled,
+        disabled_reason=row.disabled_reason,
+        disabled_by=row.disabled_by,
+        disabled_at=row.disabled_at,
     )
 
 
@@ -131,6 +141,7 @@ def _pool(row: ProxyPoolCapacityRow) -> ProxyPoolCapacity:
         available_capacity=available,
         in_lease_count=row.in_lease_count,
         utilization=row.bound_count / row.max_identities if row.max_identities else 0.0,
+        disabled=row.disabled,
     )
 
 
@@ -160,6 +171,7 @@ class ProxyReadMixin(SpaceBase):
                 pool=filters.pool,
                 status=filters.status,
                 capacity=filters.capacity,
+                enabled=filters.enabled,
             )
             pools = await tx.proxy_pool_capacities()
         visible = rows[:limit]

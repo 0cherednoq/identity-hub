@@ -1059,7 +1059,7 @@ export type ProxyActionResponse = {
   allowed_targets?: Array<string>;
   consequence_codes?: Array<string>;
   id: string;
-  kind: "recheck" | "override";
+  kind: "recheck" | "override" | "disable" | "enable";
   label: string;
   required_role: "operator" | "admin";
   requires_confirmation?: boolean;
@@ -1102,6 +1102,10 @@ export type ProxyCardResponse = {
   capacity_utilization: number;
   checked_at: string | null;
   created_at: string;
+  disabled_at?: string | null;
+  disabled_by?: string | null;
+  disabled_reason?: string | null;
+  enabled?: boolean;
   error_score: number;
   fail_streak: number;
   host: string;
@@ -1129,6 +1133,26 @@ export type ProxyDetailResponse = {
   history: Array<ProxyBindingHistoryResponse>;
   next_history_cursor: string | null;
   proxy: ProxyCardResponse;
+};
+
+/**
+ * ProxyDisableCommand
+ */
+export type ProxyDisableCommand = {
+  confirmation: Confirmation;
+  dry_run?: boolean;
+  expected_revision?: number | null;
+  reason: string;
+  unbind?: boolean;
+};
+
+/**
+ * ProxyEnableCommand
+ */
+export type ProxyEnableCommand = {
+  dry_run?: boolean;
+  expected_revision?: number | null;
+  reason: string;
 };
 
 /**
@@ -1160,6 +1184,7 @@ export type ProxyPoolCapacityResponse = {
   available_capacity: number;
   bound_count: number;
   dead: number;
+  disabled?: number;
   in_lease_count: number;
   max_identities: number;
   other: number;
@@ -1239,7 +1264,9 @@ export type ResourceCommandResponse = {
     | "link"
     | "unlink"
     | "proxy_recheck"
-    | "proxy_override";
+    | "proxy_override"
+    | "proxy_disable"
+    | "proxy_enable";
   affected_identity_ids?: Array<string>;
   changed: boolean;
   outcome: string;
@@ -5438,6 +5465,7 @@ export type AdminV1ProxiesGetData = {
     pool?: string | null;
     status?: "alive" | "quarantined" | "dead" | "unknown" | null;
     capacity?: "available" | "full" | "unbound" | null;
+    enabled?: boolean | null;
     cursor?: string | null;
     limit?: number;
   };
@@ -5528,6 +5556,124 @@ export type AdminV1ProxyGetResponses = {
 
 export type AdminV1ProxyGetResponse =
   AdminV1ProxyGetResponses[keyof AdminV1ProxyGetResponses];
+
+export type AdminV1ProxyDisablePostData = {
+  body: ProxyDisableCommand;
+  path: {
+    space_slug: string;
+    proxy_id: string;
+  };
+  query?: never;
+  url: "/api/v1/spaces/{space_slug}/proxies/{proxy_id}/commands/disable";
+};
+
+export type AdminV1ProxyDisablePostErrors = {
+  /**
+   * Validation Exception
+   */
+  400: {
+    detail: string;
+    extra?:
+      | null
+      | {
+          [key: string]: unknown;
+        }
+      | Array<unknown>;
+    status_code: number;
+  };
+  /**
+   * Stable admin error envelope
+   */
+  401: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  403: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  404: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  409: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  422: ErrorEnvelope;
+};
+
+export type AdminV1ProxyDisablePostError =
+  AdminV1ProxyDisablePostErrors[keyof AdminV1ProxyDisablePostErrors];
+
+export type AdminV1ProxyDisablePostResponses = {
+  /**
+   * Document created, URL follows
+   */
+  201: ResourceEnvelopeResourceCommandResponse;
+};
+
+export type AdminV1ProxyDisablePostResponse =
+  AdminV1ProxyDisablePostResponses[keyof AdminV1ProxyDisablePostResponses];
+
+export type AdminV1ProxyEnablePostData = {
+  body: ProxyEnableCommand;
+  path: {
+    space_slug: string;
+    proxy_id: string;
+  };
+  query?: never;
+  url: "/api/v1/spaces/{space_slug}/proxies/{proxy_id}/commands/enable";
+};
+
+export type AdminV1ProxyEnablePostErrors = {
+  /**
+   * Validation Exception
+   */
+  400: {
+    detail: string;
+    extra?:
+      | null
+      | {
+          [key: string]: unknown;
+        }
+      | Array<unknown>;
+    status_code: number;
+  };
+  /**
+   * Stable admin error envelope
+   */
+  401: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  403: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  404: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  409: ErrorEnvelope;
+  /**
+   * Stable admin error envelope
+   */
+  422: ErrorEnvelope;
+};
+
+export type AdminV1ProxyEnablePostError =
+  AdminV1ProxyEnablePostErrors[keyof AdminV1ProxyEnablePostErrors];
+
+export type AdminV1ProxyEnablePostResponses = {
+  /**
+   * Document created, URL follows
+   */
+  201: ResourceEnvelopeResourceCommandResponse;
+};
+
+export type AdminV1ProxyEnablePostResponse =
+  AdminV1ProxyEnablePostResponses[keyof AdminV1ProxyEnablePostResponses];
 
 export type AdminV1ProxyOverridePostData = {
   body: ProxyOverrideCommand;

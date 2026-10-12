@@ -498,7 +498,13 @@ def test_lease_proxy_and_link_commands_are_guarded_scoped_and_impact_aware() -> 
 
         proxy_url = f"/api/v1/spaces/demo-large/proxies/{proxy_id}"
         proxy_detail = client.get(proxy_url, headers=_headers("admin", "read-resource-proxy")).json()["data"]
-        assert {item["kind"] for item in proxy_detail["actions"]} == {"recheck", "override"}
+        assert {item["kind"] for item in proxy_detail["actions"]} == {
+            "recheck",
+            "override",
+            "disable",
+            "enable",
+        }
+        assert proxy_detail["proxy"]["enabled"] is True and proxy_detail["proxy"]["disabled_reason"] is None
         overridden = client.post(
             f"{proxy_url}/commands/override",
             headers=_headers("admin", "resource-proxy-override"),
@@ -515,3 +521,56 @@ def test_lease_proxy_and_link_commands_are_guarded_scoped_and_impact_aware() -> 
         )
         assert overridden.status_code == 201
         assert rechecked.status_code == 201 and rechecked.json()["data"]["outcome"] == "alive"
+
+        # C1.4b: выключение оператором не трогает здоровье и привязки, требует подтверждения
+        unconfirmed = client.post(
+            f"{proxy_url}/commands/disable",
+            headers=_headers("operator", "resource-proxy-disable-unconfirmed"),
+            json={"reason": "provider maintenance"},
+        )
+        assert unconfirmed.status_code in (400, 422)
+        forbidden = client.post(
+            f"{proxy_url}/commands/disable",
+            headers=_headers("viewer", "resource-proxy-disable-viewer"),
+            json={"reason": "provider maintenance", "confirmation": _confirmation("stops_proxy_issuing")},
+        )
+        assert forbidden.status_code == 403
+        disabled = client.post(
+            f"{proxy_url}/commands/disable",
+            headers=_headers("operator", "resource-proxy-disable"),
+            json={"reason": "provider maintenance", "confirmation": _confirmation("stops_proxy_issuing")},
+        )
+        assert disabled.status_code == 201
+        assert disabled.json()["data"] == {
+            "action": "proxy_disable",
+            "changed": True,
+            "outcome": "disabled",
+            "affected_identity_ids": [],
+        }
+        card = client.get(proxy_url, headers=_headers("viewer", "read-disabled-proxy")).json()["data"][
+            "proxy"
+        ]
+        assert (card["enabled"], card["status"], card["disabled_reason"]) == (
+            False,
+            "alive",
+            "provider maintenance",
+        )
+        assert card["disabled_by"] and card["disabled_at"] and card["bound_count"] == 1
+        listing = "/api/v1/spaces/demo-large/proxies"
+        off = client.get(f"{listing}?enabled=false", headers=_headers("viewer", "list-disabled")).json()[
+            "data"
+        ]
+        assert [item["id"] for item in off["items"]] == [str(proxy_id)]
+        assert sum(pool["disabled"] for pool in off["pools"]) == 1
+        on = client.get(
+            f"{listing}?enabled=true&limit=200", headers=_headers("viewer", "list-enabled")
+        ).json()
+        assert str(proxy_id) not in [item["id"] for item in on["data"]["items"]]
+        enabled = client.post(
+            f"{proxy_url}/commands/enable",
+            headers=_headers("operator", "resource-proxy-enable"),
+            json={"reason": "maintenance finished"},
+        )
+        assert enabled.status_code == 201 and enabled.json()["data"]["outcome"] == "enabled"
+        card = client.get(proxy_url, headers=_headers("viewer", "read-enabled-proxy")).json()["data"]["proxy"]
+        assert (card["enabled"], card["disabled_reason"], card["bound_count"]) == (True, None, 1)

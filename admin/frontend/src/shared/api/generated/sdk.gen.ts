@@ -183,6 +183,12 @@ import type {
   AdminV1ProxiesGetData,
   AdminV1ProxiesGetErrors,
   AdminV1ProxiesGetResponses,
+  AdminV1ProxyDisablePostData,
+  AdminV1ProxyDisablePostErrors,
+  AdminV1ProxyDisablePostResponses,
+  AdminV1ProxyEnablePostData,
+  AdminV1ProxyEnablePostErrors,
+  AdminV1ProxyEnablePostResponses,
   AdminV1ProxyGetData,
   AdminV1ProxyGetErrors,
   AdminV1ProxyGetResponses,
@@ -1507,6 +1513,56 @@ export const adminV1ProxyGet = <ThrowOnError extends boolean = false>(
     AdminV1ProxyGetErrors,
     ThrowOnError
   >({ url: "/api/v1/spaces/{space_slug}/proxies/{proxy_id}", ...options });
+
+/**
+ * DisableProxyCommand
+ *
+ * Выключить прокси: он не выдаётся, статус здоровья и привязки сохраняются.
+ */
+export const adminV1ProxyDisablePost = <ThrowOnError extends boolean = false>(
+  options: Options<AdminV1ProxyDisablePostData, ThrowOnError>,
+): RequestResult<
+  AdminV1ProxyDisablePostResponses,
+  AdminV1ProxyDisablePostErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    AdminV1ProxyDisablePostResponses,
+    AdminV1ProxyDisablePostErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/spaces/{space_slug}/proxies/{proxy_id}/commands/disable",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * EnableProxyCommand
+ *
+ * Включить прокси с прежним статусом здоровья.
+ */
+export const adminV1ProxyEnablePost = <ThrowOnError extends boolean = false>(
+  options: Options<AdminV1ProxyEnablePostData, ThrowOnError>,
+): RequestResult<
+  AdminV1ProxyEnablePostResponses,
+  AdminV1ProxyEnablePostErrors,
+  ThrowOnError
+> =>
+  (options.client ?? client).post<
+    AdminV1ProxyEnablePostResponses,
+    AdminV1ProxyEnablePostErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/spaces/{space_slug}/proxies/{proxy_id}/commands/enable",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
 
 /**
  * OverrideProxyCommand

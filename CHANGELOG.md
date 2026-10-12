@@ -15,6 +15,10 @@
 
 ### Added
 
+- Админка: выключение прокси (`C1.4b`). В карточке и списке прокси — `enabled`, причина, автор и
+  время выключения; фильтр `enabled` в `GET /proxies`; число выключенных в ёмкости групп;
+  команды `POST /proxies/{id}/commands/disable` (с подтверждением) и `/commands/enable` для
+  ролей operator и admin. `space.admin.proxy_overview(filters=ProxyFilters(enabled=...))`.
 - CLI (`C6.2`): `identity-hub keygen [--key-id k1]` печатает мастер-ключ для
   `IDENTITY_HUB_KEK`; `identity-hub migrate` берёт адрес из
   `IDENTITY_HUB_MIGRATE_DATABASE_URL` раньше общего — для миграций в обход PgBouncer. Ошибка

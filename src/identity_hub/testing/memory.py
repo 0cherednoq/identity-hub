@@ -1459,9 +1459,11 @@ class MemoryTx(StoreTx):
                     "max_identities": 0,
                     "bound_count": 0,
                     "in_lease_count": 0,
+                    "disabled": 0,
                 },
             )
             values["proxies"] += 1
+            values["disabled"] += 0 if proxy.enabled else 1
             values[proxy.status if proxy.status in {"alive", "quarantined", "dead"} else "other"] += 1
             values["max_identities"] += proxy.max_identities
             values["bound_count"] += sum(value == proxy.id for value in self.state.bindings.values())

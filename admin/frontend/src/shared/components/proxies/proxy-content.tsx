@@ -28,6 +28,14 @@ const percent = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
 
+function Disabled({ reason }: { reason?: string | null | undefined }) {
+  return (
+    <Badge variant="outline" title={reason ?? undefined}>
+      выключен
+    </Badge>
+  );
+}
+
 function Status({ value }: { value: string }) {
   return (
     <Badge
@@ -128,7 +136,12 @@ export function ProxyOverviewContent({
                   </TableCell>
                   <TableCell>{proxy.pool}</TableCell>
                   <TableCell>
-                    <Status value={proxy.status} />
+                    <span className="flex flex-wrap items-center gap-1">
+                      <Status value={proxy.status} />
+                      {proxy.enabled === false ? (
+                        <Disabled reason={proxy.disabled_reason} />
+                      ) : null}
+                    </span>
                   </TableCell>
                   <TableCell>
                     score {proxy.error_score.toFixed(1)} · streak{" "}
@@ -195,7 +208,18 @@ export function ProxyDetailContent({
           <CardTitle className="flex items-center gap-2">
             <span className="font-mono">{proxy.masked_url}</span>
             <Status value={proxy.status} />
+            {proxy.enabled === false ? (
+              <Disabled reason={proxy.disabled_reason} />
+            ) : null}
           </CardTitle>
+          {proxy.enabled === false ? (
+            <p className="text-muted-foreground text-sm">
+              Выключен оператором{" "}
+              {proxy.disabled_by ? `(${proxy.disabled_by})` : ""}:{" "}
+              {proxy.disabled_reason ?? "причина не указана"}. Прокси не
+              выдаётся; привязки и статус здоровья сохранены.
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-4">
           <p>

@@ -2210,6 +2210,7 @@ class PgTx(StoreTx):
                     func.sum(PROXIES.c.max_identities).label("max_identities"),
                     func.sum(func.coalesce(binding_counts.c.bound_count, 0)).label("bound_count"),
                     func.sum(func.coalesce(lease_counts.c.in_lease_count, 0)).label("in_lease_count"),
+                    func.count().filter(PROXIES.c.enabled.is_(False)).label("disabled"),
                 )
                 .outerjoin(binding_counts, binding_counts.c.proxy_id == PROXIES.c.id)
                 .outerjoin(lease_counts, lease_counts.c.proxy_id == PROXIES.c.id)

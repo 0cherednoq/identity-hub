@@ -129,7 +129,9 @@ export function ProxyActions({
                     setConfirmed(event.target.checked);
                   }}
                 />
-                Я понимаю последствия ручного изменения статуса
+                {active.kind === "disable"
+                  ? "Я понимаю, что прокси перестанет выдаваться"
+                  : "Я понимаю последствия ручного изменения статуса"}
               </label>
             ) : null}
             {command.error instanceof AdminApiError ? (
