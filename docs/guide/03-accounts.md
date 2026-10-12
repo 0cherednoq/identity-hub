@@ -65,6 +65,9 @@ identity = await space.identities.find(service="telegram", external_ref="+120255
 
 card = await space.identities.card(identity_id)
 card.regions, card.verifications, card.lease, card.proxy, card.quotas, card.open_challenge
+
+found = await space.identities.get_many(ids)        # {id: Identity} одним запросом, до 1000
+found[identity_id].lifecycle, found[identity_id].standing, found[identity_id].auth
 card.eligible, card.blockers        # можно ли сейчас работать и что мешает
 ```
 

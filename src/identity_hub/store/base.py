@@ -1063,6 +1063,10 @@ class StoreTx(ABC):
     # --------------------------------------------------------- аккаунт и регионы (P2.3)
 
     @abstractmethod
+    async def get_identities(self, identity_ids: Sequence[UUID]) -> list[IdentityRow]:
+        """Аккаунты этого пространства по списку id одним запросом; чужие и неизвестные пропускаются."""
+
+    @abstractmethod
     async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
         """Аккаунт этого пространства (чужое пространство — None)."""
 

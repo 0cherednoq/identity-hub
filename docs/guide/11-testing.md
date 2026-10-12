@@ -120,6 +120,10 @@ async def test_ban_event(identity_hub, identity_hub_space, identity_hub_make_ide
 ## Ограничения MemoryStore
 
 - Нет `space.using(session)` — транзакции приложения работают только с PostgreSQL.
+- Read-схема `hub.read.*` — это таблицы PostgreSQL: join с ними на `MemoryStore` не выполнить.
+  В тестах без БД читайте через API: `identities.get_many(ids)` отдаёт состояния пачки
+  аккаунтов одним вызовом, `identities.list` и `search` — по фильтру, `proxies.list` — прокси
+  с числом привязок.
 - Нет конкурентности между процессами; поведение `SKIP LOCKED` и гонок проверяйте на PostgreSQL.
 - `among=select(...)` — подзапрос SQL — работает только с PostgreSQL; в памяти он даёт
   `ValidationFailed`. Для теста передайте коллекцию id или предикат от `Identity`:

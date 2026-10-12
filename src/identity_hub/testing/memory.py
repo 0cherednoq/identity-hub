@@ -391,6 +391,10 @@ class MemoryTx(StoreTx):
             ids.append(event_id)
         return ids
 
+    async def get_identities(self, identity_ids: Sequence[UUID]) -> list[IdentityRow]:
+        rows = (self._own(identity_id) for identity_id in dict.fromkeys(identity_ids))
+        return [row for row in rows if row is not None]
+
     async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
         return self._own(identity_id)
 

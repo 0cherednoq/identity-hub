@@ -276,7 +276,7 @@ CHANGELOG в том же коммите). Дополнительно:
 
 Пункт 13 ишью.
 
-- `identities.states(ids)` → `dict[UUID, IdentityStates]`: регионы и их состояния одним
+- `identities.get_many(ids)` → `dict[UUID, Identity]` (`D-227`): состояния регионов пачки одним
   запросом, на обоих бэкендах. Потолок — `MAX_BATCH`.
 - В «Ограничения MemoryStore» (`11-testing.md`): `hub.read.*` — только PostgreSQL; для тестов
   без БД — `identities.states`, `identities.search`.

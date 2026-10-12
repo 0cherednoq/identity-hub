@@ -376,6 +376,16 @@ class PgTx(StoreTx):
 
     # --------------------------------------------------------- аккаунт и регионы
 
+    async def get_identities(self, identity_ids: Sequence[UUID]) -> list[IdentityRow]:
+        if not identity_ids:
+            return []
+        rows = await self.execute(
+            select(IDENTITIES).where(
+                _any_of(IDENTITIES.c.id, list(identity_ids)), IDENTITIES.c.space_id == self.space.id
+            )
+        )
+        return [IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) for row in rows.mappings()]
+
     async def get_identity(self, identity_id: UUID) -> IdentityRow | None:
         row = (
             (

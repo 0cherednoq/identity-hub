@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from identity_hub._space import require_actor_and_reason
 from identity_hub.api._base import Namespace
-from identity_hub.api.batch import BatchResult
+from identity_hub.api.batch import MAX_BATCH, BatchResult
 from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.data import normalize_tag
 from identity_hub.domain.query import SearchQuery, parse_query
@@ -269,6 +269,21 @@ class Identities(Namespace):
         if identity is None:
             raise NotFound("identity", identity_id)
         return identity
+
+    async def get_many(self, ids: Iterable[UUID]) -> dict[UUID, Identity]:
+        """Identity по списку id одним запросом, до 1000: состояния всех регионов пачкой.
+
+        Работает на PostgreSQL и на `MemoryStore`. Id, которых нет в этом пространстве,
+        в ответ не попадают.
+        """
+        wanted = builtins.list(dict.fromkeys(ids))
+        if len(wanted) > MAX_BATCH:
+            raise ValidationFailed(f"пачка: не больше {MAX_BATCH} элементов")
+        if not wanted:
+            return {}
+        async with self._space._tx(own=True) as tx:
+            rows = await tx.get_identities(wanted)
+        return {row.id: Identity.from_row(row) for row in rows}
 
     async def find(
         self,
