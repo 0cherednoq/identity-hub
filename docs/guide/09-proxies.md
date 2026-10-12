@@ -68,6 +68,29 @@ await space.proxies.delete(proxy.id, actor="ops:ivan", unbind=True)   # отвя
   получит прокси по политике сервиса заново.
 - Изменения пишут события `proxy.updated` и `proxy.deleted`; в них нет логина и пароля.
 
+Пачкой — одной транзакцией, до 1000 прокси:
+
+```python
+deleted = await space.proxies.delete_many(ids, actor="ops:ivan", unbind=True)
+print(len(deleted.applied), deleted.unbound)          # удалено прокси, отвязано аккаунтов
+for rejection in deleted.rejected:                    # отказ одной строки не отменяет остальные
+    print(rejection.key, rejection.code, rejection.message)
+
+changed = await space.proxies.override_many(
+    {proxy_a: "dead", proxy_b: "alive"}, reason="проверка оператора", actor="ops:ivan"
+)
+statuses = await space.proxies.report_many({proxy_a: True, proxy_b: False}, actor="checker")
+```
+
+- `delete_many` и `override_many` возвращают `BatchResult`: `applied` — ключи применённых,
+  `rejected` — отказы с кодом ошибки (`not_found`, `validation_error`, …). По умолчанию отказ
+  одной строки откатывает только её; `atomic=True` отменяет всю пачку и бросает исходное
+  исключение. События те же, что у одиночных команд, — на каждый прокси.
+- Под `space.using(session)` пачка идёт в транзакции приложения и откатывается вместе с ней.
+- `report_many` — результаты своих проверок: `True` — успех, `False` или вес — ошибка. Как и
+  `report_failure`, это факты внешнего мира: каждый отчёт фиксируется своей транзакцией и не
+  откатывается с транзакцией приложения. Неизвестный прокси в ответ не попадает.
+
 ## Как прокси выдаётся аккаунту
 
 Политика задаётся в сервисе или переопределяется в пуле:

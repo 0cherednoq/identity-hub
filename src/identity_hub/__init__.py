@@ -15,6 +15,7 @@ from identity_hub.api.proxies import (
     ProxyCreate,
     ProxyCreated,
     ProxyCreateManyResult,
+    ProxyDeleteManyResult,
     RecheckReport,
 )
 from identity_hub.api.secrets import SecretRef
@@ -198,6 +199,7 @@ __all__ = [
     "ProxyCreate",
     "ProxyCreateManyResult",
     "ProxyCreated",
+    "ProxyDeleteManyResult",
     "ProxyDownPolicy",
     "ProxyHealthPolicy",
     "ProxyPolicy",

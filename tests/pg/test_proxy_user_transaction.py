@@ -59,3 +59,30 @@ async def test_proxy_commands_commit_with_user_transaction(
     assert (await space.proxies.get(created.id)).host == "10.0.1.1"
     plain = await space.proxies.create("socks5://10.0.1.2:1080", group="res")
     assert (await space.proxies.move(plain.id, group="dc", actor="op")).group == "dc"
+
+
+async def test_batch_commands_roll_back_with_user_transaction(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """C1.2: пакетные удаление и смена статуса идут в транзакции приложения."""
+    created = await space.proxies.create_many(
+        ["socks5://10.0.2.1:1080", "socks5://10.0.2.2:1080", "socks5://10.0.2.3:1080"], group="res"
+    )
+    first, second, third = (item.id for item in created.items)
+    events = await _count(sessionmaker, EventRecord)
+
+    async with sessionmaker() as user:
+        await user.begin()
+        proxies = space.using(user).proxies
+        overridden = await proxies.override_many({first: "dead"}, reason="тест", actor="op")
+        deleted = await proxies.delete_many([second, third], actor="op")
+        assert overridden.applied == [first] and sorted(deleted.applied) == sorted([second, third])
+        await user.rollback()
+
+    assert await _count(sessionmaker, ProxyRecord) == 3
+    assert await _count(sessionmaker, EventRecord) == events
+    assert (await space.proxies.get(first)).status == "alive"
+
+    async with sessionmaker() as user, user.begin():
+        await space.using(user).proxies.delete_many([second, third], actor="op")
+    assert await _count(sessionmaker, ProxyRecord) == 1

@@ -243,6 +243,13 @@ await space.proxies.recheck_due(checker)
 
 Подробно — [Прокси](09-proxies.md).
 
+### Пакетные команды
+
+Команды над множеством (`proxies.delete_many`, `proxies.override_many`) возвращают
+`BatchResult`: `applied` — ключи применённых сущностей, `rejected` — список `BatchRejection`
+(`key`, `code`, `message`). Пачка — одна транзакция, до 1000 ключей; ключи блокируются по
+возрастанию. Параметр `atomic=True` отменяет пачку при первом отказе.
+
 ### Вход, верификация, связи, данные, секреты, импорт
 
 ```python

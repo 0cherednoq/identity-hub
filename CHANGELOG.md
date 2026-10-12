@@ -8,6 +8,11 @@
 
 ### Added
 
+- Пакетные команды прокси (`C1.2`): `proxies.delete_many(ids, actor=, unbind=, atomic=)` →
+  `ProxyDeleteManyResult` (`applied`, `rejected`, `unbound`), `proxies.override_many({id: статус},
+  reason=, actor=, pin_for=, atomic=)` → `BatchResult`, `proxies.report_many({id: True | False |
+  вес}, actor=)` → статусы после отчёта. Удаление и смена статуса идут одной транзакцией (под
+  `space.using(session)` — в транзакции приложения); события те же, что у одиночных команд.
 - `proxies.create_many` принимает структурные записи `ProxyCreate` (адрес по частям, свой `id`,
   своя ёмкость) вперемешку с URL и возвращает `result.items` — исход каждой записи в порядке
   входа (`ProxyCreated`: `index`, `id`, `created`) (`C1.1`). Вставка и чтение идут пачкой: число

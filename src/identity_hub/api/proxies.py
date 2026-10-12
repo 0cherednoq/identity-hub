@@ -6,25 +6,35 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from identity_hub._space import require_actor_and_reason
 from identity_hub.api._base import Namespace
-from identity_hub.api.batch import MAX_BATCH
+from identity_hub.api.batch import MAX_BATCH, BatchResult
 from identity_hub.api.identities import OnConflict, Page
 from identity_hub.enums import ProxyStatus
-from identity_hub.errors import ValidationFailed
+from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.proxies import parse_proxy_url
 from identity_hub.read.search import decode_cursor, encode_cursor
 from identity_hub.store.base import NewProxy, ProxyReadRow, ProxyRow
 
 if TYPE_CHECKING:
+    from identity_hub.hub import SpaceHandle
     from identity_hub.proxies import ProxyChecker, ProxyHealthPolicy
 
-__all__ = ["Proxies", "Proxy", "ProxyCreate", "ProxyCreateManyResult", "ProxyCreated", "RecheckReport"]
+__all__ = [
+    "Proxies",
+    "Proxy",
+    "ProxyCreate",
+    "ProxyCreateManyResult",
+    "ProxyCreated",
+    "ProxyDeleteManyResult",
+    "RecheckReport",
+]
 
 MAX_PROXY_PAGE = 200
 
@@ -117,6 +127,13 @@ class ProxyCreateManyResult:
     created: list[Proxy]
     skipped: list[UUID]
     items: list[ProxyCreated] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyDeleteManyResult(BatchResult[UUID]):
+    """Итог `proxies.delete_many`: удалённые прокси, отказы и общее число отвязанных identity."""
+
+    unbound: int = 0
 
 
 class Proxies(Namespace):
@@ -271,6 +288,24 @@ class Proxies(Namespace):
         """
         return await self._space._delete_proxy(proxy_id, actor=actor, unbind=unbind)
 
+    async def delete_many(
+        self, ids: Iterable[UUID], *, actor: str, unbind: bool = False, atomic: bool = False
+    ) -> ProxyDeleteManyResult:
+        """Удалить прокси одной транзакцией, до 1000. События — как у `delete`, на каждый прокси.
+
+        Прокси с привязанными identity без `unbind=True` попадает в `rejected`
+        (`validation_error`), остальные удаляются; `atomic=True` — первый отказ отменяет всё.
+        """
+        unbound: dict[UUID, int] = {}
+
+        async def delete(handle: SpaceHandle, proxy_id: UUID) -> None:
+            unbound[proxy_id] = await handle._delete_proxy(proxy_id, actor=actor, unbind=unbind)
+
+        result = await self._space._run_batch(ids, delete, atomic=atomic)
+        return ProxyDeleteManyResult(
+            result.applied, result.rejected, sum(unbound[proxy_id] for proxy_id in result.applied)
+        )
+
     # ------------------------------------------------------------------ здоровье и привязка
 
     async def report_failure(
@@ -286,6 +321,30 @@ class Proxies(Namespace):
     async def report_success(self, proxy_id: UUID) -> None:
         """Успешный запрос: `error_score` затухает."""
         await self._space._report_proxy_success(proxy_id)
+
+    async def report_many(
+        self, outcomes: Mapping[UUID, bool | float], *, actor: str
+    ) -> dict[UUID, ProxyStatus]:
+        """Результаты своих проверок пачкой, до 1000: `True` — успех, `False` или вес — ошибка.
+
+        Возвращает статус каждого прокси после отчёта; неизвестный прокси в ответ не попадает.
+        Как и `report_failure`, это факты внешнего мира: каждый отчёт фиксируется своей
+        транзакцией, а не транзакцией `space.using(session)`.
+        """
+        if len(outcomes) > MAX_BATCH:
+            raise ValidationFailed(f"пачка: не больше {MAX_BATCH} элементов")
+        statuses: dict[UUID, ProxyStatus] = {}
+        for proxy_id, outcome in sorted(outcomes.items(), key=lambda item: item[0]):
+            try:
+                if outcome is True:
+                    await self._space._report_proxy_success(proxy_id)
+                    statuses[proxy_id] = (await self.get(proxy_id)).status
+                else:
+                    weight = 1.0 if outcome is False else float(outcome)
+                    statuses[proxy_id] = await self.report_failure(proxy_id, weight=weight, actor=actor)
+            except NotFound:
+                continue
+        return statuses
 
     async def recheck(self, proxy_id: UUID, checker: ProxyChecker, *, actor: str) -> ProxyStatus:
         """Ручная перепроверка: до двух проверок подряд для выхода из карантина."""
@@ -320,6 +379,32 @@ class Proxies(Namespace):
         return ProxyStatus(
             await self._space._override_proxy(proxy_id, status, reason=reason, actor=actor, pin_for=pin_for)
         )
+
+    async def override_many(
+        self,
+        statuses: Mapping[UUID, ProxyStatus | str],
+        *,
+        reason: str,
+        actor: str,
+        pin_for: timedelta | None = None,
+        atomic: bool = False,
+    ) -> BatchResult[UUID]:
+        """Ручная смена статуса пачкой, до 1000: у каждого прокси свой статус.
+
+        Причина, автор и `pin_for` общие. События — как у `override`, на каждый прокси.
+        Неизвестный статус или прокси — отказ своей строки; `atomic=True` отменяет всё.
+        """
+        actor, reason = require_actor_and_reason(actor, reason, "смена статуса прокси")
+        wanted = dict(statuses)
+
+        async def override(handle: SpaceHandle, proxy_id: UUID) -> None:
+            try:
+                status = ProxyStatus(wanted[proxy_id])
+            except ValueError:
+                raise ValidationFailed("статус прокси: alive, quarantined или dead") from None
+            await handle._override_proxy(proxy_id, status, reason=reason, actor=actor, pin_for=pin_for)
+
+        return await self._space._run_batch(wanted, override, atomic=atomic)
 
     async def rebind(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
         """Перепривязать identity к другому прокси (sticky)."""
