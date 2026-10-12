@@ -18,6 +18,7 @@ from identity_hub.api.batch import MAX_BATCH, BatchResult
 from identity_hub.api.identities import OnConflict, Page
 from identity_hub.enums import ProxyStatus
 from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.identities import UNSET, _Unset
 from identity_hub.proxies import parse_proxy_url
 from identity_hub.read.search import decode_cursor, encode_cursor
 from identity_hub.store.base import NewProxy, ProxyReadRow, ProxyRow
@@ -274,6 +275,35 @@ class Proxies(Namespace):
         return Proxy.from_row(
             await self._space._replace_proxy_credentials(
                 proxy_id, username=username, password=password, actor=actor
+            )
+        )
+
+    async def update(
+        self,
+        proxy_id: UUID,
+        *,
+        scheme: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        username: str | _Unset | None = UNSET,
+        password: str | _Unset | None = UNSET,
+        actor: str,
+    ) -> Proxy:
+        """Сменить адрес прокси (схему, хост, порт); статус, группа и привязки остаются.
+
+        Незаданный параметр не меняется. Логин и пароль можно сменить тем же вызовом; `None`
+        убирает значение. Тот же адрес с тем же логином у другого прокси — `AlreadyExists`.
+        Событие `proxy.updated` с изменёнными полями и прежним адресом.
+        """
+        return Proxy.from_row(
+            await self._space._update_proxy(
+                proxy_id,
+                scheme=scheme,
+                host=host,
+                port=port,
+                username=username,
+                password=password,
+                actor=actor,
             )
         )
 

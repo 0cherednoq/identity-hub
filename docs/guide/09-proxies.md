@@ -55,6 +55,7 @@ for item in result.items:                                 # в порядке в
 
 ```python
 await space.proxies.replace_credentials(proxy.id, username="user", password="new-pass", actor="ops:ivan")
+await space.proxies.update(proxy.id, host="5.6.7.8", port=1081, actor="ops:ivan")   # смена адреса
 await space.proxies.move(proxy.id, group="residential-fr", actor="ops:ivan")
 await space.proxies.delete(proxy.id, actor="ops:ivan")                # с привязками — ValidationFailed
 await space.proxies.delete(proxy.id, actor="ops:ivan", unbind=True)   # отвязать аккаунты и удалить
@@ -63,6 +64,11 @@ await space.proxies.delete(proxy.id, actor="ops:ivan", unbind=True)   # отвя
 - `replace_credentials` меняет только логин и пароль: адрес, статус и привязки аккаунтов
   остаются. Если прокси с тем же адресом и новым логином уже есть — `AlreadyExists`.
   `ensure()` с другим паролем по-прежнему возвращает существующую запись и пароль не меняет.
+- `update` меняет адрес — схему, хост, порт; незаданный параметр остаётся прежним. Привязки
+  аккаунтов, статус, счётчики ошибок и группа сохраняются: привязанные аккаунты в следующей
+  аренде получат новый адрес. Тем же вызовом можно сменить логин и пароль (`None` убирает
+  значение). Если прокси с новым адресом и тем же логином уже есть — `AlreadyExists`. В событии
+  `proxy.updated` — изменённые поля и прежний адрес (`from_scheme`, `from_host`, `from_port`).
 - `move` переносит прокси в другую группу; уже привязанные аккаунты остаются на нём.
 - `delete` возвращает число отвязанных аккаунтов. Отвязанный аккаунт при следующей аренде
   получит прокси по политике сервиса заново.

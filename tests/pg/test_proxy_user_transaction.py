@@ -86,3 +86,21 @@ async def test_batch_commands_roll_back_with_user_transaction(
     async with sessionmaker() as user, user.begin():
         await space.using(user).proxies.delete_many([second, third], actor="op")
     assert await _count(sessionmaker, ProxyRecord) == 1
+
+
+async def test_update_address_in_user_transaction(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """C1.3: смена адреса под `using(session)` видна в ответе до фиксации и откатывается с приложением."""
+    proxy = await space.proxies.create("socks5://u:p@10.0.3.1:1080", group="res")
+    events = await _count(sessionmaker, EventRecord)
+
+    async with sessionmaker() as user:
+        await user.begin()
+        updated = await space.using(user).proxies.update(proxy.id, host="10.0.3.2", actor="op")
+        assert updated.host == "10.0.3.2"
+        await user.rollback()
+
+    assert (await space.proxies.get(proxy.id)).host == "10.0.3.1"
+    assert await _count(sessionmaker, EventRecord) == events
+    assert await space.proxies.url(proxy.id, actor="op", reason="тест") == "socks5://u:p@10.0.3.1:1080"

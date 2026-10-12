@@ -36,6 +36,7 @@ from identity_hub.errors import (
     describe_error,
 )
 from identity_hub.events import EventDraft
+from identity_hub.identities import UNSET, _Unset
 from identity_hub.store.base import NewProxy, ProxyRow, StoreTx
 
 __all__ = [
@@ -589,6 +590,71 @@ class ProxiesMixin(SpaceBase):
                 raise AlreadyExists("proxy", f"{row.scheme}://{row.host}:{row.port}")
             await tx.set_proxy_secret(proxy_id, tag, payload, fingerprint_key_id=key_id)
             await self._proxy_updated(tx, row, actor, ["credentials"])
+            return await self._proxy(tx, proxy_id)
+
+    async def _update_proxy(
+        self,
+        proxy_id: UUID,
+        *,
+        scheme: str | None,
+        host: str | None,
+        port: int | None,
+        username: str | _Unset | None,
+        password: str | _Unset | None,
+        actor: str,
+    ) -> ProxyRow:
+        """Сменить адрес и, если заданы, логин и пароль; привязки, статус и счётчики остаются.
+
+        Отпечаток пересчитывается; та же пара «адрес, логин» у другого прокси — `AlreadyExists`.
+        """
+        if scheme is None and host is None and port is None and username is UNSET and password is UNSET:
+            raise ValidationFailed("прокси: укажите, что изменить")
+        async with self._tx() as tx:
+            row = await self._proxy(tx, proxy_id)
+            ad = associated_data("ih_proxies", proxy_id)
+            current = self.hub._envelope.open_model(ProxySecret, row.secret, ad)
+            old_password = current.password.get_secret_value() if current.password else None
+            new_username = current.username if isinstance(username, _Unset) else username
+            new_password = old_password if isinstance(password, _Unset) else password
+            if new_password and not new_username:
+                raise ValidationFailed("прокси: пароль без логина не задаётся")
+            new_host = row.host if host is None else host
+            address = parse_proxy_url(
+                f"{row.scheme if scheme is None else scheme}://"
+                f"{f'[{new_host}]' if ':' in new_host else new_host}:{row.port if port is None else port}"
+            )
+            fields = [
+                name for name in ("scheme", "host", "port") if getattr(address, name) != getattr(row, name)
+            ]
+            if (new_username or None, new_password or None) != (current.username, old_password):
+                fields.append("credentials")
+            if not fields:
+                return row
+            tag, key_id, aliases = self._proxy_fingerprints(
+                address.scheme, address.host, address.port, new_username
+            )
+            other = await tx.proxy_by_fingerprint([tag, *aliases])
+            if other is not None and other != proxy_id:
+                raise AlreadyExists("proxy", f"{address.scheme}://{address.host}:{address.port}")
+            secret = ProxySecret(
+                username=new_username or None, password=SecretStr(new_password) if new_password else None
+            )
+            if fields != ["credentials"]:
+                await tx.update_proxy(
+                    proxy_id, {"scheme": address.scheme, "host": address.host, "port": address.port}
+                )
+            await tx.set_proxy_secret(
+                proxy_id, tag, self.hub._envelope.seal_model(secret, ad), fingerprint_key_id=key_id
+            )
+            data: dict[str, Any] = {
+                "fields": fields,
+                "pool": row.pool,
+                "host": address.host,
+                "port": address.port,
+            }
+            if fields != ["credentials"]:
+                data |= {"from_scheme": row.scheme, "from_host": row.host, "from_port": row.port}
+            await self._emit(tx, EventDraft("proxy.updated", actor=actor, proxy_id=proxy_id, data=data))
             return await self._proxy(tx, proxy_id)
 
     async def _move_proxy(self, proxy_id: UUID, *, group: str, actor: str) -> ProxyRow:

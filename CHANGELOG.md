@@ -8,6 +8,9 @@
 
 ### Added
 
+- `proxies.update(proxy_id, scheme=, host=, port=, username=, password=, actor=)` — смена адреса
+  прокси без удаления (`C1.3`): привязки, статус, счётчики и группа сохраняются, отпечаток
+  пересчитывается, занятый адрес — `AlreadyExists`. Событие `proxy.updated` несёт прежний адрес.
 - Пакетные команды прокси (`C1.2`): `proxies.delete_many(ids, actor=, unbind=, atomic=)` →
   `ProxyDeleteManyResult` (`applied`, `rejected`, `unbound`), `proxies.override_many({id: статус},
   reason=, actor=, pin_for=, atomic=)` → `BatchResult`, `proxies.report_many({id: True | False |
