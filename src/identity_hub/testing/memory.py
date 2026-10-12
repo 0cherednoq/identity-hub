@@ -3102,12 +3102,15 @@ class MemoryStore(Store):
         *,
         limit: int,
         external_only: bool = True,
+        start_now: bool = False,
     ) -> int | None:
         consumer_lock = self._consumer_locks[consumer]
         if consumer_lock.locked():
             return None
         async with consumer_lock:
             async with self._lock:
+                if start_now and consumer not in self._state.cursors:
+                    self._state.cursors[consumer] = max((e.id for e, _, _ in self._state.events), default=0)
                 cursor = self._state.cursors.get(consumer, 0)
                 events = [
                     event

@@ -46,6 +46,7 @@ class Consumer:
     name: str  # имя курсора в ih_event_cursors
     handler: BatchHandler
     external_only: bool = True
+    start_now: bool = False  # новый курсор встаёт на текущий горизонт журнала, а не в начало
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,12 @@ class ConsumerRuntime:
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     retrying: bool = False
+
+
+def _start_now(start: str) -> bool:
+    if start not in ("beginning", "now"):
+        raise ValueError("start: beginning или now")
+    return start == "now"
 
 
 def _event_filter(
@@ -87,10 +94,12 @@ class Dispatcher:
 
     # --------------------------------------------------------- регистрация
 
-    def add_consumer(self, name: str, handler: BatchHandler, *, include_internal: bool = False) -> None:
+    def add_consumer(
+        self, name: str, handler: BatchHandler, *, include_internal: bool = False, start_now: bool = False
+    ) -> None:
         if name in self._consumers:
             raise ValueError(f"потребитель {name} уже зарегистрирован")
-        self._consumers[name] = Consumer(name, handler, not include_internal)
+        self._consumers[name] = Consumer(name, handler, not include_internal, start_now)
         self._runtime[name] = ConsumerRuntime()
 
     def add_pump(self, handler: Callable[[], Awaitable[int]]) -> None:
@@ -106,6 +115,7 @@ class Dispatcher:
         space: SpaceHandle | str | None = None,
         service: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        start: str = "beginning",
     ) -> None:
         """Python-колбэк на события после коммита (FR-13.5); `types` — типы или маски (`pool.capacity.*`).
 
@@ -113,9 +123,13 @@ class Dispatcher:
         котором колбэк бросил исключение, приходит снова на следующем круге; события до него не
         повторяются. После `max_attempts` неудач подряд оно пропускается: в журнал пишется
         `dispatcher.event.skipped`, подписчик получает следующие события.
+
+        `start="now"` — новый подписчик начинает с текущего момента, а не с начала хранимого
+        журнала; у подписчика, который уже работал, параметр ничего не меняет.
         """
         if max_attempts < 1:
             raise ValueError("max_attempts должен быть положительным")
+        start_now = _start_now(start)
         wanted = _event_filter(types, space, service)
         consumer = f"callbacks:{name}"
 
@@ -144,7 +158,7 @@ class Dispatcher:
                 self._failures.pop(consumer, None)
             return len(events)
 
-        self.add_consumer(consumer, handle)
+        self.add_consumer(consumer, handle, start_now=start_now)
 
     def subscribe_batch(
         self,
@@ -155,6 +169,7 @@ class Dispatcher:
         space: SpaceHandle | str | None = None,
         service: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        start: str = "beginning",
     ) -> None:
         """Подписка, которая отдаёт события пачкой: `handler(events)` в порядке журнала.
 
@@ -166,6 +181,7 @@ class Dispatcher:
         """
         if max_attempts < 1:
             raise ValueError("max_attempts должен быть положительным")
+        start_now = _start_now(start)
         wanted = _event_filter(types, space, service)
         consumer = f"callbacks:{name}"
 
@@ -209,7 +225,7 @@ class Dispatcher:
                 return len(events)
             return events.index(selected[done])  # курсор встаёт перед сбойным событием
 
-        self.add_consumer(consumer, handle)
+        self.add_consumer(consumer, handle, start_now=start_now)
 
     async def _skip(self, consumer: str, event: Event, attempts: int, exc: Exception) -> bool:
         """Записать пропуск события; `False` — запись не удалась, событие остаётся на повтор."""
@@ -276,6 +292,7 @@ class Dispatcher:
                     consumer.handler,
                     limit=self.batch_size,
                     external_only=consumer.external_only,
+                    start_now=consumer.start_now,
                 )
             except Exception:
                 self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)

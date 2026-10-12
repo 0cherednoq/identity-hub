@@ -4436,6 +4436,18 @@ def _challenge_row(row: Any) -> ChallengeRow:
     )
 
 
+def _new_cursor(consumer: str, start_now: bool) -> dict[str, Any]:
+    """Начальная позиция потребителя: начало журнала или текущий горизонт видимости.
+
+    Горизонт — `pg_snapshot_xmin`: всё с меньшим `tx_id` уже зафиксировано и считается историей,
+    транзакции с `tx_id` не меньше горизонта (в том числе ещё открытые) потребитель получит.
+    """
+    if not start_now:
+        return {"consumer": consumer, "last_id": 0}
+    horizon = text("((pg_snapshot_xmin(pg_current_snapshot())::text::bigint - 1)::text)::xid8")
+    return {"consumer": consumer, "last_tx_id": horizon, "last_id": 2**63 - 1}
+
+
 def _proxy_row(row: Any) -> ProxyRow:
     values = {f: row[f] for f in PROXY_FIELDS if f != "secret"}
     secret = EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
@@ -4623,12 +4635,13 @@ class PgStore(Store):
         *,
         limit: int,
         external_only: bool = True,
+        start_now: bool = False,
     ) -> int | None:
         opts = self.options
         async with self._own() as session:
             await _execute(
                 session,
-                insert(CURSORS).values(consumer=consumer, last_id=0).on_conflict_do_nothing(),
+                insert(CURSORS).values(**_new_cursor(consumer, start_now)).on_conflict_do_nothing(),
                 execution_options=opts,
             )
         async with self._own() as session:
