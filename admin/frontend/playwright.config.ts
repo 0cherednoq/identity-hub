@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "tests/e2e",
   outputDir: "../test-results/playwright",
-  snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}{ext}",
+  snapshotPathTemplate: "{testDir}/__screenshots__/{testFilePath}/{arg}-{platform}{ext}",
   // Polling deliberately pauses in hidden tabs. A single browser worker keeps every
   // page visible and also matches the process-local demo backend's isolation model.
   fullyParallel: false,

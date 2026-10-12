@@ -18,7 +18,8 @@ FRONTEND_DIR = ADMIN_DIR / "frontend"
 
 
 def _spawn(command: list[str], cwd: Path, env: Mapping[str, str]) -> subprocess.Popen[bytes]:
-    if os.name == "nt":
+    # sys.platform, а не os.name: только его mypy сужает по платформе
+    if sys.platform == "win32":
         return subprocess.Popen(
             command,
             cwd=cwd,
