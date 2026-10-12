@@ -6,7 +6,7 @@ Read-модели не содержат секретов и `token` аренды
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -15,7 +15,7 @@ from identity_hub._space import SpaceBase
 from identity_hub.domain.credentials import is_expired
 from identity_hub.domain.data import build_search_text
 from identity_hub.domain.regions import RegionState
-from identity_hub.errors import ValidationFailed
+from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.links import Links
 from identity_hub.store.base import IdentityRow, LeaseHistoryRow, QuotaWindow
 
@@ -208,13 +208,28 @@ def _region_info(region: str, key: str, state: RegionState) -> RegionInfo:
 
 
 class CardsMixin(SpaceBase):
+    def _with_limits(self, service_name: str, windows: list[QuotaWindow]) -> list[QuotaWindow]:
+        """Дописать окнам лимит из правила операции сервиса с тем же окном (оно у вида одно)."""
+        try:
+            operations = self.hub.service(service_name).operations
+        except NotFound:
+            return windows  # сервис больше не зарегистрирован: расход показываем без лимита
+        result = []
+        for window in windows:
+            rule = operations.get(window.kind)
+            limits = (
+                [q.limit for q in rule.quotas if q.window_seconds == window.window_seconds] if rule else []
+            )
+            result.append(replace(window, limit=min(limits) if limits else None))
+        return result
+
     async def _identity_card(self, identity_id: UUID) -> IdentityCard:
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
             regions = await tx.list_regions(identity_id)
             lease = await tx.current_lease(identity_id)
             proxy = await tx.get_binding(identity_id)
-            quotas = await tx.quota_usage(identity_id)
+            quotas = self._with_limits(identity.service, await tx.quota_usage(identity_id))
             namespaces = await tx.data_namespaces(identity_id)
             challenge = await tx.open_challenge_of(identity_id)
             now = await tx.now()

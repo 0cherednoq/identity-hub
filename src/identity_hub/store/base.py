@@ -487,6 +487,8 @@ class QuotaWindow:
     window_seconds: int
     window_start: datetime
     used: int
+    # лимит из правила операции сервиса; заполняется в карточке, `None` — правила с таким окном нет
+    limit: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
