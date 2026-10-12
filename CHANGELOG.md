@@ -15,6 +15,11 @@
 
 ### Added
 
+- `hub.events.subscribe_batch(name, handler, types=, space=, service=, max_attempts=)` —
+  подписка, которая отдаёт события пачкой (`C4.1`). При сбое обработчика пачка делится
+  пополам до одного события; сбойное событие после `max_attempts` неудач пропускается с
+  записью `dispatcher.event.skipped`, как у `subscribe`. Фильтры `space` и `service` получила
+  и `subscribe`.
 - `identities.get_many(ids)` → `{id: Identity}` одним запросом, до 1000 аккаунтов (`C3.5`):
   состояния пачки без read-схемы, одинаково на PostgreSQL и `MemoryStore`. В руководстве по
   тестированию описано, что `hub.read.*` работает только с PostgreSQL.

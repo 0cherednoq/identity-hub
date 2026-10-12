@@ -4,6 +4,7 @@
 вебхукам (P8.3), уведомлениям (P8.4). Будится `LISTEN/NOTIFY`; без него — опрос с интервалом.
 Доставка at-least-once: курсор продвигается только после успешной обработки.
 
+Пакетные колбэки `subscribe_batch` получают пачку и при сбое делят её пополам до одного события.
 Колбэки `subscribe` получают события по одному: курсор встаёт перед событием, на котором колбэк
 упал, обработанные до него не повторяются. После `max_attempts` неудач событие пропускается с
 журнальной записью `dispatcher.event.skipped` — одно «ядовитое» событие не останавливает
@@ -27,11 +28,13 @@ from identity_hub.metrics import record_metric
 from identity_hub.store.base import NOTIFY_CHANNEL
 
 if TYPE_CHECKING:
-    from identity_hub.hub import IdentityHub
+    from identity_hub.hub import IdentityHub, SpaceHandle
 
-__all__ = ["BatchHandler", "Consumer", "Dispatcher", "EventCallback"]
+__all__ = ["BatchCallback", "BatchHandler", "Consumer", "Dispatcher", "EventCallback"]
 
 EventCallback = Callable[[Event], Awaitable[None]]
+BatchCallback = Callable[[list[Event]], Awaitable[None]]
+"""Обработчик `subscribe_batch`: получает пачку событий в порядке журнала."""
 BatchHandler = Callable[[list[Event]], Awaitable[int | None]]
 """Обработчик пачки. Может вернуть число обработанных событий с начала пачки (`None` — все)."""
 
@@ -50,6 +53,23 @@ class ConsumerRuntime:
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     retrying: bool = False
+
+
+def _event_filter(
+    types: Iterable[str] | None, space: SpaceHandle | str | None, service: str | None
+) -> Callable[[Event], bool]:
+    """Условие подписки: маски типов, пространство (хэндл или slug) и сервис."""
+    patterns = frozenset(types) if types is not None else frozenset({"*"})
+    slug = space if space is None or isinstance(space, str) else space.slug
+
+    def wanted(event: Event) -> bool:
+        return (
+            matches_any(patterns, event.type)
+            and (slug is None or event.space == slug)
+            and (service is None or event.service == service)
+        )
+
+    return wanted
 
 
 class Dispatcher:
@@ -83,23 +103,26 @@ class Dispatcher:
         callback: EventCallback,
         *,
         types: Iterable[str] | None = None,
+        space: SpaceHandle | str | None = None,
+        service: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     ) -> None:
         """Python-колбэк на события после коммита (FR-13.5); `types` — типы или маски (`pool.capacity.*`).
 
-        Событие, на котором колбэк бросил исключение, приходит снова на следующем круге; события
-        до него не повторяются. После `max_attempts` неудач подряд оно пропускается: в журнал
-        пишется `dispatcher.event.skipped`, подписчик получает следующие события.
+        `space` и `service` оставляют события одного пространства и одного сервиса. Событие, на
+        котором колбэк бросил исключение, приходит снова на следующем круге; события до него не
+        повторяются. После `max_attempts` неудач подряд оно пропускается: в журнал пишется
+        `dispatcher.event.skipped`, подписчик получает следующие события.
         """
         if max_attempts < 1:
             raise ValueError("max_attempts должен быть положительным")
-        patterns = frozenset(types) if types is not None else frozenset({"*"})
+        wanted = _event_filter(types, space, service)
         consumer = f"callbacks:{name}"
 
         async def handle(events: list[Event]) -> int:
             self._stalled.discard(consumer)
             for index, event in enumerate(events):
-                if not matches_any(patterns, event.type):
+                if not wanted(event):
                     continue
                 try:
                     await callback(event)
@@ -120,6 +143,71 @@ class Dispatcher:
                         return index  # курсор встаёт перед сбойным событием
                 self._failures.pop(consumer, None)
             return len(events)
+
+        self.add_consumer(consumer, handle)
+
+    def subscribe_batch(
+        self,
+        name: str,
+        handler: BatchCallback,
+        *,
+        types: Iterable[str] | None = None,
+        space: SpaceHandle | str | None = None,
+        service: str | None = None,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    ) -> None:
+        """Подписка, которая отдаёт события пачкой: `handler(events)` в порядке журнала.
+
+        Фильтры — как у `subscribe`. Если обработчик бросил исключение, пачка делится пополам, пока
+        не останется одно событие: события до сбойного доставляются и не повторяются, сбойное
+        приходит снова на следующем круге и после `max_attempts` неудач пропускается с записью
+        `dispatcher.event.skipped`. Доставка at-least-once: при сбое пачки её части приходят
+        повторно, обработчик должен быть идемпотентным.
+        """
+        if max_attempts < 1:
+            raise ValueError("max_attempts должен быть положительным")
+        wanted = _event_filter(types, space, service)
+        consumer = f"callbacks:{name}"
+
+        async def deliver(chunk: list[Event]) -> int:
+            """Доставить события подряд; вернуть, сколько доставлено или пропущено с начала."""
+            try:
+                await handler(chunk)
+            except Exception as exc:
+                if len(chunk) > 1:
+                    half = len(chunk) // 2
+                    done = await deliver(chunk[:half])
+                    return done if done < half else half + await deliver(chunk[half:])
+                (event,) = chunk
+                failed_id, count = self._failures.get(consumer, (event.id, 0))
+                count = count + 1 if failed_id == event.id else 1
+                if count < max_attempts or not await self._skip(consumer, event, count, exc):
+                    self._failures[consumer] = (event.id, count)
+                    self._stalled.add(consumer)
+                    logger.warning(
+                        "подписчик %s не обработал событие %s (%s), попытка %d из %d",
+                        name,
+                        event.event_id,
+                        describe_error(exc),
+                        count,
+                        max_attempts,
+                    )
+                    return 0
+                self._failures.pop(consumer, None)
+                return 1
+            if len(chunk) == 1:
+                self._failures.pop(consumer, None)
+            return len(chunk)
+
+        async def handle(events: list[Event]) -> int:
+            self._stalled.discard(consumer)
+            selected = [event for event in events if wanted(event)]
+            if not selected:
+                return len(events)
+            done = await deliver(selected)
+            if done == len(selected):
+                return len(events)
+            return events.index(selected[done])  # курсор встаёт перед сбойным событием
 
         self.add_consumer(consumer, handle)
 

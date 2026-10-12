@@ -64,7 +64,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `hub.space(slug)`, `hub.get_space(slug)` | пространство по slug без обращения к БД; несуществующее — `NotFound` при первой операции (`create=True` — создать); `get_space` возвращает `None` |
 | `hub.list_spaces()`, `hub.spaces_matrix()`, `hub.service_catalog()`, `hub.background_snapshot()` | сводные read-модели по пространствам для админок |
 | `hub.read` | read-схема Core для join и `among=` |
-| `hub.events` | `subscribe(name, fn, types=...)` — подписчики в коде, см. [События](10-events.md) |
+| `hub.events` | `subscribe(name, fn, types=..., space=..., service=...)` — подписчик по одному событию; `subscribe_batch(name, fn, ...)` — пачкой; см. [События](10-events.md) |
 | `hub.dispatcher` | фоновый цикл: `running()`, `run_once()`, `drain()` |
 | `hub.maintenance` | обслуживание по расписанию: таймеры и retention |
 | `hub.doctor` | диагностика и починка данных (`identity-hub doctor`) |
