@@ -101,6 +101,18 @@ class LeaseEndReason(StrEnum):
     LOST = "lost"  # воркер сам признал аренду потерянной (heartbeat не прошёл)
     EXPIRED = "expired"  # TTL истёк, аренду перезаписал следующий арендатор или чистильщик
     REVOKED = "revoked"  # отозвана из админки
+    MAX_HOLD = "max_hold"  # достигнут потолок удержания: продление за него не выходит
+    YIELDED = "yielded"  # держатель уступил аренду более приоритетному запросу
+
+
+class LeaseUnavailableReason(StrEnum):
+    """Почему аренда не выдана (`LeaseUnavailable.reason`)."""
+
+    BUSY = "busy"  # допустимые аккаунты есть, но все заняты
+    NO_CANDIDATES = "no_candidates"  # допустимых нет: состояние, фильтр или пустой пул
+    NO_PROXY = "no_proxy"  # аккаунт есть, но в пуле прокси нет свободного живого прокси
+    QUOTA = "quota"  # свободные аккаунты есть, но у всех исчерпана квота операции
+    RESERVE = "reserve"  # свободные аккаунты оставлены для приоритетной работы пула
 
 
 class Severity(StrEnum):

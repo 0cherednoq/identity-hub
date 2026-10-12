@@ -281,9 +281,12 @@ async def _run_batch(
     """Выполнить операцию для аккаунтов с неизменной ревизией; вернуть успешные и отказы."""
     succeeded: set[UUID] = set()
     failures: dict[UUID, tuple[str, str]] = {}
-    target = snapshot.parameters.get("target")
-    if snapshot.operation == "lifecycle" and target in ("ready", "retired") and ready:
-        # одна транзакция и одна команда ядра вместо цикла по аккаунтам
+    if not ready:
+        return succeeded, failures
+    parameters = snapshot.parameters
+    target = parameters.get("target")
+    if snapshot.operation == "lifecycle" and target in ("ready", "retired"):
+        # одна транзакция и одна команда ядра; отказ одного аккаунта не отменяет остальные
         command = (
             scope.handle.identities.activate_many
             if target == "ready"
@@ -297,9 +300,29 @@ async def _run_batch(
         for rejection in result.rejected:
             failures[rejection.key] = (_failure_name(rejection.code), "domain command rejected")
         return succeeded, failures
+    if snapshot.operation in ("tag_add", "tag_remove"):
+        # теги не зависят от состояния аккаунта: вся пачка — одной атомарной командой (N2.3)
+        tags = cast(list[str], parameters["tags"])
+        try:
+            if snapshot.operation == "tag_add":
+                await scope.handle.identities.update_many(
+                    ready, add_tags=tags, actor=scope.actor, limit=len(ready)
+                )
+            else:
+                await scope.handle.identities.update_many(
+                    ready, remove_tags=tags, actor=scope.actor, limit=len(ready)
+                )
+        except Exception as exc:
+            return succeeded, dict.fromkeys(ready, _failure(exc))
+        return set(ready), failures
     for identity_id in ready:
         try:
-            await _run_one(scope, snapshot, identity_id)
+            if snapshot.operation == "lifecycle":
+                await scope.handle.identities.set_lifecycle(
+                    identity_id, cast(str, target), actor=scope.actor, reason=scope.reason
+                )
+            else:
+                await _run_one(scope, snapshot, identity_id)
         except Exception as exc:  # one bad account must not abort the bounded batch
             failures[identity_id] = _failure(exc)
         else:
@@ -308,24 +331,9 @@ async def _run_batch(
 
 
 async def _run_one(scope: CommandScope, snapshot: BulkSnapshot, identity_id: UUID) -> None:
+    """Пересинхронизация одного аккаунта: обращение к платформе, пачкой не выполняется."""
     parameters = snapshot.parameters
-    if snapshot.operation == "lifecycle":
-        await scope.handle.identities.set_lifecycle(
-            identity_id,
-            cast(str, parameters["target"]),
-            actor=scope.actor,
-            reason=scope.reason,
-        )
-    elif snapshot.operation == "resync":
-        await scope.handle.sync.refresh(identity_id, cast(list[str], parameters["regions"]))
-    elif snapshot.operation == "tag_add":
-        await scope.handle.identities.add_tags(
-            identity_id, cast(list[str], parameters["tags"]), actor=scope.actor
-        )
-    else:
-        await scope.handle.identities.remove_tags(
-            identity_id, cast(list[str], parameters["tags"]), actor=scope.actor
-        )
+    await scope.handle.sync.refresh(identity_id, cast(list[str], parameters["regions"]))
 
 
 def _failure(exc: Exception) -> tuple[str, str]:

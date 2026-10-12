@@ -10,6 +10,7 @@ from identity_hub.api.identities import (
     OnConflict,
     Page,
     TagCount,
+    UpdateManyResult,
 )
 from identity_hub.api.proxies import (
     Proxy,
@@ -46,6 +47,7 @@ from identity_hub.enums import (
     ChangeSource,
     DeliveryStatus,
     LeaseEndReason,
+    LeaseUnavailableReason,
     Lifecycle,
     ProxyStatus,
     SessionStatus,
@@ -90,7 +92,7 @@ from identity_hub.logging import LeaseContextFilter, LeaseLogPolicy, structlog_p
 from identity_hub.maintenance import MaintenanceSchedule
 from identity_hub.metrics import Metric, MetricsHook, NullMetrics, RecordingMetrics
 from identity_hub.operation import Operation
-from identity_hub.pool import LeaseTiming, Pool
+from identity_hub.pool import LeaseTiming, Pool, PoolCapacity
 from identity_hub.protocols import (
     Authenticator,
     AuthProbe,
@@ -118,8 +120,9 @@ from identity_hub.service import (
     ProxyPolicy,
     Quota,
     Service,
+    Throttle,
 )
-from identity_hub.state import Override
+from identity_hub.state import Observation, Override
 from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
@@ -173,6 +176,7 @@ __all__ = [
     "LeaseRevoked",
     "LeaseTiming",
     "LeaseUnavailable",
+    "LeaseUnavailableReason",
     "Lifecycle",
     "LinkedIdentity",
     "LoginChallenge",
@@ -184,6 +188,7 @@ __all__ = [
     "MetricsHook",
     "NotFound",
     "NullMetrics",
+    "Observation",
     "OnConflict",
     "OnExisting",
     "Operation",
@@ -193,6 +198,7 @@ __all__ = [
     "Pacing",
     "Page",
     "Pool",
+    "PoolCapacity",
     "ProbeContext",
     "ProbeResult",
     "Probes",
@@ -235,7 +241,9 @@ __all__ = [
     "TelegramRejected",
     "TelegramTransport",
     "TelegramUnavailable",
+    "Throttle",
     "TransitionNotAllowed",
+    "UpdateManyResult",
     "ValidationFailed",
     "Verification",
     "VerificationMode",

@@ -86,7 +86,7 @@ async def test_abandoned_lease_is_closed_in_one_tick_behind_many_released(
 async def test_lease_expired_event_has_the_same_fields_on_every_backend(
     hub_under_test: IdentityHub, space: SpaceHandle
 ) -> None:
-    """R2-P09: `lease.expired` от обслуживания несёт `pool`, `holder`, `fencing`, `expired_at`."""
+    """R2-P09: `lease.expired` от обслуживания несёт `pool`, `holder`, `fencing`, `expired_at`, `reason`."""
     await register(space, service="fake_tg", external_ref="+1", lifecycle="ready", session={"auth_key": "k"})
     lease = await _short_pool(space).acquire()
     await _let_expire(hub_under_test)
@@ -99,7 +99,8 @@ async def test_lease_expired_event_has_the_same_fields_on_every_backend(
         lease.identity_id,
         lease.lease_id,
     )
-    assert set(event.data) == {"pool", "holder", "fencing", "expired_at"}
+    assert set(event.data) == {"pool", "holder", "fencing", "expired_at", "reason"}
+    assert event.data["reason"] == "expired"  # N1.2: на потолке удержания было бы max_hold
     assert (event.data["pool"], event.data["holder"], event.data["fencing"]) == (
         "short",
         "worker-1",

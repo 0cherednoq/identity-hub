@@ -19,6 +19,7 @@ from uuid import UUID
 from identity_hub.clock import Clock
 from identity_hub.crypto.envelope import EncryptedPayload
 from identity_hub.domain.regions import RegionState
+from identity_hub.enums import LeaseEndReason
 from identity_hub.errors import SecretConfigurationError
 from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupRow
@@ -29,6 +30,8 @@ NOTIFY_CHANNEL = "ih_events"
 
 __all__ = [
     "NOTIFY_CHANNEL",
+    "NO_LEASE_OPTIONS",
+    "PICK_DEMOTE_CHUNK",
     "ROTATION_TABLES",
     "UNREADABLE_IMPORT_ITEM",
     "AttentionChallengeRow",
@@ -48,7 +51,9 @@ __all__ = [
     "ImportRunRow",
     "LeaseCounters",
     "LeaseHistoryRow",
+    "LeaseOptions",
     "LeaseReadRow",
+    "LeaseRenewal",
     "LeaseRow",
     "LeaseStatsRow",
     "LinkRow",
@@ -90,6 +95,8 @@ __all__ = [
     "WebhookDeliveryRow",
     "WebhookEndpointReadRow",
     "WebhookEndpointRow",
+    "YieldRequest",
+    "expiry_reason",
 ]
 
 
@@ -347,7 +354,11 @@ class IdentityRow:
     normalized_ref: str = ""  # Service.normalize_ref(external_ref), IMP-08
     normalize_version: int = 0
     revision: int = 0  # число команд, изменивших агрегат (IMP-07, D-205)
-    last_leased_at: datetime | None = None  # последний захват аренды: выборка LRU (IMP-01, D-209)
+    last_leased_at: datetime | None = None  # последний захват аренды (IMP-01, D-209)
+    # место в порядке выборки LRU: захват ставит время, исчерпанная квота переносит в хвост (N1.3b)
+    pick_order_at: datetime | None = None
+    yield_reserved_priority: int | None = None
+    yield_reserved_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +428,9 @@ class CandidateQuery:
     proxy_enabled: bool = False
     lifecycles: frozenset[str] = frozenset({"ready"})
     auth_states: frozenset[str] | None = None  # задано — вместо needs_auth (выборка для входа, FR-5.4)
+    # окна квот операции: аккаунт с исчерпанным текущим окном не выдаётся (require_quota, N1.3)
+    quotas: tuple[QuotaCharge, ...] = ()
+    priority: int = 0  # учитывает короткую бронь после кооперативной уступки (N3.2b)
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,7 +448,37 @@ class LeaseRow:
     idempotency_key: str | None = None
     proxy_id: UUID | None = None
     heartbeat_at: datetime | None = None
+    purpose: str | None = None  # метка вида работы, по ней группируют
+    ref: str | None = None  # ссылка на задачу держателя
+    hold_deadline: datetime | None = None  # потолок удержания: продление за него не выходит
+    priority: int = 0
+    yield_requested_at: datetime | None = None
+    yield_requested_priority: int | None = None
+    throttle_state: dict[str, datetime] = field(default_factory=dict, repr=False)
 
+
+@dataclass(frozen=True, slots=True)
+class LeaseOptions:
+    """Необязательные свойства новой аренды, которые хранятся в её строке и в истории."""
+
+    purpose: str | None = None
+    ref: str | None = None
+    max_hold_seconds: float | None = None  # хранилище превращает в `hold_deadline` от своего времени
+    priority: int = 0
+
+
+def expiry_reason(hold_deadline: datetime | None, expired_at: datetime) -> LeaseEndReason:
+    """Причина для аренды, чей срок вышел: на своём потолке удержания или просто без heartbeat."""
+    if hold_deadline is not None and hold_deadline <= expired_at:
+        return LeaseEndReason.MAX_HOLD
+    return LeaseEndReason.EXPIRED
+
+
+NO_LEASE_OPTIONS = LeaseOptions()
+# Перенос исчерпанных аккаунтов из головы порядка выборки (N1.3b): столько строк головы
+# переносит один захват. 1024 строк достаточно, чтобы прогреть худший случай на 50k аккаунтов
+# за 50 захватов, но работа одного запроса остаётся ограниченной независимо от размера парка.
+PICK_DEMOTE_CHUNK = 1024
 
 RELEASE_OUTCOMES = frozenset({"released", "expired", "closed", "revoked"})
 
@@ -469,6 +513,28 @@ class LeaseCounters:
     @property
     def is_empty(self) -> bool:
         return not self.operations and not self.succeeded and not self.failed and self.last_error is None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseRenewal:
+    """Ответ продления аренды (heartbeat).
+
+    `expires_at` — новый срок живой аренды; `None` — аренды с этим token больше нет. Тогда
+    `end_reason` говорит, чем она кончилась: причина из закрытой истории, `expired` или `max_hold`
+    — срок вышел, а строку ещё никто не забрал, `None` — строки нет, а история открыта или неизвестна.
+    """
+
+    expires_at: datetime | None
+    end_reason: LeaseEndReason | None = None
+    yield_requested: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class YieldRequest:
+    """Результат запроса уступить: цель нужна для немедленной доставки внутри процесса."""
+
+    lease_id: UUID
+    forced: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -834,6 +900,10 @@ class LeaseHistoryRow:
     succeeded: int
     failed: int
     last_error: str | None
+    purpose: str | None = None
+    ref: str | None = None
+    hold_deadline: datetime | None = None
+    priority: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -858,6 +928,10 @@ class LeaseReadRow:
     failed: int
     last_error: str | None
     expires_at: datetime | None
+    purpose: str | None = None
+    ref: str | None = None
+    hold_deadline: datetime | None = None
+    priority: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1225,9 +1299,22 @@ class StoreTx(ABC):
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         """Свободный допустимый аккаунт, заблокированный до конца транзакции (FOR UPDATE SKIP LOCKED).
 
-        Порядок — наименее недавно арендованный (D-007). Истёкшие временные состояния availability
-        считаются доступными (ленивое снятие, ТЗ §3.4).
+        Порядок — наименее недавно арендованный (D-007). При `query.quotas` аккаунты с исчерпанной
+        квотой из головы порядка сначала переносятся в хвост (N1.3b). Истёкшие временные состояния
+        availability считаются доступными (ленивое снятие, ТЗ §3.4).
         """
+
+    @abstractmethod
+    async def pick_candidate_reserving(
+        self, query: CandidateQuery, reserve: int
+    ) -> tuple[IdentityRow | None, bool]:
+        """Заблокировать до ``reserve + 1`` кандидатов; вернуть (первый, reserve_blocked)."""
+
+    @abstractmethod
+    async def request_yield(
+        self, query: CandidateQuery, priority: int, grace_seconds: float | None = None
+    ) -> YieldRequest | None:
+        """Попросить одну живую допустимую аренду с меньшим priority кооперативно уступить."""
 
     @abstractmethod
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
@@ -1236,6 +1323,14 @@ class StoreTx(ABC):
     @abstractmethod
     async def count_live_candidates(self, query: CandidateQuery, limit: int) -> int:
         """Сколько подходящих аккаунтов сейчас имеют живую аренду."""
+
+    @abstractmethod
+    async def quota_reopens_at(self, query: CandidateQuery) -> datetime | None:
+        """Когда откроется квота у ближайшего из аккаунтов, которых отсекает только `query.quotas`.
+
+        Для аккаунта это конец самого позднего из исчерпанных окон; ответ — минимум по аккаунтам.
+        `None` — таких аккаунтов нет: отказ вызван не квотой. Считается только на пути отказа.
+        """
 
     @abstractmethod
     async def find_live_lease(self, idempotency_key: str) -> LeaseRow | None:
@@ -1252,6 +1347,7 @@ class StoreTx(ABC):
         idempotency_key: str | None,
         shared: bool,
         proxy_id: UUID | None = None,
+        options: LeaseOptions = NO_LEASE_OPTIONS,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         """Захватить аренду заблокированного кандидата: fencing + 1, ih_leases, строка истории (G-4.2).
 
@@ -1268,8 +1364,8 @@ class StoreTx(ABC):
         *,
         shared: bool,
         flush: bool = True,
-    ) -> datetime | None:
-        """Heartbeat: продлить живую аренду по token. None — аренды больше нет.
+    ) -> LeaseRenewal:
+        """Heartbeat: продлить живую аренду по token. Аренды больше нет — ответ без `expires_at`.
 
         `flush` — записать в историю время heartbeat и `counters`; без него эксклюзивная аренда
         обновляет только `ih_leases` (HOT, D-210). Разделяемая пишет историю всегда.
@@ -1285,6 +1381,24 @@ class StoreTx(ABC):
         взял: история закрыта как `expired` на момент `expires_at`; `closed` — история уже закрыта
         (повтор или перехват после истечения); `revoked` — аренду отозвали.
         """
+
+    @abstractmethod
+    async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
+        """Сохранённые TAT для именованных троттлов identity."""
+
+    @abstractmethod
+    async def save_throttle_state(self, identity_id: UUID, state: Mapping[str, datetime]) -> None:
+        """Сохранить TAT монотонно (greatest), не укорачивая состояние другого держателя."""
+
+    @abstractmethod
+    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+        """Конец последней истёкшей/потерянной аренды для консервативного восстановления TAT."""
+
+    @abstractmethod
+    async def take_shared_throttle(
+        self, identity_id: UUID, name: str, interval_seconds: float, burst: int
+    ) -> float:
+        """Атомарно занять общий GCRA-слот или вернуть секунды ожидания, не меняя TAT."""
 
     @abstractmethod
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
@@ -2119,10 +2233,10 @@ class Store(ABC):
         """(slug, прокси) с отпечатком не активным ключом или без ключа, по возрастанию id после `after`."""
 
     @abstractmethod
-    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:
         """Пачка heartbeat (IMP-02, D-211): продлить живые эксклюзивные аренды по token одним запросом.
 
-        Возвращает token → новый `expires_at`; аренды, которой нет или срок вышел, в ответе нет.
+        Возвращает ответ на каждый token; у аренды, которой нет или срок вышел, `expires_at` пуст.
         Историю не трогает.
         """
 

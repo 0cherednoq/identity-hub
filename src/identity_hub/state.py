@@ -14,14 +14,21 @@ from uuid import UUID
 
 from identity_hub._space import SpaceBase, logger
 from identity_hub.domain import regions as machine
-from identity_hub.domain.regions import Change, Command, Observation, RegionDecision, RegionState, Timer
+from identity_hub.domain.regions import Change, Command, RegionDecision, RegionState, Timer
 from identity_hub.domain.verification import VERIFICATION
-from identity_hub.enums import AuthState, Lifecycle, Standing
+from identity_hub.enums import AuthState, Availability, ChangeSource, Lifecycle, Standing
 from identity_hub.errors import ConcurrentModification, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.store.base import IdentityRow, StoreTx
 
-__all__ = ["COLUMN_REGIONS", "DEFAULT_SLOT", "Override", "StateMixin", "apply_region_change"]
+__all__ = [
+    "COLUMN_REGIONS",
+    "DEFAULT_SLOT",
+    "Observation",
+    "Override",
+    "StateMixin",
+    "apply_region_change",
+]
 
 DEFAULT_SLOT = "default"
 MAX_RETRIES = 5
@@ -48,6 +55,23 @@ class Override:
     reason: str
     actor: str
     pin_for: timedelta | None = None
+    code: str | None = None
+    until: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    """Публичный факт о состоянии платформы; происхождение задаёт `identities.observe()`.
+
+    `key` имеет тот же смысл, что у :class:`Override`. Если `observed_at` не задан,
+    точка входа использует время хранилища.
+    """
+
+    region: str
+    key: str | None
+    state: str | None
+    observed_at: datetime | None = None
+    raw_status: str | None = None
     code: str | None = None
     until: datetime | None = None
 
@@ -245,6 +269,33 @@ class StateMixin(SpaceBase):
                 return decision.region
             return await apply_region_change(self, tx, identity_id, override.region, key, change)
 
+    async def _cool_down(
+        self,
+        identity_id: UUID,
+        *,
+        until: datetime | None,
+        for_: timedelta | None,
+        actor: str,
+        reason: str | None,
+    ) -> RegionDecision:
+        """Перевести availability в cooling, вычислив относительный срок по времени хранилища."""
+        if (until is None) == (for_ is None):
+            raise ValidationFailed("cool_down требует ровно один из until и for_")
+        if for_ is not None and for_ <= timedelta(0):
+            raise ValidationFailed("cool_down: for_ должен быть положительным")
+        if until is not None and until.tzinfo is None:
+            raise ValidationFailed("cool_down: until должен содержать часовой пояс")
+        async with self._tx() as tx:
+            deadline = until if until is not None else await tx.now() + for_  # type: ignore[operator]
+            return await apply_region_change(
+                self,
+                tx,
+                identity_id,
+                "availability",
+                "",
+                Command(Availability.COOLING, actor=actor, reason=reason, until=deadline),
+            )
+
     async def _unpin(
         self, identity_id: UUID, region: str, key: str, *, actor: str, reason: str
     ) -> RegionDecision:
@@ -267,7 +318,7 @@ class StateMixin(SpaceBase):
         self,
         identity_id: UUID,
         region: str,
-        observation: Observation,
+        observation: machine.Observation,
         *,
         key: str = "",
         lease_id: UUID | None = None,
@@ -277,6 +328,42 @@ class StateMixin(SpaceBase):
             return await apply_region_change(
                 self, tx, identity_id, region, key, observation, lease_id=lease_id
             )
+
+    async def _public_observe(
+        self,
+        identity_id: UUID,
+        observation: Observation,
+        *,
+        actor: str,
+        source: ChangeSource,
+    ) -> RegionDecision:
+        """Проверить публичный DTO и применить его существующей машиной наблюдений."""
+        if not actor or not actor.strip():
+            raise ValidationFailed("observe требует автора")
+        try:
+            source = ChangeSource(source)
+        except ValueError as exc:
+            raise ValidationFailed(f"недопустимый источник наблюдения: {source}") from exc
+        if source not in machine.OBSERVATION_SOURCES:
+            raise ValidationFailed(f"недопустимый источник наблюдения: {source}")
+        if observation.observed_at is not None and observation.observed_at.tzinfo is None:
+            raise ValidationFailed("observe: observed_at должен содержать часовой пояс")
+        if observation.until is not None and observation.until.tzinfo is None:
+            raise ValidationFailed("observe: until должен содержать часовой пояс")
+        async with self._tx(own=True) as tx:
+            identity = await self._identity(tx, identity_id)
+            key = _override_key(self.hub.service(identity.service), observation.region, observation.key)
+            observed_at = observation.observed_at or await tx.now()
+            change = machine.Observation(
+                state=observation.state,
+                observed_at=observed_at,
+                source=source,
+                raw_status=observation.raw_status,
+                code=observation.code,
+                until=observation.until,
+                actor=actor,
+            )
+            return await apply_region_change(self, tx, identity_id, observation.region, key, change)
 
     async def _command(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -19,11 +19,11 @@ from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.data import normalize_tag
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.domain.regions import RegionDecision
-from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
+from identity_hub.enums import AuthState, Availability, ChangeSource, Lifecycle, Standing
 from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
 from identity_hub.identities import UNSET, PreparedIdentity, _Unset, prepare_identity
 from identity_hub.service import Service
-from identity_hub.state import DEFAULT_SLOT, Override
+from identity_hub.state import DEFAULT_SLOT, Observation, Override
 from identity_hub.store.base import IdentityRow, StoreTx
 
 if TYPE_CHECKING:
@@ -40,6 +40,7 @@ __all__ = [
     "OnConflict",
     "Page",
     "TagCount",
+    "UpdateManyResult",
 ]
 
 # Счётчик `count()` точный до этого значения; дальше возвращается `COUNT_CAP + 1`.
@@ -180,6 +181,14 @@ class CreateManyResult:
 
     created: list[Identity]
     skipped: list[IdentityRef]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateManyResult:
+    """Итог атомарного массового изменения identity."""
+
+    changed: int
+    skipped: int
 
 
 def _values(value: str | Collection[str] | None) -> frozenset[str]:
@@ -504,6 +513,53 @@ class Identities(Namespace):
         space = self._at(identity_id, expected_revision)
         return Identity.from_row(await space._set_note(identity_id, note, actor=actor))
 
+    async def update_many(
+        self,
+        target: IdentityFilter | Sequence[UUID],
+        *,
+        add_tags: Iterable[str] = (),
+        remove_tags: Iterable[str] = (),
+        set_labels: Mapping[str, Any] | None = None,
+        lifecycle: Lifecycle | str | None = None,
+        actor: str,
+        limit: int = 1000,
+    ) -> UpdateManyResult:
+        """Атомарно изменить identity по фильтру или списку id.
+
+        Охват больше ``limit`` отклоняется без изменений. Строки блокируются в
+        порядке UUID; ошибка или запрещённый lifecycle-переход откатывает всю пачку.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValidationFailed("limit: от 1 до 1000")
+        added = tuple(add_tags)
+        removed = tuple(remove_tags)
+        labels = None if set_labels is None else dict(set_labels)
+        if not added and not removed and labels is None and lifecycle is None:
+            raise ValidationFailed("update_many требует хотя бы одно изменение")
+        lifecycle_value: Lifecycle | None = None
+        if lifecycle is not None:
+            try:
+                lifecycle_value = Lifecycle(lifecycle)
+            except ValueError as exc:
+                raise ValidationFailed(f"неизвестный lifecycle: {lifecycle}") from exc
+        if isinstance(target, IdentityFilter):
+            search_filter = self._space._search_filter(self._query(target))
+            ids = None
+        else:
+            search_filter = None
+            ids = tuple(target)
+        changed, skipped = await self._space._update_many(
+            search_filter=search_filter,
+            identity_ids=ids,
+            add_tags=added,
+            remove_tags=removed,
+            set_labels=labels,
+            lifecycle=lifecycle_value,
+            actor=actor,
+            limit=limit,
+        )
+        return UpdateManyResult(changed=changed, skipped=skipped)
+
     async def delete(
         self, identity_id: UUID, *, actor: str, revoke: bool = False, expected_revision: int | None = None
     ) -> None:
@@ -556,6 +612,63 @@ class Identities(Namespace):
         """Вернуть `banned → good` командой (sticky-бан наблюдения не снимают)."""
         space = self._at(identity_id, expected_revision)
         return await space._restore_standing(identity_id, actor=actor, reason=reason)
+
+    async def ban(
+        self,
+        identity_id: UUID,
+        *,
+        reason: str,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Вручную установить `standing=banned` с теми же событиями, что у override."""
+        return await self.override(
+            identity_id,
+            Override("standing", "", Standing.BANNED, reason=reason, actor=actor),
+            expected_revision=expected_revision,
+        )
+
+    async def freeze(
+        self,
+        identity_id: UUID,
+        *,
+        reason: str,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Вручную установить `standing=frozen` с теми же событиями, что у override."""
+        return await self.override(
+            identity_id,
+            Override("standing", "", Standing.FROZEN, reason=reason, actor=actor),
+            expected_revision=expected_revision,
+        )
+
+    async def cool_down(
+        self,
+        identity_id: UUID,
+        *,
+        until: datetime | None = None,
+        for_: timedelta | None = None,
+        actor: str,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Временно исключить identity из выдачи; задайте ровно один срок `until` или `for_`."""
+        space = self._at(identity_id, expected_revision)
+        return await space._cool_down(identity_id, until=until, for_=for_, actor=actor, reason=reason)
+
+    async def observe(
+        self,
+        identity_id: UUID,
+        observation: Observation,
+        *,
+        actor: str,
+        source: ChangeSource,
+        expected_revision: int | None = None,
+    ) -> RegionDecision:
+        """Сообщить факт от платформы через ту же машину, что используют операции и пробы."""
+        space = self._at(identity_id, expected_revision)
+        return await space._public_observe(identity_id, observation, actor=actor, source=source)
 
     async def override(
         self, identity_id: UUID, override: Override, *, expected_revision: int | None = None

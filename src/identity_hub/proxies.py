@@ -26,7 +26,7 @@ from identity_hub.crypto import associated_data
 from identity_hub.domain import regions as machine
 from identity_hub.domain.region_specs import PROXY_HEALTH
 from identity_hub.domain.regions import Change, Command, Observation, Outcome, RegionDecision, RegionState
-from identity_hub.enums import ChangeSource, ProxyStatus
+from identity_hub.enums import ChangeSource, LeaseUnavailableReason, ProxyStatus
 from identity_hub.errors import (
     AlreadyExists,
     ConcurrentModification,
@@ -796,7 +796,9 @@ class ProxiesMixin(SpaceBase):
                 raise ValidationFailed("target proxy is disabled")
             result = await tx.rebind_proxy(identity_id, proxy_id)
             if result is None:
-                raise LeaseUnavailable("target proxy has no available capacity")
+                raise LeaseUnavailable(
+                    "target proxy has no available capacity", reason=LeaseUnavailableReason.NO_PROXY
+                )
             previous, claimed = result
             if previous == claimed.id:
                 return False

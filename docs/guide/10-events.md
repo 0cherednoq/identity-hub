@@ -122,12 +122,13 @@ flowchart LR
 | `identity.unlinked` | `linked_identity_id`, `reason`, `role` |
 | `identity.updated` | `fields`, `labels`, `tags` |
 | `identity.verification.changed` | `actor`, `attempts`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
-| `lease.acquired` | `fencing`, `holder`, `pool`, `shared` |
-| `lease.expired` | `error`, `expired_at`, `fencing`, `holder`, `pool`, `reason` |
-| `lease.failed` | `error`, `pool`, `reason` |
-| `lease.lost` | `error`, `pool`, `reason` |
-| `lease.released` | `error`, `pool`, `reason` |
+| `lease.acquired` | `fencing`, `holder`, `pool`, `purpose`, `ref`, `shared` |
+| `lease.expired` | `error`, `expired_at`, `fencing`, `holder`, `pool`, `purpose`, `reason`, `ref` |
+| `lease.failed` | `error`, `pool`, `purpose`, `reason`, `ref` |
+| `lease.lost` | `error`, `pool`, `purpose`, `reason`, `ref` |
+| `lease.released` | `error`, `pool`, `purpose`, `reason`, `ref` |
 | `lease.revoked` | `holder`, `pool`, `reason` |
+| `lease.yield_requested` | `holder`, `pool`, `priority`, `requested_priority` |
 | `operation.failed` | `blame`, `code`, `error`, `kind` |
 | `operation.succeeded` | — |
 | `pool.capacity.empty` | `available`, `pool`, `threshold` |

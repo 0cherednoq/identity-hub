@@ -50,12 +50,12 @@ EXPECTED_COLUMNS = {
     },
     "leases": {
         "identity_id", "space_id", "lease_id", "pool", "holder", "acquired_at", "heartbeat_at",
-        "expires_at",
+        "expires_at", "purpose", "ref", "hold_deadline",
     },
     "lease_history": {
         "lease_id", "space_id", "identity_id", "pool", "holder", "proxy_id", "acquired_at",
         "last_heartbeat_at", "released_at", "duration", "end_reason", "operations", "succeeded",
-        "failed", "last_error",
+        "failed", "last_error", "purpose", "ref", "hold_deadline",
     },
     "region_states": {
         "identity_id", "space_id", "region", "key", "state", "code", "until", "changed_at",
@@ -232,7 +232,7 @@ async def test_proxy_bindings_join_accounts_with_proxies(hub: IdentityHub, db: A
 
 def test_column_allowlist_and_version() -> None:
     read = ReadSchema()
-    assert READ_SCHEMA_VERSION == 2 and read.version == READ_SCHEMA_VERSION
+    assert READ_SCHEMA_VERSION == 4 and read.version == READ_SCHEMA_VERSION
     assert set(READ_TABLES) == set(EXPECTED_COLUMNS)
     for name, expected in EXPECTED_COLUMNS.items():
         table = getattr(read, name)

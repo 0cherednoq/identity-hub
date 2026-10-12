@@ -33,7 +33,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 
 | Неймспейс | Сущность | Ключевые методы | Раздел |
 |---|---|---|---|
-| `space.identities` | identity | `get`, `find`, `get_by_ref`, `card`, `search`, `list`, `count`, `create`, `ensure`, `create_many`, `update`, `replace_*`, `add_tags`, `remove_tags`, `set_tags`, `set_note`, `delete`, `activate`, `retire`, `set_lifecycle`, `restore_standing`, `override`, `unpin` | [Аккаунты](03-accounts.md), [Состояния](04-states.md) |
+| `space.identities` | identity | `get`, `find`, `get_by_ref`, `card`, `search`, `list`, `count`, `create`, `ensure`, `create_many`, `update`, `update_many`, `replace_*`, `add_tags`, `remove_tags`, `set_tags`, `set_note`, `delete`, `activate`, `retire`, `set_lifecycle`, `restore_standing`, `ban`, `freeze`, `cool_down`, `observe`, `override`, `unpin` | [Аккаунты](03-accounts.md), [Состояния](04-states.md) |
 | `space.imports` | импорт | `run`, `run_files`, `stage`, `get`, `cancel` | [Аккаунты](03-accounts.md#импорт) |
 | `space.secrets` | credentials, сессии | `describe`, `reveal`, `replace_credentials`, `replace_session` | [Аккаунты](03-accounts.md#секреты) |
 | `space.pools` | пул и аренда | `define` → `Pool.lease()` / `Pool.acquire()`; `revoke` | [Аренда](07-leases.md) |
@@ -143,6 +143,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `ensure(spec)` | вернуть существующий без изменений или создать → `(obj, created)` |
 | `create_many(specs, on_conflict=)` | массовое создание одной транзакцией: `"fail"` или `"skip"` |
 | `update(id, ...)` | частичное изменение со слиянием |
+| `update_many(target, ..., limit=1000)` | атомарно изменить теги, метки или lifecycle по фильтру/списку id |
 | `replace_<часть>(id, ...)` | полная замена части |
 | `delete(id)` | физическое удаление |
 | `add` / `remove` | только для членства: теги, связи |
@@ -199,8 +200,11 @@ await space.identities.delete(identity_id, actor="operator")
 | вывести из работы | `identities.retire(id, actor=..., reason=...)` |
 | произвольный lifecycle | `identities.set_lifecycle(id, state, actor=...)` |
 | разбанить | `identities.restore_standing(id, actor=..., reason=...)` |
-| забанить, заморозить, снять карантин | `identities.override(id, Override(region, key, state, reason=..., actor=...))` |
+| забанить / заморозить | `identities.ban(id, reason=..., actor=...)` / `identities.freeze(...)` |
+| снять с выдачи на время | `identities.cool_down(id, until=... \| for_=..., actor=...)` |
+| произвольная ручная правка | `identities.override(id, Override(region, key, state, reason=..., actor=...))` |
 | закрепить статус от проб | `Override(..., pin_for=timedelta(hours=6))`, снять — `identities.unpin(...)` |
+| сообщить факт от платформы | `identities.observe(id, Observation(...), actor=..., source=...)` |
 | узнать статус у платформы | `sync.refresh(id)`, по расписанию — `sync.refresh_many(...)` |
 | автоматически по ошибкам платформы | `Service(error_classifier=...)` |
 
@@ -209,7 +213,7 @@ await space.identities.delete(identity_id, actor="operator")
 ### Аренда
 
 ```python
-pool = space.pools.define("senders", service=TELEGRAM, tags=["sender"])
+pool = space.pools.define("senders", service=TELEGRAM, tags=["sender"], reserve=2)
 async with pool.lease(for_operation="send_message", wait=30) as lease:
     session = await lease.session()
     async with lease.operation("send_message", key=f"send:{job.id}"):
@@ -224,8 +228,11 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 | Лимит | Где | Как |
 |---|---|---|
 | квота N за окно | сервис | `OperationRule(quotas=(Quota(20, timedelta(hours=1)),))` |
+| частота запросов | сервис/аренда | `Service(throttles={"api": Throttle(...)})`; `await lease.throttle("api")` |
 | допуск по статусу и верификации | сервис | `OperationRule(standing=..., needs_auth=..., verified=..., tiers=...)` |
 | отдых после серии операций | пул | `pools.define(..., pacing=Pacing(work=Quota(...), pause=(15, 40)))` |
+| резерв для приоритетной работы | пул | `pools.define(..., reserve=N)`; разово `pool.lease(keep_free=N)` |
+| кооперативная уступка срочной работе | пул | `pools.define(..., priority=N, yield_grace=...)`; разово `pool.lease(priority=N, on_yield_requested=...)`; флаг `lease.yield_requested` |
 | пауза по требованию платформы | операция | `await op.cool_down(seconds)` или `Fault(retry_after=...)` |
 | карантин за ошибки | сервис | `quarantine_threshold` + `ErrorClassifier` |
 

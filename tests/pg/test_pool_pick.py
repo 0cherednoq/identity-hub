@@ -107,7 +107,7 @@ async def test_live_lease_excluded_and_least_recently_leased_first(
             await s.execute(
                 update(IdentityRecord)
                 .where(IdentityRecord.id == identity_id)
-                .values(last_leased_at=text(acquired))
+                .values(last_leased_at=text(acquired), pick_order_at=text(acquired))
             )
         await s.execute(
             LeaseRecord.__table__.insert().values(

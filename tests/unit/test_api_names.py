@@ -77,7 +77,7 @@ def test_lease_unavailable_is_service_unavailable_with_retry_hint() -> None:
     """R1-27: нет свободного аккаунта — временная недоступность (503), а не «не найдено»."""
     assert http_status(LeaseUnavailable("нет аккаунта")) == 503
     error = LeaseUnavailable("нет аккаунта", retry_after=5.0)
-    assert error.retry_after == 5.0 and error.context == {"retry_after": 5.0}
+    assert error.retry_after == 5.0 and error.context == {"retry_after": 5.0, "reason": None}
 
 
 async def test_webhooks_and_notifications_are_cached_namespaces() -> None:

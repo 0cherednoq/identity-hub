@@ -19,16 +19,14 @@ pytestmark = [pytest.mark.conformance]
 
 
 class TestStoreConformance(StoreConformanceSuite):
-    @pytest.fixture(params=["memory", "postgres"], ids=["memory", "postgres"])
+    @pytest.fixture
     async def store_under_test(
-        self,
-        request: pytest.FixtureRequest,
-        sessionmaker: async_sessionmaker[AsyncSession],
+        self, backend_sessionmaker: async_sessionmaker[AsyncSession] | None
     ) -> AsyncIterator[Store]:
-        if request.param == "memory":
+        if backend_sessionmaker is None:
             yield MemoryStore(FakeClock(datetime(2026, 1, 1, tzinfo=UTC)))
         else:
-            yield PgStore(sessionmaker)
+            yield PgStore(backend_sessionmaker)
 
 
 async def test_memory_clock_drives_expiry() -> None:

@@ -3019,7 +3019,8 @@
             "enum": [
               "pool",
               "service",
-              "holder"
+              "holder",
+              "purpose"
             ],
             "type": "string"
           },
@@ -3095,6 +3096,17 @@
           "fencing": {
             "type": "integer"
           },
+          "hold_deadline": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "holder": {
             "type": "string"
           },
@@ -3140,6 +3152,26 @@
               }
             ]
           },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "released_at": {
             "oneOf": [
               {
@@ -3165,6 +3197,7 @@
           "external_ref",
           "failed",
           "fencing",
+          "hold_deadline",
           "holder",
           "identity_id",
           "last_error",
@@ -3173,6 +3206,8 @@
           "operations",
           "pool",
           "proxy_id",
+          "purpose",
+          "ref",
           "released_at",
           "service",
           "succeeded"
@@ -3500,6 +3535,17 @@
           "heartbeat_stale": {
             "type": "boolean"
           },
+          "hold_deadline": {
+            "oneOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "holder": {
             "type": "string"
           },
@@ -3535,6 +3581,26 @@
               }
             ]
           },
+          "purpose": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "service": {
             "type": "string"
           },
@@ -3550,6 +3616,7 @@
           "failed",
           "heartbeat_lag_seconds",
           "heartbeat_stale",
+          "hold_deadline",
           "holder",
           "identity_id",
           "last_heartbeat_at",
@@ -3557,6 +3624,8 @@
           "operations",
           "pool",
           "proxy_id",
+          "purpose",
+          "ref",
           "service",
           "succeeded"
         ],
@@ -13700,7 +13769,8 @@
               "enum": [
                 "pool",
                 "service",
-                "holder"
+                "holder",
+                "purpose"
               ],
               "type": "string"
             }

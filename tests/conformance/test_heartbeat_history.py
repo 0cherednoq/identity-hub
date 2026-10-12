@@ -47,7 +47,7 @@ async def test_heartbeat_keeps_counters_until_flush_and_release_writes_them(
     async with lease.operation("read_channel"):
         pass
     await _pass(hub_under_test, 0.05)
-    assert await lease._extend() is not None
+    assert (await lease._extend()).expires_at is not None
 
     live = await _history(space, lease.lease_id)
     assert live.operations == {} and live.succeeded == 0  # счётчики ещё в памяти воркера
@@ -69,7 +69,7 @@ async def test_history_flushes_after_interval(hub_under_test: IdentityHub, space
     async with lease.operation("read_channel"):
         pass
     await _pass(hub_under_test, 0.3)
-    assert await lease._extend() is not None
+    assert (await lease._extend()).expires_at is not None
 
     flushed = await _history(space, lease.lease_id)
     assert (flushed.operations, flushed.succeeded) == ({"read_channel": 1}, 1)

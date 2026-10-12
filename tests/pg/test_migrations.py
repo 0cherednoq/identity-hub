@@ -99,6 +99,7 @@ async def test_admin_foundations_upgrade_from_0004_and_downgrade(engine: AsyncEn
         "ih_stats_rollup",
         "ih_state_snapshots",
         "ih_state_snapshot_coverage",
+        "ih_throttle_state",
     } <= tables
 
     async with engine.begin() as conn:

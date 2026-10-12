@@ -13,6 +13,7 @@ import identity_hub
 from identity_hub import (
     EnvSecretsProvider,
     IdentityHub,
+    Observation,
     OperationRule,
     Override,
     Pacing,
@@ -20,6 +21,7 @@ from identity_hub import (
     Service,
     Severity,
     Standing,
+    UpdateManyResult,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -56,10 +58,14 @@ def test_section_11_types_are_importable_from_package_root() -> None:
         reason="ложная блокировка",
         actor="test",
     )
+    observation = Observation("standing", "", Standing.LIMITED)
+    bulk = UpdateManyResult(changed=2, skipped=1)
 
     assert service.rule("read_channel").needs_auth
     assert pacing.work.limit == 40
     assert override.state is Standing.GOOD
+    assert observation.state is Standing.LIMITED
+    assert (bulk.changed, bulk.skipped) == (2, 1)
     assert str(Severity.WARNING) == "warning"
     assert IdentityHub is identity_hub.IdentityHub
     assert EnvSecretsProvider is identity_hub.EnvSecretsProvider

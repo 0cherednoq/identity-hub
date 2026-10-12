@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: "/admin"
+    schedule:
+      interval: monthly
+    groups:
+      admin-python-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/admin/frontend"
+    schedule:
+      interval: monthly
+    groups:
+      admin-frontend-dependencies:
+        patterns: ["*"]

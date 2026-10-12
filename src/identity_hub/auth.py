@@ -23,7 +23,7 @@ from identity_hub.crypto import associated_data
 from identity_hub.domain.provider_operations import RetryPolicy, safe_error_code
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
-from identity_hub.enums import AuthState, Lifecycle, Standing
+from identity_hub.enums import AuthState, LeaseUnavailableReason, Lifecycle, Standing
 from identity_hub.errors import (
     LeaseOwnershipLost,
     LeaseUnavailable,
@@ -191,7 +191,9 @@ class LoginMixin(SpaceBase):
             raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
         if identity.auth_state == AuthState.LOGGING_IN:
             # вход уже идёт в другой задаче или процессе; брошенный вход сбросит обслуживание
-            raise LeaseUnavailable(f"аккаунт {identity_id} уже выполняет вход")
+            raise LeaseUnavailable(
+                f"аккаунт {identity_id} уже выполняет вход", reason=LeaseUnavailableReason.BUSY
+            )
         if identity.auth_state not in LOGIN_AUTH_STATES:
             raise ValidationFailed(f"вход недоступен из состояния auth={identity.auth_state}")
         pool: Pool = self._pool(LOGIN_POOL, service=service)  # type: ignore[attr-defined]

@@ -86,6 +86,7 @@ __all__ = [
     "StateSnapshotRecord",
     "StatsMetricBatchRecord",
     "StatsRollupRecord",
+    "ThrottleStateRecord",
     "VerificationRecord",
     "WebhookDeliveryRecord",
     "WebhookEndpointRecord",
@@ -324,8 +325,14 @@ class IdentityRecord(IdentityHubBase):
     # последняя попытка фоновой сверки при любом исходе: очередь refresh_many идёт по ней (0013)
     probe_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     event_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # номер последнего события аккаунта
-    # последний захват аренды (обычной и shared): выборка идёт по нему, LRU (IMP-01, 0020)
+    # последний захват аренды (обычной и shared), показывается в поиске (IMP-01, 0020)
     last_leased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # место в порядке выборки LRU: захват ставит то же время, что last_leased_at, а аккаунт с
+    # исчерпанной квотой переносится в хвост без изменения last_leased_at (N1.3b, 0028)
+    pick_order_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Короткая бронь после уступки: менее приоритетный ожидающий не перехватит identity (N3.2b).
+    yield_reserved_priority: Mapped[int | None] = mapped_column(Integer)
+    yield_reserved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # число команд, изменивших агрегат (IMP-07, D-205); новая строка — 0, событие создания даёт 1
     revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("1"))
 
@@ -348,7 +355,7 @@ class IdentityRecord(IdentityHubBase):
             "ix_ih_identities_pick",
             "space_id",
             "service",
-            text("last_leased_at ASC NULLS FIRST"),
+            text("pick_order_at ASC NULLS FIRST"),
             "id",
             postgresql_where=text(
                 "lifecycle = 'ready' AND auth_state = 'authenticated' AND standing IN ('good', 'limited')"
@@ -711,6 +718,13 @@ class LeaseRecord(IdentityHubBase):
     pool: Mapped[str] = mapped_column(String(128))  # для админки: кто и зачем держит
     holder: Mapped[str] = mapped_column(String(256))  # hostname:pid:worker
     idempotency_key: Mapped[str | None] = mapped_column(String(256))
+    purpose: Mapped[str | None] = mapped_column(String(64))  # метка вида работы (N1.1)
+    ref: Mapped[str | None] = mapped_column(String(256))  # ссылка на задачу держателя
+    # потолок удержания (N1.2): продление не ставит expires_at позже
+    hold_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    priority: Mapped[int] = mapped_column(Integer, server_default="0")
+    yield_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    yield_requested_priority: Mapped[int | None] = mapped_column(Integer)
 
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -748,6 +762,11 @@ class LeaseHistoryRecord(IdentityHubBase):
     pool: Mapped[str] = mapped_column(String(128))
     holder: Mapped[str] = mapped_column(String(256))
     proxy_id: Mapped[UUID | None]  # через какой прокси работали
+    purpose: Mapped[str | None] = mapped_column(String(64))  # метка вида работы (N1.1)
+    ref: Mapped[str | None] = mapped_column(String(256))  # ссылка на задачу держателя
+    # потолок удержания (N1.2): продление не ставит expires_at позже
+    hold_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    priority: Mapped[int] = mapped_column(Integer, server_default="0")
 
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -834,6 +853,19 @@ class QuotaUsageRecord(IdentityHubBase):
         # чистка завершившихся окон: отдельно по каждому размеру окна (миграция 0015)
         Index("ix_ih_quota_usage_window", "window_seconds", "window_start"),
     )
+
+
+class ThrottleStateRecord(IdentityHubBase):
+    """Сохранённый theoretical arrival time GCRA для аккаунта и имени лимита."""
+
+    __tablename__ = "ih_throttle_state"
+
+    identity_id: Mapped[UUID] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    space_id: Mapped[UUID]
+    tat: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (_identity_fk(),)
 
 
 class OperationKeyRecord(IdentityHubBase):

@@ -43,7 +43,7 @@ def test_plugin_fixture_works_in_both_pytest_asyncio_modes(
     pytester.makeini(f"[pytest]\nasyncio_mode = {mode}\nasyncio_default_fixture_loop_scope = function\n")
     pytester.makepyfile(USER_TEST.format(mark=mark))
 
-    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess("--rootdir", str(pytester.path), "-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=1)
 
@@ -59,7 +59,9 @@ def test_needs_hub(identity_hub):
 """
     )
 
-    result = pytester.runpytest_subprocess("-p", "no:asyncio", "-p", "no:cacheprovider")
+    result = pytester.runpytest_subprocess(
+        "--rootdir", str(pytester.path), "-p", "no:asyncio", "-p", "no:cacheprovider"
+    )
 
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*pytest-asyncio*"])

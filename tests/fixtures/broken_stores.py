@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub.clock import FakeClock
-from identity_hub.store.base import CandidateQuery, IdentityRow, QuotaCharge, SearchFilter
+from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseRenewal, QuotaCharge, SearchFilter
 from identity_hub.testing import MemoryStore
 from identity_hub.testing.memory import MemoryTx
 
@@ -46,8 +46,8 @@ class _RevokeTx(MemoryTx):
 
     async def extend_lease(
         self, lease: Any, ttl_seconds: float, counters: Any, *, shared: bool
-    ) -> datetime | None:
-        return self._now
+    ) -> LeaseRenewal:
+        return LeaseRenewal(self._now)
 
 
 class _FencingTx(MemoryTx):

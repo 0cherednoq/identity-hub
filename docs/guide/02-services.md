@@ -46,6 +46,7 @@ TELEGRAM = Service(
 | `searchable_profile` | `∅` | Поля профиля, попадающие в полнотекстовый поиск |
 | `profile_encrypted` | `False` | Шифровать профиль; открытыми остаются только `filterable_profile` |
 | `operations` | `{}` | Виды операций и их правила допуска и квоты → [лимиты](08-limits.md) |
+| `throttles` | `{}` | Именованные GCRA-лимиты частоты запросов → [лимиты](08-limits.md#троттлинг-частоты) |
 | `lease_mode` | `EXCLUSIVE` | `SHARED` — аренда не блокирует аккаунт → [аренда](07-leases.md) |
 | `proxy_policy` | `None` | Как выдавать прокси аккаунтам → [прокси](09-proxies.md) |
 | `authenticator` | `None` | Ваша реализация входа → [вход](05-login.md) |

@@ -23,13 +23,13 @@ from identity_hub.domain.data import (
     validate_model,
     validate_tags,
 )
-from identity_hub.domain.regions import RegionState
+from identity_hub.domain.regions import Command, RegionState
 from identity_hub.enums import AuthState, ChangeSource, Lifecycle, Standing
 from identity_hub.errors import AlreadyExists, NotFound, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
-from identity_hub.state import DEFAULT_SLOT
-from identity_hub.store.base import IdentityRow, NewIdentity
+from identity_hub.state import DEFAULT_SLOT, apply_region_change
+from identity_hub.store.base import IdentityRow, NewIdentity, SearchFilter
 
 __all__ = ["IdentitiesMixin", "PreparedIdentity", "RegisterResult"]
 
@@ -355,6 +355,98 @@ class IdentitiesMixin(SpaceBase):
         return await self._mutate(
             identity_id, actor, lambda row, _: {"tags": validate_tags(t for t in row.tags if t not in drop)}
         )
+
+    async def _update_many(
+        self,
+        *,
+        search_filter: SearchFilter | None,
+        identity_ids: tuple[UUID, ...] | None,
+        add_tags: tuple[str, ...],
+        remove_tags: tuple[str, ...],
+        set_labels: dict[str, Any] | None,
+        lifecycle: Lifecycle | None,
+        actor: str,
+        limit: int,
+    ) -> tuple[int, int]:
+        """Одна транзакция массовой команды; публичный DTO живёт в api.identities."""
+        validate_tags(add_tags)
+        if set_labels is not None:
+            validate_json_payload(set_labels, "labels")
+        if identity_ids is not None and len(set(identity_ids)) > limit:
+            raise ValidationFailed(f"update_many выбрал больше {limit} identity")
+
+        async with self._tx() as tx:
+            if search_filter is not None:
+                rows, _ = await tx.search_identities(
+                    search_filter, limit=limit + 1, after=None, count_limit=None
+                )
+                if len(rows) > limit:
+                    raise ValidationFailed(f"update_many выбрал больше {limit} identity")
+                ids = sorted(row.id for row in rows)
+            else:
+                ids = sorted(set(identity_ids or ()))
+            await tx.lock_identities(ids)
+
+            changed = 0
+            skipped = 0
+            removed = set(remove_tags)
+            for identity_id in ids:
+                row = await self._identity(tx, identity_id)
+                values: dict[str, Any] = {}
+                tags = validate_tags(tag for tag in [*row.tags, *add_tags] if tag not in removed)
+                if tags != row.tags:
+                    values["tags"] = tags
+                if set_labels is not None:
+                    labels = dict(row.labels)
+                    for key, value in set_labels.items():
+                        if value is None:
+                            labels.pop(key, None)
+                        else:
+                            labels[key] = value
+                    normalized_labels = dict(validate_labels(labels))
+                    if normalized_labels != row.labels:
+                        values["labels"] = normalized_labels
+                        values["search_text"] = build_search_text(
+                            self.hub.service(row.service),
+                            row.id,
+                            row.external_ref,
+                            row.profile,
+                            normalized_labels,
+                            row.note,
+                        )
+                data_changed = bool(values)
+                if data_changed:
+                    await tx.update_identity(identity_id, values)
+                    event_data: dict[str, Any] = {"fields": sorted(k for k in values if k != "search_text")}
+                    for public in ("labels", "tags"):
+                        if public in values:
+                            event_data[public] = values[public]
+                    await self._emit(
+                        tx,
+                        EventDraft(
+                            "identity.updated",
+                            actor=actor,
+                            service=row.service,
+                            identity_id=identity_id,
+                            data=event_data,
+                        ),
+                    )
+                lifecycle_changed = False
+                if lifecycle is not None:
+                    decision = await apply_region_change(
+                        self,
+                        tx,
+                        identity_id,
+                        "lifecycle",
+                        "",
+                        Command(lifecycle, actor=actor),
+                    )
+                    lifecycle_changed = decision.changed
+                if data_changed or lifecycle_changed:
+                    changed += 1
+                else:
+                    skipped += 1
+            return changed, skipped
 
     async def _set_attributes(
         self, identity_id: UUID, attributes: BaseModel | Mapping[str, Any], *, actor: str = "system"

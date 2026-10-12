@@ -67,6 +67,7 @@ from identity_hub.enums import (
     ChangeSource,
     DeliveryStatus,
     LeaseEndReason,
+    LeaseUnavailableReason,
     Lifecycle,
     ProxyStatus,
     SessionStatus,
@@ -119,6 +120,7 @@ from identity_hub.postgres.models import (
     StateSnapshotRecord,
     StatsMetricBatchRecord,
     StatsRollupRecord,
+    ThrottleStateRecord,
     VerificationRecord,
     WebhookDeliveryRecord,
     WebhookEndpointRecord,
@@ -126,7 +128,9 @@ from identity_hub.postgres.models import (
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
+    NO_LEASE_OPTIONS,
     NOTIFY_CHANNEL,
+    PICK_DEMOTE_CHUNK,
     UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
@@ -148,7 +152,9 @@ from identity_hub.store.base import (
     LeaseCounters,
     LeaseFence,
     LeaseHistoryRow,
+    LeaseOptions,
     LeaseReadRow,
+    LeaseRenewal,
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
@@ -194,7 +200,9 @@ from identity_hub.store.base import (
     WebhookDeliveryRow,
     WebhookEndpointReadRow,
     WebhookEndpointRow,
+    YieldRequest,
     credential_label,
+    expiry_reason,
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
@@ -211,6 +219,7 @@ LEASES = cast(Table, LeaseRecord.__table__)
 HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 LEASE_LOGS = cast(Table, LeaseLogRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
+THROTTLES = cast(Table, ThrottleStateRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROVIDER_OPERATIONS = cast(Table, ProviderOperationRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
@@ -796,7 +805,7 @@ class PgTx(StoreTx):
                 LEASES.c.space_id == self.space.id,
                 HISTORY.c.released_at.is_(None),
             )
-            .values(released_at=LEASES.c.expires_at, end_reason=LeaseEndReason.EXPIRED)
+            .values(released_at=LEASES.c.expires_at, end_reason=_expiry_reason(LEASES.c.expires_at))
         )
         result = await self.execute(
             delete(IDENTITIES).where(IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id)
@@ -1009,6 +1018,13 @@ class PgTx(StoreTx):
             # соединяет хешем все живые аренды с сортировкой вместо обхода индекса LRU (D-209)
             live = select(lease.identity_id).where(lease.identity_id == i.id, lease.expires_at > now)
             conditions.append(~live.exists())
+            conditions.append(
+                or_(
+                    i.yield_reserved_until.is_(None),
+                    i.yield_reserved_until <= now,
+                    i.yield_reserved_priority <= query.priority,
+                )
+            )
         if query.proxy_wait or query.proxy_enabled:
             unusable: Any = PROXIES.c.enabled.is_(False)  # выключение ведёт себя как WAIT (D-224)
             if query.proxy_wait:
@@ -1019,22 +1035,203 @@ class PgTx(StoreTx):
                 .where(BINDINGS.c.identity_id == i.id, unusable)
             )
             conditions.append(~down.exists())
+        # исчерпанное текущее окно квоты: поиск по первичному ключу ih_quota_usage (N1.3)
+        conditions.extend(~_exhausted_window(charge).exists() for charge in query.quotas)
         return conditions
+
+    async def quota_reopens_at(self, query: CandidateQuery) -> datetime | None:
+        if not query.quotas:
+            return None
+        ends = [
+            case(
+                (
+                    _exhausted_window(charge).exists(),
+                    _window_start_sql(charge) + timedelta(seconds=charge.window_seconds),
+                ),
+                else_=None,
+            )
+            for charge in query.quotas
+        ]
+        # `greatest` пропускает NULL: у аккаунта без исчерпанных окон значение пустое и в минимум не идёт
+        reopens = func.greatest(*ends) if len(ends) > 1 else ends[0]
+        stmt = select(func.min(reopens)).where(*self._candidate_conditions(replace(query, quotas=())))
+        return cast("datetime | None", (await self.execute(stmt)).scalar_one())
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         i = IDENTITIES.c
+        order = (i.pick_order_at.asc().nulls_first(), i.id)
+        if query.quotas:
+            # Быстрый установившийся путь: проверяем квоты только у первого LRU-кандидата.
+            # Если голова свободна, отдельного запроса на перенос нет. Если исчерпана — строка
+            # уже заблокирована, переносим ограниченную пачку и выбираем первого свободного.
+            quota_windows = or_(
+                *(
+                    and_(
+                        QUOTAS.c.kind == charge.kind,
+                        QUOTAS.c.window_seconds == charge.window_seconds,
+                        QUOTAS.c.window_start == _window_start_sql(charge),
+                        QUOTAS.c.used >= charge.limit,
+                    )
+                    for charge in query.quotas
+                )
+            )
+            quota_hit = (
+                select(literal(True).label("exhausted"))
+                .select_from(QUOTAS)
+                .where(QUOTAS.c.identity_id == i.id, quota_windows)
+                .limit(1)
+                .lateral("quota_hit")
+            )
+            probe_stmt = (
+                select(IDENTITIES, quota_hit.c.exhausted.is_not(None).label("_quota_exhausted"))
+                .select_from(IDENTITIES.outerjoin(quota_hit, literal(True)))
+                .where(*self._candidate_conditions(replace(query, quotas=())))
+                .order_by(*order)
+                .limit(1)
+                .with_for_update(of=IDENTITIES, skip_locked=True)
+            )
+            probe = (await self.execute(probe_stmt)).mappings().one_or_none()
+            if probe is None:
+                return None
+            if not probe["_quota_exhausted"]:
+                return IdentityRow(**{f: probe[f] for f in IDENTITY_FIELDS})
+            await self._demote_exhausted(query)
+
         conditions = self._candidate_conditions(query)
-        # IMP-01 (D-209): наименее недавно арендованный по `last_leased_at` — порядок индекса
+        # IMP-01 (D-209): наименее недавно арендованный по `pick_order_at` — порядок индекса
         # ix_ih_identities_pick. Захват ставит время, и занятые уходят в хвост: выборка не перебирает их.
         stmt = (
             select(IDENTITIES)
             .where(*conditions)
-            .order_by(i.last_leased_at.asc().nulls_first(), i.id)
+            .order_by(*order)
             .limit(1)
             .with_for_update(of=IDENTITIES, skip_locked=True)
         )
         row = (await self.execute(stmt)).mappings().one_or_none()
         return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}) if row else None
+
+    async def pick_candidate_reserving(
+        self, query: CandidateQuery, reserve: int
+    ) -> tuple[IdentityRow | None, bool]:
+        if reserve == 0:
+            return await self.pick_candidate(query), False
+        i = IDENTITIES.c
+        stmt = (
+            select(IDENTITIES)
+            .where(*self._candidate_conditions(query))
+            .order_by(i.pick_order_at.asc().nulls_first(), i.id)
+            .limit(reserve + 1)
+            .with_for_update(of=IDENTITIES, skip_locked=True)
+        )
+        rows = (await self.execute(stmt)).mappings().all()
+        if len(rows) <= reserve:
+            return None, bool(rows)
+        row = rows[0]
+        return IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}), False
+
+    async def request_yield(
+        self, query: CandidateQuery, priority: int, grace_seconds: float | None = None
+    ) -> YieldRequest | None:
+        i, lease = IDENTITIES.c, LEASES.c
+        stmt = (
+            select(
+                lease.identity_id,
+                lease.lease_id,
+                lease.pool,
+                lease.holder,
+                lease.priority,
+                lease.yield_requested_priority,
+                lease.yield_requested_at,
+                i.service,
+            )
+            .select_from(LEASES.join(IDENTITIES, i.id == lease.identity_id))
+            .where(
+                lease.space_id == self.space.id,
+                lease.expires_at > func.now(),
+                lease.priority < priority,
+                *self._candidate_conditions(replace(query, shared=True)),
+            )
+            .order_by(lease.priority, lease.acquired_at, lease.identity_id)
+            .limit(1)
+            .with_for_update(of=LEASES, skip_locked=True)
+        )
+        victim = (await self.execute(stmt)).mappings().one_or_none()
+        if victim is None:
+            return None
+        if (
+            grace_seconds is not None
+            and victim["yield_requested_at"] is not None
+            and victim["yield_requested_at"] + timedelta(seconds=grace_seconds) <= await self.now()
+        ):
+            now = await self.now()
+            await self.execute(
+                update(HISTORY)
+                .where(HISTORY.c.lease_id == victim["lease_id"], HISTORY.c.released_at.is_(None))
+                .values(released_at=now, end_reason=LeaseEndReason.YIELDED)
+            )
+            await self.execute(delete(LEASES).where(LEASES.c.identity_id == victim["identity_id"]))
+            await self.execute(
+                update(IDENTITIES)
+                .where(IDENTITIES.c.id == victim["identity_id"])
+                .values(
+                    yield_reserved_priority=priority,
+                    yield_reserved_until=now + timedelta(seconds=max(1.0, grace_seconds)),
+                    updated_at=IDENTITIES.c.updated_at,
+                )
+            )
+            return YieldRequest(victim["lease_id"], forced=True)
+        if victim["yield_requested_priority"] is not None and victim["yield_requested_priority"] >= priority:
+            return None
+        await self.execute(
+            update(LEASES)
+            .where(LEASES.c.identity_id == victim["identity_id"])
+            .values(yield_requested_at=func.now(), yield_requested_priority=priority)
+        )
+        await self.emit(
+            [
+                EventDraft(
+                    "lease.yield_requested",
+                    actor="system",
+                    service=victim["service"],
+                    identity_id=victim["identity_id"],
+                    lease_id=victim["lease_id"],
+                    data={
+                        "pool": victim["pool"],
+                        "holder": victim["holder"],
+                        "priority": victim["priority"],
+                        "requested_priority": priority,
+                    },
+                )
+            ]
+        )
+        return YieldRequest(victim["lease_id"])
+
+    async def _demote_exhausted(self, query: CandidateQuery) -> None:
+        """Перенести аккаунты с исчерпанной квотой из головы порядка выборки в хвост (N1.3b).
+
+        Исчерпанные аккаунты не арендуются, поэтому сами из головы не уходят, и выборка проходила бы
+        мимо каждого. Проход смотрит только первые `PICK_DEMOTE_CHUNK` строк порядка — стоимость не
+        зависит от размера парка. `SKIP LOCKED` не даёт двум захватам ждать друг друга на одних строках.
+        `last_leased_at` не меняется.
+        """
+        i = IDENTITIES.c
+        head = (
+            select(i.id)
+            .where(*self._candidate_conditions(replace(query, quotas=())))
+            .order_by(i.pick_order_at.asc().nulls_first(), i.id)
+            .limit(PICK_DEMOTE_CHUNK)
+            .with_for_update(of=IDENTITIES, skip_locked=True)
+            .cte("pick_head")
+        )
+        exhausted = or_(
+            *(_exhausted_window(charge, head.c.id).correlate(head).exists() for charge in query.quotas)
+        )
+        stmt = (
+            update(IDENTITIES)
+            .where(i.id.in_(select(head.c.id).where(exhausted)))
+            .values(pick_order_at=func.clock_timestamp(), updated_at=i.updated_at)
+        )
+        await self.execute(stmt)
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
         i = IDENTITIES.c
@@ -1079,12 +1276,23 @@ class PgTx(StoreTx):
         idempotency_key: str | None,
         shared: bool,
         proxy_id: UUID | None = None,
+        options: LeaseOptions = NO_LEASE_OPTIONS,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         now = await self.now()
         expires_at = now + timedelta(seconds=ttl_seconds)
+        hold_deadline: datetime | None = None
+        if options.max_hold_seconds is not None:
+            hold_deadline = now + timedelta(seconds=options.max_hold_seconds)
+            expires_at = min(expires_at, hold_deadline)
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140);
         # время захвата ставят обе — по нему идёт LRU-выборка (IMP-01, D-209)
-        values: dict[str, Any] = {"last_leased_at": func.clock_timestamp()}
+        leased_at = func.clock_timestamp()
+        values: dict[str, Any] = {
+            "last_leased_at": leased_at,
+            "pick_order_at": leased_at,
+            "yield_reserved_priority": None,
+            "yield_reserved_until": None,
+        }
         if not shared:
             values["fencing_seq"] = IDENTITIES.c.fencing_seq + 1
         fencing_stmt = (
@@ -1108,11 +1316,13 @@ class PgTx(StoreTx):
             )
             if old is not None:
                 if old["expires_at"] > now:
-                    raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")
+                    raise LeaseUnavailable(
+                        f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
+                    )
                 closed = await self.execute(
                     update(HISTORY)
                     .where(HISTORY.c.lease_id == old["lease_id"], HISTORY.c.released_at.is_(None))
-                    .values(released_at=old["expires_at"], end_reason=LeaseEndReason.EXPIRED)
+                    .values(released_at=old["expires_at"], end_reason=_expiry_reason(old["expires_at"]))
                 )
                 if closed.rowcount:  # type: ignore[attr-defined]
                     reclaimed = _lease_row(old)
@@ -1124,6 +1334,12 @@ class PgTx(StoreTx):
                 "pool": pool,
                 "holder": holder,
                 "idempotency_key": idempotency_key,
+                "purpose": options.purpose,
+                "ref": options.ref,
+                "hold_deadline": hold_deadline,
+                "priority": options.priority,
+                "yield_requested_at": None,
+                "yield_requested_priority": None,
                 "acquired_at": now,
                 "heartbeat_at": now,
                 "expires_at": expires_at,
@@ -1135,7 +1351,9 @@ class PgTx(StoreTx):
                 where=LEASES.c.expires_at <= func.now(),
             )
             if not (await self.execute(stmt)).rowcount:  # type: ignore[attr-defined]
-                raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")  # pragma: no cover
+                raise LeaseUnavailable(
+                    f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
+                )  # pragma: no cover
         await self.execute(
             insert(HISTORY).values(
                 lease_id=lease_id,
@@ -1146,6 +1364,10 @@ class PgTx(StoreTx):
                 pool=pool,
                 holder=holder,
                 proxy_id=proxy_id,
+                purpose=options.purpose,
+                ref=options.ref,
+                hold_deadline=hold_deadline,
+                priority=options.priority,
                 acquired_at=now,
                 last_heartbeat_at=now,
             )
@@ -1162,6 +1384,10 @@ class PgTx(StoreTx):
             idempotency_key=idempotency_key,
             proxy_id=proxy_id,
             heartbeat_at=now,
+            purpose=options.purpose,
+            ref=options.ref,
+            hold_deadline=hold_deadline,
+            priority=options.priority,
         )
         return lease, reclaimed
 
@@ -1173,12 +1399,15 @@ class PgTx(StoreTx):
         *,
         shared: bool,
         flush: bool = True,
-    ) -> datetime | None:
+    ) -> LeaseRenewal:
         expires_at: datetime | None
+        now: datetime | None = None
+        renewed: Any = None
         if shared:
-            expires_at = await self.now() + timedelta(seconds=ttl_seconds)
+            now = await self.now()
+            expires_at = now + timedelta(seconds=ttl_seconds)
         else:
-            expires_at = (
+            renewed = (
                 await self.execute(
                     update(LEASES)
                     .where(
@@ -1186,19 +1415,16 @@ class PgTx(StoreTx):
                         LEASES.c.token == lease.token,
                         LEASES.c.expires_at > func.now(),
                     )
-                    .values(
-                        heartbeat_at=func.now(),
-                        expires_at=func.greatest(
-                            LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)
-                        ),
-                    )
-                    .returning(LEASES.c.expires_at)
+                    .values(heartbeat_at=func.now(), expires_at=_renewed_until(ttl_seconds))
+                    .returning(LEASES.c.expires_at, LEASES.c.yield_requested_at)
                 )
-            ).scalar_one_or_none()
-            if expires_at is None:
-                return None
+            ).one_or_none()
+            if renewed is None:
+                return await self._gone(lease.token)
+            expires_at = renewed.expires_at
+            yield_requested = renewed.yield_requested_at is not None
             if not flush:
-                return cast(datetime, expires_at)
+                return LeaseRenewal(cast(datetime, expires_at), yield_requested=yield_requested)
         updated = await self.execute(
             update(HISTORY)
             .where(
@@ -1207,10 +1433,24 @@ class PgTx(StoreTx):
                 HISTORY.c.released_at.is_(None),
             )
             .values(last_heartbeat_at=func.now(), **_counter_values(counters))
+            .returning(HISTORY.c.hold_deadline)
         )
-        if shared and not updated.rowcount:  # type: ignore[attr-defined]
-            return None
-        return expires_at
+        if shared and now is not None:
+            row = updated.first()
+            if row is None:
+                return await self._gone(lease.token)
+            if row.hold_deadline is not None:  # у разделяемой аренды потолок хранит только история
+                if row.hold_deadline <= now:
+                    return LeaseRenewal(None, LeaseEndReason.MAX_HOLD)
+                expires_at = min(expires_at, row.hold_deadline)
+        return LeaseRenewal(
+            expires_at,
+            yield_requested=(not shared and renewed is not None and renewed.yield_requested_at is not None),
+        )
+
+    async def _gone(self, token: UUID) -> LeaseRenewal:
+        rows = await self.execute(_end_reasons([token]))
+        return _renewals_of_gone([token], rows)[token]
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
@@ -1226,7 +1466,8 @@ class PgTx(StoreTx):
             revoked = history is not None and history.end_reason == LeaseEndReason.REVOKED
             return "revoked" if revoked else "closed"
         released_at: Any = func.now()
-        end_reason = reason
+        end_reason: Any = reason
+        expired = False
         if not shared:
             live = (
                 await self.execute(
@@ -1251,13 +1492,93 @@ class PgTx(StoreTx):
                     )
                 ).scalar_one_or_none()
                 released_at = expired_at if expired_at is not None else func.now()
-                end_reason = LeaseEndReason.EXPIRED
+                end_reason, expired = _expiry_reason(released_at), True
         await self.execute(
             update(HISTORY)
             .where(HISTORY.c.lease_id == lease.lease_id, HISTORY.c.released_at.is_(None))
             .values(released_at=released_at, end_reason=end_reason, **_counter_values(counters))
         )
-        return "expired" if end_reason == LeaseEndReason.EXPIRED else "released"
+        return "expired" if expired else "released"
+
+    async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
+        if not names:
+            return {}
+        rows = (
+            await self.execute(
+                select(THROTTLES.c.name, THROTTLES.c.tat).where(
+                    THROTTLES.c.identity_id == identity_id,
+                    THROTTLES.c.space_id == self.space.id,
+                    THROTTLES.c.name.in_(list(names)),
+                )
+            )
+        ).all()
+        return {row.name: row.tat for row in rows}
+
+    async def save_throttle_state(self, identity_id: UUID, state: Mapping[str, datetime]) -> None:
+        for name, tat in state.items():
+            stmt = insert(THROTTLES).values(
+                identity_id=identity_id, space_id=self.space.id, name=name, tat=tat
+            )
+            await self.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[THROTTLES.c.identity_id, THROTTLES.c.name],
+                    set_={"tat": func.greatest(THROTTLES.c.tat, stmt.excluded.tat)},
+                )
+            )
+
+    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+        return cast(
+            "datetime | None",
+            (
+                await self.execute(
+                    select(HISTORY.c.released_at)
+                    .where(
+                        HISTORY.c.space_id == self.space.id,
+                        HISTORY.c.identity_id == identity_id,
+                        HISTORY.c.end_reason.in_(
+                            [LeaseEndReason.EXPIRED, LeaseEndReason.LOST, LeaseEndReason.REVOKED]
+                        ),
+                        HISTORY.c.released_at.is_not(None),
+                    )
+                    .order_by(HISTORY.c.released_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none(),
+        )
+
+    async def take_shared_throttle(
+        self, identity_id: UUID, name: str, interval_seconds: float, burst: int
+    ) -> float:
+        now = await self.now()
+        await self.execute(
+            insert(THROTTLES)
+            .values(identity_id=identity_id, space_id=self.space.id, name=name, tat=now)
+            .on_conflict_do_nothing(index_elements=[THROTTLES.c.identity_id, THROTTLES.c.name])
+        )
+        tat = cast(
+            datetime,
+            (
+                await self.execute(
+                    select(THROTTLES.c.tat)
+                    .where(
+                        THROTTLES.c.identity_id == identity_id,
+                        THROTTLES.c.space_id == self.space.id,
+                        THROTTLES.c.name == name,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one(),
+        )
+        allowed_at = tat - timedelta(seconds=interval_seconds * (burst - 1))
+        if now < allowed_at:
+            return max(0.0, (allowed_at - now).total_seconds())
+        next_tat = max(tat, now) + timedelta(seconds=interval_seconds)
+        await self.execute(
+            update(THROTTLES)
+            .where(THROTTLES.c.identity_id == identity_id, THROTTLES.c.name == name)
+            .values(tat=next_tat)
+        )
+        return 0.0
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         ordered = sorted(set(identity_ids))
@@ -4306,7 +4627,7 @@ class PgTx(StoreTx):
             closed = await self.execute(
                 update(HISTORY)
                 .where(HISTORY.c.lease_id == row["lease_id"], HISTORY.c.released_at.is_(None))
-                .values(released_at=row["expires_at"], end_reason=LeaseEndReason.EXPIRED)
+                .values(released_at=row["expires_at"], end_reason=_expiry_reason(row["expires_at"]))
             )
             if not closed.rowcount:  # type: ignore[attr-defined]
                 continue
@@ -4324,6 +4645,7 @@ class PgTx(StoreTx):
                         "pool": row["pool"],
                         "holder": row["holder"],
                         "fencing": row["fencing"],
+                        "reason": str(expiry_reason(row["hold_deadline"], row["expires_at"])),
                         "expired_at": row["expires_at"].isoformat(),
                     },
                 )
@@ -4478,6 +4800,77 @@ def _merge_operations(delta: dict[str, int]) -> Any:
     return expr
 
 
+def _end_reasons(tokens: Sequence[UUID]) -> Any:
+    """Чем кончились аренды с этими token: причина из истории и жива ли ещё строка с тем же token."""
+    return (
+        select(
+            HISTORY.c.token,
+            HISTORY.c.released_at,
+            HISTORY.c.end_reason,
+            HISTORY.c.hold_deadline,
+            LEASES.c.token.label("held"),
+            LEASES.c.expires_at,
+        )
+        .select_from(
+            HISTORY.outerjoin(
+                LEASES,
+                and_(LEASES.c.identity_id == HISTORY.c.identity_id, LEASES.c.token == HISTORY.c.token),
+            )
+        )
+        .where(_any_of(HISTORY.c.token, list(tokens)))
+    )
+
+
+def _renewals_of_gone(tokens: Sequence[UUID], rows: Any) -> dict[UUID, LeaseRenewal]:
+    gone = dict.fromkeys(tokens, LeaseRenewal(None))
+    for row in rows:
+        if row.released_at is not None:
+            gone[row.token] = LeaseRenewal(None, LeaseEndReason(row.end_reason))
+        elif row.held is not None:  # строка наша, но срок вышел: её ещё никто не забрал
+            gone[row.token] = LeaseRenewal(None, expiry_reason(row.hold_deadline, row.expires_at))
+    return gone
+
+
+def _window_start_sql(charge: QuotaCharge) -> Any:
+    """Начало текущего окна квоты — то же выражение, что при списании."""
+    return func.date_bin(
+        timedelta(seconds=charge.window_seconds),
+        func.now(),
+        sa_cast(charge.origin, DateTime(timezone=True)),
+        type_=DateTime(timezone=True),
+    )
+
+
+def _exhausted_window(charge: QuotaCharge, identity_id: Any = IDENTITIES.c.id) -> Any:
+    """Строка счётчика аккаунта из внешнего запроса, если текущее окно квоты исчерпано."""
+    return select(QUOTAS.c.identity_id).where(
+        QUOTAS.c.identity_id == identity_id,
+        QUOTAS.c.kind == charge.kind,
+        QUOTAS.c.window_seconds == charge.window_seconds,
+        QUOTAS.c.window_start == _window_start_sql(charge),
+        QUOTAS.c.used >= charge.limit,
+    )
+
+
+def _renewed_until(ttl_seconds: float) -> Any:
+    """Новый `expires_at` при продлении: не короче прежнего (D-213) и не позже потолка удержания.
+
+    `least` в PostgreSQL пропускает NULL: аренда без `hold_deadline` продлевается как раньше.
+    """
+    return func.least(
+        func.greatest(LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)),
+        LEASES.c.hold_deadline,
+    )
+
+
+def _expiry_reason(expired_at: Any) -> Any:
+    """SQL-причина закрытия истёкшей аренды: `max_hold`, если срок вышел на её потолке удержания."""
+    return case(
+        (HISTORY.c.hold_deadline <= expired_at, LeaseEndReason.MAX_HOLD.value),
+        else_=LeaseEndReason.EXPIRED.value,
+    )
+
+
 def _lease_row(row: Any) -> LeaseRow:
     return LeaseRow(
         lease_id=row["lease_id"],
@@ -4491,6 +4884,12 @@ def _lease_row(row: Any) -> LeaseRow:
         idempotency_key=row["idempotency_key"],
         proxy_id=row.get("proxy_id"),
         heartbeat_at=row.get("heartbeat_at", row["acquired_at"]),
+        purpose=row.get("purpose"),
+        ref=row.get("ref"),
+        hold_deadline=row.get("hold_deadline"),
+        priority=row.get("priority", 0),
+        yield_requested_at=row.get("yield_requested_at"),
+        yield_requested_priority=row.get("yield_requested_priority"),
     )
 
 
@@ -5666,7 +6065,7 @@ class PgStore(Store):
             rows = (await _execute(session, stmt, execution_options=self.options)).mappings()
             return [(row["slug"], _proxy_row(row)) for row in rows]
 
-    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:
         if not tokens:
             return {}
         async with self._own() as session:
@@ -5674,17 +6073,19 @@ class PgStore(Store):
                 session,
                 update(LEASES)
                 .where(_any_of(LEASES.c.token, list(tokens)), LEASES.c.expires_at > func.now())
-                .values(
-                    heartbeat_at=func.now(),
-                    # продление никогда не укорачивает аренду (IMP-06, D-213)
-                    expires_at=func.greatest(
-                        LEASES.c.expires_at, func.now() + timedelta(seconds=ttl_seconds)
-                    ),
-                )
-                .returning(LEASES.c.token, LEASES.c.expires_at),
+                .values(heartbeat_at=func.now(), expires_at=_renewed_until(ttl_seconds))
+                .returning(LEASES.c.token, LEASES.c.expires_at, LEASES.c.yield_requested_at),
                 execution_options=self.options,
             )
-            return {row.token: row.expires_at for row in rows}
+            renewed = {
+                row.token: LeaseRenewal(row.expires_at, yield_requested=row.yield_requested_at is not None)
+                for row in rows
+            }
+            gone = [token for token in tokens if token not in renewed]
+            if gone:  # редкий путь: причина нужна держателю, чтобы отличить отзыв от истечения
+                reasons = await _execute(session, _end_reasons(gone), execution_options=self.options)
+                renewed.update(_renewals_of_gone(gone, reasons))
+            return renewed
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:
         i = IDENTITIES.c

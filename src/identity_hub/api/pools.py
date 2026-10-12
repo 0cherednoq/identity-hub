@@ -35,8 +35,17 @@ class Pools(Namespace):
         holder: str | None = None,
         capacity_low: int | None = None,
         stats_flush: timedelta | None = None,
+        purpose: str | None = None,
+        max_hold: timedelta | None = None,
+        reserve: int = 0,
+        reserve_strict: bool = False,
+        priority: int = 0,
+        yield_grace: timedelta | None = None,
     ) -> Pool:
         """Объявить пул: фильтры отбора и политики аренды. В БД не хранится, создаётся дёшево.
+
+        `purpose` — назначение аренд пула по умолчанию: метка вида работы для истории и сводок.
+        `max_hold` — потолок удержания аренды: зависшая задача не держит аккаунт дольше.
 
         Сама выборка кандидата происходит при `pool.lease()` / `pool.acquire()`.
         """
@@ -54,6 +63,12 @@ class Pools(Namespace):
             holder=holder,
             capacity_low=capacity_low,
             stats_flush=stats_flush,
+            purpose=purpose,
+            max_hold=max_hold,
+            reserve=reserve,
+            reserve_strict=reserve_strict,
+            priority=priority,
+            yield_grace=yield_grace,
         )
 
     async def revoke(self, identity_id: UUID, *, reason: str, actor: str) -> bool:

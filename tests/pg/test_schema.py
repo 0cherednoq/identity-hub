@@ -15,7 +15,7 @@ EXPECTED_TABLES = {
     "ih_identities", "ih_region_states", "ih_identity_links", "ih_identity_data",
     "ih_credentials", "ih_sessions", "ih_challenges", "ih_verifications",
     "ih_leases", "ih_lease_history", "ih_lease_logs",
-    "ih_quota_usage", "ih_operation_keys",
+    "ih_quota_usage", "ih_throttle_state", "ih_operation_keys",
     "ih_proxies", "ih_bindings",
     "ih_events", "ih_event_cursors",
     "ih_webhook_endpoints", "ih_webhook_deliveries",

@@ -32,7 +32,15 @@ from identity_hub.domain.provider_operations import resolve_outcome, resolve_rec
 from identity_hub.domain.query import profile_sort_text
 from identity_hub.domain.region_specs import AVAILABILITY, STANDING
 from identity_hub.domain.regions import RegionState
-from identity_hub.enums import AuthState, Availability, Lifecycle, SessionStatus, Severity
+from identity_hub.enums import (
+    AuthState,
+    Availability,
+    LeaseEndReason,
+    LeaseUnavailableReason,
+    Lifecycle,
+    SessionStatus,
+    Severity,
+)
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseOwnershipLost,
@@ -46,6 +54,8 @@ from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
+    NO_LEASE_OPTIONS,
+    PICK_DEMOTE_CHUNK,
     UNREADABLE_IMPORT_ITEM,
     AttentionChallengeRow,
     AttentionIdentityRow,
@@ -67,7 +77,9 @@ from identity_hub.store.base import (
     LeaseCounters,
     LeaseFence,
     LeaseHistoryRow,
+    LeaseOptions,
     LeaseReadRow,
+    LeaseRenewal,
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
@@ -113,7 +125,9 @@ from identity_hub.store.base import (
     WebhookDeliveryRow,
     WebhookEndpointReadRow,
     WebhookEndpointRow,
+    YieldRequest,
     credential_label,
+    expiry_reason,
 )
 
 __all__ = ["MemoryStore", "MemoryTx"]
@@ -179,6 +193,7 @@ class _MemoryState:
     history_spaces: dict[UUID, UUID] = field(default_factory=dict)
     # token аренды по lease_id: в строке истории его нет, а fence разделяемой аренды сверяет его (D-212)
     history_tokens: dict[UUID, UUID] = field(default_factory=dict)
+    throttle_state: dict[tuple[UUID, str], datetime] = field(default_factory=dict)
     # identity → (время, порядковый номер) последней попытки фоновой сверки
     probe_attempts: dict[UUID, tuple[datetime, int]] = field(default_factory=dict)
     next_probe_attempt: int = 1
@@ -278,6 +293,21 @@ def _memory_uuid(value: Any) -> UUID | None:
 def _window_start(now: datetime, charge: QuotaCharge) -> datetime:
     seconds = int((now - _utc(charge.origin)).total_seconds())
     return _utc(charge.origin) + timedelta(seconds=(seconds // charge.window_seconds) * charge.window_seconds)
+
+
+def _gone(state: Any, token: UUID) -> LeaseRenewal:
+    """Чем кончилась аренда с этим token — как `_renewals_of_gone` в PostgreSQL."""
+    lease_id = next((key for key, value in state.history_tokens.items() if value == token), None)
+    history = state.history.get(lease_id) if lease_id is not None else None
+    if history is None:
+        return LeaseRenewal(None)
+    if history.released_at is not None:
+        return LeaseRenewal(None, LeaseEndReason(history.end_reason))
+    current = state.leases.get(history.identity_id)
+    if current is None or current.token != token:
+        return LeaseRenewal(None)
+    # строка наша, но срок вышел
+    return LeaseRenewal(None, expiry_reason(history.hold_deadline, current.expires_at))
 
 
 def _merge_counters(row: LeaseHistoryRow, counters: LeaseCounters) -> dict[str, Any]:
@@ -670,7 +700,7 @@ class MemoryTx(StoreTx):
                     history,
                     released_at=stale.expires_at,
                     duration=stale.expires_at - history.acquired_at,
-                    end_reason="expired",
+                    end_reason=str(expiry_reason(history.hold_deadline, stale.expires_at)),
                 )
         for credential_key in [key for key in self.state.credentials if key[0] == identity_id]:
             del self.state.credentials[credential_key]
@@ -689,6 +719,8 @@ class MemoryTx(StoreTx):
             del self.state.session_slots[slot_key]
         for data_key in [item for item in self.state.data if item[0] == identity_id]:
             del self.state.data[data_key]
+        for throttle_key in [item for item in self.state.throttle_state if item[0] == identity_id]:
+            del self.state.throttle_state[throttle_key]
         for verification_key in [item for item in self.state.verifications if item[0] == identity_id]:
             del self.state.verifications[verification_key]
         for verification_key, verification in list(self.state.verifications.items()):
@@ -811,15 +843,124 @@ class MemoryTx(StoreTx):
         lease = self.state.leases.get(row.id)
         if not query.shared and lease is not None and lease.expires_at > now:
             return False
+        if (
+            not query.shared
+            and row.yield_reserved_until is not None
+            and row.yield_reserved_until > now
+            and row.yield_reserved_priority is not None
+            and row.yield_reserved_priority > query.priority
+        ):
+            return False
         if query.proxy_wait or query.proxy_enabled:
             proxy_id = self.state.bindings.get(row.id)
             bound = self.state.proxies[proxy_id] if proxy_id is not None else None
             if bound is not None and (not bound.enabled or (query.proxy_wait and bound.status != "alive")):
                 return False
-        return True
+        return not any(self._exhausted_until(row.id, charge) for charge in query.quotas)
+
+    def _exhausted_until(self, identity_id: UUID, charge: QuotaCharge) -> datetime | None:
+        """Конец текущего окна квоты, если оно исчерпано."""
+        start = _window_start(self._now, charge)
+        used = self.state.quotas.get((identity_id, charge.kind, charge.window_seconds, start), 0)
+        return start + timedelta(seconds=charge.window_seconds) if used >= charge.limit else None
+
+    async def quota_reopens_at(self, query: CandidateQuery) -> datetime | None:
+        free = replace(_with_among_ids(query), quotas=())
+        reopens: list[datetime] = []
+        for row in self.state.identities.values():
+            if row.space_id != self.space.id or not self._candidate(row, free):
+                continue
+            ends = [end for charge in query.quotas if (end := self._exhausted_until(row.id, charge))]
+            if ends:
+                reopens.append(max(ends))
+        return min(reopens, default=None)
 
     async def pick_candidate(self, query: CandidateQuery) -> IdentityRow | None:
         query = _with_among_ids(query)
+        if query.quotas:
+            head = self._ordered_candidates(replace(query, quotas=()))
+            if not head:
+                return None
+            first = head[0]
+            if not any(self._exhausted_until(first.id, charge) for charge in query.quotas):
+                return first
+            self._demote_exhausted(query)
+        candidates = self._ordered_candidates(query)
+        return candidates[0] if candidates else None
+
+    async def pick_candidate_reserving(
+        self, query: CandidateQuery, reserve: int
+    ) -> tuple[IdentityRow | None, bool]:
+        if reserve == 0:
+            return await self.pick_candidate(query), False
+        candidates = self._ordered_candidates(_with_among_ids(query))
+        if len(candidates) <= reserve:
+            return None, bool(candidates)
+        return candidates[0], False
+
+    async def request_yield(
+        self, query: CandidateQuery, priority: int, grace_seconds: float | None = None
+    ) -> YieldRequest | None:
+        admissible = replace(_with_among_ids(query), shared=True)
+        victims = [
+            lease
+            for lease in self.state.leases.values()
+            if lease.expires_at > self._now
+            and lease.priority < priority
+            and (identity := self._own(lease.identity_id)) is not None
+            and self._candidate(identity, admissible)
+        ]
+        victims.sort(key=lambda lease: (lease.priority, lease.acquired_at, lease.identity_id))
+        if not victims:
+            return None
+        victim = victims[0]
+        if (
+            grace_seconds is not None
+            and victim.yield_requested_at is not None
+            and victim.yield_requested_at + timedelta(seconds=grace_seconds) <= self._now
+        ):
+            history = self.state.history[victim.lease_id]
+            self.state.history[victim.lease_id] = replace(
+                history,
+                released_at=self._now,
+                duration=self._now - history.acquired_at,
+                end_reason=str(LeaseEndReason.YIELDED),
+            )
+            self.state.leases.pop(victim.identity_id)
+            identity = self._own(victim.identity_id)
+            assert identity is not None
+            self.state.identities[identity.id] = replace(
+                identity,
+                yield_reserved_priority=priority,
+                yield_reserved_until=self._now + timedelta(seconds=max(1.0, grace_seconds)),
+            )
+            return YieldRequest(victim.lease_id, forced=True)
+        if victim.yield_requested_priority is not None and victim.yield_requested_priority >= priority:
+            return None
+        updated = replace(victim, yield_requested_at=self._now, yield_requested_priority=priority)
+        self.state.leases[victim.identity_id] = updated
+        identity = self._own(victim.identity_id)
+        assert identity is not None
+        await self.emit(
+            [
+                EventDraft(
+                    "lease.yield_requested",
+                    actor="system",
+                    service=identity.service,
+                    identity_id=identity.id,
+                    lease_id=victim.lease_id,
+                    data={
+                        "pool": victim.pool,
+                        "holder": victim.holder,
+                        "priority": victim.priority,
+                        "requested_priority": priority,
+                    },
+                )
+            ]
+        )
+        return YieldRequest(victim.lease_id)
+
+    def _ordered_candidates(self, query: CandidateQuery) -> list[IdentityRow]:
         candidates = [
             row
             for row in self.state.identities.values()
@@ -829,13 +970,25 @@ class MemoryTx(StoreTx):
         order = self.state.lease_order
         candidates.sort(
             key=lambda row: (
-                row.last_leased_at is not None,
-                row.last_leased_at or self._now,
+                row.pick_order_at is not None,
+                row.pick_order_at or self._now,
                 order.get(row.id, 0),
                 row.id,
             )
         )
-        return candidates[0] if candidates else None
+        return candidates
+
+    def _demote_exhausted(self, query: CandidateQuery) -> None:
+        """Перенести исчерпанные аккаунты из головы порядка в хвост — тот же проход, что в PostgreSQL."""
+        free = replace(query, quotas=())
+        head = self._ordered_candidates(free)[:PICK_DEMOTE_CHUNK]
+        exhausted = [
+            row for row in head if any(self._exhausted_until(row.id, charge) for charge in query.quotas)
+        ]
+        for row in exhausted:
+            self.state.identities[row.id] = replace(row, pick_order_at=self._now)
+            self.state.lease_order[row.id] = self.state.next_lease_order
+            self.state.next_lease_order += 1
 
     async def count_candidates(self, query: CandidateQuery, limit: int) -> int:
         query = _with_among_ids(query)
@@ -882,15 +1035,20 @@ class MemoryTx(StoreTx):
         idempotency_key: str | None,
         shared: bool,
         proxy_id: UUID | None = None,
+        options: LeaseOptions = NO_LEASE_OPTIONS,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         current = self._own(identity.id)
         if current is None:
-            raise LeaseUnavailable(f"аккаунт {identity.id} недоступен")
+            raise LeaseUnavailable(
+                f"аккаунт {identity.id} недоступен", reason=LeaseUnavailableReason.NO_CANDIDATES
+            )
         reclaimed: LeaseRow | None = None
         old = self.state.leases.get(identity.id)
         if not shared and old is not None:
             if old.expires_at > self._now:
-                raise LeaseUnavailable(f"аккаунт {identity.id} уже в аренде")
+                raise LeaseUnavailable(
+                    f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
+                )
             reclaimed = old
             history = self.state.history[old.lease_id]
             if history.released_at is None:
@@ -898,16 +1056,27 @@ class MemoryTx(StoreTx):
                     history,
                     released_at=old.expires_at,
                     duration=old.expires_at - history.acquired_at,
-                    end_reason="expired",
+                    end_reason=str(expiry_reason(history.hold_deadline, old.expires_at)),
                 )
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
         fencing = current.fencing_seq if shared else current.fencing_seq + 1
         # время захвата ставят обе аренды — по нему идёт LRU-выборка (IMP-01, D-209)
         self.state.identities[identity.id] = replace(
-            current, fencing_seq=fencing, last_leased_at=self._now, updated_at=self._now
+            current,
+            fencing_seq=fencing,
+            last_leased_at=self._now,
+            pick_order_at=self._now,
+            updated_at=self._now,
+            yield_reserved_priority=None,
+            yield_reserved_until=None,
         )
         self.state.lease_order[identity.id] = self.state.next_lease_order
         self.state.next_lease_order += 1
+        expires_at = self._now + timedelta(seconds=ttl_seconds)
+        hold_deadline: datetime | None = None
+        if options.max_hold_seconds is not None:
+            hold_deadline = self._now + timedelta(seconds=options.max_hold_seconds)
+            expires_at = min(expires_at, hold_deadline)
         lease = LeaseRow(
             new_id(),  # публичный id аренды упорядочен по времени, как в PostgreSQL (R2-P10)
             uuid4(),  # token — секрет аренды, случайный
@@ -916,10 +1085,14 @@ class MemoryTx(StoreTx):
             pool,
             holder,
             self._now,
-            self._now + timedelta(seconds=ttl_seconds),
+            expires_at,
             idempotency_key,
             proxy_id,
             self._now,
+            purpose=options.purpose,
+            ref=options.ref,
+            hold_deadline=hold_deadline,
+            priority=options.priority,
         )
         if not shared:
             self.state.leases[identity.id] = lease
@@ -941,6 +1114,10 @@ class MemoryTx(StoreTx):
             0,
             0,
             None,
+            purpose=options.purpose,
+            ref=options.ref,
+            hold_deadline=hold_deadline,
+            priority=options.priority,
         )
         return lease, reclaimed
 
@@ -952,26 +1129,34 @@ class MemoryTx(StoreTx):
         *,
         shared: bool,
         flush: bool = True,
-    ) -> datetime | None:
+    ) -> LeaseRenewal:
         if not shared:
             current = self.state.leases.get(lease.identity_id)
             if current is None or current.token != lease.token or current.expires_at <= self._now:
-                return None
+                return _gone(self.state, lease.token)
         history = self.state.history.get(lease.lease_id)
         if history is None or history.released_at is not None:
-            return None
+            return _gone(self.state, lease.token)
         expires_at = self._now + timedelta(seconds=ttl_seconds)
+        if shared and history.hold_deadline is not None and history.hold_deadline <= self._now:
+            return LeaseRenewal(None, LeaseEndReason.MAX_HOLD)  # потолок разделяемой — в истории
         if not shared and current is not None:
             expires_at = max(expires_at, current.expires_at)  # продление не укорачивает (D-213)
+        if history.hold_deadline is not None:
+            expires_at = min(expires_at, history.hold_deadline)  # и не выходит за потолок удержания
+        if not shared and current is not None:
             self.state.leases[lease.identity_id] = replace(
                 current, expires_at=expires_at, heartbeat_at=self._now
             )
             if not flush:
-                return expires_at
+                return LeaseRenewal(expires_at, yield_requested=current.yield_requested_at is not None)
         self.state.history[lease.lease_id] = replace(
             history, last_heartbeat_at=self._now, **_merge_counters(history, counters)
         )
-        return expires_at
+        return LeaseRenewal(
+            expires_at,
+            yield_requested=(not shared and current is not None and current.yield_requested_at is not None),
+        )
 
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
@@ -979,14 +1164,15 @@ class MemoryTx(StoreTx):
         history = self.state.history.get(lease.lease_id)
         if history is None or history.released_at is not None:
             return "revoked" if history is not None and history.end_reason == "revoked" else "closed"
-        released_at, end_reason = self._now, reason
+        released_at, end_reason, expired = self._now, reason, False
         if not shared:
             current = self.state.leases.get(lease.identity_id)
             if current is None or current.token != lease.token:
                 return "closed"
             self.state.leases.pop(lease.identity_id)
             if current.expires_at <= self._now:  # срок вышел, аккаунт никто не взял (D-213)
-                released_at, end_reason = current.expires_at, "expired"
+                released_at, expired = current.expires_at, True
+                end_reason = str(expiry_reason(history.hold_deadline, released_at))
         self.state.history[lease.lease_id] = replace(
             history,
             released_at=released_at,
@@ -994,7 +1180,42 @@ class MemoryTx(StoreTx):
             end_reason=end_reason,
             **_merge_counters(history, counters),
         )
-        return "expired" if end_reason == "expired" else "released"
+        return "expired" if expired else "released"
+
+    async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
+        return {
+            name: tat
+            for name in names
+            if (tat := self.state.throttle_state.get((identity_id, name))) is not None
+        }
+
+    async def save_throttle_state(self, identity_id: UUID, state: Mapping[str, datetime]) -> None:
+        for name, tat in state.items():
+            key = (identity_id, name)
+            current = self.state.throttle_state.get(key)
+            self.state.throttle_state[key] = max(current, tat) if current is not None else tat
+
+    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+        ends = [
+            row.released_at
+            for row in self.state.history.values()
+            if row.identity_id == identity_id
+            and row.end_reason in {"expired", "lost", "revoked"}
+            and row.released_at is not None
+            and self.state.history_spaces.get(row.lease_id) == self.space.id
+        ]
+        return max(ends, default=None)
+
+    async def take_shared_throttle(
+        self, identity_id: UUID, name: str, interval_seconds: float, burst: int
+    ) -> float:
+        key = (identity_id, name)
+        tat = self.state.throttle_state.get(key, self._now)
+        allowed_at = tat - timedelta(seconds=interval_seconds * (burst - 1))
+        if self._now < allowed_at:
+            return max(0.0, (allowed_at - self._now).total_seconds())
+        self.state.throttle_state[key] = max(tat, self._now) + timedelta(seconds=interval_seconds)
+        return 0.0
 
     async def lock_identities(self, identity_ids: Sequence[UUID]) -> None:
         """Транзакции MemoryStore и так сериализованы (D-124): блокировать нечего."""
@@ -2980,7 +3201,7 @@ class MemoryTx(StoreTx):
                     history,
                     released_at=lease.expires_at,
                     duration=lease.expires_at - history.acquired_at,
-                    end_reason="expired",
+                    end_reason=str(expiry_reason(history.hold_deadline, lease.expires_at)),
                 )
                 identity = self.state.identities[lease.identity_id]
                 drafts.append(
@@ -2994,6 +3215,7 @@ class MemoryTx(StoreTx):
                             "pool": lease.pool,
                             "holder": lease.holder,
                             "fencing": lease.fencing,
+                            "reason": str(expiry_reason(history.hold_deadline, lease.expires_at)),
                             "expired_at": lease.expires_at.isoformat(),
                         },
                     )
@@ -3681,16 +3903,22 @@ class MemoryStore(Store):
             )
             return [(spaces[row.space_id], row) for row in rows[:limit]]
 
-    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, datetime]:
+    async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:
         async with self._lock:
             now = self.clock.now()
             wanted = set(tokens)
-            renewed: dict[UUID, datetime] = {}
+            renewed: dict[UUID, LeaseRenewal] = {}
             for identity_id, lease in list(self._state.leases.items()):
                 if lease.token in wanted and lease.expires_at > now:
                     expires_at = max(lease.expires_at, now + timedelta(seconds=ttl_seconds))
+                    if lease.hold_deadline is not None:
+                        expires_at = min(expires_at, lease.hold_deadline)
                     self._state.leases[identity_id] = replace(lease, expires_at=expires_at, heartbeat_at=now)
-                    renewed[lease.token] = expires_at
+                    renewed[lease.token] = LeaseRenewal(
+                        expires_at, yield_requested=lease.yield_requested_at is not None
+                    )
+            for token in wanted - set(renewed):
+                renewed[token] = _gone(self._state, token)
             return renewed
 
     async def stale_normalizations(self, service: str, version: int, limit: int) -> list[tuple[UUID, str]]:

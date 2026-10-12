@@ -113,6 +113,56 @@
   `claim_provider_operations`, `apply_provider_operation`, `recover_provider_operations`,
   `cancel_provider_operation`. Гарантия — at-least-once попытка. `hub.start()` требует ревизию
   схемы `0024`.
+- GCRA-троттлинг (`N4.1`): `Service(throttles={"api": Throttle(...)})` и
+  `await lease.throttle(name, wait=...)`; эксклюзивный держатель считает без запроса на вызов,
+  а миграция `0031` сохраняет TAT между арендами.
+- Надёжность троттлинга (`N4.2`): после падения держателя TAT восстанавливается консервативной
+  верхней границей; `SHARED`-аренды используют один атомарный GCRA-счётчик в БД на вызов.
+- Приоритет аренды (`N3.2a`): `pools.define(priority=)` и разовый `pool.lease(priority=)`;
+  более приоритетный запрос атомарно помечает одну низкоприоритетную аренду, а держатель получает
+  `lease.yield_requested` через `renew()`/heartbeat. Миграция `0029` хранит приоритет и запрос.
+- Кооперативная уступка (`N3.2b`): `on_yield_requested`, причина истории `yielded` и опциональный
+  `pools.define(yield_grace=)` с принудительной уступкой и короткой приоритетной бронью. Миграция
+  `0030` хранит бронь на identity.
+- Резерв ёмкости пула (`N3.1`, задача 2 из `ISSUES-INTEGRATION.md`):
+  `pools.define(reserve=, reserve_strict=)`, разовый `pool.lease(keep_free=)`, атомарная выборка
+  `N + 1` кандидатов и `LeaseUnavailable(reason="reserve")`. `pool.capacity_detail()` возвращает
+  точные `free`, `reserved` и `available`; `SHARED` резерв не поддерживает.
+- Атомарные массовые изменения (`N2.3`, задача 7 из `ISSUES-INTEGRATION.md`):
+  `identities.update_many()` меняет теги, метки и lifecycle по `IdentityFilter` или списку UUID,
+  ограничивает охват через `limit`, блокирует строки в порядке id и откатывает всю пачку при
+  любой ошибке. Админские bulk-команды lifecycle/тегов используют этот метод.
+- Команды состояния и публичные наблюдения (`N2.2`, задача 7 из `ISSUES-INTEGRATION.md`):
+  `identities.ban()`, `freeze()` и `cool_down()` дают именованные операции поверх существующей
+  машины регионов; `identities.observe()` принимает экспортируемый из корня `Observation` и
+  проводит внешние факты через те же правила stale/pin/sticky/confirmation, что операции и пробы.
+- Ручное продление аренды (`N2.1`, задача 7 из `ISSUES-INTEGRATION.md`): `await lease.renew()`
+  продлевает аренду из `pool.acquire()`, возвращает новый `expires_at`, соблюдает `max_hold` и
+  `stats_flush`, а при потере бросает `LeaseLost` с причиной. В управляемой аренде работает как
+  внеочередной heartbeat.
+- Стабильная стоимость выборки с квотами (`N1.3b`): отдельный `pick_order_at` сохраняет смысл
+  публичного `last_leased_at`, а ограниченный перенос исчерпанной головы LRU не даёт десяткам
+  тысяч исчерпанных аккаунтов замедлять `require_quota`. Миграция `0028` переводит индекс
+  `ix_ih_identities_pick` на новый порядок.
+- Учёт квот при выборе аккаунта (`N1.3`, задача 5 из `ISSUES-INTEGRATION.md`):
+  `pool.lease(for_operation=..., require_quota=True)` и то же у `pool.acquire()` не выдают аккаунты
+  с исчерпанным окном квоты операции. Если мешает только квота — `LeaseUnavailable` с
+  `reason="quota"` и `retry_after` до ближайшего открытия окна. По умолчанию поведение прежнее.
+- Потолок удержания аренды (`N1.2`, задача 4 из `ISSUES-INTEGRATION.md`): `pools.define(max_hold=)`,
+  `pool.lease(max_hold=)`, `pool.acquire(max_hold=)` и `lease.hold_deadline`. Продление не ставит
+  срок позже дедлайна; держатель получает `LeaseLost` с причиной `max_hold`, в истории —
+  `LeaseEndReason.MAX_HOLD`. Дедлайн есть в списке живых аренд и read-схеме (версия 4). Миграция
+  `0027` добавляет `hold_deadline` в `ih_leases` и `ih_lease_history`.
+- Назначение аренды (`N1.1`, задача 6 из `ISSUES-INTEGRATION.md`): `pool.lease(purpose=, ref=)`,
+  `pool.acquire(purpose=, ref=)` и значение по умолчанию `pools.define(purpose=)`. Поля видны как
+  `lease.purpose` и `lease.ref`, в истории, событиях `lease.*`, read-схеме (версия 3) и админке;
+  `lease_dashboard(group_by="purpose")`. Миграция `0026` добавляет колонки в `ih_leases` и
+  `ih_lease_history`.
+- Причина отказа и причина потери аренды (`N0.1`, задачи 1, 4, 5 из `ISSUES-INTEGRATION.md`):
+  `LeaseUnavailable.reason` — `busy`, `no_candidates` или `no_proxy` (`LeaseUnavailableReason`);
+  держатель, чья аренда истекла до heartbeat, получает `LeaseExpired` с причиной `expired`, а не
+  `LeaseRevoked`. Контракт хранилища: `StoreTx.extend_lease` и `Store.renew_leases` возвращают
+  `LeaseRenewal(expires_at, end_reason)` вместо `datetime | None`.
 - Режимы записи сессии (`IMP-10`, `D-219`): `lease.save_session(..., mode=)` и
   `secrets.replace_session(..., mode=)` — `in_place` (по умолчанию) или `replace` (новая запись,
   прежняя в истории); `secrets.revoke_session` — отзыв без замены. Вход сохраняет сессию в режиме
