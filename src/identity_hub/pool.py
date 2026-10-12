@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from identity_hub.domain.admissibility import compile_rule
-from identity_hub.domain.data import validate_labels
+from identity_hub.domain.data import normalize_tag, validate_labels
 from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
@@ -115,7 +115,7 @@ class Pool:
             standing=frozenset(standing),
             needs_auth=needs_auth,
             required_factors=frozenset(factors),
-            tags=self.tags | frozenset(tags),
+            tags=self.tags | frozenset(normalize_tag(tag) for tag in tags),
             labels=merged_labels or None,
             profile=merged_profile or None,
             among=among,
@@ -301,7 +301,7 @@ class PoolsMixin:
             space=self,
             name=name,
             service=self.hub.service(service),
-            tags=frozenset(tags),
+            tags=frozenset(normalize_tag(tag) for tag in tags),
             labels=dict(labels or {}),
             profile=dict(profile or {}),
             pacing=pacing,

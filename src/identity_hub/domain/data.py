@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from typing import Any
 from uuid import UUID
@@ -20,6 +21,7 @@ __all__ = [
     "LabelValue",
     "build_search_text",
     "json_depth",
+    "normalize_tag",
     "short_id",
     "split_profile",
     "validate_json_payload",
@@ -31,7 +33,8 @@ __all__ = [
 LabelValue = str | int | float | bool
 
 _KEY = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
-_TAG = re.compile(r"^[A-Za-z0-9_.:\-]{1,64}$")
+MAX_TAG_LENGTH = 64
+_TAG_PUNCTUATION = frozenset("_.:-")
 MAX_LABEL_VALUE = 256
 MAX_JSON_BYTES = 64 * 1024
 MAX_JSON_DEPTH = 16
@@ -79,13 +82,28 @@ def validate_json_payload(value: Any, what: str) -> None:
         raise ValidationFailed(f"{what}: {size} байт больше {MAX_JSON_BYTES // 1024} KiB")
 
 
+def normalize_tag(tag: str) -> str:
+    """Каноническая форма тега (NFC): «й» одной буквой и «и» со знаком краткости — один тег."""
+    return unicodedata.normalize("NFC", tag)
+
+
+def _is_tag(tag: str) -> bool:
+    # буквы, цифры и присоединяемые знаки любого письма; пробелы, управляющие и скрытые символы — нет
+    return 1 <= len(tag) <= MAX_TAG_LENGTH and all(
+        char in _TAG_PUNCTUATION or unicodedata.category(char)[0] in "LNM" for char in tag
+    )
+
+
 def validate_tags(tags: Iterable[str]) -> list[str]:
-    """Множество флагов (FR-3.4): уникальные, отсортированные."""
-    values = set(tags)
-    bad = sorted(t for t in values if not isinstance(t, str) or not _TAG.match(t))
+    """Множество флагов (FR-3.4): уникальные, отсортированные, в форме NFC.
+
+    Тег — от 1 до 64 символов: буквы и цифры Unicode и знаки `_ . : -`. Регистр значим.
+    """
+    raw = list(tags)
+    bad = sorted((t for t in raw if not isinstance(t, str) or not _is_tag(normalize_tag(t))), key=repr)
     if bad:
         raise ValidationFailed("некорректные теги", [f"тег {t!r}" for t in bad])
-    return sorted(values)
+    return sorted({normalize_tag(t) for t in raw})
 
 
 def validate_model(schema: type[BaseModel], data: Mapping[str, Any] | BaseModel, what: str) -> BaseModel:

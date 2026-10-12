@@ -16,6 +16,7 @@ from identity_hub.crypto import EncryptedPayload, associated_data, credential_as
 from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.data import (
     build_search_text,
+    normalize_tag,
     split_profile,
     validate_json_payload,
     validate_labels,
@@ -350,7 +351,7 @@ class IdentitiesMixin(SpaceBase):
     async def _remove_tags(
         self, identity_id: UUID, tags: Iterable[str], *, actor: str = "system"
     ) -> IdentityRow:
-        drop = set(tags)
+        drop = {normalize_tag(tag) for tag in tags}
         return await self._mutate(
             identity_id, actor, lambda row, _: {"tags": validate_tags(t for t in row.tags if t not in drop)}
         )

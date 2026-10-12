@@ -16,6 +16,7 @@ from identity_hub._space import require_actor_and_reason
 from identity_hub.api._base import Namespace
 from identity_hub.api.batch import BatchResult
 from identity_hub.domain.credentials import CredentialInput
+from identity_hub.domain.data import normalize_tag
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.domain.regions import RegionDecision
 from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
@@ -235,7 +236,7 @@ class IdentityFilter:
         return SearchQuery(
             services=self.services(),
             regions=regions,
-            tags=frozenset(self.tags),
+            tags=frozenset(normalize_tag(tag) for tag in self.tags),
             filters=filters,
         )
 

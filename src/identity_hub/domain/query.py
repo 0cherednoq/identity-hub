@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
+from identity_hub.domain.data import normalize_tag
 from identity_hub.enums import AuthState, Availability, Lifecycle, Standing
 from identity_hub.errors import ValidationFailed
 
@@ -119,7 +120,7 @@ def parse_query(text: str) -> SearchQuery:
         if key == "service":
             services.add(value.lower())
         elif key == "tag":
-            tags.add(value)
+            tags.add(normalize_tag(value))
         elif key in REGION_KEYS:
             regions.setdefault(key, set()).add(value.lower())
         elif key == "status":
