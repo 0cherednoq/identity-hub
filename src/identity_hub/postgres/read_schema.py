@@ -25,7 +25,8 @@ from identity_hub.postgres.models import IdentityHubBase
 
 __all__ = ["READ_SCHEMA_VERSION", "READ_TABLES", "ReadSchema"]
 
-# Меняется только при несовместимом изменении набора, имён или типов публичных колонок.
+# Меняется только при несовместимом изменении набора, имён или типов публичных колонок;
+# добавление таблицы или колонки версию не повышает.
 READ_SCHEMA_VERSION = 2
 
 # Публичное имя таблицы → (физическая таблица, {публичная колонка: физическая колонка}).
@@ -152,6 +153,16 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "created_at": "created_at",
         },
     ),
+    # sticky-привязки аккаунт ↔ прокси: join списка аккаунтов с прокси и обратно
+    "proxy_bindings": (
+        "ih_bindings",
+        {
+            "identity_id": "identity_id",
+            "space_id": "space_id",
+            "proxy_id": "proxy_id",
+            "bound_at": "bound_at",
+        },
+    ),
 }
 
 
@@ -190,6 +201,7 @@ class ReadSchema:
         self.region_states: Table = built["region_states"]
         self.events: Table = built["events"]
         self.proxies: Table = built["proxies"]
+        self.proxy_bindings: Table = built["proxy_bindings"]
 
     def __repr__(self) -> str:
         return f"ReadSchema(version={self.version}, db_schema={self.db_schema!r})"

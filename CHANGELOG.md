@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Read-схема: `hub.read.proxy_bindings` (`identity_id`, `proxy_id`, `space_id`, `bound_at`) —
+  sticky-привязки аккаунт ↔ прокси для join со списком аккаунтов (`C3.1`). Версия read-схемы
+  не меняется.
+
 ### Fixed
 
 - Команды прокси под `space.using(session)` (`C0.1`): `proxies.create`, `ensure`, `create_many`,

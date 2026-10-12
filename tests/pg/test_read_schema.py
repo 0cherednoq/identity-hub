@@ -71,6 +71,7 @@ EXPECTED_COLUMNS = {
         "next_check_at", "status_changed_at", "status_source", "checked_at", "pinned_until",
         "max_identities", "bound_count", "created_at",
     },
+    "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at"},
 }  # fmt: skip
 
 
@@ -185,6 +186,47 @@ async def test_read_tables_expose_state_without_secrets(hub: IdentityHub, db: As
     assert len(history) == 1 and events["identity.registered"] == 1 and regions
     dumped = repr([dict(row), dict(proxy), dict(lease), *map(dict, history), *map(dict, regions)])
     assert "secret-pass" not in dumped and "proxy-pass" not in dumped
+
+
+async def test_proxy_bindings_join_accounts_with_proxies(hub: IdentityHub, db: AsyncEngine) -> None:
+    """C3.1: аккаунты с их прокси и число аккаунтов на прокси — одним запросом с join."""
+    space = hub.space(f"read-{uuid4().hex[:6]}", create=True)
+    ref = await space.ref()
+    ids = [
+        (
+            await space.identities.create(
+                IdentityCreate(
+                    service="fake_tg", external_ref=f"{space.slug}+{n}", lifecycle=Lifecycle.READY
+                ),
+                actor="test",
+            )
+        ).id
+        for n in range(3)
+    ]
+    busy = await space.proxies.create("socks5://10.1.0.1:1080", group="res")
+    idle = await space.proxies.create("socks5://10.1.0.2:1080", group="res")
+    for identity_id in ids[:2]:
+        await space.proxies.rebind(identity_id, busy.id, reason="тест", actor="test")
+
+    read = hub.read
+    accounts = (
+        select(read.identities.c.id, read.proxies.c.host)
+        .join(read.proxy_bindings, read.proxy_bindings.c.identity_id == read.identities.c.id, isouter=True)
+        .join(read.proxies, read.proxies.c.id == read.proxy_bindings.c.proxy_id, isouter=True)
+        .where(read.identities.c.space_id == ref.id)
+    )
+    counts = select(read.proxies.c.id, read.proxies.c.bound_count).where(read.proxies.c.space_id == ref.id)
+    async with db.connect() as conn:
+        hosts = {identity_id: host for identity_id, host in await conn.execute(accounts)}
+        bound = {proxy_id: count for proxy_id, count in await conn.execute(counts)}
+        binding = (
+            (await conn.execute(select(read.proxy_bindings).where(read.proxy_bindings.c.space_id == ref.id)))
+            .mappings()
+            .first()
+        )
+    assert hosts == {ids[0]: "10.1.0.1", ids[1]: "10.1.0.1", ids[2]: None}
+    assert bound == {busy.id: 2, idle.id: 0}
+    assert binding is not None and binding["proxy_id"] == busy.id and binding["bound_at"] is not None
 
 
 def test_column_allowlist_and_version() -> None:

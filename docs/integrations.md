@@ -63,7 +63,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 `hub.read` — публичная read-схема на SQLAlchemy Core (версия `hub.read.version`). Она даёт
 стабильные selectable без секретов и служебных полей: `identities`, `leases`,
-`lease_history`, `region_states`, `events`, `proxies`. Физические таблицы библиотеки приватны и
+`lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`. Физические таблицы библиотеки приватны и
 могут меняться между версиями; read-схема меняется только с повышением версии.
 
 ```python
@@ -89,6 +89,20 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
   агрегата, а не номер события (`D-205`), у `events` появилась колонка `revision`. Секретов (`credentials`, сессии, логины прокси), `token` аренды, fencing и
   fingerprint в схеме нет.
 - Только чтение: изменения — через `space.*`.
+- **Прокси аккаунтов.** `proxy_bindings` (`identity_id`, `proxy_id`, `space_id`, `bound_at`) —
+  sticky-привязки. Список аккаунтов с прокси — одним запросом:
+
+  ```python
+  read = hub.read
+  stmt = (
+      select(read.identities.c.id, read.proxies.c.host, read.proxies.c.port)
+      .join(read.proxy_bindings, read.proxy_bindings.c.identity_id == read.identities.c.id, isouter=True)
+      .join(read.proxies, read.proxies.c.id == read.proxy_bindings.c.proxy_id, isouter=True)
+      .where(read.identities.c.space_id == ref.id)
+  )
+  ```
+
+  Число аккаунтов на прокси считать не нужно: оно уже есть в `proxies.c.bound_count`.
 - **Отдельная схема.** При `IdentityHub(db_schema="identity_hub")` read-таблицы получают эту
   схему явно, поэтому запросы приложения не требуют `schema_translate_map`. Если такой select
   передаётся в `among=`, библиотека выполняет его со своей картой `{None: db_schema}`: таблицы

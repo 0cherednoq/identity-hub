@@ -147,4 +147,7 @@ await space.proxies.override(proxy_id, "alive", reason="заменили", actor
 Обзор: `await space.admin.proxy_overview()` — статусы, загрузка, ёмкость пулов;
 `await space.admin.proxy_detail(proxy_id)` — привязанные аккаунты и история.
 
+Для своих списков — read-схема: `hub.read.proxies` (с `bound_count`) и `hub.read.proxy_bindings`
+для join аккаунтов с прокси одним запросом, см. [интеграции](../integrations.md#read-схема-join-с-таблицами-приложения).
+
 Дальше: [события и уведомления](10-events.md).
