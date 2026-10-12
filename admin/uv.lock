@@ -653,7 +653,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "structlog", marker = "extra == 'structlog'", specifier = ">=24.1" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
-    { name = "uuid-utils", marker = "python_full_version < '3.14'", specifier = ">=0.9" },
+    { name = "uuid-utils", marker = "python_full_version < '3.14'", specifier = ">=1.0" },
 ]
 provides-extras = ["postgres", "alembic", "telegram", "structlog", "webhooks", "testing"]
 

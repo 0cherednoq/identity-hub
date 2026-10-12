@@ -66,7 +66,9 @@ jobs:
       - run: npm ci --prefix admin/frontend
       - run: npm run api:check --prefix admin/frontend
       - run: npm run check --prefix admin/frontend
-      - run: npm audit --prefix admin/frontend
+      # только то, что попадает в сборку: у dev-инструмента линтинга (@boundaries/eslint-plugin)
+      # транзитивные handlebars и braces без исправленной версии
+      - run: npm audit --omit=dev --prefix admin/frontend
 
   contract:
     runs-on: ubuntu-latest
