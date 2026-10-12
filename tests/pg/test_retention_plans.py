@@ -56,8 +56,9 @@ SEED = [
             auth_state, availability, error_score, fencing_seq, event_seq)
         SELECT gen_random_uuid(), :space, 'fake_tg', 'ref-' || g, 'ref-' || g, 'ready', 'good',
             'authenticated', 'available', 0, 0, 0 FROM generate_series(1, {N}) g""",
+    # окно следующего часа: окно текущего истекает, если прогон пересекает границу часа
     """INSERT INTO ih_quota_usage (identity_id, kind, window_seconds, window_start, space_id, used)
-        SELECT id, 'op', w, date_trunc('hour', now()), space_id, 1
+        SELECT id, 'op', w, date_trunc('hour', now()) + interval '1 hour', space_id, 1
         FROM ih_identities, (VALUES (3600), (86400)) v(w)""",
     f"""INSERT INTO ih_operation_keys (namespace, key, space_id, operation, fingerprint_version, attempt,
             expires_at)
