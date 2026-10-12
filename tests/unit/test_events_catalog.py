@@ -137,3 +137,10 @@ def test_event_to_dict() -> None:
     assert body["space"] == "tennet"
     assert body["severity"] == "info"
     assert "id" not in body
+
+
+def test_every_event_type_has_documented_data() -> None:
+    """C4.3: у каждого типа каталога описан состав `data`; лишних типов в таблице нет."""
+    from tests.event_data_contract import documented
+
+    assert set(documented()) == set(CATALOG)

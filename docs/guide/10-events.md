@@ -73,6 +73,79 @@ flowchart LR
 `space.admin.event_page(filters=EventFilters(include_journal=True))`, но подписчикам и вебхукам не
 отправляются. Своих типов событий добавить нельзя.
 
+## Состав `data`
+
+Ключи `data` по типам событий. Ключ из таблицы может отсутствовать в конкретном событии
+(например, `reason` есть только у команд с причиной), но других ключей в `data` нет: таблицу
+сверяет тест на каждом прогоне. Значения — строки, числа, логические и `null`; идентификаторы
+и время приходят строками (UUID и ISO 8601). Журнальные типы (`lease.*`, `operation.*`,
+`session.saved`, `dispatcher.event.skipped`) подписчикам не отправляются.
+
+У событий смены состояния (`identity.*.changed`, `proxy.status.changed`) состав общий: `region`
+и `key` — какой регион изменился, `from` и `to` — прежнее и новое состояние, `code` и `until` —
+код и срок временного состояния, `source` — источник (`command`, `observation`, `error`, …),
+`actor` и `reason` — кто и почему, `raw_status` — исходный статус платформы для наблюдений.
+
+<!-- event-data:start -->
+| Тип | Ключи `data` |
+|---|---|
+| `admin.accounts.exported` | `count`, `filter_fingerprint`, `format`, `reason` |
+| `admin.bulk.executed` | `attempt`, `failed`, `operation`, `reason`, `snapshot_id`, `succeeded` |
+| `admin.events.exported` | `count`, `filter_fingerprint`, `format`, `reason` |
+| `admin.import.changed` | `action`, `count`, `reason`, `run_id`, `service` |
+| `admin.integration.changed` | `action`, `outcome`, `reason`, `resource_id`, `resource_kind` |
+| `dispatcher.event.skipped` | `attempts`, `consumer`, `error`, `event_id`, `type` |
+| `identity.auth.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
+| `identity.availability.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
+| `identity.challenge.answered` | `challenge_id`, `kind` |
+| `identity.challenge.expired` | `challenge_id`, `kind` |
+| `identity.challenge.opened` | `challenge_id`, `expires_at`, `hint`, `kind` |
+| `identity.credentials.updated` | `action`, `fields`, `kind`, `name`, `reason` |
+| `identity.deleted` | `external_ref` |
+| `identity.imported` | `count`, `run_id`, `skipped`, `updated` |
+| `identity.lifecycle.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
+| `identity.linked` | `linked_identity_id`, `reason`, `role` |
+| `identity.login.failed` | `error` |
+| `identity.login.succeeded` | — |
+| `identity.quota.exhausted` | `kind`, `limit`, `resets_at`, `window_seconds`, `window_start` |
+| `identity.registered` | `auth`, `external_ref`, `labels`, `lifecycle`, `links`, `tags` |
+| `identity.requirement.added` | `code`, `deadline`, `since` |
+| `identity.requirement.resolved` | `code`, `reason` |
+| `identity.secret.revealed` | `field`, `kind`, `name`, `reason` |
+| `identity.session.updated` | `expires_at`, `fields`, `mode`, `reason`, `replaced_id`, `session_id`, `session_revision`, `slot` |
+| `identity.standing.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
+| `identity.state.drift` | `cause`, `key`, `observed`, `raw_status`, `region`, `source`, `state` |
+| `identity.state.overridden` | `actor`, `attempts`, `code`, `from`, `host`, `key`, `pinned_until`, `pool`, `port`, `reason`, `region`, `to` |
+| `identity.state.unpinned` | `actor`, `key`, `reason`, `region`, `state` |
+| `identity.tier.lost` | `factor`, `tier` |
+| `identity.tier.reached` | `factor`, `tier` |
+| `identity.unlinked` | `linked_identity_id`, `reason`, `role` |
+| `identity.updated` | `fields`, `labels`, `tags` |
+| `identity.verification.changed` | `actor`, `attempts`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
+| `lease.acquired` | `fencing`, `holder`, `pool`, `shared` |
+| `lease.expired` | `error`, `expired_at`, `fencing`, `holder`, `pool`, `reason` |
+| `lease.failed` | `error`, `pool`, `reason` |
+| `lease.lost` | `error`, `pool`, `reason` |
+| `lease.released` | `error`, `pool`, `reason` |
+| `lease.revoked` | `holder`, `pool`, `reason` |
+| `operation.failed` | `blame`, `code`, `error`, `kind` |
+| `operation.succeeded` | — |
+| `pool.capacity.empty` | `available`, `pool`, `threshold` |
+| `pool.capacity.low` | `available`, `pool`, `threshold` |
+| `proxy.binding.changed` | `from_proxy_id`, `pool`, `reason`, `to_proxy_id` |
+| `proxy.checker.failed` | `pool`, `proxies`, `reason` |
+| `proxy.deleted` | `host`, `pool`, `port`, `proxy_id`, `unbound` |
+| `proxy.disabled` | `host`, `pool`, `port`, `reason`, `unbound` |
+| `proxy.enabled` | `host`, `pool`, `port` |
+| `proxy.pool.exhausted` | `pool`, `proxy_pool` |
+| `proxy.secret.revealed` | `reason` |
+| `proxy.status.changed` | `actor`, `code`, `from`, `host`, `key`, `pool`, `port`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
+| `proxy.updated` | `fields`, `from_host`, `from_pool`, `from_port`, `from_scheme`, `host`, `pool`, `port` |
+| `session.saved` | `mode`, `replaced_id`, `session_id`, `session_revision`, `slot` |
+| `webhook.endpoint.disabled` | `endpoint_id`, `failure_streak` |
+| `worker.leases_lost` | `count`, `holder` |
+<!-- event-data:end -->
+
 ## Подписка в коде
 
 ```python
