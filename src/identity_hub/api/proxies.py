@@ -145,8 +145,8 @@ class Proxies(Namespace):
         row = self._space._prepare_proxy(
             url, group, scheme, host, port, username, password, max_identities, id
         )
-        ((proxy_id, _created),) = await self._space._insert_proxies([row], fail_existing=True)
-        return await self.get(proxy_id)
+        ((created, _is_new),) = await self._space._create_proxies([row], fail_existing=True)
+        return Proxy.from_row(created)
 
     async def ensure(
         self,
@@ -165,8 +165,8 @@ class Proxies(Namespace):
         row = self._space._prepare_proxy(
             url, group, scheme, host, port, username, password, max_identities, id
         )
-        ((proxy_id, created),) = await self._space._insert_proxies([row])
-        return await self.get(proxy_id), created
+        ((found, created),) = await self._space._create_proxies([row])
+        return Proxy.from_row(found), created
 
     async def create_many(
         self,
@@ -185,9 +185,11 @@ class Proxies(Namespace):
             self._space._prepare_proxy(url, group, None, None, None, None, None, max_identities, None)
             for url in urls
         ]
-        results = await self._space._insert_proxies(rows, fail_existing=on_conflict is OnConflict.FAIL)
-        created = [await self.get(proxy_id) for proxy_id, is_new in results if is_new]
-        return ProxyCreateManyResult(created, [proxy_id for proxy_id, is_new in results if not is_new])
+        results = await self._space._create_proxies(rows, fail_existing=on_conflict is OnConflict.FAIL)
+        return ProxyCreateManyResult(
+            [Proxy.from_row(row) for row, is_new in results if is_new],
+            [row.id for row, is_new in results if not is_new],
+        )
 
     # ------------------------------------------------------------------ изменение и удаление
 
@@ -195,15 +197,15 @@ class Proxies(Namespace):
         self, proxy_id: UUID, *, username: str | None, password: str | None, actor: str
     ) -> Proxy:
         """Сменить логин и пароль прокси; адрес, статус и привязки остаются. Событие `proxy.updated`."""
-        await self._space._replace_proxy_credentials(
-            proxy_id, username=username, password=password, actor=actor
+        return Proxy.from_row(
+            await self._space._replace_proxy_credentials(
+                proxy_id, username=username, password=password, actor=actor
+            )
         )
-        return await self.get(proxy_id)
 
     async def move(self, proxy_id: UUID, *, group: str, actor: str) -> Proxy:
         """Перенести прокси в другую группу; привязки сохраняются. Событие `proxy.updated`."""
-        await self._space._move_proxy(proxy_id, group=group, actor=actor)
-        return await self.get(proxy_id)
+        return Proxy.from_row(await self._space._move_proxy(proxy_id, group=group, actor=actor))
 
     async def delete(self, proxy_id: UUID, *, actor: str, unbind: bool = False) -> int:
         """Удалить прокси. С привязанными identity — `ValidationFailed`; `unbind=True` отвязывает их.

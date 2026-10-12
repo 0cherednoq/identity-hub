@@ -232,15 +232,30 @@ class ProxiesMixin(SpaceBase):
     ) -> list[tuple[UUID, bool]]:
         """Вставить одной транзакцией; `fail_existing` — любой существующий адрес откатывает всё."""
         async with self._tx() as tx:
-            results = [await tx.insert_proxy(row) for row in rows]
-            existing = [
-                f"{row.scheme}://{row.host}:{row.port}"
-                for row, (_id, created) in zip(rows, results, strict=True)
-                if not created
-            ]
-            if fail_existing and existing:
-                raise AlreadyExists("proxy", ", ".join(existing))
-            return results
+            return await self._insert_into(tx, rows, fail_existing)
+
+    async def _create_proxies(
+        self, rows: list[NewProxy], *, fail_existing: bool = False
+    ) -> list[tuple[ProxyRow, bool]]:
+        """Вставить и вернуть строки, прочитанные в той же транзакции.
+
+        Своя транзакция чтения под `using(session)` незафиксированную вставку не видит (C0.1).
+        """
+        async with self._tx() as tx:
+            results = await self._insert_into(tx, rows, fail_existing)
+            return [(await self._proxy(tx, proxy_id), created) for proxy_id, created in results]
+
+    @staticmethod
+    async def _insert_into(tx: StoreTx, rows: list[NewProxy], fail_existing: bool) -> list[tuple[UUID, bool]]:
+        results = [await tx.insert_proxy(row) for row in rows]
+        existing = [
+            f"{row.scheme}://{row.host}:{row.port}"
+            for row, (_id, created) in zip(rows, results, strict=True)
+            if not created
+        ]
+        if fail_existing and existing:
+            raise AlreadyExists("proxy", ", ".join(existing))
+        return results
 
     # --------------------------------------------------------- чтение
 
@@ -552,8 +567,8 @@ class ProxiesMixin(SpaceBase):
 
     async def _replace_proxy_credentials(
         self, proxy_id: UUID, *, username: str | None, password: str | None, actor: str
-    ) -> None:
-        """Сменить логин и пароль прокси; адрес и привязки остаются."""
+    ) -> ProxyRow:
+        """Сменить логин и пароль прокси; адрес и привязки остаются. Возвращает строку после записи."""
         if password and not username:
             raise ValidationFailed("прокси: пароль без логина не задаётся")
         secret = ProxySecret(username=username, password=SecretStr(password) if password else None)
@@ -566,17 +581,19 @@ class ProxiesMixin(SpaceBase):
                 raise AlreadyExists("proxy", f"{row.scheme}://{row.host}:{row.port}")
             await tx.set_proxy_secret(proxy_id, tag, payload, fingerprint_key_id=key_id)
             await self._proxy_updated(tx, row, actor, ["credentials"])
+            return await self._proxy(tx, proxy_id)
 
-    async def _move_proxy(self, proxy_id: UUID, *, group: str, actor: str) -> None:
-        """Перенести прокси в другую группу; привязки аккаунтов сохраняются."""
+    async def _move_proxy(self, proxy_id: UUID, *, group: str, actor: str) -> ProxyRow:
+        """Перенести прокси в другую группу; привязки сохраняются. Возвращает строку после записи."""
         if not group or len(group) > 128:
             raise ValidationFailed("пул прокси: от 1 до 128 символов")
         async with self._tx() as tx:
             row = await self._proxy(tx, proxy_id)
             if row.pool == group:
-                return
+                return row
             await tx.update_proxy(proxy_id, {"pool": group})
             await self._proxy_updated(tx, replace(row, pool=group), actor, ["group"], previous=row.pool)
+            return await self._proxy(tx, proxy_id)
 
     async def _proxy_updated(
         self, tx: StoreTx, row: ProxyRow, actor: str, fields: list[str], *, previous: str | None = None
