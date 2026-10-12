@@ -28,7 +28,7 @@ from tests.conftest import TEST_KEYS
 from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_TG
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 @pytest.fixture

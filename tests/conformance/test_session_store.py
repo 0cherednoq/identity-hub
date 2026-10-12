@@ -11,7 +11,7 @@ from identity_hub import IdentityCreate, SpaceHandle
 from identity_hub.crypto import associated_data
 from identity_hub.enums import SessionStatus
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def _identity(space: SpaceHandle) -> UUID:

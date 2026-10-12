@@ -10,7 +10,7 @@ import pytest
 from identity_hub import IdentityCreate, IdentityHub, SpaceHandle
 from identity_hub.clock import FakeClock
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def _leases(space: SpaceHandle, count: int) -> list[Any]:

@@ -18,7 +18,7 @@ from identity_hub import (
     ValidationFailed,
 )
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 class ApiKey(BaseModel):

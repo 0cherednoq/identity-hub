@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from identity_hub.postgres.migrate import alembic_config, migrate
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 EARLY, LATE = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 3, 1, tzinfo=UTC)
 

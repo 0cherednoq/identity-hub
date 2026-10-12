@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from identity_hub import IdentityCreate, RevisionConflict
 from identity_hub.hub import SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 async def _create(space: SpaceHandle, ref: str) -> tuple[UUID, int]:

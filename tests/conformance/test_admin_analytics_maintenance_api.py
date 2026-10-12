@@ -9,7 +9,7 @@ import pytest
 
 from identity_hub import IdentityCreate, IdentityHub, Lifecycle, SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def test_admin_read_models(space: SpaceHandle) -> None:

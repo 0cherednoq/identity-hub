@@ -15,7 +15,7 @@ from identity_hub import IdentityCreate, IdentityHub, SpaceHandle, ValidationFai
 from identity_hub.clock import FakeClock
 from identity_hub.crypto import credential_associated_data
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 class ApiKey(BaseModel):

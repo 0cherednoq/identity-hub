@@ -17,7 +17,7 @@ from identity_hub import (
 )
 from identity_hub.read.events import EventFilters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def test_run_reports_and_resolves_links_by_ref(space: SpaceHandle) -> None:

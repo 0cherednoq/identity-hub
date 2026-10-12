@@ -14,7 +14,7 @@ from tests.fixtures.services import FAKE_TG, TgSession
 
 from identity_hub import IdentityCreate, IdentityHub, LoginChallenge, LoginOutcome, SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 class RecordingAuthenticator:

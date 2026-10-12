@@ -8,7 +8,7 @@ import pytest
 
 from identity_hub import AlreadyExists, IdentityCreate, SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 def _specs(refs: list[str]) -> list[IdentityCreate]:

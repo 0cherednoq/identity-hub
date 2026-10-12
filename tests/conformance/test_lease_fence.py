@@ -14,7 +14,7 @@ from identity_hub import IdentityCreate, IdentityHub, LeaseOwnershipLost, SpaceH
 from identity_hub.clock import FakeClock
 from identity_hub.errors import LeaseLost
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def _lease(space: SpaceHandle, **timing: timedelta) -> Any:

@@ -17,7 +17,7 @@ from identity_hub import (
     ValidationFailed,
 )
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def test_create_get_ensure_and_conflict(space: SpaceHandle) -> None:

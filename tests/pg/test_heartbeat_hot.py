@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from identity_hub import IdentityCreate
 from identity_hub.hub import SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 LEASES, ROUNDS = 30, 10
 STATS = text("SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 'ih_leases'")

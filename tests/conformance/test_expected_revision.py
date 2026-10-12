@@ -21,7 +21,7 @@ from identity_hub import (
 )
 from identity_hub.read.events import EventFilters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 Command = Callable[[SpaceHandle, UUID, int | None], Awaitable[Any]]
 

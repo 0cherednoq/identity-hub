@@ -17,7 +17,7 @@ from identity_hub import (
     ValidationFailed,
 )
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 def _spec(ref: str, **kwargs: object) -> IdentityCreate:

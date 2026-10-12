@@ -10,7 +10,7 @@ from tests.fixtures.services import FAKE_TG
 
 from identity_hub import IdentityCreate, IdentityHub, LeaseMode, SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def _ready(space: SpaceHandle, count: int) -> list[UUID]:

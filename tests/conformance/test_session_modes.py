@@ -10,7 +10,7 @@ import pytest
 from identity_hub import IdentityCreate, SpaceHandle, ValidationFailed
 from identity_hub.read.events import EventFilters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 async def _identity(space: SpaceHandle) -> UUID:

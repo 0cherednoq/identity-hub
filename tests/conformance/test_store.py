@@ -15,7 +15,7 @@ from identity_hub.store.base import Store
 from identity_hub.testing import MemoryStore
 from identity_hub.testing.conformance import StoreConformanceSuite
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 class TestStoreConformance(StoreConformanceSuite):

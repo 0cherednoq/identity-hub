@@ -17,8 +17,6 @@ from identity_hub.crypto.envelope import MAX_SECRET_BYTES, DecryptionFailed
 from identity_hub.domain.data import MAX_JSON_BYTES, MAX_JSON_DEPTH, json_depth, validate_json_payload
 from identity_hub.events.catalog import SecretLeak, scrub
 
-pytestmark = pytest.mark.anyio
-
 KEYS = {"k1": b"\x11" * 32, "k2": b"\x22" * 32}
 
 

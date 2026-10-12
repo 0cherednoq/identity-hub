@@ -9,7 +9,7 @@ import pytest
 from identity_hub import IdentityCreate, ImportRecord, SpaceHandle
 from identity_hub.importing import ImportReport
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 REFS = [f"+5{n:03d}" for n in range(40)]
 

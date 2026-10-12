@@ -18,7 +18,7 @@ from identity_hub import (
 )
 from identity_hub.read.events import EventFilters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 FP_OLD, FP_NEW = bytes(range(40, 72)), bytes(range(80, 112))
 

@@ -12,7 +12,7 @@ from identity_hub import IdentityCreate, IdentityHub, SpaceHandle
 from identity_hub.clock import FakeClock
 from identity_hub.domain.provider_operations import RetryPolicy
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 CLAIM = timedelta(seconds=30)
 SHORT = timedelta(seconds=0.4)

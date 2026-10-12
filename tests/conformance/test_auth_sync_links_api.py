@@ -24,7 +24,7 @@ from identity_hub import (
     Standing,
 )
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 SMS_CODE = "12345"
 

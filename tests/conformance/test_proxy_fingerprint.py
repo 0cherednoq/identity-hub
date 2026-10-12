@@ -11,7 +11,7 @@ from tests.fixtures.services import FAKE_EXCHANGE, FAKE_TG
 
 from identity_hub import AlreadyExists, IdentityHub, SpaceHandle, StaticSecretsProvider
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 URL = "socks5://alice:pass@10.0.0.1:1080"
 FP_OLD, FP_NEW = bytes(range(40, 72)), bytes(range(80, 112))

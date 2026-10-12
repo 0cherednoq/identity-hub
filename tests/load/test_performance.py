@@ -20,7 +20,7 @@ from identity_hub.postgres.models import IdentityRecord, LeaseRecord
 from identity_hub.service import OperationRule, Service
 from identity_hub.store.base import SpaceRef
 
-pytestmark = [pytest.mark.load, pytest.mark.pg, pytest.mark.anyio]
+pytestmark = [pytest.mark.load, pytest.mark.pg]
 
 
 def _budget(actual: float, maximum: float, metric: str) -> None:

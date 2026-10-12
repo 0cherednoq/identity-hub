@@ -13,7 +13,7 @@ from identity_hub.crypto import associated_data
 from identity_hub.hub import SpaceHandle
 from tests.fixtures.services import TgSession
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 async def _wait_blocked(sessionmaker: async_sessionmaker[AsyncSession], task: asyncio.Task[object]) -> None:

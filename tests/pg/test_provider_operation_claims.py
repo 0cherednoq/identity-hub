@@ -10,7 +10,7 @@ import pytest
 from identity_hub import IdentityCreate
 from identity_hub.hub import SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 async def test_two_workers_claim_disjoint_operations(space: SpaceHandle) -> None:

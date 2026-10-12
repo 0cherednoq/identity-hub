@@ -13,7 +13,7 @@ from identity_hub import IdentityCreate, LeaseRevoked
 from identity_hub.hub import SpaceHandle
 from identity_hub.store.base import LeaseCounters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 async def _lease(space: SpaceHandle) -> Any:

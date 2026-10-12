@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from identity_hub.hub import IdentityHub
 from identity_hub.service import OperationRule, Service
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 PICK_MARKER = "SKIP LOCKED"
 

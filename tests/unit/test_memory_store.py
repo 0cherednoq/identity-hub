@@ -36,7 +36,6 @@ from tests.fixtures.shared_lease import (
     check_shared_rotates_least_recently_leased,
 )
 
-pytestmark = pytest.mark.anyio
 TEST_KEYS = {"k1": b"\x33" * 32, "k2": b"\x44" * 32}
 
 

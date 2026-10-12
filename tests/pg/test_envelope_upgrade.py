@@ -11,7 +11,7 @@ from identity_hub.crypto import EncryptedPayload, Envelope, StaticSecretsProvide
 from identity_hub.postgres.models import CredentialsRecord
 from tests.conftest import TEST_KEYS
 
-pytestmark = [pytest.mark.anyio, pytest.mark.pg]
+pytestmark = [pytest.mark.pg]
 
 
 async def test_rotate_key_upgrades_legacy_credentials(

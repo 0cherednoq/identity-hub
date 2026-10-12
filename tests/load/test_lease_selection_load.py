@@ -15,7 +15,7 @@ from identity_hub.hub import IdentityHub
 from identity_hub.service import OperationRule, Service
 
 # засев 100k аккаунтов и живых аренд на занятой машине дольше общего лимита в 120 с
-pytestmark = [pytest.mark.load, pytest.mark.pg, pytest.mark.anyio, pytest.mark.timeout(900)]
+pytestmark = [pytest.mark.load, pytest.mark.pg, pytest.mark.timeout(900)]
 
 ACCOUNTS = 100_000
 SAMPLES = 200

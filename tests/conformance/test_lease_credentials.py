@@ -16,7 +16,7 @@ from identity_hub.clock import FakeClock
 from identity_hub.errors import LeaseLost
 from identity_hub.read.events import EventFilters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 
 class ApiKey(BaseModel):

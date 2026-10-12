@@ -21,7 +21,7 @@ from identity_hub import (
 from identity_hub.events import CATALOG
 from identity_hub.read.events import EventFilters
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.conformance]
 
 FAR_PAST = datetime(2000, 1, 1, tzinfo=UTC)
 FAR_FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
