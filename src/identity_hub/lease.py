@@ -27,7 +27,7 @@ from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
-from identity_hub.enums import AuthState, LeaseEndReason, ProxyStatus, SessionStatus
+from identity_hub.enums import AuthState, LeaseEndReason, SessionStatus
 from identity_hub.errors import (
     IdempotencyConflict,
     LeaseLost,
@@ -863,10 +863,11 @@ async def _resolve_proxy(
     if policy is None:
         return None, []
     current = await tx.get_binding(candidate.id) if policy.sticky else None
-    if current is not None and current.status == ProxyStatus.ALIVE:
+    if current is not None and current.issuable:
         return current, []
-    if current is not None and policy.on_proxy_down is ProxyDownPolicy.WAIT:
-        raise _SkipCandidate(candidate.id)  # прокси упал между выборкой и захватом
+    # выключение оператором — не поломка: привязка сохраняется при любой политике (D-224)
+    if current is not None and (not current.enabled or policy.on_proxy_down is ProxyDownPolicy.WAIT):
+        raise _SkipCandidate(candidate.id)  # прокси упал или выключен между выборкой и захватом
     chosen = await tx.choose_proxy(policy.group, policy.max_identities, claim=policy.sticky)
     if chosen is None:
         raise _PoolExhausted

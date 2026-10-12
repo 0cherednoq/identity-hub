@@ -807,9 +807,10 @@ class MemoryTx(StoreTx):
         lease = self.state.leases.get(row.id)
         if not query.shared and lease is not None and lease.expires_at > now:
             return False
-        if query.proxy_wait:
+        if query.proxy_wait or query.proxy_enabled:
             proxy_id = self.state.bindings.get(row.id)
-            if proxy_id is not None and self.state.proxies[proxy_id].status != "alive":
+            bound = self.state.proxies[proxy_id] if proxy_id is not None else None
+            if bound is not None and (not bound.enabled or (query.proxy_wait and bound.status != "alive")):
                 return False
         return True
 
@@ -1252,6 +1253,16 @@ class MemoryTx(StoreTx):
         self.state.proxies[proxy_id] = replace(row, fingerprint=fingerprint, fingerprint_key_id=key_id)
         return True
 
+    async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
+        if await self.get_proxy(proxy_id) is None:
+            return []
+        unbound = [identity_id for identity_id, bound in self.state.bindings.items() if bound == proxy_id]
+        for identity_id in unbound:
+            del self.state.bindings[identity_id]
+            self.state.binding_times.pop(identity_id, None)
+        self.state.proxy_load[proxy_id] = 0
+        return unbound
+
     async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
         if await self.get_proxy(proxy_id) is None:
             return None
@@ -1272,12 +1283,7 @@ class MemoryTx(StoreTx):
         for proxy in self.state.proxies.values():
             capacity = proxy.max_identities if max_identities is None else max_identities
             load = self.state.proxy_load.get(proxy.id, 0)
-            if (
-                proxy.space_id == self.space.id
-                and proxy.pool == pool
-                and proxy.status == "alive"
-                and load < capacity
-            ):
+            if proxy.space_id == self.space.id and proxy.pool == pool and proxy.issuable and load < capacity:
                 candidates.append(proxy)
         candidates.sort(
             key=lambda proxy: (self.state.proxy_load.get(proxy.id, 0), proxy.error_score, proxy.id)
@@ -1307,7 +1313,7 @@ class MemoryTx(StoreTx):
         if previous == proxy_id:
             return previous, target
         load = self.state.proxy_load.get(proxy_id, 0)
-        if target.status != "alive" or load >= target.max_identities:
+        if not target.issuable or load >= target.max_identities:
             return None
         self.state.proxy_load[proxy_id] = load + 1
         await self.bind_proxy(identity_id, proxy_id, previous)
@@ -1331,6 +1337,7 @@ class MemoryTx(StoreTx):
             if row.space_id == self.space.id
             and (pool is None or row.pool == pool)
             and ready(row)
+            and row.enabled
             and (row.pinned_until is None or row.pinned_until <= self._now)
         ]
         never = datetime.min.replace(tzinfo=UTC)
@@ -1345,6 +1352,7 @@ class MemoryTx(StoreTx):
         pool: str | None,
         status: str | None,
         capacity: str | None,
+        enabled: bool | None = None,
     ) -> list[ProxyReadRow]:
         result = []
         for proxy in self.state.proxies.values():
@@ -1354,6 +1362,8 @@ class MemoryTx(StoreTx):
             if pool is not None and proxy.pool != pool:
                 continue
             if status is not None and proxy.status != status:
+                continue
+            if enabled is not None and proxy.enabled != enabled:
                 continue
             if capacity == "available" and bound_count >= proxy.max_identities:
                 continue
@@ -1384,6 +1394,10 @@ class MemoryTx(StoreTx):
                     bound_count=bound_count,
                     in_lease_count=in_lease_count,
                     created_at=proxy.created_at,
+                    enabled=proxy.enabled,
+                    disabled_reason=proxy.disabled_reason,
+                    disabled_by=proxy.disabled_by,
+                    disabled_at=proxy.disabled_at,
                 )
             )
         result.sort(key=lambda row: (row.created_at, row.id), reverse=True)

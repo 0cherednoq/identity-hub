@@ -8,6 +8,14 @@
 
 ### Added
 
+- Выключение прокси оператором (`C1.4a`, `D-224`, миграция `0025`): `proxies.disable(proxy_id,
+  reason=, actor=, unbind=)`, `proxies.enable(proxy_id, actor=)`, `proxies.set_enabled_many(ids,
+  enabled, actor=, reason=)`, фильтр `proxies.list(enabled=)`. Флаг `enabled` независим от
+  здоровья: выдаётся только включённый и живой прокси, автоматика выключенный не трогает,
+  статус при включении сохраняется. Привязанные аккаунты остаются привязанными и не выдаются
+  при любой `on_proxy_down`; `unbind=True` отвязывает их. Поля `enabled`, `disabled_reason`,
+  `disabled_by`, `disabled_at` — в `Proxy` и `hub.read.proxies`; события `proxy.disabled` и
+  `proxy.enabled`. `hub.start()` требует ревизию схемы `0025`.
 - `proxies.update(proxy_id, scheme=, host=, port=, username=, password=, actor=)` — смена адреса
   прокси без удаления (`C1.3`): привязки, статус, счётчики и группа сохраняются, отпечаток
   пересчитывается, занятый адрес — `AlreadyExists`. Событие `proxy.updated` несёт прежний адрес.

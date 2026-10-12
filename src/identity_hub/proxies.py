@@ -317,6 +317,9 @@ class ProxiesMixin(SpaceBase):
         """Ошибка по вине прокси (FR-8.4): счёт ошибок; при пороге — карантин с перепроверкой."""
         policy = self._proxy_health
         async with self._tx(own=True) as tx:
+            known = await self._proxy(tx, proxy_id)
+            if not known.enabled:
+                return known.status  # выключенный прокси автоматика не трогает (D-224)
             # сложение выполняет хранилище одной командой: параллельные сообщения не теряются (R2-F23)
             score = await tx.add_proxy_error(proxy_id, weight)
             row = await self._proxy(tx, proxy_id)
@@ -340,7 +343,7 @@ class ProxiesMixin(SpaceBase):
     async def _report_proxy_success(self, proxy_id: UUID) -> None:
         async with self._tx(own=True) as tx:
             row = await self._proxy(tx, proxy_id)
-            if row.error_score > 0 and row.status == ProxyStatus.ALIVE:
+            if row.error_score > 0 and row.status == ProxyStatus.ALIVE and row.enabled:
                 score = row.error_score * self._proxy_health.success_decay
                 await tx.update_proxy(proxy_id, {"error_score": score if score >= 0.01 else 0.0})
 
@@ -377,7 +380,9 @@ class ProxiesMixin(SpaceBase):
         """
         rows = [await self._get_proxy(proxy_id) for proxy_id in proxy_ids]
         rows = [
-            row for row in rows if row.status != ProxyStatus.ALIVE and (manual or not self._is_pinned(row))
+            row
+            for row in rows
+            if row.status != ProxyStatus.ALIVE and (manual or (row.enabled and not self._is_pinned(row)))
         ]
         if not rows:
             return {}
@@ -462,7 +467,7 @@ class ProxiesMixin(SpaceBase):
         self, proxy_id: UUID, checker: ProxyChecker, *, actor: str, manual: bool = False
     ) -> str:
         row = await self._get_proxy(proxy_id)
-        if row.status == ProxyStatus.ALIVE or (not manual and self._is_pinned(row)):
+        if row.status == ProxyStatus.ALIVE or (not manual and (self._is_pinned(row) or not row.enabled)):
             return row.status
         outcome = await self._check(row, checker)
         if outcome is None:
@@ -479,6 +484,8 @@ class ProxiesMixin(SpaceBase):
                 now = await tx.now()
                 if not manual and current.pinned_until is not None and current.pinned_until > now:
                     return current.status  # закрепление защищает от автоматических переходов (R2-F14)
+                if not manual and not current.enabled:
+                    return current.status  # выключен во время проверки (D-224)
                 if ok:
                     extra: dict[str, Any] = {"checked_at": now, "next_check_at": now + policy.base_backoff}
                     decision = await self._apply(
@@ -528,6 +535,77 @@ class ProxiesMixin(SpaceBase):
                 extra = {"next_check_at": await tx.now() + self._proxy_health.base_backoff}
             change = machine.Override(to=str(status), reason=reason, actor=actor, pin_for=pin_for)
             return (await self._apply(tx, row, change, extra)).state.state
+
+    async def _set_proxy_enabled(
+        self, proxy_id: UUID, enabled: bool, *, actor: str, reason: str | None = None, unbind: bool = False
+    ) -> ProxyRow:
+        """Выключить или включить прокси (D-224). Здоровье не меняется; повтор — без события.
+
+        Выключение требует причины; `unbind=True` отвязывает аккаунты в той же транзакции.
+        Включение назначает перепроверку недоступному прокси на текущий момент.
+        """
+        if enabled:
+            if not isinstance(actor, str) or not actor.strip():
+                raise ValidationFailed("включение прокси требует автора")
+            actor = actor.strip()
+        else:
+            actor, reason = require_actor_and_reason(actor, reason, "выключение прокси")
+        async with self._tx() as tx:
+            row = await self._proxy(tx, proxy_id)
+            if row.enabled == enabled:
+                return row
+            now = await tx.now()
+            data: dict[str, Any] = {"pool": row.pool, "host": row.host, "port": row.port}
+            drafts: list[EventDraft] = []
+            if enabled:
+                values: dict[str, Any] = {
+                    "enabled": True,
+                    "disabled_reason": None,
+                    "disabled_by": None,
+                    "disabled_at": None,
+                }
+                if row.status != ProxyStatus.ALIVE:
+                    values["next_check_at"] = now  # сведения о здоровье за время простоя устарели
+            else:
+                values = {
+                    "enabled": False,
+                    "disabled_reason": reason,
+                    "disabled_by": actor,
+                    "disabled_at": now,
+                }
+                data["reason"] = reason
+                if unbind:
+                    bound = {
+                        item.identity_id: item.service for item in await tx.proxy_bound_identities(proxy_id)
+                    }
+                    unbound = await tx.unbind_proxy(proxy_id)
+                    data["unbound"] = len(unbound)
+                    drafts = [
+                        EventDraft(
+                            "proxy.binding.changed",
+                            actor=actor,
+                            service=bound.get(identity_id),
+                            identity_id=identity_id,
+                            data={
+                                "from_proxy_id": str(proxy_id),
+                                "to_proxy_id": None,
+                                "reason": "proxy disabled",
+                                "pool": row.pool,
+                            },
+                        )
+                        for identity_id in unbound
+                    ]
+            await tx.update_proxy(proxy_id, values)
+            drafts.append(
+                EventDraft(
+                    "proxy.enabled" if enabled else "proxy.disabled",
+                    actor=actor,
+                    proxy_id=proxy_id,
+                    data=data,
+                )
+            )
+            await self._emit(tx, *drafts)
+            return await self._proxy(tx, proxy_id)
 
     async def _delete_proxy(self, proxy_id: UUID, *, actor: str, unbind: bool = False) -> int:
         """Удалить прокси; с привязанными аккаунтами — только при unbind=True.
@@ -688,6 +766,8 @@ class ProxiesMixin(SpaceBase):
             target = await self._proxy(tx, proxy_id)
             if target.status != ProxyStatus.ALIVE:
                 raise ValidationFailed("target proxy must be alive")
+            if not target.enabled:
+                raise ValidationFailed("target proxy is disabled")
             result = await tx.rebind_proxy(identity_id, proxy_id)
             if result is None:
                 raise LeaseUnavailable("target proxy has no available capacity")

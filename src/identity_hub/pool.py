@@ -126,6 +126,7 @@ class Pool:
                 and self.proxy_policy.sticky
                 and self.proxy_policy.on_proxy_down is ProxyDownPolicy.WAIT
             ),
+            proxy_enabled=bool(self.proxy_policy and self.proxy_policy.sticky),
         )
 
     def lease(

@@ -69,7 +69,8 @@ EXPECTED_COLUMNS = {
     "proxies": {
         "id", "space_id", "group", "scheme", "host", "port", "status", "error_score", "fail_streak",
         "next_check_at", "status_changed_at", "status_source", "checked_at", "pinned_until",
-        "max_identities", "bound_count", "created_at",
+        "max_identities", "bound_count", "created_at", "enabled", "disabled_reason", "disabled_by",
+        "disabled_at",
     },
     "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at"},
 }  # fmt: skip

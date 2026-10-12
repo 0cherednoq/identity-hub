@@ -42,7 +42,11 @@ MAX_PROXY_PAGE = 200
 
 @dataclass(frozen=True, slots=True)
 class Proxy:
-    """Прокси без логина и пароля. `bound_count` заполняется только в `list()`."""
+    """Прокси без логина и пароля. `bound_count` заполняется только в `list()`.
+
+    `status` — наблюдаемое здоровье, `enabled` — намерение оператора: выдаётся только включённый
+    и живой прокси. У выключенного заполнены `disabled_reason`, `disabled_by`, `disabled_at`.
+    """
 
     id: UUID
     group: str
@@ -57,6 +61,10 @@ class Proxy:
     max_identities: int
     created_at: datetime
     bound_count: int | None = None
+    enabled: bool = True
+    disabled_reason: str | None = None
+    disabled_by: str | None = None
+    disabled_at: datetime | None = None
 
     @classmethod
     def from_row(cls, row: ProxyRow | ProxyReadRow) -> Proxy:
@@ -74,6 +82,10 @@ class Proxy:
             max_identities=row.max_identities,
             created_at=row.created_at,
             bound_count=row.bound_count if isinstance(row, ProxyReadRow) else None,
+            enabled=row.enabled,
+            disabled_reason=row.disabled_reason,
+            disabled_by=row.disabled_by,
+            disabled_at=row.disabled_at,
         )
 
 
@@ -153,6 +165,7 @@ class Proxies(Namespace):
         *,
         group: str | None = None,
         status: ProxyStatus | str | None = None,
+        enabled: bool | None = None,
         limit: int = 50,
         after: str | None = None,
     ) -> Page[Proxy]:
@@ -167,6 +180,7 @@ class Proxies(Namespace):
                 pool=group,
                 status=str(status) if status is not None else None,
                 capacity=None,
+                enabled=enabled,
             )
         page = rows[:limit]
         next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
@@ -409,6 +423,42 @@ class Proxies(Namespace):
         return ProxyStatus(
             await self._space._override_proxy(proxy_id, status, reason=reason, actor=actor, pin_for=pin_for)
         )
+
+    async def disable(self, proxy_id: UUID, *, reason: str, actor: str, unbind: bool = False) -> Proxy:
+        """Выключить прокси: он не выдаётся, автоматика его не трогает; статус здоровья остаётся.
+
+        Привязанные identity не выдаются, пока прокси выключен, и остаются привязанными при любой
+        `on_proxy_down`; `unbind=True` отвязывает их в той же транзакции. Событие `proxy.disabled`.
+        Повторное выключение ничего не меняет.
+        """
+        return Proxy.from_row(
+            await self._space._set_proxy_enabled(proxy_id, False, actor=actor, reason=reason, unbind=unbind)
+        )
+
+    async def enable(self, proxy_id: UUID, *, actor: str) -> Proxy:
+        """Включить прокси с прежним статусом здоровья; недоступному назначается перепроверка сейчас.
+
+        Событие `proxy.enabled`. Повторное включение ничего не меняет.
+        """
+        return Proxy.from_row(await self._space._set_proxy_enabled(proxy_id, True, actor=actor))
+
+    async def set_enabled_many(
+        self,
+        ids: Iterable[UUID],
+        enabled: bool,
+        *,
+        actor: str,
+        reason: str | None = None,
+        atomic: bool = False,
+    ) -> BatchResult[UUID]:
+        """Выключить или включить прокси пачкой, до 1000; для выключения причина обязательна."""
+        if not enabled:
+            actor, reason = require_actor_and_reason(actor, reason, "выключение прокси")
+
+        async def switch(handle: SpaceHandle, proxy_id: UUID) -> None:
+            await handle._set_proxy_enabled(proxy_id, enabled, actor=actor, reason=reason)
+
+        return await self._space._run_batch(ids, switch, atomic=atomic)
 
     async def override_many(
         self,

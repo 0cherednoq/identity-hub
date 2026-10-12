@@ -999,11 +999,14 @@ class PgTx(StoreTx):
             # соединяет хешем все живые аренды с сортировкой вместо обхода индекса LRU (D-209)
             live = select(lease.identity_id).where(lease.identity_id == i.id, lease.expires_at > now)
             conditions.append(~live.exists())
-        if query.proxy_wait:
+        if query.proxy_wait or query.proxy_enabled:
+            unusable: Any = PROXIES.c.enabled.is_(False)  # выключение ведёт себя как WAIT (D-224)
+            if query.proxy_wait:
+                unusable = or_(PROXIES.c.status != ProxyStatus.ALIVE, unusable)
             down = (
                 select(BINDINGS.c.identity_id)
                 .join(PROXIES, PROXIES.c.id == BINDINGS.c.proxy_id)
-                .where(BINDINGS.c.identity_id == i.id, PROXIES.c.status != ProxyStatus.ALIVE)
+                .where(BINDINGS.c.identity_id == i.id, unusable)
             )
             conditions.append(~down.exists())
         return conditions
@@ -1820,6 +1823,28 @@ class PgTx(StoreTx):
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
+    async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
+        owned = (
+            await self.execute(
+                select(PROXIES.c.id)
+                .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if owned is None:
+            return []
+        unbound = list(
+            (
+                await self.execute(
+                    delete(BINDINGS)
+                    .where(BINDINGS.c.proxy_id == proxy_id, BINDINGS.c.space_id == self.space.id)
+                    .returning(BINDINGS.c.identity_id)
+                )
+            ).scalars()
+        )
+        await self.execute(update(PROXIES).where(PROXIES.c.id == proxy_id).values(bound_count=0))
+        return unbound
+
     async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
         owned = (
             await self.execute(
@@ -1862,6 +1887,7 @@ class PgTx(StoreTx):
             PROXIES.c.space_id == self.space.id,
             PROXIES.c.pool == pool,
             PROXIES.c.status == ProxyStatus.ALIVE,
+            PROXIES.c.enabled.is_(True),
             PROXIES.c.bound_count < capacity,
         ]
         candidates = list(
@@ -1935,6 +1961,7 @@ class PgTx(StoreTx):
                         PROXIES.c.id == proxy_id,
                         PROXIES.c.space_id == self.space.id,
                         PROXIES.c.status == ProxyStatus.ALIVE,
+                        PROXIES.c.enabled.is_(True),
                         PROXIES.c.bound_count < PROXIES.c.max_identities,
                     )
                     .values(bound_count=PROXIES.c.bound_count + 1)
@@ -1969,6 +1996,7 @@ class PgTx(StoreTx):
                 ),
             ),
             or_(p.pinned_until.is_(None), p.pinned_until <= func.now()),
+            p.enabled.is_(True),  # выключенный прокси автоматика не проверяет (D-224)
         ]
         if pool is not None:
             conditions.append(p.pool == pool)
@@ -1985,6 +2013,7 @@ class PgTx(StoreTx):
         pool: str | None,
         status: str | None,
         capacity: str | None,
+        enabled: bool | None = None,
     ) -> list[ProxyReadRow]:
         binding_counts = (
             select(BINDINGS.c.proxy_id, func.count().label("bound_count"))
@@ -2023,6 +2052,10 @@ class PgTx(StoreTx):
                 bound.label("bound_count"),
                 func.coalesce(lease_counts.c.in_lease_count, 0).label("in_lease_count"),
                 PROXIES.c.created_at,
+                PROXIES.c.enabled,
+                PROXIES.c.disabled_reason,
+                PROXIES.c.disabled_by,
+                PROXIES.c.disabled_at,
             )
             .outerjoin(binding_counts, binding_counts.c.proxy_id == PROXIES.c.id)
             .outerjoin(lease_counts, lease_counts.c.proxy_id == PROXIES.c.id)
@@ -2032,6 +2065,8 @@ class PgTx(StoreTx):
             stmt = stmt.where(PROXIES.c.pool == pool)
         if status is not None:
             stmt = stmt.where(PROXIES.c.status == status)
+        if enabled is not None:
+            stmt = stmt.where(PROXIES.c.enabled.is_(enabled))
         if capacity == "available":
             stmt = stmt.where(bound < PROXIES.c.max_identities)
         elif capacity == "full":
@@ -2110,6 +2145,10 @@ class PgTx(StoreTx):
                         bound_count.label("bound_count"),
                         in_lease_count.label("in_lease_count"),
                         PROXIES.c.created_at,
+                        PROXIES.c.enabled,
+                        PROXIES.c.disabled_reason,
+                        PROXIES.c.disabled_by,
+                        PROXIES.c.disabled_at,
                     ).where(PROXIES.c.space_id == self.space.id, PROXIES.c.id == proxy_id)
                 )
             )

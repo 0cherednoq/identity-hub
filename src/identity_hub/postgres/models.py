@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Computed,
     DateTime,
@@ -945,6 +946,11 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
     pending_observation: Mapped[str | None] = mapped_column(
         String(16)
     )  # confirm_leaving (D-116, миграция 0003)
+    # намерение оператора, отдельное от здоровья: выключенный прокси не выдаётся (D-224, 0025)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    disabled_reason: Mapped[str | None] = mapped_column(Text)
+    disabled_by: Mapped[str | None] = mapped_column(String(128))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     max_identities: Mapped[int] = mapped_column(Integer, default=3)
     bound_count: Mapped[int] = mapped_column(
         Integer, default=0, server_default=text("0")

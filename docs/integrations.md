@@ -103,6 +103,8 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
   ```
 
   Число аккаунтов на прокси считать не нужно: оно уже есть в `proxies.c.bound_count`.
+  Выключенные оператором прокси — `proxies.c.enabled` и `disabled_reason`, `disabled_by`,
+  `disabled_at`.
 - **Отдельная схема.** При `IdentityHub(db_schema="identity_hub")` read-таблицы получают эту
   схему явно, поэтому запросы приложения не требуют `schema_translate_map`. Если такой select
   передаётся в `among=`, библиотека выполняет его со своей картой `{None: db_schema}`: таблицы

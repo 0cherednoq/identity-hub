@@ -413,6 +413,8 @@ class CandidateQuery:
     exclude: frozenset[UUID] = frozenset()
     shared: bool = False  # FR-6.6: живая аренда не исключает аккаунт
     proxy_wait: bool = False  # FR-8.3 on_proxy_down=wait: аккаунт с прокси не в alive недоступен
+    # sticky-пул: аккаунт, привязанный к выключенному прокси, недоступен при любой политике (D-224)
+    proxy_enabled: bool = False
     lifecycles: frozenset[str] = frozenset({"ready"})
     auth_states: frozenset[str] | None = None  # задано — вместо needs_auth (выборка для входа, FR-5.4)
 
@@ -581,6 +583,16 @@ class ProxyRow:
     created_at: datetime
     secret: EncryptedPayload
     fingerprint_key_id: str | None = None  # NULL — SHA-256 до миграции 0018
+    # намерение оператора (D-224): выключенный прокси не выдаётся и не трогается автоматикой
+    enabled: bool = True
+    disabled_reason: str | None = None
+    disabled_by: str | None = None
+    disabled_at: datetime | None = None
+
+    @property
+    def issuable(self) -> bool:
+        """Правило выдачи: прокси включён оператором и жив."""
+        return self.enabled and self.status == "alive"
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,6 +617,10 @@ class ProxyReadRow:
     bound_count: int
     in_lease_count: int
     created_at: datetime
+    enabled: bool = True
+    disabled_reason: str | None = None
+    disabled_by: str | None = None
+    disabled_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1399,6 +1415,10 @@ class StoreTx(ABC):
         """Записать пересчитанный отпечаток; `False` — прокси нет или отпечаток занят другим прокси."""
 
     @abstractmethod
+    async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
+        """Снять все привязки аккаунтов к прокси; вернуть id отвязанных аккаунтов."""
+
+    @abstractmethod
     async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
         """Удалить прокси вместе с привязками; вернуть id отвязанных аккаунтов. `None` — прокси нет."""
 
@@ -1442,6 +1462,7 @@ class StoreTx(ABC):
         pool: str | None,
         status: str | None,
         capacity: str | None,
+        enabled: bool | None = None,
     ) -> list[ProxyReadRow]: ...
 
     @abstractmethod
