@@ -147,7 +147,24 @@ flowchart TD
 | `sticky=True, REBIND` | Смена IP допустима, но постоянный IP предпочтителен |
 | `sticky=False` | IP не важен (парсинг публичных данных); ёмкость прокси в этом режиме не ограничивается |
 
-Ручная перепривязка: `await space.proxies.rebind(identity_id, new_proxy_id, reason="...", actor="admin")`.
+Ручная перепривязка и отвязка:
+
+```python
+await space.proxies.rebind(identity_id, new_proxy_id, reason="...", actor="admin")
+await space.proxies.unbind(identity_id, reason="...", actor="admin")     # False — привязки не было
+moved = await space.proxies.rebind_many(
+    {identity_a: proxy_1, identity_b: proxy_1, identity_c: proxy_2}, reason="перенос пула", actor="admin"
+)
+```
+
+- `unbind` снимает привязку и освобождает место на прокси; при следующей аренде аккаунт
+  получит прокси по политике сервиса заново.
+- `rebind_many` — до 1000 пар одной транзакцией, результат — `BatchResult`. Отказ по аккаунту
+  не отменяет остальные: `no_resource_available` — на прокси нет места, `validation_error` —
+  прокси не `alive` или выключен, `not_found` — нет аккаунта или прокси. `atomic=True` отменяет
+  всю пачку. Ёмкость прокси не превышается и при параллельных пачках.
+- Все три команды пишут `proxy.binding.changed` на каждый аккаунт; у отвязки `to_proxy_id` —
+  `null`.
 
 ## Здоровье прокси
 

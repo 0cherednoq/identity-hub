@@ -1415,6 +1415,10 @@ class StoreTx(ABC):
         """Записать пересчитанный отпечаток; `False` — прокси нет или отпечаток занят другим прокси."""
 
     @abstractmethod
+    async def unbind_identity(self, identity_id: UUID) -> UUID | None:
+        """Снять привязку аккаунта и освободить место на прокси; вернуть id прокси или `None`."""
+
+    @abstractmethod
     async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
         """Снять все привязки аккаунтов к прокси; вернуть id отвязанных аккаунтов."""
 

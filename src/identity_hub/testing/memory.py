@@ -1253,6 +1253,15 @@ class MemoryTx(StoreTx):
         self.state.proxies[proxy_id] = replace(row, fingerprint=fingerprint, fingerprint_key_id=key_id)
         return True
 
+    async def unbind_identity(self, identity_id: UUID) -> UUID | None:
+        if self._own(identity_id) is None:
+            return None
+        proxy_id = self.state.bindings.pop(identity_id, None)
+        if proxy_id is not None:
+            self.state.binding_times.pop(identity_id, None)
+            await self.adjust_proxy_load(proxy_id, -1)
+        return proxy_id
+
     async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
         if await self.get_proxy(proxy_id) is None:
             return []

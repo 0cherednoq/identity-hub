@@ -8,6 +8,10 @@
 
 ### Added
 
+- `proxies.unbind(identity_id, reason=, actor=)` — снять привязку аккаунта к прокси, и
+  `proxies.rebind_many({identity_id: proxy_id}, reason=, actor=, atomic=)` → `BatchResult` с
+  отказами по аккаунтам: нет места, прокси не `alive` или выключен (`C1.5`). Событие
+  `proxy.binding.changed` — на каждый аккаунт.
 - Выключение прокси оператором (`C1.4a`, `D-224`, миграция `0025`): `proxies.disable(proxy_id,
   reason=, actor=, unbind=)`, `proxies.enable(proxy_id, actor=)`, `proxies.set_enabled_many(ids,
   enabled, actor=, reason=)`, фильтр `proxies.list(enabled=)`. Флаг `enabled` независим от

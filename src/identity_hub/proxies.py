@@ -755,6 +755,32 @@ class ProxiesMixin(SpaceBase):
             data["from_pool"] = previous
         await self._emit(tx, EventDraft("proxy.updated", actor=actor, proxy_id=row.id, data=data))
 
+    async def _unbind_identity(self, identity_id: UUID, *, reason: str, actor: str) -> bool:
+        """Снять sticky-привязку аккаунта; `False` — привязки не было. Место на прокси освобождается."""
+        actor, reason = require_actor_and_reason(actor, reason, "отвязка прокси")
+        async with self._tx() as tx:
+            identity = await self._identity(tx, identity_id)
+            previous = await tx.unbind_identity(identity_id)
+            if previous is None:
+                return False
+            proxy = await tx.get_proxy(previous)
+            await self._emit(
+                tx,
+                EventDraft(
+                    "proxy.binding.changed",
+                    actor=actor,
+                    service=identity.service,
+                    identity_id=identity_id,
+                    data={
+                        "from_proxy_id": str(previous),
+                        "to_proxy_id": None,
+                        "reason": reason,
+                        "pool": proxy.pool if proxy else None,
+                    },
+                ),
+            )
+            return True
+
     async def _rebind_proxy(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
         """Move an account's sticky binding without exceeding target capacity."""
         if not reason.strip():

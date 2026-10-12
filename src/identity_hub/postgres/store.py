@@ -1823,6 +1823,18 @@ class PgTx(StoreTx):
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
+    async def unbind_identity(self, identity_id: UUID) -> UUID | None:
+        proxy_id: UUID | None = (
+            await self.execute(
+                delete(BINDINGS)
+                .where(BINDINGS.c.identity_id == identity_id, BINDINGS.c.space_id == self.space.id)
+                .returning(BINDINGS.c.proxy_id)
+            )
+        ).scalar_one_or_none()
+        if proxy_id is not None:
+            await self.adjust_proxy_load(proxy_id, -1)
+        return proxy_id
+
     async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
         owned = (
             await self.execute(

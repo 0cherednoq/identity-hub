@@ -489,3 +489,28 @@ class Proxies(Namespace):
     async def rebind(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
         """Перепривязать identity к другому прокси (sticky)."""
         return await self._space._rebind_proxy(identity_id, proxy_id, reason=reason, actor=actor)
+
+    async def rebind_many(
+        self, bindings: Mapping[UUID, UUID], *, reason: str, actor: str, atomic: bool = False
+    ) -> BatchResult[UUID]:
+        """Перепривязать пачкой, до 1000: `{identity_id: proxy_id}` одной транзакцией.
+
+        Отказ по identity — нет места (`no_resource_available`), прокси не `alive` или выключен
+        (`validation_error`), нет identity или прокси (`not_found`) — не отменяет остальные;
+        `atomic=True` отменяет всё. Событие `proxy.binding.changed` — на каждую перенесённую.
+        """
+        actor, reason = require_actor_and_reason(actor, reason, "перепривязка прокси")
+        targets = dict(bindings)
+
+        async def rebind(handle: SpaceHandle, identity_id: UUID) -> None:
+            await handle._rebind_proxy(identity_id, targets[identity_id], reason=reason, actor=actor)
+
+        return await self._space._run_batch(targets, rebind, atomic=atomic)
+
+    async def unbind(self, identity_id: UUID, *, reason: str, actor: str) -> bool:
+        """Снять привязку identity к прокси; `False` — привязки не было.
+
+        Место на прокси освобождается; следующая аренда выберет прокси по политике сервиса.
+        Событие `proxy.binding.changed` с `to_proxy_id=None`.
+        """
+        return await self._space._unbind_identity(identity_id, reason=reason, actor=actor)
