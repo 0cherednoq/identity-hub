@@ -1196,6 +1196,13 @@ class MemoryTx(StoreTx):
         self.state.proxy_load[row.id] = 0
         return row.id, True
 
+    async def insert_proxies(self, rows: Sequence[NewProxy]) -> list[tuple[ProxyRow, bool]]:
+        results: list[tuple[ProxyRow, bool]] = []
+        for row in rows:
+            proxy_id, created = await self.insert_proxy(row)
+            results.append((self.state.proxies[proxy_id], created))
+        return results
+
     async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None:
         proxy = self.state.proxies.get(proxy_id)
         return proxy if proxy is not None and proxy.space_id == self.space.id else None

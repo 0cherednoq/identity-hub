@@ -7,22 +7,24 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub.api._base import Namespace
+from identity_hub.api.batch import MAX_BATCH
 from identity_hub.api.identities import OnConflict, Page
 from identity_hub.enums import ProxyStatus
 from identity_hub.errors import ValidationFailed
+from identity_hub.proxies import parse_proxy_url
 from identity_hub.read.search import decode_cursor, encode_cursor
-from identity_hub.store.base import ProxyReadRow, ProxyRow
+from identity_hub.store.base import NewProxy, ProxyReadRow, ProxyRow
 
 if TYPE_CHECKING:
     from identity_hub.proxies import ProxyChecker, ProxyHealthPolicy
 
-__all__ = ["Proxies", "Proxy", "ProxyCreateManyResult", "RecheckReport"]
+__all__ = ["Proxies", "Proxy", "ProxyCreate", "ProxyCreateManyResult", "ProxyCreated", "RecheckReport"]
 
 MAX_PROXY_PAGE = 200
 
@@ -72,11 +74,49 @@ class RecheckReport:
 
 
 @dataclass(frozen=True, slots=True)
+class ProxyCreate:
+    """Прокси для `proxies.create_many`: адрес по частям, необязательные свой `id` и ёмкость.
+
+    `max_identities=None` — значение из параметра `create_many`. Пароль не попадает в `repr`.
+    """
+
+    scheme: str
+    host: str
+    port: int
+    username: str | None = None
+    password: str | None = field(default=None, repr=False)
+    max_identities: int | None = None
+    id: UUID | None = None
+
+    @classmethod
+    def from_url(cls, url: str, *, id: UUID | None = None, max_identities: int | None = None) -> ProxyCreate:
+        """Запись из URL `схема://логин:пароль@хост:порт`; ошибка разбора — `ValidationFailed`."""
+        parsed = parse_proxy_url(url)
+        return cls(
+            parsed.scheme, parsed.host, parsed.port, parsed.username, parsed.password, max_identities, id
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyCreated:
+    """Исход одной записи `create_many`: место во входе, id прокси и создан ли он этой записью."""
+
+    index: int
+    id: UUID
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ProxyCreateManyResult:
-    """Итог `proxies.create_many`: новые прокси и id уже существовавших (при `on_conflict="skip"`)."""
+    """Итог `proxies.create_many`.
+
+    `items` — исход каждой записи в порядке входа. `created` — новые прокси, `skipped` — id уже
+    существовавших и повторов внутри пачки (при `on_conflict="skip"`).
+    """
 
     created: list[Proxy]
     skipped: list[UUID]
+    items: list[ProxyCreated] = field(default_factory=list)
 
 
 class Proxies(Namespace):
@@ -170,25 +210,42 @@ class Proxies(Namespace):
 
     async def create_many(
         self,
-        urls: Iterable[str],
+        items: Iterable[str | ProxyCreate],
         *,
         group: str,
         max_identities: int = 3,
         on_conflict: OnConflict | str = OnConflict.FAIL,
     ) -> ProxyCreateManyResult:
-        """Атомарно добавить прокси одной транзакцией; `on_conflict` — `OnConflict.FAIL` или `SKIP`."""
+        """Атомарно добавить прокси одной транзакцией: URL и `ProxyCreate` вперемешку, до 1000.
+
+        `on_conflict` — `OnConflict.FAIL` (существующий адрес или повтор в пачке откатывает всё)
+        или `SKIP`. `result.items` сопоставляет каждую запись входа с id прокси. Число запросов
+        не зависит от размера пачки.
+        """
         try:
             on_conflict = OnConflict(on_conflict)
         except ValueError:
             raise ValidationFailed("on_conflict: fail или skip") from None
-        rows = [
-            self._space._prepare_proxy(url, group, None, None, None, None, None, max_identities, None)
-            for url in urls
-        ]
+        rows = [self._prepare(item, group, max_identities) for item in items]
+        if len(rows) > MAX_BATCH:
+            raise ValidationFailed(f"пачка: не больше {MAX_BATCH} элементов")
         results = await self._space._create_proxies(rows, fail_existing=on_conflict is OnConflict.FAIL)
         return ProxyCreateManyResult(
             [Proxy.from_row(row) for row, is_new in results if is_new],
             [row.id for row, is_new in results if not is_new],
+            [ProxyCreated(index, row.id, is_new) for index, (row, is_new) in enumerate(results)],
+        )
+
+    def _prepare(self, item: str | ProxyCreate, group: str, max_identities: int) -> NewProxy:
+        if isinstance(item, str):
+            return self._space._prepare_proxy(item, group, None, None, None, None, None, max_identities, None)
+        if not isinstance(item, ProxyCreate):
+            raise ValidationFailed("прокси: нужен URL или ProxyCreate")
+        if item.password and not item.username:
+            raise ValidationFailed("прокси: пароль без логина не задаётся")
+        capacity = max_identities if item.max_identities is None else item.max_identities
+        return self._space._prepare_proxy(
+            None, group, item.scheme, item.host, item.port, item.username, item.password, capacity, item.id
         )
 
     # ------------------------------------------------------------------ изменение и удаление

@@ -1357,6 +1357,14 @@ class StoreTx(ABC):
         """(id, создан). Дубликат по fingerprint или `aliases` в пространстве — существующий id (FR-8.1)."""
 
     @abstractmethod
+    async def insert_proxies(self, rows: Sequence[NewProxy]) -> list[tuple[ProxyRow, bool]]:
+        """Вставить пачку прокси; результат — в порядке входа: (строка, создана ли этой записью).
+
+        Адрес, который уже есть в пространстве или встретился в пачке раньше, даёт существующую
+        строку и `False`. Число запросов не зависит от размера пачки.
+        """
+
+    @abstractmethod
     async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None: ...
 
     @abstractmethod

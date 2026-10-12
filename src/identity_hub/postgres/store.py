@@ -1690,6 +1690,60 @@ class PgTx(StoreTx):
         ).scalar_one()
         return existing, False
 
+    async def insert_proxies(self, rows: Sequence[NewProxy]) -> list[tuple[ProxyRow, bool]]:
+        if not rows:
+            return []
+        known = await self._proxies_by_fingerprint(
+            {fp for row in rows for fp in (row.fingerprint, *row.aliases)}
+        )
+        pending: dict[str, NewProxy] = {}
+        for row in rows:
+            if not any(fp in known for fp in (row.fingerprint, *row.aliases)):
+                pending.setdefault(row.fingerprint, row)  # повтор адреса в пачке: первая запись
+        inserted: dict[str, ProxyRow] = {}
+        if pending:
+            stmt = (
+                insert(PROXIES)
+                .values(
+                    [
+                        {
+                            "id": row.id,
+                            "space_id": self.space.id,
+                            "pool": row.pool,
+                            "scheme": row.scheme,
+                            "host": row.host,
+                            "port": row.port,
+                            "fingerprint": row.fingerprint,
+                            "fingerprint_key_id": row.fingerprint_key_id,
+                            "max_identities": row.max_identities,
+                            **row.secret.columns(),
+                        }
+                        for row in pending.values()
+                    ]
+                )
+                .on_conflict_do_nothing(index_elements=[PROXIES.c.space_id, PROXIES.c.fingerprint])
+                .returning(PROXIES)
+            )
+            inserted = {r["fingerprint"]: _proxy_row(r) for r in (await self.execute(stmt)).mappings()}
+            raced = pending.keys() - inserted.keys()
+            if raced:  # адрес вставила параллельная транзакция между чтением и вставкой
+                known.update(await self._proxies_by_fingerprint(raced))
+        results: list[tuple[ProxyRow, bool]] = []
+        for row in rows:
+            created = inserted.get(row.fingerprint)
+            if created is not None:
+                results.append((created, pending[row.fingerprint] is row))
+            else:
+                found = next(known[fp] for fp in (row.fingerprint, *row.aliases) if fp in known)
+                results.append((found, False))
+        return results
+
+    async def _proxies_by_fingerprint(self, fingerprints: Iterable[str]) -> dict[str, ProxyRow]:
+        stmt = select(PROXIES).where(
+            PROXIES.c.space_id == self.space.id, _any_of(PROXIES.c.fingerprint, sorted(fingerprints))
+        )
+        return {r["fingerprint"]: _proxy_row(r) for r in (await self.execute(stmt)).mappings()}
+
     async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None:
         row = (
             (

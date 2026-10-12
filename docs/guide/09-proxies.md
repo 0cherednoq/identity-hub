@@ -26,6 +26,31 @@ proxy = await space.proxies.get(proxy.id)                                  # б�
 - `max_identities` — сколько аккаунтов можно **закрепить** за прокси.
 - Прокси из `ImportRecord.proxy` при импорте добавляются в пул `proxy_policy.pool` сервиса.
 
+Пачка из своей таблицы — структурными записями, со своим `id` и сопоставлением результата:
+
+```python
+from identity_hub import ProxyCreate
+
+result = await space.using(db).proxies.create_many(
+    [
+        ProxyCreate("http", "gate.example.com", 8000, username="u1", password="p1", id=row1.id),
+        ProxyCreate("http", "gate.example.com", 8000, username="u2", password="p2", id=row2.id),
+        "socks5://u:p@1.2.3.7:1080",                      # URL и записи можно смешивать
+    ],
+    group="residential-de",
+    on_conflict="skip",
+)
+for item in result.items:                                 # в порядке входа
+    print(item.index, item.id, item.created)
+```
+
+- `result.items[i]` — исход записи `i`: id прокси и создан ли он этой записью. Адрес, который
+  уже есть в пространстве или встретился в пачке раньше, даёт id существующего прокси и
+  `created=False`; при `on_conflict="fail"` (по умолчанию) такая пачка откатывается целиком.
+- `ProxyCreate.id` задаёт id прокси — удобно, когда источник правды о прокси — таблица
+  приложения. `max_identities` записи перекрывает значение параметра.
+- В пачке до 1000 записей; число запросов к БД от её размера не зависит.
+
 Изменить и удалить:
 
 ```python

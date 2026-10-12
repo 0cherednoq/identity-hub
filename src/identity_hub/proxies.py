@@ -237,13 +237,21 @@ class ProxiesMixin(SpaceBase):
     async def _create_proxies(
         self, rows: list[NewProxy], *, fail_existing: bool = False
     ) -> list[tuple[ProxyRow, bool]]:
-        """Вставить и вернуть строки, прочитанные в той же транзакции.
+        """Вставить пачкой и вернуть строки из той же транзакции, в порядке входа.
 
         Своя транзакция чтения под `using(session)` незафиксированную вставку не видит (C0.1).
+        Число запросов не зависит от размера пачки (C1.1).
         """
         async with self._tx() as tx:
-            results = await self._insert_into(tx, rows, fail_existing)
-            return [(await self._proxy(tx, proxy_id), created) for proxy_id, created in results]
+            results = await tx.insert_proxies(rows)
+            existing = [
+                f"{row.scheme}://{row.host}:{row.port}"
+                for row, (_found, created) in zip(rows, results, strict=True)
+                if not created
+            ]
+            if fail_existing and existing:
+                raise AlreadyExists("proxy", ", ".join(existing))
+            return results
 
     @staticmethod
     async def _insert_into(tx: StoreTx, rows: list[NewProxy], fail_existing: bool) -> list[tuple[UUID, bool]]:

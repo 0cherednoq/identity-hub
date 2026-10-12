@@ -10,7 +10,13 @@ from identity_hub.api.identities import (
     OnConflict,
     Page,
 )
-from identity_hub.api.proxies import Proxy, ProxyCreateManyResult, RecheckReport
+from identity_hub.api.proxies import (
+    Proxy,
+    ProxyCreate,
+    ProxyCreated,
+    ProxyCreateManyResult,
+    RecheckReport,
+)
 from identity_hub.api.secrets import SecretRef
 from identity_hub.api.sync import RefreshResult
 from identity_hub.auth import LoginOutcome, LoginReport
@@ -189,7 +195,9 @@ __all__ = [
     "ProbeResult",
     "Probes",
     "Proxy",
+    "ProxyCreate",
     "ProxyCreateManyResult",
+    "ProxyCreated",
     "ProxyDownPolicy",
     "ProxyHealthPolicy",
     "ProxyPolicy",
