@@ -6,12 +6,10 @@
 
 ## [Unreleased]
 
-### Changed
+## [1.0.0a2] - 2026-10-12
 
-- Теги принимают буквы и цифры любого письма, в том числе кириллицу, и знаки `_ . : -`
-  (`C3.2`); раньше — только латиница. Длина — до 64 символов, регистр значим. Теги приводятся к
-  форме Unicode NFC при записи, в фильтрах поиска и в отборе пула. Прежние теги остаются
-  допустимыми.
+Второй альфа-релиз: доработки по итогам встраивания в приложение (очереди `N` и `C`). Ревизия
+схемы — `0031`: перед обновлением примените `identity-hub migrate`.
 
 ### Added
 
@@ -89,30 +87,6 @@
 - Read-схема: `hub.read.proxy_bindings` (`identity_id`, `proxy_id`, `space_id`, `bound_at`) —
   sticky-привязки аккаунт ↔ прокси для join со списком аккаунтов (`C3.1`). Версия read-схемы
   не меняется.
-
-### Fixed
-
-- Команды прокси под `space.using(session)` (`C0.1`): `proxies.create`, `ensure`, `create_many`,
-  `replace_credentials` и `move` возвращают строку, прочитанную в транзакции записи. Раньше
-  результат читался отдельной транзакцией: `create` до фиксации падал с `NotFound`, `move`
-  возвращал прежнюю группу.
-
-## [1.0.0a1] - 2026-10-12
-
-Первый публичный альфа-релиз. API может меняться между альфа-версиями. Изменения ниже
-описаны относительно внутреннего среза от 2026-09-30.
-
-Исправлены 118 из 125 находок предрелизного ревью; что чем закреплено — раздел «Статус
-исправлений» в `docs/review/PRE-RELEASE-REVIEW.md`, оставшиеся 7 описаны в
-[ограничениях](docs/guide/limitations.md#известные-дефекты).
-
-### Added
-
-- Очередь операций провайдера (`IMP-11`, `D-220`, миграция `0024`): машина состояний и
-  `RetryPolicy` в `identity_hub.domain.provider_operations`; Store `enqueue_provider_operation`,
-  `claim_provider_operations`, `apply_provider_operation`, `recover_provider_operations`,
-  `cancel_provider_operation`. Гарантия — at-least-once попытка. `hub.start()` требует ревизию
-  схемы `0024`.
 - GCRA-троттлинг (`N4.1`): `Service(throttles={"api": Throttle(...)})` и
   `await lease.throttle(name, wait=...)`; эксклюзивный держатель считает без запроса на вызов,
   а миграция `0031` сохраняет TAT между арендами.
@@ -163,6 +137,37 @@
   держатель, чья аренда истекла до heartbeat, получает `LeaseExpired` с причиной `expired`, а не
   `LeaseRevoked`. Контракт хранилища: `StoreTx.extend_lease` и `Store.renew_leases` возвращают
   `LeaseRenewal(expires_at, end_reason)` вместо `datetime | None`.
+
+### Changed
+
+- Теги принимают буквы и цифры любого письма, в том числе кириллицу, и знаки `_ . : -`
+  (`C3.2`); раньше — только латиница. Длина — до 64 символов, регистр значим. Теги приводятся к
+  форме Unicode NFC при записи, в фильтрах поиска и в отборе пула. Прежние теги остаются
+  допустимыми.
+
+### Fixed
+
+- Команды прокси под `space.using(session)` (`C0.1`): `proxies.create`, `ensure`, `create_many`,
+  `replace_credentials` и `move` возвращают строку, прочитанную в транзакции записи. Раньше
+  результат читался отдельной транзакцией: `create` до фиксации падал с `NotFound`, `move`
+  возвращал прежнюю группу.
+
+## [1.0.0a1] - 2026-10-12
+
+Первый публичный альфа-релиз. API может меняться между альфа-версиями. Изменения ниже
+описаны относительно внутреннего среза от 2026-09-30.
+
+Исправлены 118 из 125 находок предрелизного ревью; что чем закреплено — раздел «Статус
+исправлений» в `docs/review/PRE-RELEASE-REVIEW.md`, оставшиеся 7 описаны в
+[ограничениях](docs/guide/limitations.md#известные-дефекты).
+
+### Added
+
+- Очередь операций провайдера (`IMP-11`, `D-220`, миграция `0024`): машина состояний и
+  `RetryPolicy` в `identity_hub.domain.provider_operations`; Store `enqueue_provider_operation`,
+  `claim_provider_operations`, `apply_provider_operation`, `recover_provider_operations`,
+  `cancel_provider_operation`. Гарантия — at-least-once попытка. `hub.start()` требует ревизию
+  схемы `0024`.
 - Режимы записи сессии (`IMP-10`, `D-219`): `lease.save_session(..., mode=)` и
   `secrets.replace_session(..., mode=)` — `in_place` (по умолчанию) или `replace` (новая запись,
   прежняя в истории); `secrets.revoke_session` — отзыв без замены. Вход сохраняет сессию в режиме

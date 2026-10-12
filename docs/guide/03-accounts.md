@@ -176,7 +176,7 @@ if outcome is LoginOutcome.SUCCEEDED:
     await space.identities.activate(identity.id, actor="onboarding")
 ```
 
-Проверить аккаунт пробой (`sync.refresh`) до `activate` в 1.0.0a1 нельзя — см.
+Проверить аккаунт пробой (`sync.refresh`) до `activate` в 1.0.0a2 нельзя — см.
 [ограничения](limitations.md).
 
 
