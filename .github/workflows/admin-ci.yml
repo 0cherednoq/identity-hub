@@ -88,6 +88,10 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # Эталоны *-linux.png сняты в этом образе: шрифты раннера дают другие размеры и пиксели.
+    # Версия образа должна совпадать с @playwright/test в package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -95,8 +99,6 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: admin/uv.lock
-      - uses: actions/setup-python@v6
-        with:
           python-version: "3.14"
       - uses: actions/setup-node@v6
         with:
@@ -105,8 +107,6 @@ jobs:
           cache-dependency-path: admin/frontend/package-lock.json
       - run: uv sync --project admin --locked --all-groups
       - run: npm ci --prefix admin/frontend
-      - run: npx playwright install --with-deps chromium
-        working-directory: admin/frontend
       - run: npm run test:e2e --prefix admin/frontend
       - name: Upload Playwright diagnostics
         if: failure()
