@@ -19,9 +19,14 @@ Python-библиотека управления парком аккаунтов
    `docs/plan/INTEGRATION-PLAN.md`, прогресс `docs/plan/INTEGRATION-PROGRESS.md`, источник
    требований — `docs/plan/ISSUES-INTEGRATION.md` (задачи 1–7; задача 8 не выполняется).
    Идентификаторы задач — `N<фаза>.<номер>`, коммит закрытия — `feat(<ID>): <кратко>`.
+4. **Доработки по запросам пульта** (очередь `C`, решение `D-224`): план
+   `docs/plan/CONSOLE-PLAN.md`, прогресс `docs/plan/CONSOLE-PROGRESS.md`, источник
+   требований — `docs/isue/ISSUES-identity-hub.md` (пункты 1–9 и 13; отклонённое — в
+   `docs/plan/CONSOLE-REJECTED.md`). Идентификаторы задач — `C<фаза>.<номер>`, коммит закрытия —
+   `feat(<ID>): <кратко>` (`fix(C0.1): …` для дефекта).
 
 Пока в `RELEASE-FIXES-PROGRESS.md` есть `in_progress` или `todo`, активна очередь `F`. Когда она
-закрыта полностью — очередь `I`. Когда закрыта и она — очередь `N`. Исходный план и его история остаются в `PLAN.md` и `PROGRESS.md`;
+закрыта полностью — очередь `I`. Когда закрыта и она — очередь `N`, за ней — очередь `C`. Исходный план и его история остаются в `PLAN.md` и `PROGRESS.md`;
 к ним возвращаться только при появлении новых незавершённых задач.
 
 Каждая сессия (в том числе запуск через `/loop`) выполняет цикл для активного плана:
@@ -71,6 +76,7 @@ Python-библиотека управления парком аккаунтов
 - Исправления перед публикацией: `python docs/plan/release_fixes_progress_tool.py start|check|note|done|status|show ...`.
 - Улучшения: `python docs/plan/improvements_progress_tool.py start|check|note|done|status|show ...`.
 - Доработки по итогам встраивания: `python docs/plan/integration_progress_tool.py start|check|note|done|status|show ...`.
+- Доработки по запросам пульта: `python docs/plan/console_progress_tool.py start|check|note|done|status|show ...`.
 
 Шаги 3, 4 и 6 делать утилитой активного плана, чтобы формат таблицы не ломался.
 
