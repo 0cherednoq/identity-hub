@@ -319,6 +319,11 @@ identity = await space.identities.update(
 ```python
 await space.identities.activate(identity_id, actor="onboarding")                 # → ready
 await space.identities.retire(identity_id, actor="ops", reason="продан")          # → retired
+
+# пачкой, до 1000 аккаунтов одной транзакцией
+result = await space.identities.retire_many(ids, actor="ops", reason="продан")
+result.applied                                   # id изменённых
+[(r.key, r.code) for r in result.rejected]       # отказы: not_found, invalid_transition, …
 await space.identities.activate(identity_id, actor="ops", reason="вернули")       # retired → ready, причина обязательна
 await space.identities.restore_standing(identity_id, actor="admin", reason="ложный бан")
 await space.identities.override(identity_id, Override("standing", "", "banned", reason="жалоба", actor="admin"))

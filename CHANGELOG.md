@@ -8,6 +8,10 @@
 
 ### Added
 
+- Пакетные команды аккаунтов (`C2.1`): `identities.activate_many`, `retire_many`,
+  `restore_standing_many`, `delete_many` → `BatchResult`. Пачка до 1000 аккаунтов идёт одной
+  транзакцией (под `space.using(session)` — в транзакции приложения); событие и ревизия — на
+  каждый аккаунт; отказ одного не отменяет остальные, `atomic=True` отменяет всю пачку.
 - `proxies.unbind(identity_id, reason=, actor=)` — снять привязку аккаунта к прокси, и
   `proxies.rebind_many({identity_id: proxy_id}, reason=, actor=, atomic=)` → `BatchResult` с
   отказами по аккаунтам: нет места, прокси не `alive` или выключен (`C1.5`). Событие

@@ -245,7 +245,8 @@ await space.proxies.recheck_due(checker)
 
 ### Пакетные команды
 
-Команды над множеством (`proxies.delete_many`, `proxies.override_many`) возвращают
+Команды над множеством (`identities.activate_many`, `retire_many`, `restore_standing_many`,
+`delete_many`; `proxies.delete_many`, `override_many`, `set_enabled_many`, `rebind_many`) возвращают
 `BatchResult`: `applied` — ключи применённых сущностей, `rejected` — список `BatchRejection`
 (`key`, `code`, `message`). Пачка — одна транзакция, до 1000 ключей; ключи блокируются по
 возрастанию. Параметр `atomic=True` отменяет пачку при первом отказе.

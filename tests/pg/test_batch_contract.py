@@ -70,3 +70,33 @@ async def test_batch_joins_user_transaction(
     async with sessionmaker() as user, user.begin():
         await space.using(user)._run_batch(ids, _mover("dc", bad=ids[1]))
     assert [(await space.proxies.get(proxy_id)).group for proxy_id in ids] == ["dc", "res", "dc"]
+
+
+async def test_identity_batch_joins_user_transaction(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """C2.1: пакетные команды аккаунтов под `using(session)` откатываются вместе с приложением."""
+    from identity_hub import IdentityCreate, Lifecycle
+
+    ids = [
+        (await space.identities.create(IdentityCreate(service="fake_tg", external_ref=f"+{n}"), actor="t")).id
+        for n in range(3)
+    ]
+    async with sessionmaker() as session:
+        before = (await session.execute(select(func.count()).select_from(EventRecord))).scalar_one()
+
+    async with sessionmaker() as user:
+        await user.begin()
+        identities = space.using(user).identities
+        activated = await identities.activate_many(ids[:2], actor="op")
+        deleted = await identities.delete_many(ids[2:], actor="op")
+        assert sorted(activated.applied) == sorted(ids[:2]) and deleted.applied == ids[2:]
+        await user.rollback()
+
+    assert {(await space.identities.get(i)).lifecycle for i in ids} == {Lifecycle.PROVISIONING}
+    async with sessionmaker() as session:
+        assert (await session.execute(select(func.count()).select_from(EventRecord))).scalar_one() == before
+
+    async with sessionmaker() as user, user.begin():
+        await space.using(user).identities.activate_many(ids, actor="op")
+    assert {(await space.identities.get(i)).lifecycle for i in ids} == {Lifecycle.READY}

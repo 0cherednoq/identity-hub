@@ -12,7 +12,9 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from identity_hub._space import require_actor_and_reason
 from identity_hub.api._base import Namespace
+from identity_hub.api.batch import BatchResult
 from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.query import SearchQuery, parse_query
 from identity_hub.domain.regions import RegionDecision
@@ -24,6 +26,7 @@ from identity_hub.state import DEFAULT_SLOT, Override
 from identity_hub.store.base import IdentityRow, StoreTx
 
 if TYPE_CHECKING:
+    from identity_hub.hub import SpaceHandle
     from identity_hub.read.cards import IdentityCard
 
 __all__ = [
@@ -531,6 +534,56 @@ class Identities(Namespace):
         """Снять закрепление региона, не меняя состояния."""
         space = self._at(identity_id, expected_revision)
         return await space._unpin(identity_id, region, key, actor=actor, reason=reason)
+
+    # ------------------------------------------------------------------ пачкой
+
+    async def activate_many(
+        self, ids: Iterable[UUID], *, actor: str, reason: str | None = None, atomic: bool = False
+    ) -> BatchResult[UUID]:
+        """Перевести в работу пачкой, до 1000, одной транзакцией; событие и ревизия — на каждую.
+
+        Отказ по identity (нет такой, недопустимый переход, из `retired` без причины) попадает в
+        `rejected` и не отменяет остальные; `atomic=True` отменяет всю пачку.
+        """
+
+        async def activate(handle: SpaceHandle, identity_id: UUID) -> None:
+            await handle._set_lifecycle(identity_id, Lifecycle.READY, actor=actor, reason=reason)
+
+        return await self._space._run_batch(ids, activate, atomic=atomic)
+
+    async def retire_many(
+        self, ids: Iterable[UUID], *, actor: str, reason: str | None = None, atomic: bool = False
+    ) -> BatchResult[UUID]:
+        """Вывести из работы пачкой, до 1000, одной транзакцией; условия — как у `retire`."""
+
+        async def retire(handle: SpaceHandle, identity_id: UUID) -> None:
+            await handle._retire(identity_id, actor=actor, reason=reason)
+
+        return await self._space._run_batch(ids, retire, atomic=atomic)
+
+    async def restore_standing_many(
+        self, ids: Iterable[UUID], *, actor: str, reason: str, atomic: bool = False
+    ) -> BatchResult[UUID]:
+        """Вернуть `banned → good` пачкой, до 1000; причина общая и обязательна."""
+        actor, reason = require_actor_and_reason(actor, reason, "снятие бана")
+
+        async def restore(handle: SpaceHandle, identity_id: UUID) -> None:
+            await handle._restore_standing(identity_id, actor=actor, reason=reason)
+
+        return await self._space._run_batch(ids, restore, atomic=atomic)
+
+    async def delete_many(
+        self, ids: Iterable[UUID], *, actor: str, revoke: bool = False, atomic: bool = False
+    ) -> BatchResult[UUID]:
+        """Удалить identity пачкой, до 1000, одной транзакцией; условия — как у `delete`.
+
+        Identity со связями или живой арендой (без `revoke=True`) попадает в `rejected`.
+        """
+
+        async def delete(handle: SpaceHandle, identity_id: UUID) -> None:
+            await handle._delete(identity_id, actor=actor, revoke=revoke)
+
+        return await self._space._run_batch(ids, delete, atomic=atomic)
 
     # ------------------------------------------------------------------ служебное
 
