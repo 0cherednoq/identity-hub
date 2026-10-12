@@ -2569,6 +2569,17 @@ class PgTx(StoreTx):
 
     # --------------------------------------------------------- поиск
 
+    async def tag_counts(self, *, service: str | None, limit: int) -> list[tuple[str, int]]:
+        conditions = [IDENTITIES.c.space_id == self.space.id]
+        if service is not None:
+            conditions.append(IDENTITIES.c.service == service)
+        tags = select(func.unnest(IDENTITIES.c.tags).label("tag")).where(*conditions).subquery()
+        total = func.count().label("total")
+        rows = await self.execute(
+            select(tags.c.tag, total).group_by(tags.c.tag).order_by(total.desc(), tags.c.tag).limit(limit)
+        )
+        return [(str(row["tag"]), int(row["total"])) for row in rows.mappings()]
+
     async def search_identities(
         self,
         flt: SearchFilter,

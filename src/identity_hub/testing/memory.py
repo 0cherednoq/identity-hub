@@ -1776,6 +1776,14 @@ class MemoryTx(StoreTx):
             for region, _, state in regions
         )
 
+    async def tag_counts(self, *, service: str | None, limit: int) -> list[tuple[str, int]]:
+        counts: dict[str, int] = {}
+        for row in self.state.identities.values():
+            if row.space_id == self.space.id and (service is None or row.service == service):
+                for tag in row.tags:
+                    counts[tag] = counts.get(tag, 0) + 1
+        return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+
     async def search_identities(
         self,
         flt: SearchFilter,

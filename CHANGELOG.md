@@ -15,6 +15,8 @@
 
 ### Added
 
+- `identities.tags(service=None, limit=1000)` → список `TagCount` (`tag`, `count`): теги
+  пространства с числом аккаунтов, по убыванию числа (`C3.3`).
 - Пакетные команды аккаунтов (`C2.1`, `C2.2a`): `identities.activate_many`, `retire_many`,
   `restore_standing_many`, `override_many`, `delete_many` → `BatchResult`. Пачка до 1000 аккаунтов идёт одной
   транзакцией (под `space.using(session)` — в транзакции приложения); событие и ревизия — на

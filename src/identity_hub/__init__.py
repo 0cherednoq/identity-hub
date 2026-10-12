@@ -9,6 +9,7 @@ from identity_hub.api.identities import (
     IdentityRef,
     OnConflict,
     Page,
+    TagCount,
 )
 from identity_hub.api.proxies import (
     Proxy,
@@ -229,6 +230,7 @@ __all__ = [
     "StaticSecretsProvider",
     "StorageError",
     "SystemClock",
+    "TagCount",
     "TelegramRateLimited",
     "TelegramRejected",
     "TelegramTransport",

@@ -313,6 +313,13 @@ identity = await space.identities.update(
 пишет событие `identity.updated`.
 Сменить `external_ref` нельзя.
 
+Какие теги есть в пространстве и сколько аккаунтов у каждого:
+
+```python
+for item in await space.identities.tags(service=TELEGRAM):     # по убыванию числа аккаунтов
+    print(item.tag, item.count)
+```
+
 **Теги или метки?** Теги — для отбора в пулы (`pools.define(..., tags=["parser"])` требует все
 теги). Метки — для атрибутов со значением: поставщик, партия, ферма
 (`pools.define(..., labels={"farm": "eu-1"})`).

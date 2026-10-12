@@ -1537,6 +1537,10 @@ class StoreTx(ABC):
     # --------------------------------------------------------- поиск (P6.1)
 
     @abstractmethod
+    async def tag_counts(self, *, service: str | None, limit: int) -> list[tuple[str, int]]:
+        """Теги аккаунтов пространства с числом аккаунтов: по убыванию числа, затем по тегу."""
+
+    @abstractmethod
     async def search_identities(
         self,
         flt: SearchFilter,

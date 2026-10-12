@@ -39,6 +39,7 @@ __all__ = [
     "IdentityRef",
     "OnConflict",
     "Page",
+    "TagCount",
 ]
 
 # Счётчик `count()` точный до этого значения; дальше возвращается `COUNT_CAP + 1`.
@@ -241,6 +242,17 @@ class IdentityFilter:
         )
 
 
+MAX_TAG_COUNTS = 1000
+
+
+@dataclass(frozen=True, slots=True)
+class TagCount:
+    """Тег и число identity с ним (`identities.tags`)."""
+
+    tag: str
+    count: int
+
+
 type _Prepared = list[tuple[Service, PreparedIdentity]]
 
 
@@ -322,6 +334,20 @@ class Identities(Namespace):
             _rows, total = await tx.search_identities(flt, limit=1, after=None, count_limit=COUNT_CAP)
         assert total is not None
         return total
+
+    async def tags(
+        self, *, service: str | Service | None = None, limit: int = 1000
+    ) -> builtins.list[TagCount]:
+        """Теги пространства с числом identity: по убыванию числа, при равенстве — по тегу.
+
+        `service` ограничивает подсчёт одним сервисом; `limit` — от 1 до 1000 самых частых тегов.
+        """
+        if not 1 <= limit <= MAX_TAG_COUNTS:
+            raise ValidationFailed(f"limit: от 1 до {MAX_TAG_COUNTS}")
+        name = self._space.hub.service(service).name if service is not None else None
+        async with self._space._tx(own=True) as tx:
+            rows = await tx.tag_counts(service=name, limit=limit)
+        return [TagCount(tag, count) for tag, count in rows]
 
     # ------------------------------------------------------------------ создание
 
