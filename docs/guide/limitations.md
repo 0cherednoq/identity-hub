@@ -12,7 +12,7 @@
 | Проба (`sync.refresh`/`sync.refresh_many`) не работает для аккаунтов в `provisioning`: бросает `OperationNotAllowed(lifecycle)` | Логиньте через `auth.login` (он работает), проверку делайте после перевода в `ready` |
 | Обновление сессии без входа (`SessionRefresher.refresh`) библиотека не вызывает | Обновляйте сессию своим кодом через `lease.save_session` |
 | Нет продления/`renew` для аренды из `pool.acquire()` | Для длинной работы используйте `async with pool.lease()` |
-| Нет массовой правки тегов, меток и полей профиля | Цикл по отдельным методам; жизненный цикл, снятие бана и удаление пачкой — `activate_many`, `retire_many`, `restore_standing_many`, `delete_many` |
+| Нет массовой правки тегов, меток и полей профиля | Цикл по отдельным методам; жизненный цикл, снятие бана, ручная правка состояния и удаление пачкой — `activate_many`, `retire_many`, `restore_standing_many`, `override_many`, `delete_many` |
 | `idempotency_key` и `pools.revoke` не работают для shared-аренд (ключ даёт `ValidationFailed`) | Для задач, требующих этого, используйте эксклюзивный сервис |
 | Нет своих типов событий | Используйте свою шину для событий приложения |
 | Нет синхронного API | Только `asyncio` |

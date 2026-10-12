@@ -572,6 +572,20 @@ class Identities(Namespace):
 
         return await self._space._run_batch(ids, restore, atomic=atomic)
 
+    async def override_many(
+        self, ids: Iterable[UUID], override: Override, *, atomic: bool = False
+    ) -> BatchResult[UUID]:
+        """Одна ручная правка региона — на все identity пачки, до 1000, одной транзакцией.
+
+        Причина, автор и закрепление берутся из `override`. Событие `identity.state.overridden` —
+        на каждую identity; отказ по одной не отменяет остальные, `atomic=True` отменяет всё.
+        """
+
+        async def apply(handle: SpaceHandle, identity_id: UUID) -> None:
+            await handle._override(identity_id, override)
+
+        return await self._space._run_batch(ids, apply, atomic=atomic)
+
     async def delete_many(
         self, ids: Iterable[UUID], *, actor: str, revoke: bool = False, atomic: bool = False
     ) -> BatchResult[UUID]:

@@ -131,3 +131,25 @@ async def test_identity_batches_respect_limit(space: SpaceHandle) -> None:
         await space.identities.delete_many(ids, actor="op")
     empty = await space.identities.retire_many([], actor="op")
     assert empty.applied == [] and empty.rejected == []
+
+
+async def test_override_many_applies_one_override_to_all(space: SpaceHandle) -> None:
+    """C2.2a: одна ручная правка — на все аккаунты пачки; событие правки — на каждый."""
+    first, second = sorted([await _account(space, "+1"), await _account(space, "+2")])
+    missing = uuid4()
+    ban = Override("standing", "", "banned", reason="жалобы", actor="ops:ivan")
+
+    result = await space.identities.override_many([first, second, missing], ban)
+
+    assert result.applied == [first, second]
+    assert [(r.key, r.code) for r in result.rejected] == [(missing, "not_found")]
+    assert {(await space.identities.get(i)).standing for i in (first, second)} == {Standing.BANNED}
+    overridden = await _events(space, "identity.state.overridden")
+    assert sorted(e.identity_id for e in overridden) == [first, second]
+    assert {(e.actor, e.data["reason"]) for e in overridden} == {("ops:ivan", "жалобы")}
+
+    unknown = Override("standing", "", "нет такого", reason="тест", actor="op")
+    refused = await space.identities.override_many([first], unknown)
+    assert refused.applied == [] and [r.key for r in refused.rejected] == [first]
+    with pytest.raises(NotFound):
+        await space.identities.override_many([first, missing], ban, atomic=True)
