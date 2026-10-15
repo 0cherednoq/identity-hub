@@ -24,9 +24,17 @@ Python-библиотека управления парком аккаунтов
    требований — `docs/isue/ISSUES-identity-hub.md` (пункты 1–9 и 13; отклонённое — в
    `docs/plan/CONSOLE-REJECTED.md`). Идентификаторы задач — `C<фаза>.<номер>`, коммит закрытия —
    `feat(<ID>): <кратко>` (`fix(C0.1): …` для дефекта).
+5. **Исправления по ишью server-admins** (очередь `S`, решение `D-310`): план
+   `docs/plan/SERVER-ADMINS-PLAN.md`, прогресс `docs/plan/SERVER-ADMINS-PROGRESS.md`, источник
+   требований — `docs/isue/09-assessment.md` и тексты ишью в `docs/isue/server-admins/`.
+   Идентификаторы задач — `S<фаза>.<номер>`, коммит закрытия — `fix(<ID>): <кратко>` для `S0.*`,
+   `feat(<ID>): <кратко>` для остальных. Очередь `S` берётся сразу после закрытия `I4.3`, раньше
+   оставшихся задач очереди `I`.
 
 Пока в `RELEASE-FIXES-PROGRESS.md` есть `in_progress` или `todo`, активна очередь `F`. Когда она
-закрыта полностью — очередь `I`. Когда закрыта и она — очередь `N`, за ней — очередь `C`. Исходный план и его история остаются в `PLAN.md` и `PROGRESS.md`;
+закрыта полностью — очередь `I`. Когда закрыта и она — очередь `N`, за ней — очередь `C`. Исключение —
+очередь `S` (`D-310`): она активна, как только закрыта `I4.3`, и пока в `SERVER-ADMINS-PROGRESS.md`
+есть `todo` или `in_progress`, остальные задачи `I` ждут. Исходный план и его история остаются в `PLAN.md` и `PROGRESS.md`;
 к ним возвращаться только при появлении новых незавершённых задач.
 
 Каждая сессия (в том числе запуск через `/loop`) выполняет цикл для активного плана:
@@ -77,6 +85,7 @@ Python-библиотека управления парком аккаунтов
 - Улучшения: `python docs/plan/improvements_progress_tool.py start|check|note|done|status|show ...`.
 - Доработки по итогам встраивания: `python docs/plan/integration_progress_tool.py start|check|note|done|status|show ...`.
 - Доработки по запросам пульта: `python docs/plan/console_progress_tool.py start|check|note|done|status|show ...`.
+- Исправления по ишью server-admins: `python docs/plan/server_admins_progress_tool.py start|check|note|done|status|show ...`.
 
 Шаги 3, 4 и 6 делать утилитой активного плана, чтобы формат таблицы не ломался.
 
