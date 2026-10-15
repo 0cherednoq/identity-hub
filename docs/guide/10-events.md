@@ -105,7 +105,7 @@ flowchart LR
 | `identity.imported` | `count`, `run_id`, `skipped`, `updated` |
 | `identity.lifecycle.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
 | `identity.linked` | `linked_identity_id`, `reason`, `role` |
-| `identity.login.failed` | `error` |
+| `identity.login.failed` | `code`, `error`, `retryable` |
 | `identity.login.succeeded` | — |
 | `identity.quota.exhausted` | `kind`, `limit`, `resets_at`, `window_seconds`, `window_start` |
 | `identity.registered` | `auth`, `external_ref`, `labels`, `lifecycle`, `links`, `tags` |

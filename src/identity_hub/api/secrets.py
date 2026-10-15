@@ -93,15 +93,21 @@ class Secrets(Namespace):
         actor: str,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
+        reset_auth: bool = False,
     ) -> None:
         """Заменить credentials целиком (валидация схемой сервиса, шифрование до транзакции).
 
         `idempotency_key` — повтор с теми же данными ничего не пишет, с другими —
         `IdempotencyConflict`; секрет в ключ не попадает, только его HMAC-тег (D-208).
+        `reset_auth=True` очищает код отказа в `no_session`/`session_invalid`, не отзывает сессию.
         """
         space = self._at(identity_id, expected_revision)
         await space._update_credentials(
-            identity_id, credentials, actor=actor, idempotency_key=idempotency_key
+            identity_id,
+            credentials,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            reset_auth=reset_auth,
         )
 
     async def replace_session(

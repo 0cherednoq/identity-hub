@@ -142,7 +142,9 @@ async def update_secret(
 
     async def apply(scope: CommandScope) -> Response[ResourceEnvelope[SecretUpdateResponse]]:
         if data.kind == "credentials":
-            await scope.handle.secrets.replace_credentials(identity_id, data.value, actor=scope.actor)
+            await scope.handle.secrets.replace_credentials(
+                identity_id, data.value, actor=scope.actor, reset_auth=True
+            )
             slot = None
         else:
             await scope.handle.secrets.replace_session(

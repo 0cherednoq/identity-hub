@@ -459,6 +459,28 @@ class PgTx(StoreTx):
         values["change_source"] = ChangeSource(values["change_source"])
         return RegionState(**values)
 
+    async def load_regions(
+        self, identity_ids: Sequence[UUID], region: str, key: str
+    ) -> dict[UUID, RegionState]:
+        if not identity_ids:
+            return {}
+        rows = (
+            await self.execute(
+                select(REGION_STATES.c.identity_id, *(REGION_STATES.c[name] for name in REGION_FIELDS)).where(
+                    REGION_STATES.c.space_id == self.space.id,
+                    REGION_STATES.c.identity_id.in_(identity_ids),
+                    REGION_STATES.c.region == region,
+                    REGION_STATES.c.key == key,
+                )
+            )
+        ).mappings()
+        result: dict[UUID, RegionState] = {}
+        for row in rows:
+            values = {name: row[name] for name in REGION_FIELDS}
+            values["change_source"] = ChangeSource(values["change_source"])
+            result[row["identity_id"]] = RegionState(**values)
+        return result
+
     async def save_region(
         self, identity_id: UUID, region: str, key: str, previous: RegionState | None, new: RegionState
     ) -> bool:

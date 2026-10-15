@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.hub import SpaceHandle
 from identity_hub.postgres.models import EventRecord
+from identity_hub.state import Override
 from identity_hub.store.base import IdentityRow
 from tests.fixtures.api import register
 
@@ -55,3 +56,38 @@ async def test_update_and_reveal_with_audit(
 def test_read_models_have_no_secret_fields() -> None:
     names = {f.name for f in fields(IdentityRow)}
     assert not names & {"ciphertext", "wrapped_dek", "profile_ciphertext", "token", "password"}
+
+
+async def test_reset_auth_rolls_back_with_user_transaction(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    registered = await register(
+        space,
+        service="fake_tg",
+        external_ref="+reset-rollback",
+        credentials={"phone": "+reset-rollback"},
+    )
+    await space.identities.override(
+        registered.identity_id,
+        Override(
+            "auth",
+            "default",
+            "no_session",
+            reason="test failure",
+            actor="test",
+            code="credentials_rejected",
+        ),
+    )
+
+    async with sessionmaker() as session:
+        await session.begin()
+        await space.using(session).secrets.replace_credentials(
+            registered.identity_id,
+            {"phone": "+new"},
+            actor="admin",
+            reset_auth=True,
+        )
+        await session.rollback()
+
+    identity = await space.identities.get(registered.identity_id)
+    assert identity.auth == "no_session" and identity.auth_code == "credentials_rejected"

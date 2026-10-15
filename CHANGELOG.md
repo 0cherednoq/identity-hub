@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
+  сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
+- `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается
+  обслуживанием, бессрочный бан остаётся sticky.
+- `secrets.replace_credentials(..., reset_auth=True)` атомарно очищает старый код отказа в
+  `no_session`/`session_invalid`, не отзывая сессию.
+
+### Fixed
+
+- `identity.login.failed` всегда содержит `code`, а пересчёт `logins.failed` использует прежнее
+  поле `error` для старых событий без кода.
+- Наблюдения и ошибки операций больше не выводят standing из терминального `deleted`; выйти
+  можно только явным override с причиной.
+
 ### Changed
 
 - Пробы `sync.refresh`/`refresh_many` идут через долговечные операции `probe:<region>`

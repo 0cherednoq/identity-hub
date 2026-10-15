@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -30,6 +31,8 @@ __all__ = [
     "LinkedIdentity",
     "LoginChallenge",
     "LoginContext",
+    "LoginFailure",
+    "LoginFailureCode",
     "ProbeContext",
     "ProbeResult",
     "Probes",
@@ -114,6 +117,40 @@ class LoginChallenge(Exception):
         self.context = context
         self.expires_in = expires_in
         super().__init__(f"challenge {kind}: {hint}")
+
+
+class LoginFailureCode(StrEnum):
+    """Рекомендуемые стабильные коды отказа входа; адаптер может использовать свой код."""
+
+    CREDENTIALS_REJECTED = "credentials_rejected"
+    TRANSIENT = "transient"
+    SESSION_INVALID = "session_invalid"
+    IDENTITY_LIMITED = "identity_limited"
+    IDENTITY_BANNED = "identity_banned"
+
+
+_LOGIN_FAILURE_CODE = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
+
+
+class LoginFailure(Exception):
+    """Структурированный безопасный отказ `Authenticator.login` (D-310)."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = True,
+        fault: Fault | None = None,
+        raw_status: str | None = None,
+    ) -> None:
+        value = str(code)
+        if _LOGIN_FAILURE_CODE.fullmatch(value) is None:
+            raise ValueError("LoginFailure.code должен соответствовать [a-z][a-z0-9_.-]{0,63}")
+        self.code = value
+        self.retryable = retryable
+        self.fault = fault
+        self.raw_status = raw_status
+        super().__init__(value)
 
 
 @runtime_checkable
@@ -223,9 +260,23 @@ class Fault:
     blame: Blame
     retry_after: timedelta | None = None  # rate limit / flood-wait → availability cooling
     standing: str | None = None  # целевое standing для IDENTITY_BANNED (по умолчанию banned)
+    until: datetime | None = None  # срок limited/banned; другие standing автоматически не снимаются
     code: str | None = None  # код платформы
     raw_status: str | None = None
     weight: float = 1.0  # вклад в error_score
+
+    def __post_init__(self) -> None:
+        if self.until is None:
+            return
+        if self.until.tzinfo is None:
+            raise ValueError("Fault.until должен быть с часовым поясом")
+        if self.blame is not Blame.IDENTITY_BANNED:
+            raise ValueError("Fault.until допустим только для IDENTITY_BANNED")
+        from identity_hub.domain.region_specs import STANDING
+
+        target = self.standing or "banned"
+        if target not in STANDING.on_expire:
+            raise ValueError(f"Fault.until не поддерживается для standing={target!r}")
 
 
 class ErrorClassifier(Protocol):

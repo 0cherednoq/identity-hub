@@ -144,7 +144,8 @@ TELEGRAM = Service(
   не сверяется;
 - `error_classifier` — объект с `classify(exc)` или словарь `{TimeoutError: Fault(Blame.PROXY)}`
   (подходящий тип ищется по MRO исключения); если `classify` принимает именованный `kind`, туда
-  приходит вид операции;
+  приходит вид операции. Невалидный `Fault` (например, наивный `until` или срок у `frozen`)
+  считается ошибкой классификатора: она логируется, а исход обрабатывается как `Blame.REQUEST`;
 - `importers` — объекты с `can_import(path)` и `read(path)`: async-генератор с `yield ImportRecord`,
   обычная функция или `async def`, возвращающие список записей.
 

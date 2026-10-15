@@ -2,7 +2,8 @@
 
 Примеры:
   python docs/plan/server_admins_progress_tool.py show
-  python docs/plan/server_admins_progress_tool.py start S0.1 "Измерение code" "регрессионный тест" "исправление"
+  python docs/plan/server_admins_progress_tool.py start S0.1 \
+    "Измерение code" "регрессионный тест" "исправление"
   python docs/plan/server_admins_progress_tool.py check "регрессионный тест"
   python docs/plan/server_admins_progress_tool.py note "Тест готов; дальше исправление"
   python docs/plan/server_admins_progress_tool.py done S0.1 - "code у logins.failed · дальше S0.2"

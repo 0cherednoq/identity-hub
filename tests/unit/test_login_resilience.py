@@ -92,7 +92,7 @@ async def test_session_of_wrong_shape_fails_and_restores_auth() -> None:
     report = await space.auth.login_many(service=svc)
     assert list(report.failed) == [identity_id]  # login_many аккаунт по-прежнему видит
     failed = await _events(space, "identity.login.failed")
-    assert failed and all(item.data["error"] == "ValidationFailed" for item in failed)
+    assert failed and all(item.data["error"] == item.data["code"] == "ValidationFailed" for item in failed)
 
 
 async def test_login_longer_than_lease_deadline_keeps_the_session() -> None:
@@ -126,7 +126,7 @@ async def test_cancelled_login_restores_auth_and_frees_the_lease() -> None:
     assert await _auth(space, identity_id) == "no_session"
     assert await _live_lease(space, identity_id) is None
     (failed,) = await _events(space, "identity.login.failed")
-    assert failed.data["error"] == "CancelledError"
+    assert failed.data["error"] == failed.data["code"] == "CancelledError"
 
 
 async def test_cancelled_login_from_session_invalid_returns_to_session_invalid() -> None:
@@ -179,7 +179,7 @@ async def test_login_timeout_bounds_the_authenticator() -> None:
     assert await asyncio.wait_for(space.auth.login(identity_id), 5) is LoginOutcome.FAILED
     assert await _auth(space, identity_id) == "no_session"
     (failed,) = await _events(space, "identity.login.failed")
-    assert failed.data["error"] == "LoginTimeout"
+    assert failed.data["error"] == failed.data["code"] == "LoginTimeout"
     assert make_service("x").login_timeout == timedelta(seconds=120)
 
 
@@ -211,7 +211,11 @@ async def test_abandoned_logging_in_is_reset_by_maintenance() -> None:
     await hub.maintenance.run_all()
     assert await _auth(space, identity_id) == "no_session"
     (failed,) = await _events(space, "identity.login.failed")
-    assert (failed.actor, failed.data["error"]) == ("timer", "LoginAbandoned")
+    assert (failed.actor, failed.data["error"], failed.data["code"]) == (
+        "timer",
+        "LoginAbandoned",
+        "LoginAbandoned",
+    )
     assert await space.auth.login(identity_id) is LoginOutcome.SUCCEEDED
 
 

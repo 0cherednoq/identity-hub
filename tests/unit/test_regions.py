@@ -130,6 +130,19 @@ def test_repeated_command_is_idempotent_and_until_only_extends() -> None:
     assert longer.events == ()
 
 
+def test_command_can_explicitly_clear_code_in_same_state() -> None:
+    current = at(AuthState.NO_SESSION, code="credentials_rejected")
+    unchanged = apply(AUTH, current, Command(AuthState.NO_SESSION, actor="admin"), sec(1))
+    assert unchanged.state.code == "credentials_rejected"
+    cleared = apply(
+        AUTH,
+        current,
+        Command(AuthState.NO_SESSION, actor="admin", clear_code=True),
+        sec(1),
+    )
+    assert cleared.outcome is Outcome.APPLIED and cleared.state.code is None
+
+
 def test_command_event_carries_severity_and_data() -> None:
     decision = apply(STANDING, at(Standing.GOOD), Command(Standing.BANNED, actor="w", code="spam"), sec(1))
     (event,) = decision.events
@@ -263,10 +276,44 @@ def test_banned_is_sticky_for_observations() -> None:
     assert cur.state == Standing.BANNED
 
 
+@pytest.mark.parametrize("observed", [Standing.GOOD, Standing.LIMITED, Standing.BANNED])
+def test_deleted_is_terminal_for_observations(observed: Standing) -> None:
+    decision = apply(STANDING, at(Standing.DELETED), Observation(observed, sec(1)), sec(1))
+    assert decision.outcome is Outcome.STICKY
+    assert decision.state.state == Standing.DELETED
+    assert decision.events[0].data["cause"] == "sticky"
+
+
+def test_deleted_can_only_leave_through_override() -> None:
+    decision = apply(
+        STANDING,
+        at(Standing.DELETED),
+        Override(Standing.GOOD, reason="ошибка удаления", actor="admin"),
+        sec(1),
+    )
+    assert decision.state.state == Standing.GOOD
+
+
 def test_banned_to_deleted_by_observation_after_confirmation() -> None:
     first = apply(STANDING, at(Standing.BANNED), Observation(Standing.DELETED, sec(1)), sec(1))
     second = apply(STANDING, first.state, Observation(Standing.DELETED, sec(2)), sec(2))
     assert second.state.state == Standing.DELETED
+
+
+def test_temporary_ban_is_sticky_and_only_observation_with_later_until_extends() -> None:
+    current = at(Standing.BANNED, until=sec(100))
+    drift = apply(STANDING, current, Observation(Standing.GOOD, sec(1)), sec(1))
+    assert drift.outcome is Outcome.STICKY and drift.state.until == sec(100)
+
+    unchanged = apply(STANDING, drift.state, Observation(Standing.BANNED, sec(2)), sec(2))
+    assert unchanged.state.until == sec(100)
+    extended = apply(
+        STANDING,
+        unchanged.state,
+        Observation(Standing.BANNED, sec(3), until=sec(200)),
+        sec(3),
+    )
+    assert extended.state.until == sec(200)
 
 
 # ---------------------------------------------------------------- override и закрепление
@@ -337,7 +384,29 @@ def test_timer_expires_temporary_states() -> None:
     assert decision.state.change_source is ChangeSource.TIMER
     assert decision.state.until is None
     assert apply(STANDING, at(Standing.LIMITED, until=sec(5)), Timer(), sec(6)).state.state == Standing.GOOD
-    assert apply(STANDING, at(Standing.BANNED, until=sec(5)), Timer(), sec(6)).outcome is Outcome.NOT_DUE
+    banned = apply(STANDING, at(Standing.BANNED, until=sec(5)), Timer(), sec(6))
+    assert banned.state.state == Standing.GOOD
+    assert banned.events[0].data["source"] == "timer"
+    assert apply(STANDING, at(Standing.BANNED), Timer(), sec(600)).outcome is Outcome.NOT_DUE
+
+
+def test_pinned_temporary_ban_is_not_removed_by_timer() -> None:
+    current = at(Standing.BANNED, until=sec(5), pinned_until=sec(20))
+    decision = apply(STANDING, current, Timer(), sec(6))
+    assert decision.outcome is Outcome.PINNED and decision.state.state == Standing.BANNED
+
+
+@pytest.mark.parametrize("state", [Standing.FROZEN, Standing.APPEALING, Standing.DELETED])
+def test_non_expiring_standing_rejects_until(state: Standing) -> None:
+    with pytest.raises(ValidationFailed):
+        apply(STANDING, at(Standing.GOOD), Observation(state, sec(1), until=sec(10)), sec(1))
+    with pytest.raises(ValidationFailed):
+        apply(
+            STANDING,
+            at(Standing.GOOD),
+            Override(state, reason="manual", actor="admin", until=sec(10)),
+            sec(1),
+        )
 
 
 # ---------------------------------------------------------------- инварианты

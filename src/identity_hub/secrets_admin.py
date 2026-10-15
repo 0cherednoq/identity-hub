@@ -26,8 +26,11 @@ from identity_hub.domain.credentials import (
 )
 from identity_hub.domain.data import validate_json_payload, validate_model
 from identity_hub.domain.idempotency import SECRETS_FAMILY, keyed_fingerprint, namespace
+from identity_hub.domain.regions import Command
+from identity_hub.enums import AuthState
 from identity_hub.errors import NotFound, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
+from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CredentialRow, IdempotencyRequest, StoreTx
 
 __all__ = ["CredentialsMixin", "SecretsAdminMixin", "SessionRevokeMixin"]
@@ -41,13 +44,14 @@ class SecretsAdminMixin(SpaceBase):
         *,
         actor: str,
         idempotency_key: str | None = None,
+        reset_auth: bool = False,
     ) -> None:
         """Заменить credentials (валидация схемой сервиса, шифрование до транзакции)."""
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.credentials, credentials, "credentials")
         payload = self.hub._envelope.seal_model(model, associated_data("ih_credentials", identity_id))
-        command = {"identity_id": identity_id}
+        command = {"identity_id": identity_id, "reset_auth": reset_auth}
         async with self._tx(checked=idempotency_key is None) as tx:
             if not await self._claim_secret_command(
                 tx, idempotency_key, "replace_credentials", command, model
@@ -55,6 +59,15 @@ class SecretsAdminMixin(SpaceBase):
                 return
             row = await self._identity(tx, identity_id)
             await tx.put_credentials(identity_id, payload)
+            if reset_auth and row.auth_state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
+                await apply_region_change(
+                    self,
+                    tx,
+                    identity_id,
+                    "auth",
+                    DEFAULT_SLOT,
+                    Command(AuthState.NO_SESSION, actor=actor, clear_code=True),
+                )
             await self._emit(
                 tx,
                 EventDraft(

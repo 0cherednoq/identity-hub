@@ -33,8 +33,22 @@ async def _standing(space: SpaceHandle, identity_id: UUID, state: str) -> None:
     async with space._tx(own=True) as tx:
         now = await tx.now()
     await space.identities.override(
-        identity_id, Override("standing", "", state, reason="тест", actor="op", until=now + SOON)
+        identity_id,
+        Override(
+            "standing",
+            "",
+            state,
+            reason="тест",
+            actor="op",
+            until=now + SOON if state in {"limited", "banned"} else None,
+        ),
     )
+
+
+async def _legacy_frozen_until(space: SpaceHandle, identity_id: UUID) -> None:
+    """Имитировать строку старой версии, которая разрешала бессмысленный срок у frozen."""
+    async with space._tx(own=True) as tx:
+        await tx.update_identity(identity_id, {"standing_until": await tx.now() + SOON})
 
 
 async def _availability(space: SpaceHandle, identity_id: UUID, state: Availability) -> None:
@@ -60,7 +74,8 @@ async def test_only_states_with_a_timer_transition_are_due(
 ) -> None:
     """В очередь таймеров попадают только состояния, у которых есть переход по истечении."""
     frozen, limited, paused, cooling, quarantined = [await _account(space, f"+{n}") for n in range(5)]
-    await _standing(space, frozen, "frozen")  # `until` есть, перехода по таймеру нет
+    await _standing(space, frozen, "frozen")
+    await _legacy_frozen_until(space, frozen)
     await _standing(space, limited, "limited")
     await _availability(space, paused, Availability.PAUSED)
     await _availability(space, cooling, Availability.COOLING)
@@ -80,7 +95,9 @@ async def test_rows_without_transition_do_not_starve_the_batch(
     """R2-F06 (S5): два `frozen` с истёкшим `until` не заслоняют `limited` при пачке 2."""
     hub_under_test.maintenance.schedule = MaintenanceSchedule(batch_size=2)
     for n in range(2):
-        await _standing(space, await _account(space, f"+frozen{n}"), "frozen")
+        frozen = await _account(space, f"+frozen{n}")
+        await _standing(space, frozen, "frozen")
+        await _legacy_frozen_until(space, frozen)
     limited = await _account(space, "+limited")
     await _standing(space, limited, "limited")
     await _pass_time(hub_under_test)

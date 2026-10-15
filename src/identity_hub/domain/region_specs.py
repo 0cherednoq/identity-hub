@@ -61,9 +61,9 @@ STANDING = RegionSpec(
         Standing.DELETED: Severity.CRITICAL,
     },
     confirm_leaving=_fs(Standing.BANNED, Standing.FROZEN),  # FR-9.4, D-104
-    sticky=_fs(Standing.BANNED),  # D-102
+    sticky=_fs(Standing.BANNED, Standing.DELETED),  # D-102, D-310
     sticky_exits=_fs(Standing.DELETED),
-    on_expire={Standing.LIMITED: Standing.GOOD},
+    on_expire={Standing.LIMITED: Standing.GOOD, Standing.BANNED: Standing.GOOD},
 )
 
 # §3.3 — вход; session_invalid — не бан, standing не трогает

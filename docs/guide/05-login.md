@@ -139,6 +139,34 @@ report.succeeded, report.challenged, report.failed
 [интеграции](../integrations.md#очередь-операций-провайдера)). `LoginReport.operations` называет
 операцию каждой попытки `login_many`; незавершённые видны в `space.admin.provider_operations()`.
 
+### Неудачный вход
+
+Адаптер сообщает ожидаемый отказ структурированным `LoginFailure`, а не текстом исключения:
+
+```python
+from identity_hub import Blame, Fault, LoginFailure, LoginFailureCode
+
+if response.status == "PASSWORD_INVALID":
+    raise LoginFailure(LoginFailureCode.CREDENTIALS_REJECTED, retryable=False)
+if response.status == "USER_BANNED":
+    raise LoginFailure(
+        LoginFailureCode.IDENTITY_BANNED,
+        retryable=False,
+        fault=Fault(Blame.IDENTITY_BANNED, code="user_banned"),
+    )
+```
+
+`code` — стабильная машинная строка `[a-z][a-z0-9_.-]{0,63}`. Рекомендуемые значения:
+`credentials_rejected`, `transient`, `session_invalid`, `identity_limited`, `identity_banned`;
+свои коды разрешены. Код сохраняется в регионе `auth` карточки, событии
+`identity.login.failed` и операции `login`; текст исключения, credentials и ответ платформы туда
+не попадают. Новый вход (`auth → logging_in`) очищает старый код.
+
+`LoginFailure.fault` атомарно применяет последствия вместе с итогом входа: временное охлаждение,
+`session_invalid` или standing `limited`/`banned`. Обычное исключение адаптера сохраняет прежнее
+поведение (`auth → no_session`, код — имя класса). `login_many` по-прежнему пробует такой аккаунт;
+если постоянные ошибки нужно исключить, фильтруйте их в приложении по коду карточки.
+
 ## Работа с сессией в аренде
 
 ```python

@@ -1159,6 +1159,13 @@ class StoreTx(ABC):
     async def load_region(self, identity_id: UUID, region: str, key: str) -> RegionState | None: ...
 
     @abstractmethod
+    async def load_regions(
+        self, identity_ids: Sequence[UUID], region: str, key: str
+    ) -> dict[UUID, RegionState]:
+        """Пакетно прочитать строки одного региона без N+1."""
+        ...
+
+    @abstractmethod
     async def save_region(
         self, identity_id: UUID, region: str, key: str, previous: RegionState | None, new: RegionState
     ) -> bool:

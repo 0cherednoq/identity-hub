@@ -62,6 +62,7 @@ class Command:
     to: str
     actor: str
     code: str | None = None
+    clear_code: bool = False
     until: datetime | None = None
     reason: str | None = None
 
@@ -272,12 +273,13 @@ def _apply_command(
     spec: RegionSpec, cur: RegionState, cmd: Command, now: datetime, key: str
 ) -> RegionDecision:
     _check_state(spec, cmd.to)
+    _check_until(spec, cmd.to, cmd.until)
     if cmd.to == cur.state:
         # идемпотентный повтор; срок только удлиняется (FR-7.4)
         until = cur.until
         if cmd.until is not None and (until is None or cmd.until > until):
             until = cmd.until
-        code = cmd.code if cmd.code is not None else cur.code
+        code = None if cmd.clear_code else (cmd.code if cmd.code is not None else cur.code)
         if until == cur.until and code == cur.code:
             return RegionDecision(Outcome.UNCHANGED, cur, cur)
         new = replace(cur, until=until, code=code, version=cur.version + 1)
@@ -322,6 +324,7 @@ def _apply_observation(
         return RegionDecision(Outcome.UNKNOWN_STATUS, cur, synced, warning=warning)
 
     target = spec.normalize(cur.state, obs.state) if spec.normalize else obs.state
+    _check_until(spec, target, obs.until)
     same = target == cur.state and (obs.code is None or obs.code == cur.code)
 
     if cur.is_pinned(now):
@@ -357,6 +360,7 @@ def _apply_override(
     spec: RegionSpec, cur: RegionState, ov: Override, now: datetime, key: str
 ) -> RegionDecision:
     _check_state(spec, ov.to)
+    _check_until(spec, ov.to, ov.until)
     if not ov.reason or not ov.reason.strip():
         raise ValidationFailed("override требует причину")
     if not ov.actor or not ov.actor.strip():
@@ -452,6 +456,11 @@ def _apply_timer(spec: RegionSpec, cur: RegionState, timer: Timer, now: datetime
 def _check_state(spec: RegionSpec, state: str) -> None:
     if state not in spec.states:
         raise ValidationFailed(f"регион {spec.name}: неизвестное состояние {state!r}")
+
+
+def _check_until(spec: RegionSpec, state: str, until: datetime | None) -> None:
+    if until is not None and spec.name == "standing" and state not in spec.on_expire:
+        raise ValidationFailed(f"standing={state!r} не поддерживает until")
 
 
 def _changed_events(

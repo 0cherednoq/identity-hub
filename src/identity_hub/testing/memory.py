@@ -449,6 +449,19 @@ class MemoryTx(StoreTx):
     async def load_region(self, identity_id: UUID, region: str, key: str) -> RegionState | None:
         return self.state.regions.get((identity_id, region, key)) if self._own(identity_id) else None
 
+    async def load_regions(
+        self, identity_ids: Sequence[UUID], region: str, key: str
+    ) -> dict[UUID, RegionState]:
+        wanted = set(identity_ids)
+        return {
+            identity_id: state
+            for (identity_id, found_region, found_key), state in self.state.regions.items()
+            if identity_id in wanted
+            and self._own(identity_id) is not None
+            and found_region == region
+            and found_key == key
+        }
+
     async def save_region(
         self, identity_id: UUID, region: str, key: str, previous: RegionState | None, new: RegionState
     ) -> bool:

@@ -143,11 +143,14 @@ stateDiagram-v2
 - `quarantined` снимается только вручную, даже если у него задан `until`: срок здесь справочный.
   Override не обнуляет `error_score`, поэтому после выхода из карантина одна новая ошибка может
   снова отправить аккаунт туда.
+- `identities.cool_down()` применим к `available` и `paused`, а повтор в `cooling` только
+  продлевает срок. Для `quarantined` команда бросает `TransitionNotAllowed`: охлаждение слабее
+  карантина. `Fault(retry_after=...)` и `op.cool_down()` не ослабляют уже установленный карантин.
 - Закрепление (`Override(..., pin_for=...)`) защищает регион и от таймера: `limited` с истёкшим
   `until` остаётся `limited`, пока действует закрепление.
 - Таймер срабатывает только там, где у состояния есть переход по истечении: `limited → good`,
-  `paused`/`cooling → available`. У `frozen` и `banned` с `until` срок тоже справочный —
-  обслуживание такие аккаунты не трогает.
+  `banned → good`, `paused`/`cooling → available`. У `frozen`, `appealing` и `deleted` срок
+  запрещён.
 
 ## Как забанить, заморозить, разбанить
 
@@ -160,7 +163,12 @@ class TgErrors:
         if isinstance(exc, UserDeactivatedBanError):
             return Fault(Blame.IDENTITY_BANNED, code="USER_DEACTIVATED_BAN")
         if isinstance(exc, PeerFloodError):
-            return Fault(Blame.IDENTITY_BANNED, standing=Standing.LIMITED, code="PEER_FLOOD")
+            return Fault(
+                Blame.IDENTITY_BANNED,
+                standing=Standing.LIMITED,
+                until=datetime.now(UTC) + timedelta(hours=1),
+                code="peer_flood",
+            )
         return None
 ```
 
@@ -208,12 +216,20 @@ await space.identities.unpin(identity_id, "standing", "", actor="admin:ivan", re
 | Забанить автоматически по ответу платформы | `ErrorClassifier` → `Fault(Blame.IDENTITY_BANNED)` |
 | Узнать о бане фоном | `Probes.standing` + `sync.refresh_many()` |
 | Забанить вручную | `ban(reason=..., actor=...)` |
-| Ограничить временно | `Fault(IDENTITY_BANNED, standing="limited")` или проба с `until` |
+| Ограничить временно | `Fault(IDENTITY_BANNED, standing="limited", until=...)` или проба с `until` |
+| Забанить до срока | `Fault(IDENTITY_BANNED, until=...)`, наблюдение или `Override(..., until=...)` |
 | Заморозить | `freeze(reason=..., actor=...)` или проба |
 | Разбанить | `restore_standing(reason=...)` |
 | Запретить пробам менять статус | override с `pin_for` |
 | Вывести из работы (не бан) | `retire()` |
 | Снять с нагрузки на время | `identities.cool_down(until=... \| for_=..., actor=...)` или `op.cool_down(...)` |
+
+Бан без `until` бессрочный. Бан со сроком остаётся sticky до истечения: наблюдение `good` его не
+снимет, а повторное наблюдение `banned` может только продлить срок. Наблюдение `banned` без срока
+не превращает временный бан в бессрочный; для этого нужен явный `Override(..., until=None)`.
+Событие автоматического снятия имеет `source="timer"`, поэтому отличается от ручного разбана.
+Standing `deleted` терминален и для наблюдений: выйти из него можно только ручным override с
+обязательной причиной.
 
 ## Синхронизация статусов с платформой
 
@@ -350,7 +366,7 @@ async def reconcile_loop(space):
 | Защита | Что делает |
 |---|---|
 | Устаревшие наблюдения | Наблюдение старше последнего изменения отбрасывается (`stale`) |
-| Sticky `banned` | Проба «всё хорошо» не разбанит аккаунт — только человек (`restore_standing`) |
+| Sticky `banned`/`deleted` | Проба не снимает бан и не возвращает удалённый аккаунт; выход из `deleted` — только ручной `override` с причиной |
 | Подтверждение выхода | Выход из `banned`/`frozen` по наблюдениям требует двух одинаковых наблюдений подряд |
 | Закрепление | Override с `pin_for` игнорирует наблюдения до срока, расхождение пишется `identity.state.drift` |
 

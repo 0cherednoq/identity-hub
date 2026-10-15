@@ -113,6 +113,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `Service.login_timeout` | 2 мин | предел одного вызова `Authenticator.login` |
 | `Service.probe_timeout` | 1 мин | предел одного вызова пробы |
 | `LoginChallenge.expires_in` | 1 ч | срок вопроса платформы, если `expires_in` не задан |
+| `LoginFailure.code` | 1–64 символа | машинный код `[a-z][a-z0-9_.-]*`; рекомендуемые значения — `LoginFailureCode` |
 | `ProxyHealthPolicy.error_threshold` | 3.0 | счёт ошибок прокси до карантина |
 | `ProxyHealthPolicy.check_timeout` | 15 с | предел одной проверки прокси |
 | `ProxyHealthPolicy.max_backoff` | 1 ч | наибольшая пауза между перепроверками |
@@ -191,6 +192,10 @@ await space.identities.update(identity_id, profile={"city": "Berlin"}, labels={"
 await space.identities.add_tags(identity_id, ["vip"], actor="operator")
 await space.identities.delete(identity_id, actor="operator")
 ```
+
+`Identity.auth_code` — безопасный машинный код последнего состояния `auth` (например,
+`credentials_rejected`); `None` после успешного или нового входа. Полная история и `raw_status`
+доступны в `card.regions`.
 
 ### Состояние identity
 

@@ -12,7 +12,7 @@ from identity_hub.enums import Severity
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import Event
 from identity_hub.hub import IdentityHub
-from identity_hub.rollups import BucketSize
+from identity_hub.rollups import BucketSize, event_contributions
 from identity_hub.testing import MemoryStore
 from tests.fixtures.api import register
 from tests.fixtures.services import FAKE_EXCHANGE
@@ -30,6 +30,25 @@ def _hub() -> tuple[IdentityHub, MemoryStore]:
         strict_events=True,
     )
     return hub, store
+
+
+def test_old_login_failure_event_falls_back_to_error_dimension() -> None:
+    event = Event(
+        id=1,
+        event_id=uuid4(),
+        type="identity.login.failed",
+        severity=Severity.WARNING,
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        space="legacy",
+        service="svc",
+        identity_id=uuid4(),
+        proxy_id=None,
+        lease_id=None,
+        sequence=1,
+        actor="legacy",
+        data={"error": "ConnectionError"},
+    )
+    assert ("logins.failed", (("code", "ConnectionError"),), 1.0) in event_contributions(event)
 
 
 async def _golden(hub: IdentityHub, store: MemoryStore) -> tuple[datetime, datetime]:

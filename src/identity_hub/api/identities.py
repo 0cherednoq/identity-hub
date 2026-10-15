@@ -84,6 +84,7 @@ class Identity:
     standing_code: str | None
     standing_until: datetime | None
     auth: AuthState
+    auth_code: str | None
     availability: Availability
     availability_until: datetime | None
     verified_factors: frozenset[str]
@@ -102,7 +103,7 @@ class Identity:
         return IdentityRef(self.id, self.service, self.external_ref)
 
     @classmethod
-    def from_row(cls, row: IdentityRow) -> Identity:
+    def from_row(cls, row: IdentityRow, *, auth_code: str | None = None) -> Identity:
         return cls(
             id=row.id,
             service=row.service,
@@ -113,6 +114,7 @@ class Identity:
             standing_code=row.standing_code,
             standing_until=row.standing_until,
             auth=AuthState(row.auth_state),
+            auth_code=auth_code,
             availability=Availability(row.availability),
             availability_until=row.availability_until,
             verified_factors=frozenset(row.verified_factors),
@@ -292,7 +294,8 @@ class Identities(Namespace):
             return {}
         async with self._space._tx(own=True) as tx:
             rows = await tx.get_identities(wanted)
-        return {row.id: Identity.from_row(row) for row in rows}
+            identities = await self._views(tx, rows)
+        return {identity.id: identity for identity in identities}
 
     async def find(
         self,
@@ -315,7 +318,8 @@ class Identities(Namespace):
                     return None
                 identity_id = found[0]
             row = await tx.get_identity(identity_id)
-        return None if row is None else Identity.from_row(row)
+            identity = None if row is None else await self._view(tx, row)
+        return identity
 
     async def get_by_ref(self, service: str | Service, external_ref: str) -> Identity:
         """Identity по `(service, external_ref)` или `NotFound`."""
@@ -461,21 +465,23 @@ class Identities(Namespace):
         row = await self._at(identity_id, expected_revision)._update(
             identity_id, profile=profile, labels=labels, note=note, actor=actor
         )
-        return Identity.from_row(row)
+        return await self._view_new_tx(row)
 
     async def replace_profile(
         self, identity_id: UUID, profile: SchemaInput, *, actor: str, expected_revision: int | None = None
     ) -> Identity:
         """Заменить профиль целиком (валидация схемой сервиса)."""
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._update_profile(identity_id, profile, replace=True, actor=actor))
+        return await self._view_new_tx(
+            await space._update_profile(identity_id, profile, replace=True, actor=actor)
+        )
 
     async def replace_attributes(
         self, identity_id: UUID, attributes: SchemaInput, *, actor: str, expected_revision: int | None = None
     ) -> Identity:
         """Заменить технические атрибуты целиком (валидация схемой сервиса)."""
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._set_attributes(identity_id, attributes, actor=actor))
+        return await self._view_new_tx(await space._set_attributes(identity_id, attributes, actor=actor))
 
     async def replace_labels(
         self,
@@ -487,31 +493,31 @@ class Identities(Namespace):
     ) -> Identity:
         """Заменить метки целиком; для слияния — `update(labels=...)`."""
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._set_labels(identity_id, labels, actor=actor))
+        return await self._view_new_tx(await space._set_labels(identity_id, labels, actor=actor))
 
     async def add_tags(
         self, identity_id: UUID, tags: Iterable[str], *, actor: str, expected_revision: int | None = None
     ) -> Identity:
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._add_tags(identity_id, tags, actor=actor))
+        return await self._view_new_tx(await space._add_tags(identity_id, tags, actor=actor))
 
     async def remove_tags(
         self, identity_id: UUID, tags: Iterable[str], *, actor: str, expected_revision: int | None = None
     ) -> Identity:
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._remove_tags(identity_id, tags, actor=actor))
+        return await self._view_new_tx(await space._remove_tags(identity_id, tags, actor=actor))
 
     async def set_tags(
         self, identity_id: UUID, tags: Iterable[str], *, actor: str, expected_revision: int | None = None
     ) -> Identity:
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._set_tags(identity_id, tags, actor=actor))
+        return await self._view_new_tx(await space._set_tags(identity_id, tags, actor=actor))
 
     async def set_note(
         self, identity_id: UUID, note: str | None, *, actor: str, expected_revision: int | None = None
     ) -> Identity:
         space = self._at(identity_id, expected_revision)
-        return Identity.from_row(await space._set_note(identity_id, note, actor=actor))
+        return await self._view_new_tx(await space._set_note(identity_id, note, actor=actor))
 
     async def update_many(
         self,
@@ -810,7 +816,24 @@ class Identities(Namespace):
         row = await tx.get_identity(identity_id)
         if row is None:  # pragma: no cover - вставлена в этой же транзакции
             raise NotFound("identity", identity_id)
-        return Identity.from_row(row)
+        return await Identities._view(tx, row)
+
+    @staticmethod
+    async def _view(tx: StoreTx, row: IdentityRow) -> Identity:
+        auth = await tx.load_region(row.id, "auth", "default")
+        return Identity.from_row(row, auth_code=auth.code if auth is not None else None)
+
+    @staticmethod
+    async def _views(tx: StoreTx, rows: Sequence[IdentityRow]) -> builtins.list[Identity]:
+        auth = await tx.load_regions([row.id for row in rows], "auth", "default")
+        return [
+            Identity.from_row(row, auth_code=auth[row.id].code if row.id in auth else None) for row in rows
+        ]
+
+    async def _view_new_tx(self, row: IdentityRow) -> Identity:
+        # Под `space.using(session)` читаем незакоммиченную запись той же транзакции.
+        async with self._space._tx() as tx:
+            return await self._view(tx, row)
 
     def _query(self, where: IdentityFilter | None) -> SearchQuery:
         if where is None:
@@ -822,4 +845,6 @@ class Identities(Namespace):
 
     async def _page(self, query: SearchQuery, limit: int, after: str | None, count: bool) -> Page[Identity]:
         found = await self._space._search(query, limit=limit, after=after, count=count)
-        return Page([Identity.from_row(row) for row in found.items], found.next_cursor, found.total)
+        async with self._space._tx(own=True) as tx:
+            items = await self._views(tx, found.items)
+        return Page(items, found.next_cursor, found.total)

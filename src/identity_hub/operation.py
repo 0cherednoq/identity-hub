@@ -36,7 +36,7 @@ from identity_hub.store.base import StoreTx
 if TYPE_CHECKING:
     from identity_hub.lease import Lease
 
-__all__ = ["SUCCESS_DECAY", "Operation", "OperationOutcome", "operation_scope"]
+__all__ = ["SUCCESS_DECAY", "Operation", "OperationOutcome", "apply_fault_effects", "operation_scope"]
 
 SUCCESS_DECAY = 0.5
 
@@ -235,50 +235,9 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
     space = lease.pool.space
     try:
         async with space._tx(own=True) as tx:
-            now = await tx.now()
             if op.key is not None and not op.duplicate:
                 await tx.complete_idempotency_key(namespace(tx.space.id, OPERATION_FAMILY), op.key, "failed")
-            if fault.blame is Blame.IDENTITY:
-                score = await tx.add_error_score(lease.identity_id, fault.weight)
-                if fault.retry_after is not None:
-                    await _cooling(lease, tx, now + fault.retry_after)
-                if score >= service.quarantine_threshold:
-                    await _set_availability(lease, tx, Command(Availability.QUARANTINED, actor=lease.holder))
-            elif fault.blame is Blame.SESSION_INVALID:
-                await tx.set_session_status(lease.identity_id, DEFAULT_SLOT, SessionStatus.INVALID)
-                await apply_region_change(
-                    space,
-                    tx,
-                    lease.identity_id,
-                    "auth",
-                    DEFAULT_SLOT,
-                    Observation(
-                        AuthState.SESSION_INVALID,
-                        observed_at=now,
-                        source=ChangeSource.ERROR,
-                        raw_status=fault.raw_status,
-                        code=fault.code,
-                        actor=lease.holder,
-                    ),
-                    lease_id=lease.lease_id,
-                )
-            elif fault.blame is Blame.IDENTITY_BANNED:
-                await apply_region_change(
-                    space,
-                    tx,
-                    lease.identity_id,
-                    "standing",
-                    "",
-                    Observation(
-                        fault.standing or Standing.BANNED,
-                        observed_at=now,
-                        source=ChangeSource.ERROR,
-                        raw_status=fault.raw_status,
-                        code=fault.code,
-                        actor=lease.holder,
-                    ),
-                    lease_id=lease.lease_id,
-                )
+            await apply_fault_effects(lease, tx, fault)
             # Blame.PROXY — здоровье прокси (ниже, своей транзакцией); Blame.REQUEST — состояние не меняется
             await space._emit(
                 tx,
@@ -305,6 +264,61 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
             )
         except Exception:
             logger.exception("не удалось учесть ошибку прокси %s", lease.proxy_id)
+
+
+async def apply_fault_effects(lease: Lease, tx: StoreTx, fault: Fault) -> Fault:
+    """Применить последствия безопасного `Fault` в переданной транзакции (D-310)."""
+    fault = replace(
+        fault,
+        code=sanitize_text(fault.code, limit=CODE_LIMIT),
+        raw_status=sanitize_text(fault.raw_status, limit=RAW_STATUS_LIMIT),
+    )
+    space = lease.pool.space
+    service = lease.pool.service
+    now = await tx.now()
+    if fault.blame is Blame.IDENTITY:
+        score = await tx.add_error_score(lease.identity_id, fault.weight)
+        if fault.retry_after is not None:
+            await _cooling(lease, tx, now + fault.retry_after)
+        if score >= service.quarantine_threshold:
+            await _set_availability(lease, tx, Command(Availability.QUARANTINED, actor=lease.holder))
+    elif fault.blame is Blame.SESSION_INVALID:
+        await tx.set_session_status(lease.identity_id, DEFAULT_SLOT, SessionStatus.INVALID)
+        await apply_region_change(
+            space,
+            tx,
+            lease.identity_id,
+            "auth",
+            DEFAULT_SLOT,
+            Observation(
+                AuthState.SESSION_INVALID,
+                observed_at=now,
+                source=ChangeSource.ERROR,
+                raw_status=fault.raw_status,
+                code=fault.code,
+                actor=lease.holder,
+            ),
+            lease_id=lease.lease_id,
+        )
+    elif fault.blame is Blame.IDENTITY_BANNED:
+        await apply_region_change(
+            space,
+            tx,
+            lease.identity_id,
+            "standing",
+            "",
+            Observation(
+                fault.standing or Standing.BANNED,
+                observed_at=now,
+                source=ChangeSource.ERROR,
+                raw_status=fault.raw_status,
+                code=fault.code,
+                until=fault.until,
+                actor=lease.holder,
+            ),
+            lease_id=lease.lease_id,
+        )
+    return fault
 
 
 async def _cooling(lease: Lease, tx: StoreTx, until: datetime) -> None:

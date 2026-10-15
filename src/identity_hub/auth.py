@@ -32,7 +32,8 @@ from identity_hub.errors import (
     describe_error,
 )
 from identity_hub.events import EventDraft
-from identity_hub.protocols import Authenticator, LoginChallenge
+from identity_hub.operation import apply_fault_effects
+from identity_hub.protocols import Authenticator, Blame, Fault, LoginChallenge, LoginFailure
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, ChallengeRow, ProviderClaim, StoreTx
@@ -355,7 +356,7 @@ class LoginMixin(SpaceBase):
                         actor="timer",
                         service=identity.service,
                         identity_id=identity_id,
-                        data={"error": "LoginAbandoned"},
+                        data={"error": "LoginAbandoned", "code": "LoginAbandoned"},
                     ),
                 )
                 count += 1
@@ -399,20 +400,63 @@ class LoginMixin(SpaceBase):
                 await self._open_challenge(lease, asked, claim=claim, previous=challenge)
                 entered = False
                 return LoginOutcome.CHALLENGED, None
+            except LoginFailure as failure:
+                fault = failure.fault
+                if fault is not None and failure.raw_status is not None and fault.raw_status is None:
+                    fault = replace(fault, raw_status=failure.raw_status)
+                if fault is not None and fault.blame is Blame.SESSION_INVALID:
+                    # auth-код отказа принадлежит LoginFailure; Observation сохраняет raw_status
+                    # и сразу делает единственный переход logging_in → session_invalid.
+                    fault = replace(fault, code=failure.code)
+                target = (
+                    AuthState.SESSION_INVALID
+                    if fault is not None and fault.blame is Blame.SESSION_INVALID
+                    else AuthState.NO_SESSION
+                )
+                await self._set_auth(
+                    lease,
+                    target,
+                    "identity.login.failed",
+                    {
+                        "error": "LoginFailure",
+                        "code": failure.code,
+                        "retryable": failure.retryable,
+                    },
+                    claim=claim,
+                    outcome="failed",
+                    result={"outcome": "failed", "retryable": failure.retryable},
+                    error_code=failure.code,
+                    auth_code=failure.code,
+                    fault=fault,
+                    previous=challenge,
+                )
+                if fault is not None and fault.blame is Blame.PROXY and lease.proxy_id is not None:
+                    try:
+                        await self._report_proxy_failure(  # type: ignore[attr-defined]
+                            lease.proxy_id,
+                            weight=fault.weight,
+                            actor=lease.holder,
+                            raw_status=fault.raw_status,
+                        )
+                    except Exception:
+                        logger.exception("не удалось учесть ошибку прокси %s", lease.proxy_id)
+                entered = False
+                return LoginOutcome.FAILED, f"LoginFailure: {failure.code}"
             except Exception as exc:
                 name = "LoginTimeout" if isinstance(exc, TimeoutError) else type(exc).__name__
+                code = safe_error_code(exc) if name != "LoginTimeout" else name
                 await self._set_auth(
                     lease,
                     AuthState.NO_SESSION,
                     "identity.login.failed",
-                    {"error": name},
+                    {"error": name, "code": code},
                     claim=claim,
                     outcome="failed",
-                    error_code=safe_error_code(exc) if name != "LoginTimeout" else name,
+                    error_code=code,
                     previous=challenge,
                 )
                 entered = False
-                return LoginOutcome.FAILED, f"{name}: {exc}"[:500]
+                return LoginOutcome.FAILED, name
             # новый вход — новая запись сессии, прежняя остаётся в истории отозванной (D-219)
             payload = lease._seal_session(session, DEFAULT_SLOT)
             await self._set_auth(
@@ -441,7 +485,7 @@ class LoginMixin(SpaceBase):
             logger.warning("вход аккаунта %s прерван: %s", lease.identity_id, describe_error(exc))
             if entered:
                 await asyncio.shield(self._restore_auth(lease, initial, challenge, type(exc).__name__))
-            return LoginOutcome.FAILED, f"{type(exc).__name__}: {exc}"[:500]
+            return LoginOutcome.FAILED, type(exc).__name__
         finally:
             await ctx.close()
             await lease.release()
@@ -476,7 +520,7 @@ class LoginMixin(SpaceBase):
                         service=lease.service,
                         identity_id=lease.identity_id,
                         lease_id=lease.lease_id,
-                        data={"error": error},
+                        data={"error": error, "code": error},
                     ),
                 )
         except Exception as exc:
@@ -529,12 +573,16 @@ class LoginMixin(SpaceBase):
         outcome: str = "succeeded",
         result: dict[str, Any] | None = None,
         error_code: str | None = None,
+        auth_code: str | None = None,
+        fault: Fault | None = None,
         session: Any = None,
         previous: ChallengeRow | None = None,
     ) -> None:
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)
             await self._apply_login(tx, lease, claim, outcome, result=result, error_code=error_code)
+            if fault is not None:
+                await apply_fault_effects(lease, tx, fault)
             if session is not None:
                 await lease._write_session(tx, session, DEFAULT_SLOT, mode="replace")
             if previous is not None:
@@ -545,7 +593,7 @@ class LoginMixin(SpaceBase):
                 lease.identity_id,
                 "auth",
                 DEFAULT_SLOT,
-                Command(state, actor=lease.holder),
+                Command(state, actor=lease.holder, code=auth_code),
                 lease_id=lease.lease_id,
             )
             if event is not None:

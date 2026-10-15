@@ -416,6 +416,12 @@ data = await space.secrets.reveal(identity_id, SecretRef.session("web"), actor="
 Каждое раскрытие пишет событие `identity.secret.revealed` в той же транзакции. `actor` и `reason`
 обязательны и непусты: без автора и причины секрет не раскрывается.
 
+`secrets.replace_credentials()` по умолчанию меняет только credentials: регион `auth`, его код и
+сохранённые сессии остаются прежними. После замены можно сразу запустить `auth.login()`. Если
+карточка не должна продолжать показывать старый код вроде `credentials_rejected`, передайте
+`reset_auth=True`: для `no_session`/`session_invalid` код очищается атомарно с заменой, но живая
+сессия не отзывается; `authenticated`, `logging_in` и `challenge` не меняются.
+
 Объект аренды отдаёт секреты, только пока аренда действует. После `release()`, выхода из
 `async with`, потери или отзыва аренды, а также когда аккаунт уже взял другой воркер,
 `lease.credentials()`, `lease.session()`, `lease.save_session()` и `lease.proxy` бросают `LeaseLost`.

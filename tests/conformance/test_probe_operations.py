@@ -11,7 +11,7 @@ from uuid import UUID
 import pytest
 from tests.fixtures.services import FAKE_TG
 
-from identity_hub import IdentityCreate, IdentityHub, ProbeResult, SpaceHandle
+from identity_hub import IdentityCreate, IdentityHub, Override, ProbeResult, SpaceHandle
 
 pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
 
@@ -87,6 +87,19 @@ async def test_live_operation_makes_region_busy(hub_under_test: IdentityHub, spa
     outcomes = await space.sync.refresh(identity_id, ["auth", "standing"])
 
     assert outcomes.outcomes["auth"] == "busy" and outcomes.outcomes["standing"] != "busy"
+
+
+async def test_probe_cannot_revive_deleted(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    _probes, identity_id = await _setup(hub_under_test, space, "pr_deleted")
+    await space.identities.override(
+        identity_id,
+        Override("standing", "", "deleted", reason="platform deleted", actor="admin"),
+    )
+
+    outcomes = await space.sync.refresh(identity_id, ["standing"])
+
+    assert outcomes.outcomes == {"standing": "sticky"}
+    assert (await space.identities.get(identity_id)).standing == "deleted"
 
 
 async def test_late_probe_result_is_rejected_and_recovery_leaves_no_expired_running(

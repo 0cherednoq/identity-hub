@@ -100,7 +100,7 @@ def event_contributions(event: Event) -> tuple[tuple[str, tuple[tuple[str, str],
     elif event.type == "identity.login.succeeded":
         items.append(("logins.succeeded", (), 1.0))
     elif event.type == "identity.login.failed":
-        items.append(("logins.failed", _dim(code=data.get("code")), 1.0))
+        items.append(("logins.failed", _dim(code=data.get("code") or data.get("error")), 1.0))
     elif event.type.startswith("identity.challenge."):
         outcome = event.type.removeprefix("identity.challenge.")
         if outcome in {"opened", "answered", "expired"}:
