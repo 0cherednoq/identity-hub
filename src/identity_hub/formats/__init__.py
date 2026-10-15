@@ -28,6 +28,7 @@ from identity_hub.formats.models import (
     WebGl,
 )
 from identity_hub.formats.namespaces import DumpNamespace, LoadNamespace
+from identity_hub.formats.proxy import ProxyUrl
 
 __all__ = [
     "ApiKey",
@@ -49,6 +50,7 @@ __all__ = [
     "PartitionKey",
     "PasswordCredentials",
     "PrivateKeyCredentials",
+    "ProxyUrl",
     "RecoveryCodes",
     "SameSite",
     "Screen",

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
-from identity_hub.crypto import SecretValue, associated_data, credential_associated_data
+from identity_hub.crypto import associated_data, credential_associated_data
 from identity_hub.domain.credentials import ACTIVE, is_expired, session_event_data, session_mode
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
@@ -45,6 +45,7 @@ from identity_hub.errors import (
     describe_error,
 )
 from identity_hub.events import EventDraft
+from identity_hub.formats.proxy import ProxyUrl
 from identity_hub.metrics import record_metric
 from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
@@ -189,10 +190,12 @@ class Lease:
         return self._row.proxy_id
 
     @property
-    def proxy(self) -> SecretValue | None:
+    def proxy(self) -> ProxyUrl | None:
         """URL прокси аренды с логином и паролем: строка для клиента платформы — `lease.proxy.reveal()`."""
         url = self._proxy_url()
-        return SecretValue(url) if url is not None else None
+        if url is None:
+            return None
+        return ProxyUrl(url)
 
     def _proxy_url(self) -> str | None:
         self.check()
@@ -642,7 +645,7 @@ class Lease:
         defaults = {key: value for key, value in defaults.items() if value is not None}
         proxy = self.proxy
         if proxy is not None:
-            defaults["proxy"] = {"server": proxy.reveal()}
+            defaults["proxy"] = proxy.dump.playwright()
         defaults.update(options)
         context = browser.new_context(**defaults)
         if inspect.isawaitable(context):

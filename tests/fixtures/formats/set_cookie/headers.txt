@@ -1,0 +1,2 @@
+sid=alpha; Path=/account; Max-Age=3600; Secure; HttpOnly; SameSite=Lax
+theme=dark; Domain=.example.test; Path=/

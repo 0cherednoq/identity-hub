@@ -14,6 +14,8 @@ from collections.abc import Collection, Iterator, Mapping
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
+from http.cookiejar import CookieJar
+from http.cookies import SimpleCookie
 from typing import Any, ClassVar, Literal, Self, cast
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
@@ -285,6 +287,21 @@ class CookiesDump(DumpNamespace[Any]):
 
         return tough_cookie.dump(self._value, strict=strict)
 
+    def cookiejar(self, *, strict: bool = False) -> CookieJar:
+        from identity_hub.formats import cookiejar
+
+        return cookiejar.dump(self._value, strict=strict)
+
+    def aiohttp(self, *, strict: bool = False) -> list[tuple[SimpleCookie, str]]:
+        from identity_hub.formats import aiohttp
+
+        return aiohttp.dump(self._value, strict=strict)
+
+    def scrapy(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import scrapy
+
+        return scrapy.dump(self._value, strict=strict)
+
 
 class CookiesLoad(LoadNamespace[Any]):
     def json(self, data: Any, *, strict: bool = False) -> Cookies:
@@ -321,6 +338,23 @@ class CookiesLoad(LoadNamespace[Any]):
         from identity_hub.formats import tough_cookie
 
         return tough_cookie.load(data, strict=strict)
+
+    def cookiejar(self, data: CookieJar, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import cookiejar
+
+        return cookiejar.load(data, strict=strict)
+
+    def set_cookie(
+        self,
+        data: Any,
+        *,
+        url: str,
+        received_at: float | datetime | None = None,
+        strict: bool = False,
+    ) -> Cookies:
+        from identity_hub.formats import set_cookie
+
+        return set_cookie.load(data, url=url, received_at=received_at, strict=strict)
 
 
 class Cookies(RootModel[list[Cookie]]):

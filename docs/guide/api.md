@@ -89,6 +89,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 - credentials: `PasswordCredentials`, `OtpSecret`, `RecoveryCodes`, `ApiKey`, `SigningKey`,
   `OAuthClient`, `OAuth1Client`, `PrivateKeyCredentials`, `ClientCertificate`;
 - инфраструктура конвертеров: `DumpNamespace`, `LoadNamespace`, `FormatLossWarning`.
+- прокси: `ProxyUrl` — маскированный наследник `SecretValue` с клиентскими форматами в `dump`.
 
 JSON — первый канонический формат: `cookies.dump.json()`, `Cookies.load.json(data)` и
 `Cookies.load(data)`. `dump` и `load` — `ClassVar`, поэтому в сериализацию модели не попадают.
@@ -101,6 +102,16 @@ JSON — первый канонический формат: `cookies.dump.json(
 `strict=True` — `ValidationFailed`. Аренда с `BrowserSession` может создать и сохранить
 контекст через `async with lease.playwright_context(browser)` либо применить cookie к уже
 открытому WebDriver через `await lease.selenium_apply(driver)`.
+
+Для HTTP-клиентов `cookies.dump.cookiejar()` возвращает строгий stdlib `CookieJar`, пригодный
+для httpx, requests и curl_cffi; `cookies.dump.aiohttp()` — пары `(SimpleCookie,
+response_url)`. Входящие заголовки разбираются как
+`Cookies.load.set_cookie(headers, url=..., received_at=...)`, а
+`cookies.dump.scrapy()` отдаёт список cookie без потери дублей имён. Строку заголовка для URL
+формирует `cookies.header_for(url)`. `lease.proxy` возвращает `ProxyUrl | None`; сырой URL
+доступен только явным `reveal()`, а клиентские формы — через `dump.playwright()`,
+`dump.httpx()`, `dump.requests()` и `dump.aiohttp()`.
+
 | `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
 | `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |

@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** S6.3 Реализовать HTTP-конвертеры
-- **Начата:** 2026-10-15
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Реализовать cookiejar и aiohttp
-  - [ ] Реализовать Set-Cookie и Scrapy
-  - [ ] Добавить ProxyUrl и форматы прокси
-  - [ ] Добавить fixtures, round-trip и HTTP tests
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -36,12 +33,12 @@
 | S5.2 | Перевод хранения, предупреждения и документация | S5.1 | done |  | запрос владельца, `D-313` |
 | S6.1 | Модели, нормализация и каркас `dump`/`load` | — | done |  | запрос владельца, `D-314` |
 | S6.2 | Браузеры: `dump`/`load` и методы аренды | S6.1 | done |  | `D-314` |
-| S6.3 | HTTP-клиенты: `dump`/`load` | S6.1 | in_progress |  | `D-314` |
+| S6.3 | HTTP-клиенты: `dump`/`load` | S6.1 | done |  | `D-314` |
 | S6.4 | Файлы и автоопределение | S6.1, S6.2 | todo |  | `D-314` |
 | S6.5 | Отпечаток: `dump`/`load` | S6.1, S6.2 | todo |  | `D-314` |
 | S6.6 | Интеграция с хабом и документация | S5.2, S6.1, S6.2, S6.3, S6.4, S6.5 | todo |  | `D-314`; закрытие S5–S6 |
 
-**Итого:** 13 / 17 done
+**Итого:** 14 / 17 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -57,3 +54,4 @@
 2026-10-15 · S5.2 · done · batch conversion, CLI, warnings, audit and 1000-row round trip
 2026-10-15 · S6.1 · done · canonical models, RFC OTP, JSON namespaces and per-slot session schemas
 2026-10-15 · S6.2 · done · Playwright storage_state, CDP/Puppeteer, Selenium, extension/Crawlee/tough-cookie и lease helpers; 26 targeted tests
+2026-10-15 · S6.3 · done · CookieJar/aiohttp/Set-Cookie/Scrapy, строгая область cookie, ProxyUrl; D-315; 40 passed, 2 optional skipped

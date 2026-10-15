@@ -20,6 +20,9 @@
 - Браузерные конвертеры `Cookies.dump/load` для Playwright, CDP/Puppeteer, Selenium,
   Chrome extensions, Crawlee и tough-cookie; `Lease.playwright_context()` и
   `Lease.selenium_apply()` применяют сессию без обязательных зависимостей от этих библиотек.
+- HTTP-конвертеры cookie для `http.cookiejar`, aiohttp, `Set-Cookie` и Scrapy, включая строгую
+  host-only политику; маскированный `ProxyUrl` формирует аргументы Playwright, httpx, requests
+  и aiohttp через `lease.proxy.dump.*`.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается
