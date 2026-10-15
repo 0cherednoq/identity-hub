@@ -36,6 +36,12 @@ def test_every_server_admins_issue_is_traced() -> None:
             assert TASK.findall(cell), f"ишью {number}: нет задач"
 
 
+def test_owner_requests_are_traced_to_s5_and_s6() -> None:
+    table = PLAN[PLAN.index("## 8. Матрица трассировки") :]
+    assert "| Запрос владельца: открытое хранение | S5.1, S5.2 |" in table
+    assert "| Запрос владельца: стандартные форматы | S6.1, S6.2, S6.3, S6.4, S6.5, S6.6 |" in table
+
+
 def test_plan_tasks_match_progress() -> None:
     progress = _progress()
     table = PLAN[PLAN.index("## 8. Матрица трассировки") :]

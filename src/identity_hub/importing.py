@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import pydantic_core
+from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
@@ -68,7 +69,7 @@ class ImportRecord:
     note: str | None = None
     # секреты не попадают в repr: запись импорта печатают в логах и трассировках (R2-S14)
     credentials: Mapping[str, Any] | None = field(default=None, repr=False)
-    sessions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict, repr=False)
+    sessions: Mapping[str, BaseModel | Mapping[str, Any]] = field(default_factory=dict, repr=False)
     links: Mapping[str, str] = field(default_factory=dict)
     proxy: str | None = field(default=None, repr=False)
     verifications: Mapping[str, str] = field(default_factory=dict)
@@ -453,7 +454,13 @@ class ImportingMixin(SpaceBase):
             # шифротекст привязан к id записи импорта через AAD — перешифровать под существующий id
             session = self.hub._envelope.open_json(payload, _aad(item.prepared.row.id, slot))
             resealed = self.hub._envelope.seal(_to_json(session), _aad(identity_id, slot))
-            await tx.put_session(identity_id, slot, resealed, fencing=fencing or 0)
+            await tx.put_session(
+                identity_id,
+                slot,
+                resealed,
+                fencing=fencing or 0,
+                expires_at=item.prepared.session_expirations.get(slot),
+            )
         from identity_hub.state import DEFAULT_SLOT, apply_region_change
 
         if DEFAULT_SLOT in item.prepared.sessions:
@@ -844,7 +851,7 @@ def _record_payload(record: ImportRecord) -> dict[str, Any]:
         "tags": sorted(record.tags),
         "note": record.note,
         "credentials": dict(record.credentials) if record.credentials is not None else None,
-        "sessions": {key: dict(value) for key, value in record.sessions.items()},
+        "sessions": {key: _session_payload(value) for key, value in record.sessions.items()},
         "links": dict(record.links),
         "proxy": record.proxy,
         "verifications": dict(record.verifications),
@@ -888,6 +895,19 @@ def _payload_record(value: Mapping[str, Any]) -> ImportRecord:
             for item in value.get("credential_records") or ()
         ),
     )
+
+
+def _session_payload(value: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
+    from identity_hub.formats import BrowserSession, Cookies
+
+    if isinstance(value, Cookies):
+        value = BrowserSession(cookies=value)
+    if isinstance(value, BaseModel):
+        converted = pydantic_core.to_jsonable_python(reveal(value.model_dump()))
+        if not isinstance(converted, dict):
+            raise ValidationFailed("сессия импорта должна сериализоваться в JSON-объект")
+        return converted
+    return dict(value)
 
 
 def _import_aad(run_id: UUID, position: int) -> bytes:

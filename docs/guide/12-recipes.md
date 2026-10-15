@@ -2,6 +2,59 @@
 
 Типовые сценарии целиком. Каждый показывает, какие механизмы библиотеки сочетать.
 
+## Браузерный аккаунт
+
+**Задача:** хранить cookie и localStorage, закрепить отпечаток и прокси, а обновлённый
+`storage_state` сохранять автоматически.
+
+```python
+from pydantic import BaseModel
+from identity_hub import (
+    BrowserFingerprint, BrowserSession, Cookies, IdentityCreate,
+    PasswordCredentials, ProxyPolicy, Service,
+)
+
+class ShopProfile(BaseModel):
+    fingerprint: BrowserFingerprint
+
+SHOP = Service(
+    name="shop",
+    title="Shop",
+    credentials=PasswordCredentials,
+    session=BrowserSession,
+    session_auth_cookies=frozenset({"sessionid"}),
+    profile=ShopProfile,
+    filterable_profile=frozenset({"fingerprint.browser"}),
+    proxy_policy=ProxyPolicy(group="residential", sticky=True),
+)
+
+# uploaded может быть JSON, storage_state, Netscape/cookies.txt или их base64.
+cookies = Cookies.load(uploaded)
+identity = await space.identities.create(
+    IdentityCreate(
+        service=SHOP,
+        external_ref="seller-42",
+        credentials={"login": "alice", "password": "secret"},
+        session=BrowserSession(cookies=cookies),
+        profile={"fingerprint": BrowserFingerprint.load.browserforge(fingerprint_json)},
+        lifecycle="ready",
+    ),
+    actor="intake",
+)
+
+pool = space.pools.define("chrome-shops", service=SHOP, holder="worker-1")
+async with pool.lease(profile={"fingerprint.browser": "chrome"}) as lease:
+    async with lease.playwright_context(browser) as context:
+        page = await context.new_page()
+        await page.goto("https://shop.example/account")
+```
+
+`playwright_context` передаёт в новый context сессию, отпечаток и `lease.proxy`, а при выходе
+вызывает `storage_state()` и `lease.save_session()`. Срок записи берётся из самой ранней cookie
+`sessionid`; переданный вручную `expires_at` имеет приоритет. Тот же аккаунт можно использовать
+без браузера: `cookies=(await lease.session()).cookies.dump.cookiejar()` для httpx/requests и
+`proxy=lease.proxy.dump.httpx()`.
+
 ## Парсинг каналов пулом аккаунтов
 
 **Задача:** 200 аккаунтов читают публичные каналы, каждый не больше 300 запросов в час.

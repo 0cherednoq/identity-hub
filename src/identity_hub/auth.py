@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -458,7 +458,7 @@ class LoginMixin(SpaceBase):
                 entered = False
                 return LoginOutcome.FAILED, name
             # новый вход — новая запись сессии, прежняя остаётся в истории отозванной (D-219)
-            payload = lease._seal_session(session, DEFAULT_SLOT)
+            payload, session_expires_at = lease._seal_session_with_expiry(session, DEFAULT_SLOT)
             await self._set_auth(
                 lease,
                 AuthState.AUTHENTICATED,
@@ -468,6 +468,7 @@ class LoginMixin(SpaceBase):
                 outcome="succeeded",
                 result={"outcome": "succeeded"},
                 session=payload,
+                session_expires_at=session_expires_at,
                 previous=challenge,
             )
             entered = False
@@ -576,6 +577,7 @@ class LoginMixin(SpaceBase):
         auth_code: str | None = None,
         fault: Fault | None = None,
         session: Any = None,
+        session_expires_at: datetime | None = None,
         previous: ChallengeRow | None = None,
     ) -> None:
         async with self._tx(own=True) as tx:
@@ -584,7 +586,13 @@ class LoginMixin(SpaceBase):
             if fault is not None:
                 await apply_fault_effects(lease, tx, fault)
             if session is not None:
-                await lease._write_session(tx, session, DEFAULT_SLOT, mode="replace")
+                await lease._write_session(
+                    tx,
+                    session,
+                    DEFAULT_SLOT,
+                    mode="replace",
+                    expires_at=session_expires_at,
+                )
             if previous is not None:
                 await tx.resolve_challenge(previous.id)
             await apply_region_change(

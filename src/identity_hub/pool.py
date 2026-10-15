@@ -199,7 +199,7 @@ class Pool:
             required_factors=frozenset(factors),
             tags=self.tags | frozenset(normalize_tag(tag) for tag in tags),
             labels=merged_labels or None,
-            profile=merged_profile or None,
+            profile=_expand_profile_filter(merged_profile) or None,
             among=among,
             exclude=frozenset(exclude),
             shared=self.shared,
@@ -392,6 +392,30 @@ def _check_profile_filter(service: Service, profile: Mapping[str, Any]) -> None:
     unknown = set(profile) - service.filterable_profile
     if unknown:
         raise ValidationFailed(f"фильтр профиля: поля не объявлены filterable: {sorted(unknown)}")
+
+
+def _expand_profile_filter(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """Превратить `fingerprint.browser=chrome` в JSON containment по вложенному объекту."""
+    result: dict[str, Any] = {}
+    for path, value in profile.items():
+        target = result
+        parts = path.split(".")
+        for part in parts[:-1]:
+            existing = target.get(part)
+            if existing is None:
+                nested: dict[str, Any] = {}
+                target[part] = nested
+                target = nested
+            elif isinstance(existing, dict):
+                target = existing
+            else:
+                raise ValidationFailed(f"фильтр профиля: конфликт пути {path!r}")
+        leaf = parts[-1]
+        existing = target.get(leaf)
+        if isinstance(existing, dict) and not isinstance(value, Mapping):
+            raise ValidationFailed(f"фильтр профиля: конфликт пути {path!r}")
+        target[leaf] = value
+    return result
 
 
 class PoolsMixin:

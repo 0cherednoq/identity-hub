@@ -29,6 +29,9 @@
 - `BrowserFingerprint.load` принимает browserforge и fingerprint-suite, а `dump` формирует
   настройки Playwright, Camoufox, AdsPower, GoLogin и версионированные impersonation-цели для
   curl_cffi, tls-client, primp и rnet.
+- `Service.session_auth_cookies` выводит срок `BrowserSession` из auth-cookie при любой записи;
+  импорт принимает `BrowserSession` и `Cookies` напрямую, а `filterable_profile` поддерживает
+  вложенные пути наподобие `fingerprint.browser`.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается

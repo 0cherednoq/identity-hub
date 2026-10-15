@@ -611,7 +611,11 @@ class Lease:
         """
         self.check()
         mode = session_mode(mode)
-        payload = self._seal_session(session, slot)  # до открытия транзакции (T-5)
+        payload, inferred_expiry = self._seal_session_with_expiry(
+            session, slot
+        )  # до открытия транзакции (T-5)
+        if expires_at is None:
+            expires_at = inferred_expiry
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
             await self._write_session(tx, payload, slot, mode=mode, expires_at=expires_at)
@@ -677,9 +681,19 @@ class Lease:
                     await added
 
     def _seal_session(self, session: BaseModel | Mapping[str, Any], slot: str) -> Any:
-        model = validate_model(self.pool.service.session_schema(slot), session, f"session {slot}")
+        """Внутренний контракт login-пайплайна: вернуть только sealed payload."""
+        payload, _ = self._seal_session_with_expiry(session, slot)
+        return payload
+
+    def _seal_session_with_expiry(
+        self, session: BaseModel | Mapping[str, Any], slot: str
+    ) -> tuple[Any, datetime | None]:
+        service = self.pool.service
+        model = validate_model(
+            service.session_schema(slot), service.session_input(slot, session), f"session {slot}"
+        )
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub._seal_stored_model(model, aad)
+        return self.pool.space.hub._seal_stored_model(model, aad), service.session_expiry(model)
 
     async def _write_session(
         self, tx: StoreTx, payload: Any, slot: str, *, mode: str, expires_at: datetime | None = None

@@ -75,6 +75,42 @@ def test_unsupported_quota_reset_is_not_public() -> None:
     assert "reset_quotas" not in identity_hub.__all__
 
 
+def test_standard_format_exports_are_allowlisted_and_documented() -> None:
+    names = {
+        "ApiKey",
+        "BrowserFingerprint",
+        "BrowserSession",
+        "ClientCertificate",
+        "Cookie",
+        "Cookies",
+        "DumpNamespace",
+        "FormatLossWarning",
+        "Geolocation",
+        "HeaderSession",
+        "LoadNamespace",
+        "OAuth1Client",
+        "OAuth1Session",
+        "OAuthClient",
+        "OriginStorage",
+        "OtpSecret",
+        "PartitionKey",
+        "PasswordCredentials",
+        "PrivateKeyCredentials",
+        "ProxyUrl",
+        "RecoveryCodes",
+        "SameSite",
+        "Screen",
+        "SigningKey",
+        "TokenSession",
+        "UserAgentData",
+        "Viewport",
+        "WebGl",
+    }
+    assert names <= set(identity_hub.__all__)
+    guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
+    assert [name for name in sorted(names) if f"`{name}`" not in guide] == []
+
+
 HUB_PUBLIC = {
     # жизненный цикл и реестр сервисов
     "start",

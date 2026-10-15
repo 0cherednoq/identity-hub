@@ -851,9 +851,7 @@ class MemoryTx(StoreTx):
         # как JSONB `@>`: ключ должен быть, `{"country": None}` не совпадает с отсутствующим полем (R2-P12)
         if query.labels and any(k not in row.labels or row.labels[k] != v for k, v in query.labels.items()):
             return False
-        if query.profile and any(
-            k not in row.profile or row.profile[k] != v for k, v in query.profile.items()
-        ):
+        if query.profile and not self._contains(row.profile, query.profile):
             return False
         if query.exclude and row.id in query.exclude:
             return False

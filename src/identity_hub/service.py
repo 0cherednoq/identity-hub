@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel, ConfigDict
 
@@ -176,6 +176,7 @@ class Service:
     credentials: type[BaseModel] = EmptyModel
     session: type[BaseModel] = EmptyModel
     session_slots: Mapping[str, type[BaseModel]] = field(default_factory=dict)
+    session_auth_cookies: frozenset[str] = frozenset()
     filterable_profile: frozenset[str] = frozenset()
     searchable_profile: frozenset[str] = frozenset()
     operations: Mapping[str, OperationRule] = field(default_factory=dict)
@@ -209,6 +210,24 @@ class Service:
         if not isinstance(slot, str) or not 1 <= len(slot) <= 64:
             raise ValidationFailed("session slot: от 1 до 64 символов")
         return self.session_slots.get(slot, self.session)
+
+    def session_input(self, slot: str, value: Any) -> Any:
+        """Нормализовать удобные входные формы перед валидацией схемой слота."""
+        from identity_hub.formats import BrowserSession, Cookies
+
+        schema = self.session_schema(slot)
+        if issubclass(schema, BrowserSession) and isinstance(value, Cookies):
+            return BrowserSession(cookies=value)
+        return value
+
+    def session_expiry(self, model: BaseModel) -> datetime | None:
+        """Срок BrowserSession по объявленным auth-cookie; для остальных моделей срока нет."""
+        from identity_hub.formats import BrowserSession
+
+        if not self.session_auth_cookies or not isinstance(model, BrowserSession):
+            return None
+        timestamp = model.expires_at(self.session_auth_cookies)
+        return datetime.fromtimestamp(timestamp, UTC) if timestamp is not None else None
 
     def credential_schema(self, kind: str) -> type[BaseModel]:
         """Схема секрета вида credentials; неизвестный вид — `ValidationFailed` (D-214)."""
@@ -322,11 +341,19 @@ class Service:
             errors.append(
                 "normalize_ref_version: своя нормализация требует версии ≥ 1 (0 — str.strip по умолчанию)"
             )
+        unknown_filterable = {
+            path for path in self.filterable_profile if not _model_path_exists(self.profile, path)
+        }
+        if unknown_filterable:
+            errors.append(f"filterable_profile: нет в схеме profile: {sorted(unknown_filterable)}")
+        if self.profile_encrypted and any("." in path for path in self.filterable_profile):
+            errors.append("filterable_profile: вложенные пути несовместимы с profile_encrypted")
         profile_fields = set(self.profile.model_fields)
-        for attr in ("filterable_profile", "searchable_profile"):
-            unknown = set(getattr(self, attr)) - profile_fields
-            if unknown:
-                errors.append(f"{attr}: нет в схеме profile: {sorted(unknown)}")
+        unknown_searchable = set(self.searchable_profile) - profile_fields
+        if unknown_searchable:
+            errors.append(f"searchable_profile: нет в схеме profile: {sorted(unknown_searchable)}")
+        if any(not isinstance(name, str) or not name for name in self.session_auth_cookies):
+            errors.append("session_auth_cookies: имена cookie должны быть непустыми строками")
         for code, state in self.standing_codes.items():
             if state not in set(Standing):
                 errors.append(f"standing_codes[{code!r}]: неизвестное состояние {state!r}")
@@ -417,6 +444,34 @@ class Service:
 
 
 _PROBES = ("auth", "standing", "verification")
+
+
+def _model_path_exists(model: type[BaseModel], path: str) -> bool:
+    if not isinstance(path, str) or not path or any(not part for part in path.split(".")):
+        return False
+    current = model
+    parts = path.split(".")
+    for index, part in enumerate(parts):
+        field_info = current.model_fields.get(part)
+        if field_info is None:
+            return False
+        if index == len(parts) - 1:
+            return True
+        nested = _nested_model(field_info.annotation)
+        if nested is None:
+            return False
+        current = nested
+    return True
+
+
+def _nested_model(annotation: Any) -> type[BaseModel] | None:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    for argument in get_args(annotation):
+        nested = _nested_model(argument)
+        if nested is not None:
+            return nested
+    return None
 
 
 def _is_async(function: object) -> bool:

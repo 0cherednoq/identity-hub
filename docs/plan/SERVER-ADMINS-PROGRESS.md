@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** S6.6 Интегрировать форматы с хабом и закрыть S5-S6
-- **Начата:** 2026-10-15
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Добавить session_auth_cookies и expires_at
-  - [ ] Поддержать BrowserSession/Cookies в импорте
-  - [ ] Принять решение по фильтру fingerprint
-  - [ ] Завершить руководство, traceability и allowlist
-  - [ ] Выполнить полный check и anti-flake 3 раза
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -40,9 +36,11 @@
 | S6.3 | HTTP-клиенты: `dump`/`load` | S6.1 | done |  | `D-314` |
 | S6.4 | Файлы и автоопределение | S6.1, S6.2 | done |  | `D-314` |
 | S6.5 | Отпечаток: `dump`/`load` | S6.1, S6.2 | done |  | `D-314` |
-| S6.6 | Интеграция с хабом и документация | S5.2, S6.1, S6.2, S6.3, S6.4, S6.5 | in_progress |  | `D-314`; закрытие S5–S6 |
+| S6.6 | Интеграция с хабом и документация | S5.2, S6.1, S6.2, S6.3, S6.4, S6.5 | done |  | `D-314`; закрытие S5–S6 |
+| S7.1 | `AcceptPolicy`: модель, дефолт сервиса, постановка на приёмку | — | todo |  | запрос владельца, `D-315` |
+| S7.2 | `AcceptanceWorker`: применение политики, retryable, закрытие фазы | S7.1 | todo |  | `D-315` |
 
-**Итого:** 16 / 17 done
+**Итого:** 17 / 19 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -61,3 +59,4 @@
 2026-10-15 · S6.3 · done · CookieJar/aiohttp/Set-Cookie/Scrapy, строгая область cookie, ProxyUrl; D-315; 40 passed, 2 optional skipped
 2026-10-15 · S6.4 · done · Netscape/HAR, safe autodetect, base64, explicit line templates and unsafe binary rejection; 51 passed, 2 optional skipped
 2026-10-15 · S6.5 · done · Browserforge/fingerprint-suite, browser and antidetect dumps, versioned impersonation targets; 93 passed, 2 optional skipped
+2026-10-16 · S6.6 · done · Hub integration, nested fingerprint filters, guide/traceability; full check 2128 passed, 5 skipped; anti-flake 3x60 passed

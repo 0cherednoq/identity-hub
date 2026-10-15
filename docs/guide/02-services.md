@@ -41,9 +41,10 @@ TELEGRAM = Service(
 | `credentials` | пустая модель | Схема данных для входа: пароль, телефон, API-ключи. По умолчанию шифруется; режим хранения задаёт хаб. |
 | `session` | пустая модель | Схема сессии одного слота: токен, cookie, auth_key. По умолчанию шифруется; режим хранения задаёт хаб. |
 | `session_slots` | `{}` | Схемы отдельных слотов (`{"api": TokenSession}`); остальные слоты используют `session`. |
+| `session_auth_cookies` | `∅` | Имена cookie, по минимальному сроку которых автоматически задаётся `expires_at` у `BrowserSession`. |
 | `profile` | пустая модель | Персона аккаунта: имя, страна, пол, возраст. Хранится открыто (или частично шифруется). |
 | `attributes` | пустая модель | Технические параметры: device_id, user-agent, версия приложения. Открыто. |
-| `filterable_profile` | `∅` | Поля профиля, по которым можно фильтровать пулы и поиск (`country:DE`) |
+| `filterable_profile` | `∅` | Поля профиля для фильтра пулов, включая вложенные пути (`country`, `fingerprint.browser`) |
 | `searchable_profile` | `∅` | Поля профиля, попадающие в полнотекстовый поиск |
 | `profile_encrypted` | `False` | Шифровать профиль; открытыми остаются только `filterable_profile` |
 | `operations` | `{}` | Виды операций и их правила допуска и квоты → [лимиты](08-limits.md) |
@@ -79,6 +80,51 @@ service = Service(
 
 `default` в этом примере проверяется как `BrowserSession`, `api` — как `TokenSession`; любой
 необъявленный слот сохраняет совместимое прежнее поведение и использует общую `session`.
+
+## Стандартные форматы
+
+Модели из `identity_hub.formats` необязательны: сервис может по-прежнему объявить свою
+Pydantic-модель. Для браузерного аккаунта обычно достаточно:
+
+```python
+class ShopProfile(BaseModel):
+    fingerprint: BrowserFingerprint
+
+SHOP = Service(
+    name="shop",
+    title="Shop",
+    credentials=PasswordCredentials,
+    session=BrowserSession,
+    session_slots={"api": TokenSession},
+    session_auth_cookies=frozenset({"sessionid"}),
+    profile=ShopProfile,
+    filterable_profile=frozenset({"fingerprint.browser"}),
+)
+```
+
+`session_auth_cookies` применяется при регистрации, импорте, `lease.save_session()` и
+`secrets.replace_session()`. Если передан свой `expires_at`, он имеет приоритет. Сессионная
+auth-cookie или отсутствие подходящих cookie оставляет срок пустым. Вложенный фильтр задаётся
+так: `pool.lease(profile={"fingerprint.browser": "chrome"})`. Для `profile_encrypted=True`
+используйте плоское открытое поле: частичное раскрытие вложенной модели не поддерживается.
+
+| Модель и формат | Выгрузка / загрузка | Явные потери |
+|---|---|---|
+| Канонический JSON | `dump.json()` / `load.json()` | нет |
+| Playwright | `Cookies.dump/load.playwright()`, `BrowserSession.dump/load.playwright()` | `sessionStorage`; Chromium может нормализовать незаданный SameSite |
+| CDP / Puppeteer | `dump/load.cdp()`, `dump.puppeteer()` | Puppeteer — только выгрузка |
+| Selenium | `dump/load.selenium()` | partitioned cookie пропускаются |
+| Chrome extensions | `dump/load.chrome_extension()` | служебные поля расширений не канонизируются |
+| Crawlee Python / JS | `dump/load.crawlee()`, `dump/load.tough_cookie()` | поля вне cookie-схемы Crawlee |
+| stdlib / HTTP | `dump/load.cookiejar()`, `dump.aiohttp()`, `load.set_cookie()`, `dump.scrapy()` | Scrapy теряет срок, HttpOnly и SameSite; partitioned не поддерживаются |
+| Netscape / curl | `dump/load.netscape()` | SameSite и partition key |
+| HAR | `load.har()` | только загрузка; HAR 1.2 не задаёт SameSite |
+| Автоопределение | `Cookies.load(data)`, `BrowserSession.load(data)` | принимает только перечисленные безопасные формы |
+| Отпечаток | `BrowserFingerprint.load.browserforge/fingerprint_suite()`, `dump.playwright_context/camoufox/adspower/gologin/impersonate()` | несовпадение UA и TLS-цели, не-Firefox для Camoufox |
+
+Потеря выдаёт `FormatLossWarning`; `strict=True` превращает её в `ValidationFailed`. Значения
+cookie, токенов, паролей и URL прокси скрыты в `repr`. Pickle и Chrome `Cookies` SQLite не
+загружаются. Конвертеры не требуют установки Playwright, Selenium или HTTP-клиентов.
 
 ## Операции и правила допуска
 

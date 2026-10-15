@@ -68,6 +68,7 @@ class PreparedIdentity:
     row: NewIdentity
     credentials: StoredPayload | None
     sessions: dict[str, StoredPayload]
+    session_expirations: dict[str, datetime | None]
     links: dict[str, UUID]
     credential_records: tuple[PreparedCredential, ...] = ()
 
@@ -124,11 +125,15 @@ def prepare_identity(
         sealed = space.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
         records.append(PreparedCredential(kind, name, sealed, public, record.expires_at))
     session_payloads: dict[str, StoredPayload] = {}
+    session_expirations: dict[str, datetime | None] = {}
     for slot, data in (sessions or {}).items():
-        model = validate_model(service.session_schema(slot), data, f"sessions.{slot}")
+        model = validate_model(
+            service.session_schema(slot), service.session_input(slot, data), f"sessions.{slot}"
+        )
         session_payloads[slot] = space.hub._seal_stored_model(
             model, associated_data("ih_sessions", identity_id, slot)
         )
+        session_expirations[slot] = service.session_expiry(model)
     profile_secret = (
         envelope.seal_model(secret_profile, associated_data("ih_identities", identity_id, "profile"))
         if secret_profile
@@ -162,6 +167,7 @@ def prepare_identity(
         row=row,
         credentials=creds_payload,
         sessions=session_payloads,
+        session_expirations=session_expirations,
         links=link_map,
         credential_records=tuple(records),
     )
@@ -295,7 +301,13 @@ class IdentitiesMixin(SpaceBase):
                 expires_at=record.expires_at,
             )
         for slot, payload in prepared.sessions.items():
-            await tx.put_session(identity_id, slot, payload, fencing=0)
+            await tx.put_session(
+                identity_id,
+                slot,
+                payload,
+                fencing=0,
+                expires_at=prepared.session_expirations.get(slot),
+            )
         now = await tx.now()
         await tx.save_region(
             identity_id,
