@@ -1,0 +1,13 @@
+[
+  {
+    "name": "sid",
+    "value": "fixture-secret",
+    "domain": "example.com",
+    "host_only": false,
+    "path": "/",
+    "expires": 1767225600.0,
+    "secure": true,
+    "http_only": true,
+    "same_site": "lax"
+  }
+]

@@ -97,7 +97,7 @@ class SecretsAdminMixin(SpaceBase):
             raise ValidationFailed("session slot must contain from 1 to 64 characters")
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
-        model = validate_model(service.session, session, "session")
+        model = validate_model(service.session_schema(slot), session, f"session {slot}")
         payload = self.hub._seal_stored_model(model, associated_data("ih_sessions", identity_id, slot))
         command = {"identity_id": identity_id, "slot": slot, "expires_at": expires_at, "mode": mode}
         async with self._tx(checked=idempotency_key is None) as tx:
@@ -210,7 +210,9 @@ class SecretsAdminMixin(SpaceBase):
                 found = await tx.get_session(identity_id, slot)
                 value = (
                     self.hub._open_stored_model(
-                        service.session, found[0], associated_data("ih_sessions", identity_id, slot)
+                        service.session_schema(slot),
+                        found[0],
+                        associated_data("ih_sessions", identity_id, slot),
                     )
                     if found
                     else None

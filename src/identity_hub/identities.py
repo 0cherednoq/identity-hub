@@ -125,7 +125,7 @@ def prepare_identity(
         records.append(PreparedCredential(kind, name, sealed, public, record.expires_at))
     session_payloads: dict[str, StoredPayload] = {}
     for slot, data in (sessions or {}).items():
-        model = validate_model(service.session, data, f"sessions.{slot}")
+        model = validate_model(service.session_schema(slot), data, f"sessions.{slot}")
         session_payloads[slot] = space.hub._seal_stored_model(
             model, associated_data("ih_sessions", identity_id, slot)
         )

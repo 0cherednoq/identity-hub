@@ -1,0 +1,22 @@
+{
+  "cookies": [
+    {
+      "name": "sid",
+      "value": "fixture-secret",
+      "domain": "example.com",
+      "host_only": true,
+      "path": "/",
+      "expires": null,
+      "secure": true,
+      "http_only": true
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://example.com",
+      "local_storage": {"theme": "dark"},
+      "session_storage": {}
+    }
+  ],
+  "indexed_db": null
+}

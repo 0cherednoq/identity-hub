@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pydantic_core
@@ -129,7 +129,9 @@ def reveal(value: Any) -> Any:
         revealed = value.reveal()
         return revealed.decode() if isinstance(revealed, bytes) else revealed
     if isinstance(value, BaseModel):
-        return reveal(dict(value))
+        if getattr(type(value), "__pydantic_root_model__", False):
+            return reveal(cast(Any, value).root)
+        return {name: reveal(getattr(value, name)) for name in type(value).model_fields}
     if isinstance(value, Mapping):
         return {k: reveal(v) for k, v in value.items()}
     if isinstance(value, list | tuple | set | frozenset):

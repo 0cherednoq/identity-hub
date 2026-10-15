@@ -14,6 +14,9 @@
 - `hub.doctor.convert_secrets()` и `identity-hub secrets convert --to plaintext|encrypted`
   переводят хранилище атомарными пачками без изменения ревизий; старт и `doctor` предупреждают
   об открытых строках, а `admin.secrets.converted` фиксирует число в аудите.
+- `identity_hub.formats`: канонические модели cookie, браузерных/API-сессий, credentials и
+  browser fingerprint; типизированные неймспейсы `dump`/`load` с JSON round-trip, RFC-векторы
+  TOTP/HOTP и `Service.session_slots` для отдельной схемы каждого слота.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается

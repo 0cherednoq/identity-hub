@@ -175,6 +175,7 @@ class Service:
     profile: type[BaseModel] = EmptyModel
     credentials: type[BaseModel] = EmptyModel
     session: type[BaseModel] = EmptyModel
+    session_slots: Mapping[str, type[BaseModel]] = field(default_factory=dict)
     filterable_profile: frozenset[str] = frozenset()
     searchable_profile: frozenset[str] = frozenset()
     operations: Mapping[str, OperationRule] = field(default_factory=dict)
@@ -202,6 +203,12 @@ class Service:
     normalize_ref_version: int = 0
     # виды credentials кроме `default` (его схема — `credentials`): пароль, TOTP, API-ключи (IMP-09)
     credential_kinds: Mapping[str, type[BaseModel]] = field(default_factory=dict)
+
+    def session_schema(self, slot: str) -> type[BaseModel]:
+        """Схема конкретного слота; необъявленный слот использует прежнюю общую `session`."""
+        if not isinstance(slot, str) or not 1 <= len(slot) <= 64:
+            raise ValidationFailed("session slot: от 1 до 64 символов")
+        return self.session_slots.get(slot, self.session)
 
     def credential_schema(self, kind: str) -> type[BaseModel]:
         """Схема секрета вида credentials; неизвестный вид — `ValidationFailed` (D-214)."""
@@ -349,6 +356,11 @@ class Service:
                 errors.append(f"throttles[{name!r}]: некорректное имя")
             if not isinstance(throttle, Throttle):
                 errors.append(f"throttles[{name!r}]: нужен Throttle")
+        for slot, schema in self.session_slots.items():
+            if not isinstance(slot, str) or not 1 <= len(slot) <= 64:
+                errors.append("session_slots: имя слота — от 1 до 64 символов")
+            if not isinstance(schema, type) or not issubclass(schema, BaseModel):
+                errors.append(f"session_slots[{slot!r}]: нужна Pydantic-модель")
         for region in self.normalizers:
             if region not in REGIONS and region != VERIFICATION.name:
                 errors.append(f"normalizers: неизвестный регион {region!r}")

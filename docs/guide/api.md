@@ -77,6 +77,22 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `hub.lease_log_sink` | обработчик `logging` для записи логов аренды в `ih_lease_logs` |
 | `hub.flush_lease_losses()` | выпустить накопленные события `worker.leases_lost` |
 | `hub.flush_metrics()` | записать накопленную телеметрию операций в rollups; нужен процессу без dispatcher |
+
+## Стандартные модели форматов
+
+Модуль `identity_hub.formats` и корневой импорт `identity_hub` экспортируют модели:
+
+- cookie и браузер: `Cookie`, `Cookies`, `SameSite`, `PartitionKey`, `BrowserSession`,
+  `OriginStorage`, `BrowserFingerprint`, `Screen`, `Viewport`, `WebGl`, `Geolocation`,
+  `UserAgentData`;
+- сессии API: `TokenSession`, `OAuth1Session`, `HeaderSession`;
+- credentials: `PasswordCredentials`, `OtpSecret`, `RecoveryCodes`, `ApiKey`, `SigningKey`,
+  `OAuthClient`, `OAuth1Client`, `PrivateKeyCredentials`, `ClientCertificate`;
+- инфраструктура конвертеров: `DumpNamespace`, `LoadNamespace`, `FormatLossWarning`.
+
+JSON — первый канонический формат: `cookies.dump.json()`, `Cookies.load.json(data)` и
+`Cookies.load(data)`. `dump` и `load` — `ClassVar`, поэтому в сериализацию модели не попадают.
+Значения cookie, токенов, паролей и ключей скрыты в `repr`.
 | `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
 | `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |

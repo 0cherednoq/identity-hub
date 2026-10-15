@@ -591,7 +591,7 @@ class Lease:
         if found is None or (valid_only and found[1] != SessionStatus.VALID):
             return None
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub._open_stored_model(self.pool.service.session, found[0], aad)
+        return self.pool.space.hub._open_stored_model(self.pool.service.session_schema(slot), found[0], aad)
 
     async def save_session(
         self,
@@ -614,7 +614,7 @@ class Lease:
             await self._write_session(tx, payload, slot, mode=mode, expires_at=expires_at)
 
     def _seal_session(self, session: BaseModel | Mapping[str, Any], slot: str) -> Any:
-        model = validate_model(self.pool.service.session, session, "session")
+        model = validate_model(self.pool.service.session_schema(slot), session, f"session {slot}")
         aad = associated_data("ih_sessions", self.identity_id, slot)
         return self.pool.space.hub._seal_stored_model(model, aad)
 
