@@ -630,21 +630,10 @@ class Lease:
         fingerprint_data = self.identity.profile.get("fingerprint")
         if fingerprint_data is not None:
             fingerprint = BrowserFingerprint.model_validate(fingerprint_data)
-            defaults.update(
-                user_agent=fingerprint.user_agent,
-                locale=fingerprint.locale,
-                timezone_id=fingerprint.timezone,
-            )
-            if fingerprint.viewport is not None:
-                defaults["viewport"] = {
-                    "width": fingerprint.viewport.width,
-                    "height": fingerprint.viewport.height,
-                }
-            if fingerprint.geolocation is not None:
-                defaults["geolocation"] = fingerprint.geolocation.model_dump(exclude_none=True)
-        defaults = {key: value for key, value in defaults.items() if value is not None}
         proxy = self.proxy
-        if proxy is not None:
+        if fingerprint_data is not None:
+            defaults.update(fingerprint.dump.playwright_context(proxy=proxy))
+        elif proxy is not None:
             defaults["proxy"] = proxy.dump.playwright()
         defaults.update(options)
         context = browser.new_context(**defaults)

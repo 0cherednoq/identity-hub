@@ -690,6 +690,57 @@ class UserAgentData(BaseModel):
     bitness: str | None = None
     model: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        _alias(data, "full_version_list", "fullVersionList")
+        _alias(data, "platform_version", "platformVersion")
+        return data
+
+
+class BrowserFingerprintDump(DumpNamespace[Any]):
+    def playwright_context(self, *, proxy: Any = None, strict: bool = False) -> dict[str, Any]:
+        from identity_hub.formats import fingerprint
+
+        return cast(
+            dict[str, Any], fingerprint.dump(self._value, "playwright_context", proxy=proxy, strict=strict)
+        )
+
+    def camoufox(self, *, strict: bool = False) -> dict[str, Any]:
+        from identity_hub.formats import fingerprint
+
+        return cast(dict[str, Any], fingerprint.dump(self._value, "camoufox", strict=strict))
+
+    def impersonate(self, client: str, *, strict: bool = False) -> str:
+        from identity_hub.formats import fingerprint
+
+        return cast(str, fingerprint.dump(self._value, "impersonate", client=client, strict=strict))
+
+    def adspower(self, *, strict: bool = False) -> dict[str, Any]:
+        from identity_hub.formats import fingerprint
+
+        return cast(dict[str, Any], fingerprint.dump(self._value, "adspower", strict=strict))
+
+    def gologin(self, *, strict: bool = False) -> dict[str, Any]:
+        from identity_hub.formats import fingerprint
+
+        return cast(dict[str, Any], fingerprint.dump(self._value, "gologin", strict=strict))
+
+
+class BrowserFingerprintLoad(LoadNamespace[Any]):
+    def browserforge(self, data: Any, *, strict: bool = False) -> BrowserFingerprint:
+        from identity_hub.formats import fingerprint
+
+        return fingerprint.load(data, source="browserforge", strict=strict)
+
+    def fingerprint_suite(self, data: Any, *, strict: bool = False) -> BrowserFingerprint:
+        from identity_hub.formats import fingerprint
+
+        return fingerprint.load(data, source="fingerprint-suite", strict=strict)
+
 
 class BrowserFingerprint(BaseModel):
     user_agent: str
@@ -715,3 +766,10 @@ class BrowserFingerprint(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     source: Literal["browserforge", "fingerprint-suite", "manual"] | None = None
     raw: dict[str, Any] | None = None
+
+    dump: ClassVar[DumpDescriptor[BrowserFingerprint, BrowserFingerprintDump]] = DumpDescriptor(
+        BrowserFingerprintDump
+    )
+    load: ClassVar[LoadDescriptor[BrowserFingerprint, BrowserFingerprintLoad]] = LoadDescriptor(
+        BrowserFingerprintLoad
+    )

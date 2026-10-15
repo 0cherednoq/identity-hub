@@ -1,0 +1,16 @@
+{
+  "fingerprint": {
+    "navigator": {
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+      "platform": "Linux x86_64",
+      "language": "de-DE",
+      "languages": ["de-DE", "de"],
+      "hardwareConcurrency": 4
+    },
+    "screen": {"width": 1440, "height": 900, "colorDepth": 24},
+    "videoCard": {"vendor": "Mesa", "renderer": "llvmpipe"},
+    "fonts": ["DejaVu Sans"],
+    "timezone": "Europe/Berlin"
+  },
+  "headers": {"Accept-Language": "de-DE,de;q=0.9"}
+}

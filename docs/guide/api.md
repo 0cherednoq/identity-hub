@@ -120,6 +120,12 @@ JSON. Неизвестный ввод завершается `ValidationFailed`;
 загружаются ни при каких условиях. Нестандартные строки принимают только явные шаблоны
 `identity_hub.formats.lines.load_account(...)` и `load_proxy(...)`.
 
+Отпечатки загружаются через `BrowserFingerprint.load.browserforge(data)` и
+`load.fingerprint_suite(data)` с сохранением исходника в `raw`. Выходные формы:
+`dump.playwright_context(proxy=...)`, `dump.camoufox()`, `dump.adspower()`,
+`dump.gologin()` и `dump.impersonate(client)`. Для impersonation выбирается ближайшая цель того
+же браузера, не новее major-версии UA; несовпадение версии считается явной потерей формата.
+
 | `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
 | `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |

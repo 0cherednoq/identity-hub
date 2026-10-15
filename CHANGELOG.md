@@ -26,6 +26,9 @@
 - Netscape/curl и HAR, безопасное автоопределение JSON/Netscape/Cookie/base64 в
   `Cookies.load(...)` и Playwright/canonical JSON в `BrowserSession.load(...)`; pickle и Chrome
   Cookies SQLite явно отвергаются. Строки продавцов разбираются только по заданному шаблону.
+- `BrowserFingerprint.load` принимает browserforge и fingerprint-suite, а `dump` формирует
+  настройки Playwright, Camoufox, AdsPower, GoLogin и версионированные impersonation-цели для
+  curl_cffi, tls-client, primp и rnet.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается

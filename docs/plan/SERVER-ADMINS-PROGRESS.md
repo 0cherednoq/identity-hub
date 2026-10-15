@@ -10,13 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** S6.5 Реализовать форматы отпечатка
-- **Начата:** 2026-10-15
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Реализовать browserforge и fingerprint-suite load
-  - [ ] Реализовать Playwright, Camoufox, AdsPower и GoLogin dump
-  - [ ] Добавить versioned impersonate target tables
-  - [ ] Добавить fixtures и UA selection tests
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -38,10 +35,10 @@
 | S6.2 | Браузеры: `dump`/`load` и методы аренды | S6.1 | done |  | `D-314` |
 | S6.3 | HTTP-клиенты: `dump`/`load` | S6.1 | done |  | `D-314` |
 | S6.4 | Файлы и автоопределение | S6.1, S6.2 | done |  | `D-314` |
-| S6.5 | Отпечаток: `dump`/`load` | S6.1, S6.2 | in_progress |  | `D-314` |
+| S6.5 | Отпечаток: `dump`/`load` | S6.1, S6.2 | done |  | `D-314` |
 | S6.6 | Интеграция с хабом и документация | S5.2, S6.1, S6.2, S6.3, S6.4, S6.5 | todo |  | `D-314`; закрытие S5–S6 |
 
-**Итого:** 15 / 17 done
+**Итого:** 16 / 17 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -59,3 +56,4 @@
 2026-10-15 · S6.2 · done · Playwright storage_state, CDP/Puppeteer, Selenium, extension/Crawlee/tough-cookie и lease helpers; 26 targeted tests
 2026-10-15 · S6.3 · done · CookieJar/aiohttp/Set-Cookie/Scrapy, строгая область cookie, ProxyUrl; D-315; 40 passed, 2 optional skipped
 2026-10-15 · S6.4 · done · Netscape/HAR, safe autodetect, base64, explicit line templates and unsafe binary rejection; 51 passed, 2 optional skipped
+2026-10-15 · S6.5 · done · Browserforge/fingerprint-suite, browser and antidetect dumps, versioned impersonation targets; 93 passed, 2 optional skipped
