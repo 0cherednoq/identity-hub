@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from identity_hub.crypto import DecryptionFailed, associated_data
-from identity_hub.errors import ValidationFailed
+from identity_hub.errors import NotFound, ValidationFailed
 from identity_hub.proxies import ProxySecret, fingerprint_value
 from identity_hub.service import Service
 from identity_hub.store.base import ROTATION_TABLES, DoctorIssue, UnreadableSecret
@@ -22,6 +22,7 @@ __all__ = [
     "FingerprintRekeyReport",
     "RenormalizeReport",
     "RotationReport",
+    "SecretConversionReport",
     "UnreadableSecret",
 ]
 
@@ -87,6 +88,19 @@ class RotationReport:
         return not self.remaining
 
 
+@dataclass(frozen=True, slots=True)
+class SecretConversionReport:
+    """Итог перевода credentials/session: целевой формат и числа по таблицам/пространствам."""
+
+    to: str
+    counts: dict[str, int]
+    spaces: dict[str, int]
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+
 class Doctor:
     def __init__(self, hub: IdentityHub) -> None:
         self.hub = hub
@@ -100,6 +114,37 @@ class Doctor:
         Пусто — ротация завершена, прежние ключи можно убирать из конфигурации.
         """
         return await self.hub._store.inactive_key_usage(self.hub._envelope.active_key_id)
+
+    async def plaintext_secrets(self, *, space: str | None = None) -> dict[str, int]:
+        """Число открытых строк credentials/session, чтобы doctor мог явно предупредить."""
+        return await self.hub._store.plaintext_secret_counts(space=space)
+
+    async def convert_secrets(
+        self, *, to: str, space: str | None = None, batch: int = 500
+    ) -> SecretConversionReport:
+        """Пачками перевести credentials/session в `plaintext` или `encrypted` (D-313)."""
+        if to not in ("plaintext", "encrypted"):
+            raise ValidationFailed("to: plaintext или encrypted")
+        if batch < 1:
+            raise ValidationFailed("размер пачки должен быть положительным")
+        if space is not None and await self.hub.get_space(space) is None:
+            raise NotFound("space", space)
+        counts: Counter[str] = Counter()
+        spaces: Counter[str] = Counter()
+        for table in ("credentials", "sessions"):
+            while True:
+                converted = await self.hub._store.convert_secret_storage(
+                    self.hub._envelope, table=table, to=to, limit=batch, space=space
+                )
+                counts[table] += converted.converted
+                spaces.update(converted.spaces)
+                if converted.converted < batch:
+                    break
+        for slug, count in spaces.items():
+            handle = await self.hub.get_space(slug)
+            assert handle is not None
+            await handle._record_secret_conversion(to, count=count, actor="identity-hub")
+        return SecretConversionReport(to, dict(counts), dict(spaces))
 
     async def rotate_key(
         self, *, limit: int = 500, lock_retries: int = 5, retry_delay: float = 0.5

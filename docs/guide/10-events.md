@@ -94,6 +94,7 @@ flowchart LR
 | `admin.events.exported` | `count`, `filter_fingerprint`, `format`, `reason` |
 | `admin.import.changed` | `action`, `count`, `reason`, `run_id`, `service` |
 | `admin.integration.changed` | `action`, `outcome`, `reason`, `resource_id`, `resource_kind` |
+| `admin.secrets.converted` | `count`, `to` |
 | `dispatcher.event.skipped` | `attempts`, `consumer`, `error`, `event_id`, `type` |
 | `identity.auth.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
 | `identity.availability.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |

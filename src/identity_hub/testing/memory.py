@@ -14,14 +14,17 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
+
+import pydantic_core
 
 from identity_hub._ids import new_id
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import (
     DecryptionFailed,
     EncryptedPayload,
+    PlaintextPayload,
     StoredPayload,
     associated_data,
     credential_associated_data,
@@ -114,6 +117,7 @@ from identity_hub.store.base import (
     QuotaWindow,
     RotationBatch,
     SearchFilter,
+    SecretConversionBatch,
     ServiceRow,
     SessionHistoryRow,
     SessionMetadataRow,
@@ -4112,7 +4116,7 @@ class MemoryStore(Store):
                 (
                     (_rotation_cursor(key), key, payload)
                     for key, payload in list(view.items())
-                    if payload.key_id != active
+                    if isinstance(payload, EncryptedPayload) and payload.key_id != active
                 ),
                 key=lambda item: item[0],
             )
@@ -4142,11 +4146,90 @@ class MemoryStore(Store):
             for name, (view, _aad) in self._rotation_views().items():
                 counts: dict[str, int] = defaultdict(int)
                 for _key, payload in list(view.items()):
-                    if payload.key_id != active:
+                    if isinstance(payload, EncryptedPayload) and payload.key_id != active:
                         counts[payload.key_id] += 1
                 if counts:
                     usage[name] = dict(counts)
         return usage
+
+    async def convert_secret_storage(
+        self,
+        envelope: Any,
+        *,
+        table: str,
+        to: str,
+        limit: int,
+        space: str | None = None,
+    ) -> SecretConversionBatch:
+        async with self._lock:
+            slug_by_space = {ref.id: ref.slug for ref in self._state.spaces.values()}
+            pending: list[tuple[Any, StoredPayload, str]] = []
+            if table == "credentials":
+                rows = sorted(self._state.credentials.items(), key=lambda item: item[1][1].id)
+                for key, (payload, cred_row) in rows:
+                    identity = self._state.identities[cred_row.identity_id]
+                    slug = slug_by_space[identity.space_id]
+                    if space is not None and slug != space:
+                        continue
+                    if (to == "plaintext") != isinstance(payload, EncryptedPayload):
+                        continue
+                    aad = credential_associated_data(cred_row.identity_id, cred_row.kind, cred_row.name)
+                    converted = self._converted_payload(envelope, payload, aad, to)
+                    pending.append((key, converted, slug))
+                    if len(pending) == limit:
+                        break
+                for key, payload, _slug in pending:
+                    _old, row = self._state.credentials[key]
+                    self._state.credentials[key] = (payload, row)
+            else:
+                for session_id, session_row in sorted(self._state.sessions.items()):
+                    identity = self._state.identities[session_row.identity_id]
+                    slug = slug_by_space[identity.space_id]
+                    if space is not None and slug != space:
+                        continue
+                    if (to == "plaintext") != isinstance(session_row.payload, EncryptedPayload):
+                        continue
+                    aad = associated_data("ih_sessions", session_row.identity_id, session_row.slot)
+                    converted = self._converted_payload(envelope, session_row.payload, aad, to)
+                    pending.append((session_id, converted, slug))
+                    if len(pending) == limit:
+                        break
+                for session_id, payload, _slug in pending:
+                    self._state.sessions[session_id] = replace(
+                        self._state.sessions[session_id], payload=payload
+                    )
+            counts: dict[str, int] = defaultdict(int)
+            for _key, _payload, slug in pending:
+                counts[slug] += 1
+            return SecretConversionBatch(len(pending), dict(counts))
+
+    @staticmethod
+    def _converted_payload(envelope: Any, payload: StoredPayload, aad: bytes, to: str) -> StoredPayload:
+        if to == "plaintext":
+            assert isinstance(payload, EncryptedPayload)
+            value = envelope.open_json(payload, aad)
+            if not isinstance(value, dict):
+                raise ValidationFailed("секрет должен быть JSON-объектом")
+            return PlaintextPayload(value)
+        assert isinstance(payload, PlaintextPayload)
+        return cast(EncryptedPayload, envelope.seal(pydantic_core.to_json(payload.value), aad))
+
+    async def plaintext_secret_counts(self, *, space: str | None = None) -> dict[str, int]:
+        async with self._lock:
+            space_ids = {ref.id for ref in self._state.spaces.values() if space is None or ref.slug == space}
+            credentials = sum(
+                isinstance(payload, PlaintextPayload)
+                and self._state.identities[row.identity_id].space_id in space_ids
+                for payload, row in self._state.credentials.values()
+            )
+            sessions = sum(
+                isinstance(row.payload, PlaintextPayload)
+                and self._state.identities[row.identity_id].space_id in space_ids
+                for row in self._state.sessions.values()
+            )
+        return {
+            name: count for name, count in (("credentials", credentials), ("sessions", sessions)) if count
+        }
 
     async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         async with self._lock:

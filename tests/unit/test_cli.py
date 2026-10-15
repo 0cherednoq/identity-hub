@@ -26,6 +26,19 @@ pytestmark = pytest.mark.unit
         (["rotate-key", "--factory", "app:hub", "--batch-size", "10"], "rotate-key"),
         (
             [
+                "secrets",
+                "--factory",
+                "app:hub",
+                "convert",
+                "--to",
+                "plaintext",
+                "--batch",
+                "10",
+            ],
+            "secrets",
+        ),
+        (
+            [
                 "rollups",
                 "--factory",
                 "app:hub",
@@ -144,6 +157,43 @@ def test_doctor_reports_rows_under_inactive_key(capsys: pytest.CaptureFixture[st
     for extra in ([], ["--fix"]):  # --fix ключи не меняет: это работа rotate-key
         assert main(["doctor", "--factory", f"{__name__}:rotation_hub_factory", *extra]) == 1
         assert "issue: inactive-key proxies k1 1" in capsys.readouterr().out.splitlines()
+
+
+async def conversion_hub_factory(*, plaintext: bool = False) -> IdentityHub:
+    from identity_hub import IdentityCreate
+    from tests.fixtures.services import FAKE_TG
+
+    hub = IdentityHub(
+        store=MemoryStore(),
+        secrets=StaticSecretsProvider({"k": _K1}, "k"),
+        services=[FAKE_TG],
+        secret_storage="plaintext" if plaintext else "encrypted",
+    )
+    await hub.start()
+    await hub.space("main", create=True).identities.create(
+        IdentityCreate(
+            service="fake_tg",
+            external_ref="+cli-convert",
+            credentials={"phone": "+cli-convert", "password": "p"},
+            session={"auth_key": "s"},
+        ),
+        actor="test",
+    )
+    return hub
+
+
+async def plaintext_hub_factory() -> IdentityHub:
+    return await conversion_hub_factory(plaintext=True)
+
+
+def test_secrets_convert_and_doctor_warning(capsys: pytest.CaptureFixture[str]) -> None:
+    factory = f"{__name__}:conversion_hub_factory"
+    assert main(["secrets", "--factory", factory, "convert", "--to", "plaintext", "--batch", "1"]) == 0
+    assert capsys.readouterr().out.strip() == "2"
+
+    plaintext_factory = f"{__name__}:plaintext_hub_factory"
+    assert main(["doctor", "--factory", plaintext_factory]) == 0
+    assert "warning: credentials и сессии хранятся открытыми: 2" in capsys.readouterr().out
 
 
 def test_keygen_prints_usable_key(capsys: pytest.CaptureFixture[str]) -> None:

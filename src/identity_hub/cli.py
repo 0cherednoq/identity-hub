@@ -82,6 +82,15 @@ def _parser() -> argparse.ArgumentParser:
     _factory_argument(rotate)
     rotate.add_argument("--batch-size", type=int, default=500)
 
+    secrets = sub.add_parser("secrets", help="обслуживание хранения credentials и сессий")
+    _factory_argument(secrets)
+    secrets_sub = secrets.add_subparsers(dest="secrets_command")
+    convert = secrets_sub.add_parser("convert", help="перевести credentials и сессии между форматами")
+    _factory_argument(convert, inherited=True)
+    convert.add_argument("--to", choices=("plaintext", "encrypted"), required=True)
+    convert.add_argument("--space", help="только указанное пространство")
+    convert.add_argument("--batch", type=int, default=500)
+
     rollups = sub.add_parser("rollups", help="перестроить или очистить временные роллапы")
     _factory_argument(rollups)
     action = rollups.add_mutually_exclusive_group(required=True)
@@ -140,6 +149,11 @@ def _check_arguments(args: argparse.Namespace) -> None:
         return
     if command == "rotate-key" and args.batch_size < 1:
         raise _UsageError("--batch-size должен быть положительным")
+    if command == "secrets":
+        if args.secrets_command != "convert":
+            raise _UsageError("укажите подкоманду secrets convert")
+        if args.batch < 1:
+            raise _UsageError("--batch должен быть положительным")
     if (
         command == "doctor"
         and args.doctor_command in ("renormalize", "rekey-fingerprints")
@@ -309,6 +323,11 @@ async def _run(hub: IdentityHub, args: argparse.Namespace) -> int:
         for table, keys in sorted(inactive.items()):
             for key_id, count in sorted(keys.items()):
                 print(f"issue: inactive-key {table} {key_id} {count}")
+        plaintext = await hub.doctor.plaintext_secrets()
+        if plaintext:
+            from identity_hub.hub import PLAINTEXT_SECRET_WARNING
+
+            print(f"warning: {PLAINTEXT_SECRET_WARNING}: {sum(plaintext.values())}")
         return 1 if inactive or (issues and not args.fix) else 0
     if args.command == "rotate-key":
         rotation_report = await hub.doctor.rotate_key(limit=args.batch_size)
@@ -323,6 +342,10 @@ async def _run(hub: IdentityHub, args: argparse.Namespace) -> int:
             print(f"unreadable: ещё {hidden}")
         # остаток под прежним ключом: удалять его из конфигурации нельзя
         return 0 if rotation_report.complete else 1
+    if args.command == "secrets":
+        report = await hub.doctor.convert_secrets(to=args.to, space=args.space, batch=args.batch)
+        print(report.total)
+        return 0
     if args.command == "rollups":
         if args.rebuild:
             print(await hub._rollups.rebuild(args.space, args.start, args.end, force=args.force))

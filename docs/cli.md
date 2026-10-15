@@ -216,6 +216,20 @@ unreadable: 0198c1f3-…
 отпечатки продолжают находиться: поиск сверяет теги всеми ключами кольца и прежний SHA-256.
 Из кода — `await hub.doctor.rekey_fingerprints()` → `FingerprintRekeyReport`.
 
+## `secrets convert`
+
+Переводит только credentials и сессии между зашифрованным envelope и читаемым JSON:
+
+```bash
+identity-hub secrets convert --to plaintext [--space production] [--batch 500]
+identity-hub secrets convert --to encrypted [--space production] [--batch 500]
+```
+
+Фабрика задаётся через `--factory` или `IDENTITY_HUB_FACTORY`, как у `doctor`. Каждая пачка
+атомарна; прерванную команду можно запустить повторно. Ревизии credentials и сессий не меняются.
+Команда печатает число переведённых строк и пишет `admin.secrets.converted` в аудит каждого
+затронутого пространства. `doctor` предупреждает, пока в базе остаются открытые строки.
+
 ## `rotate-key`
 
 После добавления нового KEK первым в конфигурации переоборачивает зашифрованные

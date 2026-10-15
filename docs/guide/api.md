@@ -71,7 +71,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `hub.events` | `subscribe(name, fn, types=..., space=..., service=...)` — подписчик по одному событию; `subscribe_batch(name, fn, ...)` — пачкой; см. [События](10-events.md) |
 | `hub.dispatcher` | фоновый цикл: `running()`, `run_once()`, `drain()` |
 | `hub.maintenance` | обслуживание по расписанию: таймеры и retention |
-| `hub.doctor` | диагностика и починка данных (`identity-hub doctor`) |
+| `hub.doctor` | диагностика и починка данных (`check`, `rotate_key`, `convert_secrets`, `plaintext_secrets`; CLI `identity-hub doctor`) |
 | `hub.equivalence_tag(value)` | HMAC-тег значения ключом отпечатков: сравнить чувствительные данные, не храня их (`D-208`) |
 | `hub.metrics` | хук метрик, заданный параметром `metrics` |
 | `hub.lease_log_sink` | обработчик `logging` для записи логов аренды в `ih_lease_logs` |

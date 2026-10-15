@@ -85,6 +85,7 @@ __all__ = [
     "QuotaWindow",
     "RotationBatch",
     "SearchFilter",
+    "SecretConversionBatch",
     "ServiceRow",
     "SpaceRef",
     "Store",
@@ -249,6 +250,14 @@ class RotationBatch:
     rotated: int
     unreadable: tuple[UnreadableSecret, ...] = ()
     cursor: tuple[Any, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SecretConversionBatch:
+    """Одна атомарная пачка перевода credentials/session между форматами хранения."""
+
+    converted: int
+    spaces: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2235,6 +2244,22 @@ class Store(ABC):
     @abstractmethod
     async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
         """Набор → `key_id` → число строк с шифртекстом под ключом, отличным от `active`."""
+
+    @abstractmethod
+    async def convert_secret_storage(
+        self,
+        envelope: Any,
+        *,
+        table: str,
+        to: str,
+        limit: int,
+        space: str | None = None,
+    ) -> SecretConversionBatch:
+        """Атомарно перевести до `limit` строк credentials/session, не меняя доменные ревизии."""
+
+    @abstractmethod
+    async def plaintext_secret_counts(self, *, space: str | None = None) -> dict[str, int]:
+        """Число открытых строк credentials/session; нулевые наборы не возвращаются."""
 
     @abstractmethod
     async def stale_proxy_fingerprints(

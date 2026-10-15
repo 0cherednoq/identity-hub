@@ -96,6 +96,8 @@ if TYPE_CHECKING:
 
 __all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle", "Spaces"]
 
+PLAINTEXT_SECRET_WARNING = "credentials и сессии хранятся открытыми"
+
 
 @dataclass(frozen=True)
 class Retention:
@@ -319,6 +321,9 @@ class IdentityHub:
             if len(actual) != 1 or actual[0] not in self._store.compatible_revisions(expected):
                 raise SchemaIncompatible(expected, ", ".join(actual) or None)
         await self._store.sync_services([ServiceRow(s.name, s.title) for s in self._services.values()])
+        plaintext = await self._store.plaintext_secret_counts()
+        if self._secret_storage == "plaintext" or plaintext:
+            logger.warning("%s: %s", PLAINTEXT_SECRET_WARNING, plaintext or "режим plaintext")
 
     async def flush_metrics(self) -> int:
         """Записать накопленные метрики в rollups; возвращает число записанных значений.

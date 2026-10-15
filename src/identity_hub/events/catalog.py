@@ -100,6 +100,7 @@ def _specs() -> dict[str, EventSpec]:
             ("admin.events.exported", Severity.INFO),
             ("admin.integration.changed", Severity.INFO),
             ("admin.import.changed", Severity.INFO),
+            ("admin.secrets.converted", Severity.WARNING),
         ],
     }
     journal = [

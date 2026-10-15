@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import fields, replace
@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+import pydantic_core
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -88,6 +89,7 @@ from identity_hub.errors import (
     RevisionConflict,
     SpaceMismatch,
     StorageError,
+    ValidationFailed,
     describe_error,
 )
 from identity_hub.events import Event, EventDraft
@@ -190,6 +192,7 @@ from identity_hub.store.base import (
     QuotaWindow,
     RotationBatch,
     SearchFilter,
+    SecretConversionBatch,
     ServiceRow,
     SessionHistoryRow,
     SessionMetadataRow,
@@ -6472,6 +6475,67 @@ class PgStore(Store):
                 if counts:
                     usage[name] = counts
         return usage
+
+    async def convert_secret_storage(
+        self,
+        envelope: Any,
+        *,
+        table: str,
+        to: str,
+        limit: int,
+        space: str | None = None,
+    ) -> SecretConversionBatch:
+        target = {"credentials": CREDENTIALS, "sessions": SESSIONS}[table]
+        c = target.c
+        wanted = c.ciphertext.is_not(None) if to == "plaintext" else c.payload.is_not(None)
+        stmt = (
+            select(target, SPACES.c.slug.label("_space_slug"))
+            .join(SPACES, SPACES.c.id == c.space_id)
+            .where(wanted)
+            .order_by(c.id)
+            .limit(limit)
+            .with_for_update(of=target)
+        )
+        if space is not None:
+            stmt = stmt.where(SPACES.c.slug == space)
+        counts: Counter[str] = Counter()
+        async with self._own() as session:
+            rows = list((await _execute(session, stmt, execution_options=self.options)).mappings())
+            for row in rows:
+                if table == "credentials":
+                    aad = credential_associated_data(row["identity_id"], row["kind"], row["name"])
+                else:
+                    aad = associated_data("ih_sessions", row["identity_id"], row["slot"])
+                if to == "plaintext":
+                    current = EncryptedPayload(
+                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
+                    )
+                    value = envelope.open_json(current, aad)
+                    if not isinstance(value, dict):
+                        raise ValidationFailed("секрет должен быть JSON-объектом")
+                    payload: StoredPayload = PlaintextPayload(value)
+                else:
+                    payload = envelope.seal(pydantic_core.to_json(row["payload"]), aad)
+                await _execute(
+                    session,
+                    update(target).where(c.id == row["id"]).values(**_stored_payload_columns(payload)),
+                    execution_options=self.options,
+                )
+                counts[row["_space_slug"]] += 1
+        return SecretConversionBatch(len(rows), dict(counts))
+
+    async def plaintext_secret_counts(self, *, space: str | None = None) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        async with self.sessionmaker() as session:
+            for name, target in (("credentials", CREDENTIALS), ("sessions", SESSIONS)):
+                c = target.c
+                stmt = select(func.count()).select_from(target).where(c.payload.is_not(None))
+                if space is not None:
+                    stmt = stmt.join(SPACES, SPACES.c.id == c.space_id).where(SPACES.c.slug == space)
+                count = int((await _execute(session, stmt, execution_options=self.options)).scalar_one())
+                if count:
+                    counts[name] = count
+        return counts
 
     async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         cursor_lag: dict[str, int] = {}

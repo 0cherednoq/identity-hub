@@ -12,6 +12,18 @@ __all__ = ["AdminAuditMixin"]
 
 
 class AdminAuditMixin(SpaceBase):
+    async def _record_secret_conversion(self, to: str, *, count: int, actor: str) -> None:
+        """Audit storage conversion without secret values or row identifiers."""
+        async with self._tx() as tx:
+            await self._emit(
+                tx,
+                EventDraft(
+                    "admin.secrets.converted",
+                    actor=actor,
+                    data={"to": to, "count": count},
+                ),
+            )
+
     async def _record_admin_import(
         self,
         action: Literal["started", "cancel_requested"],

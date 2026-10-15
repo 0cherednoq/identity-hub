@@ -150,7 +150,7 @@ identity, created = await space.identities.ensure(spec, actor="importer")  # get
   передайте `lifecycle=Lifecycle.READY`.
 - **`auth`** становится `authenticated`, если передана сессия, иначе `no_session`; явно —
   `auth=`.
-- Данные проверяются схемами сервиса и шифруются **до** обращения к базе. Секреты не попадают
+- Данные проверяются схемами сервиса и подготавливаются в выбранном формате **до** обращения к базе. Секреты не попадают
   в `repr(spec)`.
 - Несколько сессий: `sessions={"default": {...}, "web": {...}}`. Связи при создании:
   `links={"recovery_email": mail_id}`.
@@ -408,6 +408,29 @@ hub = IdentityHub(..., secret_storage="plaintext")  # осознанно отк�
 
 Чтение определяет формат каждой строки, поэтому во время перевода одна база может содержать оба
 варианта. Мастер-ключ обязателен и в `plaintext`: все остальные виды секретов остаются под шифром.
+
+В PostgreSQL открытые значения находятся только в `ih_credentials.payload` и
+`ih_sessions.payload`. Например:
+
+```sql
+SELECT payload->>'password' FROM ih_credentials WHERE identity_id = :identity_id;
+```
+
+Не выдавайте роли приложения `SELECT` на эти таблицы без необходимости: read-схема хаба их не
+экспортирует. Право чтения таблиц или дампа базы в режиме `plaintext` означает доступ ко всем
+паролям, cookie и токенам. Прокси, webhook/notification secrets, staged-импорт, evidence и
+зашифрованная часть профиля при этом остаются под AES-GCM.
+
+Перевод существующих строк выполняется короткими атомарными пачками и безопасен при повторе:
+
+```bash
+identity-hub secrets convert --to plaintext --batch 500
+identity-hub secrets convert --to encrypted --space production --batch 500
+```
+
+То же из кода: `await hub.doctor.convert_secrets(to="plaintext", space=None, batch=500)`.
+Команда не меняет версии credentials, ревизии сессий и доменные события аккаунтов; она пишет
+только аудит `admin.secrets.converted` с целевым форматом и числом строк.
 
 ```python
 # 1. Под арендой — основной путь для воркеров
