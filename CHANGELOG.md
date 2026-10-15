@@ -8,6 +8,9 @@
 
 ### Added
 
+- `IdentityHub(secret_storage="encrypted" | "plaintext")` и миграция `0033`: credentials и
+  сессии можно хранить читаемым JSON; чтение поддерживает смешанную базу, остальные секреты
+  остаются зашифрованными.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается

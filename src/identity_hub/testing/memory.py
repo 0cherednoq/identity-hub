@@ -22,6 +22,7 @@ from identity_hub.clock import Clock, SystemClock
 from identity_hub.crypto.envelope import (
     DecryptionFailed,
     EncryptedPayload,
+    StoredPayload,
     associated_data,
     credential_associated_data,
 )
@@ -161,7 +162,7 @@ class _SessionRecord:
     id: UUID
     identity_id: UUID
     slot: str
-    payload: EncryptedPayload
+    payload: StoredPayload
     status: str
     written_by_fencing: int
     expires_at: datetime | None
@@ -179,7 +180,7 @@ class _MemoryState:
     identities: dict[UUID, IdentityRow] = field(default_factory=dict)
     regions: dict[tuple[UUID, str, str], RegionState] = field(default_factory=dict)
     # (identity, kind, name) → (секрет, метаданные): несколько credentials на аккаунт (D-214)
-    credentials: dict[tuple[UUID, str, str], tuple[EncryptedPayload, CredentialRow]] = field(
+    credentials: dict[tuple[UUID, str, str], tuple[StoredPayload, CredentialRow]] = field(
         default_factory=dict
     )
     profile_secrets: dict[UUID, EncryptedPayload] = field(default_factory=dict)
@@ -532,7 +533,7 @@ class MemoryTx(StoreTx):
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
         return {identity_id for identity_id in ids if self._own(identity_id) is not None}
 
-    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
+    async def put_credentials(self, identity_id: UUID, payload: StoredPayload) -> None:
         if self._own(identity_id):
             await self.put_credential(identity_id, "default", "default", payload)
 
@@ -541,7 +542,7 @@ class MemoryTx(StoreTx):
         identity_id: UUID,
         kind: str,
         name: str,
-        payload: EncryptedPayload,
+        payload: StoredPayload,
         *,
         public_value: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
@@ -573,12 +574,12 @@ class MemoryTx(StoreTx):
                 version=old[1].version + 1,
                 updated_at=self._now,
             )
-        self.state.credentials[key] = (payload, row)
+        self.state.credentials[key] = (deepcopy(payload), row)
         return row
 
     async def get_credential(
         self, identity_id: UUID, kind: str, name: str
-    ) -> tuple[EncryptedPayload, CredentialRow] | None:
+    ) -> tuple[StoredPayload, CredentialRow] | None:
         if self._own(identity_id) is None:
             return None
         found = self.state.credentials.get((identity_id, kind, name))
@@ -605,7 +606,7 @@ class MemoryTx(StoreTx):
         self,
         identity_id: UUID,
         slot: str,
-        payload: EncryptedPayload,
+        payload: StoredPayload,
         *,
         fencing: int,
         expires_at: datetime | None = None,
@@ -619,7 +620,7 @@ class MemoryTx(StoreTx):
         if current is not None and mode == "in_place":
             updated = replace(
                 current,
-                payload=payload,
+                payload=deepcopy(payload),
                 status=SessionStatus.ACTIVE,
                 written_by_fencing=fencing,
                 expires_at=expires_at,
@@ -637,7 +638,7 @@ class MemoryTx(StoreTx):
             new_id(),
             identity_id,
             slot,
-            payload,
+            deepcopy(payload),
             SessionStatus.ACTIVE,
             fencing,
             expires_at,
@@ -2467,11 +2468,11 @@ class MemoryTx(StoreTx):
         ]
         return sorted(rows, key=lambda row: row.expires_at or self._now)[:limit]
 
-    async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None:
+    async def get_credentials(self, identity_id: UUID) -> StoredPayload | None:
         found = await self.get_credential(identity_id, "default", "default")
         return found[0] if found is not None else None
 
-    async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
+    async def get_session(self, identity_id: UUID, slot: str) -> tuple[StoredPayload, str] | None:
         record = self._current_session(identity_id, slot) if self._own(identity_id) else None
         return (record.payload, record.status) if record is not None else None
 

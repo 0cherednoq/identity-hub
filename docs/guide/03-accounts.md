@@ -394,9 +394,20 @@ await space.identities.delete(identity_id, actor="ops", revoke=True)
 
 | Данные | Хранение |
 |---|---|
-| credentials, сессии, evidence верификаций, логины прокси | всегда зашифрованы (AES-256-GCM, свой ключ на запись) |
+| credentials, сессии | AES-256-GCM по умолчанию; JSON в колонке `payload` при явном `secret_storage="plaintext"` |
+| evidence верификаций, логины прокси и остальные секреты | всегда зашифрованы (AES-256-GCM, свой ключ на запись) |
 | profile | открыто; при `profile_encrypted=True` открыты только `filterable_profile` |
 | attributes, labels, tags, note | открыто |
+
+Формат новых credentials и сессий выбирается один раз при создании хаба:
+
+```python
+hub = IdentityHub(..., secret_storage="encrypted")  # значение по умолчанию
+hub = IdentityHub(..., secret_storage="plaintext")  # осознанно открытое хранение
+```
+
+Чтение определяет формат каждой строки, поэтому во время перевода одна база может содержать оба
+варианта. Мастер-ключ обязателен и в `plaintext`: все остальные виды секретов остаются под шифром.
 
 ```python
 # 1. Под арендой — основной путь для воркеров

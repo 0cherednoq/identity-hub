@@ -59,6 +59,7 @@ __all__ = [
     "BindingRecord",
     "ChallengeRecord",
     "CredentialsRecord",
+    "DualSecretPayloadMixin",
     "EncryptedPayloadMixin",
     "EventCursorRecord",
     "EventRecord",
@@ -143,6 +144,16 @@ class EncryptedPayloadMixin:
     wrapped_dek: Mapped[bytes] = mapped_column(LargeBinary)
     nonce: Mapped[bytes] = mapped_column(LargeBinary)
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class DualSecretPayloadMixin:
+    """Credentials/session: ровно один из encrypted envelope и открытого JSON payload (D-313)."""
+
+    key_id: Mapped[str | None] = mapped_column(String(64))
+    wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
 
 
 # ---------------------------------------------------------------- пространства и сервисы
@@ -587,7 +598,7 @@ class VerificationRecord(IdentityHubBase):
 # ---------------------------------------------------------------- авторизация
 
 
-class CredentialsRecord(EncryptedPayloadMixin, IdentityHubBase):
+class CredentialsRecord(DualSecretPayloadMixin, IdentityHubBase):
     """Как войти: пароль, TOTP, API-ключи. Несколько записей на аккаунт — по виду и имени (0022, D-214)."""
 
     __tablename__ = "ih_credentials"
@@ -609,10 +620,16 @@ class CredentialsRecord(EncryptedPayloadMixin, IdentityHubBase):
         _identity_fk(),
         UniqueConstraint("identity_id", "kind", "name"),
         CheckConstraint("lifecycle IN ('active', 'disabled', 'revoked')", name="lifecycle_valid"),
+        CheckConstraint(
+            "(payload IS NOT NULL AND key_id IS NULL AND wrapped_dek IS NULL AND nonce IS NULL "
+            "AND ciphertext IS NULL) OR (payload IS NULL AND key_id IS NOT NULL AND "
+            "wrapped_dek IS NOT NULL AND nonce IS NOT NULL AND ciphertext IS NOT NULL)",
+            name="payload_format_valid",
+        ),
     )
 
 
-class SessionRecord(EncryptedPayloadMixin, IdentityHubBase):
+class SessionRecord(DualSecretPayloadMixin, IdentityHubBase):
     """Результат входа: StringSession, cookies, OAuth-токены.
 
     slot позволяет держать несколько авторизаций одного аккаунта.
@@ -638,6 +655,12 @@ class SessionRecord(EncryptedPayloadMixin, IdentityHubBase):
     __table_args__ = (
         _identity_fk(),
         _enum_check("status", SessionStatus),
+        CheckConstraint(
+            "(payload IS NOT NULL AND key_id IS NULL AND wrapped_dek IS NULL AND nonce IS NULL "
+            "AND ciphertext IS NULL) OR (payload IS NULL AND key_id IS NOT NULL AND "
+            "wrapped_dek IS NOT NULL AND nonce IS NOT NULL AND ciphertext IS NOT NULL)",
+            name="payload_format_valid",
+        ),
         # история слота и индекс под FK аккаунта: частичный уникальный индекс для FK не годится
         Index("ix_ih_sessions_identity_slot", "identity_id", "slot"),
         # в слоте одна не отозванная запись

@@ -52,6 +52,8 @@ from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import (
     DecryptionFailed,
     EncryptedPayload,
+    PlaintextPayload,
+    StoredPayload,
     associated_data,
     credential_associated_data,
 )
@@ -272,6 +274,27 @@ def _resume_deliveries(endpoint_id: UUID) -> Any:
 
 
 NOTIFICATION_CHANNELS = cast(Table, NotificationChannelRecord.__table__)
+
+
+def _stored_payload_columns(payload: StoredPayload) -> dict[str, Any]:
+    if isinstance(payload, PlaintextPayload):
+        return {
+            "payload": payload.value,
+            "key_id": None,
+            "wrapped_dek": None,
+            "nonce": None,
+            "ciphertext": None,
+        }
+    return {"payload": None, **payload.columns()}
+
+
+def _stored_payload(row: Any) -> StoredPayload:
+    value = row["payload"]
+    if value is not None:
+        return PlaintextPayload(dict(value))
+    return EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
+
+
 NOTIFICATION_RULES = cast(Table, NotificationRuleRecord.__table__)
 NOTIFICATIONS = cast(Table, NotificationRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
@@ -569,7 +592,7 @@ class PgTx(StoreTx):
         )
         return set(rows.scalars())
 
-    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
+    async def put_credentials(self, identity_id: UUID, payload: StoredPayload) -> None:
         await self.put_credential(identity_id, "default", "default", payload)
 
     async def put_credential(
@@ -577,7 +600,7 @@ class PgTx(StoreTx):
         identity_id: UUID,
         kind: str,
         name: str,
-        payload: EncryptedPayload,
+        payload: StoredPayload,
         *,
         public_value: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
@@ -591,12 +614,12 @@ class PgTx(StoreTx):
             name=name,
             public_value=public_value,
             expires_at=expires_at,
-            **payload.columns(),
+            **_stored_payload_columns(payload),
         )
         upsert = stmt.on_conflict_do_update(
             index_elements=[c.identity_id, c.kind, c.name],
             set_={
-                **payload.columns(),
+                **_stored_payload_columns(payload),
                 "public_value": stmt.excluded.public_value,
                 "expires_at": stmt.excluded.expires_at,
                 "version": c.version + 1,
@@ -608,12 +631,19 @@ class PgTx(StoreTx):
 
     async def get_credential(
         self, identity_id: UUID, kind: str, name: str
-    ) -> tuple[EncryptedPayload, CredentialRow] | None:
+    ) -> tuple[StoredPayload, CredentialRow] | None:
         c = CREDENTIALS.c
         row = (
             (
                 await self.execute(
-                    select(*_CREDENTIAL_COLUMNS, c.key_id, c.wrapped_dek, c.nonce, c.ciphertext).where(
+                    select(
+                        *_CREDENTIAL_COLUMNS,
+                        c.payload,
+                        c.key_id,
+                        c.wrapped_dek,
+                        c.nonce,
+                        c.ciphertext,
+                    ).where(
                         c.identity_id == identity_id,
                         c.space_id == self.space.id,
                         c.kind == kind,
@@ -626,8 +656,7 @@ class PgTx(StoreTx):
         )
         if row is None:
             return None
-        payload = EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
-        return payload, _credential_row(row)
+        return _stored_payload(row), _credential_row(row)
 
     async def set_credential_lifecycle(
         self, identity_id: UUID, kind: str, name: str, lifecycle: str
@@ -665,7 +694,7 @@ class PgTx(StoreTx):
         self,
         identity_id: UUID,
         slot: str,
-        payload: EncryptedPayload,
+        payload: StoredPayload,
         *,
         fencing: int,
         expires_at: datetime | None = None,
@@ -693,7 +722,7 @@ class PgTx(StoreTx):
                         update(SESSIONS)
                         .where(c.id == current.id)
                         .values(
-                            **payload.columns(),
+                            **_stored_payload_columns(payload),
                             status=SessionStatus.ACTIVE,
                             expires_at=expires_at,
                             written_by_fencing=fencing,
@@ -725,7 +754,7 @@ class PgTx(StoreTx):
                         expires_at=expires_at,
                         written_by_fencing=fencing,
                         revision=revision,
-                        **payload.columns(),
+                        **_stored_payload_columns(payload),
                     )
                     .on_conflict_do_nothing(
                         index_elements=[c.identity_id, c.slot], index_where=text("status <> 'revoked'")
@@ -1681,25 +1710,29 @@ class PgTx(StoreTx):
         )
         return _lease_row(row)
 
-    async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None:
+    async def get_credentials(self, identity_id: UUID) -> StoredPayload | None:
         found = await self.get_credential(identity_id, "default", "default")
         return found[0] if found is not None else None
 
-    async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
+    async def get_session(self, identity_id: UUID, slot: str) -> tuple[StoredPayload, str] | None:
         c = SESSIONS.c
         row = (
-            await self.execute(
-                select(c.key_id, c.wrapped_dek, c.nonce, c.ciphertext, c.status).where(
-                    c.identity_id == identity_id,
-                    c.slot == slot,
-                    c.space_id == self.space.id,
-                    c.status != SessionStatus.REVOKED,
+            (
+                await self.execute(
+                    select(c.payload, c.key_id, c.wrapped_dek, c.nonce, c.ciphertext, c.status).where(
+                        c.identity_id == identity_id,
+                        c.slot == slot,
+                        c.space_id == self.space.id,
+                        c.status != SessionStatus.REVOKED,
+                    )
                 )
             )
-        ).one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             return None
-        return EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext), row.status
+        return _stored_payload(row), row["status"]
 
     async def access_metadata(
         self, identity_id: UUID

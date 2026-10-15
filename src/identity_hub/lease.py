@@ -554,7 +554,7 @@ class Lease:
         ):
             return None
         aad = credential_associated_data(self.identity_id, kind, name)
-        return self.pool.space.hub._envelope.open_model(schema, found[0], aad)
+        return self.pool.space.hub._open_stored_model(schema, found[0], aad)
 
     async def active_credentials(self) -> dict[tuple[str, str], BaseModel]:
         """Все активные записи credentials с непрошедшим сроком: `(kind, name) → модель` (D-216)."""
@@ -569,14 +569,13 @@ class Lease:
                 if row.lifecycle == ACTIVE and not is_expired(row.lifecycle, row.expires_at, now)
             ]
             payloads = [await tx.get_credential(self.identity_id, row.kind, row.name) for row in usable]
-        envelope = self.pool.space.hub._envelope
         result: dict[tuple[str, str], BaseModel] = {}
         for row, found in zip(usable, payloads, strict=True):
             if found is None:
                 continue
             schema = self.pool.service.credential_schema(row.kind)
             aad = credential_associated_data(self.identity_id, row.kind, row.name)
-            result[(row.kind, row.name)] = envelope.open_model(schema, found[0], aad)
+            result[(row.kind, row.name)] = self.pool.space.hub._open_stored_model(schema, found[0], aad)
         return result
 
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
@@ -592,7 +591,7 @@ class Lease:
         if found is None or (valid_only and found[1] != SessionStatus.VALID):
             return None
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub._envelope.open_model(self.pool.service.session, found[0], aad)
+        return self.pool.space.hub._open_stored_model(self.pool.service.session, found[0], aad)
 
     async def save_session(
         self,
@@ -617,7 +616,7 @@ class Lease:
     def _seal_session(self, session: BaseModel | Mapping[str, Any], slot: str) -> Any:
         model = validate_model(self.pool.service.session, session, "session")
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub._envelope.seal_model(model, aad)
+        return self.pool.space.hub._seal_stored_model(model, aad)
 
     async def _write_session(
         self, tx: StoreTx, payload: Any, slot: str, *, mode: str, expires_at: datetime | None = None

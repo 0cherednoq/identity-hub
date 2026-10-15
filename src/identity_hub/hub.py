@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import weakref
 from collections import Counter
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Any, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import pydantic_core
+from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
 from identity_hub.admin_audit import AdminAuditMixin
@@ -29,7 +32,8 @@ from identity_hub.api.sync import Sync
 from identity_hub.api.verifications import Verifications
 from identity_hub.auth import LoginMixin
 from identity_hub.clock import Clock, SystemClock
-from identity_hub.crypto import Envelope
+from identity_hub.crypto import Envelope, PlaintextPayload, StoredPayload, reveal
+from identity_hub.crypto.envelope import MAX_SECRET_BYTES
 from identity_hub.crypto.fingerprint import FingerprintKeyring
 from identity_hub.dispatch.dispatcher import Dispatcher
 from identity_hub.dispatch.notifications import NotificationDispatcher, TelegramTransport
@@ -137,11 +141,15 @@ class IdentityHub:
         metrics: MetricsHook | None = None,
         timezone: str = "UTC",
         migrate: str = "check",
+        secret_storage: str = "encrypted",
     ) -> None:
         if migrate not in ("check", "auto", "off"):
             raise ValidationFailed("migrate: check, auto или off")
         if migrate == "auto" and store is not None:
             raise ValidationFailed("migrate='auto' работает только с PostgreSQL (sessionmaker), не со store")
+        if secret_storage not in ("encrypted", "plaintext"):
+            raise ValidationFailed("secret_storage: encrypted или plaintext")
+        self._secret_storage = secret_storage
         self._migrate = migrate
         if store is None:
             if sessionmaker is None:
@@ -218,6 +226,24 @@ class IdentityHub:
         self._closed = False
         # когда пул последний раз сообщал proxy.pool.exhausted (монотонные часы, R1-12)
         self._proxy_exhausted_at: dict[tuple[str, str, str], float] = {}
+
+    def _seal_stored_model(self, model: BaseModel | Mapping[str, Any], aad: bytes) -> StoredPayload:
+        """Подготовить credentials/session в выбранном формате; прочие секреты сюда не идут."""
+        if self._secret_storage == "encrypted":
+            return self._envelope.seal_model(model, aad)
+        encoded = pydantic_core.to_json(reveal(model))
+        if len(encoded) > MAX_SECRET_BYTES:
+            raise ValidationFailed(f"секрет больше {MAX_SECRET_BYTES // 1024} KiB")
+        value = pydantic_core.from_json(encoded)
+        if not isinstance(value, dict):
+            raise ValidationFailed("секрет должен быть JSON-объектом")
+        return PlaintextPayload(value)
+
+    def _open_stored_model[M: BaseModel](self, schema: type[M], payload: StoredPayload, aad: bytes) -> M:
+        """Прочитать строку независимо от текущего режима хаба (смешанная база допустима)."""
+        if isinstance(payload, PlaintextPayload):
+            return schema.model_validate(payload.value)
+        return self._envelope.open_model(schema, payload, aad)
 
     # --------------------------------------------------------- сервисы
 

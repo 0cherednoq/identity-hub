@@ -50,7 +50,7 @@ class SecretsAdminMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.credentials, credentials, "credentials")
-        payload = self.hub._envelope.seal_model(model, associated_data("ih_credentials", identity_id))
+        payload = self.hub._seal_stored_model(model, associated_data("ih_credentials", identity_id))
         command = {"identity_id": identity_id, "reset_auth": reset_auth}
         async with self._tx(checked=idempotency_key is None) as tx:
             if not await self._claim_secret_command(
@@ -98,7 +98,7 @@ class SecretsAdminMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.session, session, "session")
-        payload = self.hub._envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
+        payload = self.hub._seal_stored_model(model, associated_data("ih_sessions", identity_id, slot))
         command = {"identity_id": identity_id, "slot": slot, "expires_at": expires_at, "mode": mode}
         async with self._tx(checked=idempotency_key is None) as tx:
             if not await self._claim_secret_command(tx, idempotency_key, "replace_session", command, model):
@@ -187,7 +187,7 @@ class SecretsAdminMixin(SpaceBase):
             if kind == "credentials":
                 payload = await tx.get_credentials(identity_id)
                 value = (
-                    envelope.open_model(
+                    self.hub._open_stored_model(
                         service.credentials, payload, associated_data("ih_credentials", identity_id)
                     )
                     if payload
@@ -198,7 +198,7 @@ class SecretsAdminMixin(SpaceBase):
                 schema = service.credential_schema(cred_kind)
                 record = await tx.get_credential(identity_id, cred_kind, cred_name)
                 value = (
-                    envelope.open_model(
+                    self.hub._open_stored_model(
                         schema, record[0], credential_associated_data(identity_id, cred_kind, cred_name)
                     )
                     if record
@@ -209,7 +209,7 @@ class SecretsAdminMixin(SpaceBase):
                 slot = key or "default"
                 found = await tx.get_session(identity_id, slot)
                 value = (
-                    envelope.open_model(
+                    self.hub._open_stored_model(
                         service.session, found[0], associated_data("ih_sessions", identity_id, slot)
                     )
                     if found
@@ -271,7 +271,7 @@ class CredentialsMixin(SpaceBase):
         public = dict(public_value) if public_value is not None else None
         if public is not None:
             validate_json_payload(public, "public_value")  # открытая часть: только JSON, с лимитом размера
-        payload = self.hub._envelope.seal_model(model, credential_associated_data(identity_id, kind, name))
+        payload = self.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
             current = await tx.get_credential(identity_id, kind, name)

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase
-from identity_hub.crypto import EncryptedPayload, associated_data, credential_associated_data
+from identity_hub.crypto import StoredPayload, associated_data, credential_associated_data
 from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.data import (
     build_search_text,
@@ -56,7 +56,7 @@ class PreparedCredential:
 
     kind: str
     name: str
-    payload: EncryptedPayload
+    payload: StoredPayload
     public_value: dict[str, Any] | None
     expires_at: datetime | None
 
@@ -66,8 +66,8 @@ class PreparedIdentity:
     """Аккаунт, провалидированный и зашифрованный до открытия транзакции (T-5). Используется и импортом."""
 
     row: NewIdentity
-    credentials: EncryptedPayload | None
-    sessions: dict[str, EncryptedPayload]
+    credentials: StoredPayload | None
+    sessions: dict[str, StoredPayload]
     links: dict[str, UUID]
     credential_records: tuple[PreparedCredential, ...] = ()
 
@@ -109,7 +109,7 @@ def prepare_identity(
     creds_payload = None
     if credentials is not None:
         creds = validate_model(service.credentials, credentials, "credentials")
-        creds_payload = envelope.seal_model(creds, associated_data("ih_credentials", identity_id))
+        creds_payload = space.hub._seal_stored_model(creds, associated_data("ih_credentials", identity_id))
     records: list[PreparedCredential] = []
     seen: set[tuple[str, str]] = {("default", "default")} if credentials is not None else set()
     for record in credential_records:
@@ -121,12 +121,14 @@ def prepare_identity(
         public = dict(record.public_value) if record.public_value is not None else None
         if public is not None:
             validate_json_payload(public, f"public_value {kind}/{name}")
-        sealed = envelope.seal_model(model, credential_associated_data(identity_id, kind, name))
+        sealed = space.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
         records.append(PreparedCredential(kind, name, sealed, public, record.expires_at))
-    session_payloads: dict[str, EncryptedPayload] = {}
+    session_payloads: dict[str, StoredPayload] = {}
     for slot, data in (sessions or {}).items():
         model = validate_model(service.session, data, f"sessions.{slot}")
-        session_payloads[slot] = envelope.seal_model(model, associated_data("ih_sessions", identity_id, slot))
+        session_payloads[slot] = space.hub._seal_stored_model(
+            model, associated_data("ih_sessions", identity_id, slot)
+        )
     profile_secret = (
         envelope.seal_model(secret_profile, associated_data("ih_identities", identity_id, "profile"))
         if secret_profile

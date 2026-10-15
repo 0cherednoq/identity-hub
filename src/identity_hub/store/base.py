@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub.clock import Clock
-from identity_hub.crypto.envelope import EncryptedPayload
+from identity_hub.crypto.envelope import EncryptedPayload, StoredPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import LeaseEndReason
 from identity_hub.errors import SecretConfigurationError
@@ -1192,7 +1192,7 @@ class StoreTx(ABC):
         """Какие из аккаунтов есть в этом пространстве."""
 
     @abstractmethod
-    async def put_credentials(self, identity_id: UUID, payload: EncryptedPayload) -> None:
+    async def put_credentials(self, identity_id: UUID, payload: StoredPayload) -> None:
         """Запись `default`/`default` (прежний единственный blob, D-214)."""
 
     @abstractmethod
@@ -1201,7 +1201,7 @@ class StoreTx(ABC):
         identity_id: UUID,
         kind: str,
         name: str,
-        payload: EncryptedPayload,
+        payload: StoredPayload,
         *,
         public_value: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
@@ -1212,7 +1212,7 @@ class StoreTx(ABC):
     @abstractmethod
     async def get_credential(
         self, identity_id: UUID, kind: str, name: str
-    ) -> tuple[EncryptedPayload, CredentialRow] | None: ...
+    ) -> tuple[StoredPayload, CredentialRow] | None: ...
 
     @abstractmethod
     async def set_credential_lifecycle(
@@ -1229,7 +1229,7 @@ class StoreTx(ABC):
         self,
         identity_id: UUID,
         slot: str,
-        payload: EncryptedPayload,
+        payload: StoredPayload,
         *,
         fencing: int,
         expires_at: datetime | None = None,
@@ -1772,10 +1772,10 @@ class StoreTx(ABC):
     # --------------------------------------------------------- секреты (P3.4)
 
     @abstractmethod
-    async def get_credentials(self, identity_id: UUID) -> EncryptedPayload | None: ...
+    async def get_credentials(self, identity_id: UUID) -> StoredPayload | None: ...
 
     @abstractmethod
-    async def get_session(self, identity_id: UUID, slot: str) -> tuple[EncryptedPayload, str] | None:
+    async def get_session(self, identity_id: UUID, slot: str) -> tuple[StoredPayload, str] | None:
         """(payload, status) сессии слота."""
 
     @abstractmethod

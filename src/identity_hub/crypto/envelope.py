@@ -35,6 +35,8 @@ __all__ = [
     "DecryptionFailed",
     "EncryptedPayload",
     "Envelope",
+    "PlaintextPayload",
+    "StoredPayload",
     "associated_data",
     "credential_associated_data",
     "reveal",
@@ -71,6 +73,19 @@ class EncryptedPayload:
             f"{prefix}nonce": self.nonce,
             f"{prefix}ciphertext": self.ciphertext,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class PlaintextPayload:
+    """JSON-представление секрета для явно выбранного открытого хранения (D-313)."""
+
+    value: dict[str, Any]
+
+    def __repr__(self) -> str:
+        return "PlaintextPayload(<redacted>)"
+
+
+StoredPayload = EncryptedPayload | PlaintextPayload
 
 
 class AssociatedData(bytes):
