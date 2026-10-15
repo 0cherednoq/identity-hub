@@ -325,8 +325,15 @@ async def reconcile_loop(space):
 - Проба выполняется как операция `probe` и тратит её квоту, если вы её объявили. Так можно
   ограничить частоту проверок: `operations={"probe": OperationRule(needs_auth=False,
   standing=frozenset(Standing), quotas=(Quota(4, timedelta(hours=1)),))}`.
+- Каждый вызов адаптера имеет долговечную операцию `probe:<region>` (для фактора —
+  `probe:verification:<factor>`). Claim фиксируется до сетевого вызова, а итог операции и
+  наблюдение — одной транзакцией. Параллельная живая проба того же региона возвращает `busy`;
+  поздний ответ после истечения claim не меняет состояние. `maintenance.run_due()` переводит
+  зависшие операции в `failed` с кодом `claim_expired`, не выполняя сетевой вызов повторно.
+- Квота `probe` списывается один раз перед серией регионов одного аккаунта. Повтор после падения
+  процесса — новый вызов `refresh`/`refresh_many` и новое списание; recovery сам квоту не тратит.
 - Исходы по региону: `applied`, `unchanged`, `stale`, `unknown_status`, `pinned`, `sticky`,
-  `awaiting_confirmation`, `not_probed`.
+  `awaiting_confirmation`, `not_probed`, `busy`.
 - `refresh_many` сверяет только аккаунты в `lifecycle=ready`: `provisioning` и `retired` в
   очередь не попадают. Аккаунты на паузе, в охлаждении и карантине попадают в
   `report.skipped_unavailable` — проба для них не запускается и `limit` не расходуется.

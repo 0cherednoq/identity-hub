@@ -75,6 +75,7 @@ from identity_hub.enums import (
     VerificationState,
 )
 from identity_hub.errors import (
+    AlreadyExists,
     ConcurrentModification,
     DatabaseBusy,
     IdempotencyConflict,
@@ -4323,11 +4324,20 @@ class PgTx(StoreTx):
         }
         if available_at is not None:
             values["available_at"] = available_at
+        p = PROVIDER_OPERATIONS.c
         operation_id = (
             await self.execute(
-                insert(PROVIDER_OPERATIONS).values(**values).returning(PROVIDER_OPERATIONS.c.id)
+                insert(PROVIDER_OPERATIONS)
+                .values(**values)
+                .on_conflict_do_nothing(
+                    index_elements=[p.identity_id, p.kind],
+                    index_where=text("state IN ('pending', 'running')"),
+                )
+                .returning(p.id)
             )
-        ).scalar_one()
+        ).scalar_one_or_none()
+        if operation_id is None:
+            raise AlreadyExists("provider_operation", f"{identity_id}/{kind}")
         (row,) = [
             r for r in await self.list_provider_operations(identity_id=identity_id) if r.id == operation_id
         ]

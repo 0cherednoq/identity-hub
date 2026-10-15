@@ -1909,7 +1909,10 @@ class StoreTx(ABC):
         available_at: datetime | None = None,
         deadline_at: datetime | None = None,
     ) -> ProviderOperationRow:
-        """Поставить операцию в очередь: `pending`, `attempt = 0`, `revision = 1` (D-220)."""
+        """Поставить операцию в очередь: `pending`, `attempt = 0`, `revision = 1` (D-220).
+
+        Живая (`pending`/`running`) операция того же вида у аккаунта уже есть — `AlreadyExists` (D-223).
+        """
         raise NotImplementedError
 
     @abstractmethod

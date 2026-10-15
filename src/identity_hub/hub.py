@@ -60,6 +60,7 @@ from identity_hub.metrics import (
 )
 from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider
+from identity_hub.provider_worker import ProviderOperationsWorker
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
 from identity_hub.read.admin_state import AdminStateMixin
 from identity_hub.read.analytics import AnalyticsMixin
@@ -189,6 +190,7 @@ class IdentityHub:
         self.dispatcher.add_consumer("notifications", self._notification_dispatcher.handle_events)
         self.dispatcher.add_pump(self._notification_dispatcher.deliver_due)
         self._import_runner = ImportRunner(self)
+        self._provider_worker = ProviderOperationsWorker(self)  # восстановление операций провайдера (D-223)
         self.dispatcher.add_pump(self._import_runner.run_once)
         self.maintenance = Maintenance(self, maintenance)
         self.dispatcher.add_pump(self.maintenance.run_due)

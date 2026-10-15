@@ -42,6 +42,7 @@ from identity_hub.enums import (
     Severity,
 )
 from identity_hub.errors import (
+    AlreadyExists,
     IdempotencyConflict,
     LeaseOwnershipLost,
     LeaseUnavailable,
@@ -2979,6 +2980,11 @@ class MemoryTx(StoreTx):
     ) -> ProviderOperationRow:
         if self._own(identity_id) is None:
             raise NotFound("identity", identity_id)
+        if any(
+            op.identity_id == identity_id and op.kind == kind and op.state in ("pending", "running")
+            for op in self.state.provider_operations.values()
+        ):
+            raise AlreadyExists("provider_operation", f"{identity_id}/{kind}")
         row = ProviderOperationRow(
             new_id(),
             self.space.id,

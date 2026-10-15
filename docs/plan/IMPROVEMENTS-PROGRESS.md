@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I4.3 Probes, reconcile и recovery worker
-- **Начата:** 2026-10-06
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Падающие тесты: проба через операцию, отказ пробы, busy при живой операции, поздний ответ, восстановление и инвариант без истёкших running, обслуживание
-  - [ ] Миграция 0025 (дедупликация живых операций) и enqueue с AlreadyExists
-  - [ ] Пробы через операции: claim, итог с наблюдением, верификация
-  - [ ] ProviderOperationsWorker.run_once и вызов из обслуживания
-  - [ ] Документация, CHANGELOG, IMP-11 implemented, check.sh
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -58,7 +54,7 @@
 | I3.3b | Session: режимы в API, события, вход и обновление | I3.3a | done |  | разбиение D-218 |
 | I4.1 | Provider operation state machine и claim | I0.2b, I0.4, I1.2b, I2.3 | done |  |  |
 | I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | done |  |  |
-| I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | in_progress |  |  |
+| I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | done |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
@@ -71,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 36 / 46 done
+**Итого:** 37 / 46 done
 
 ## Журнал сессий
 
@@ -111,3 +107,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-06 · I3.3b · done · mode in_place/replace в lease.save_session и secrets.replace_session, secrets.revoke_session, вход — replace, события с mode/session_id/replaced_id/session_revision без данных сессии, параллельная замена на барьере; IMP-10 implemented, D-219 · фаза I3 закрыта, дальше I4.1
 2026-10-06 · I4.1 · done · машина состояний операций провайдера и RetryPolicy (domain/provider_operations), миграция 0024 (revision, claim по пространству), Store enqueue/claim (SKIP LOCKED)/apply (claim + fence, поздний ответ — False)/recover/cancel в PgStore и MemoryStore, at-least-once в интеграциях; D-220 · дальше I4.2
 2026-10-06 · I4.2 · done · вход через очередь операций: claim операции login коммитится до Authenticator, ctx.attempt_id = claim_id, итог (сессия replace / challenge / отказ) одной транзакцией с claim и fence, поздний ответ откатывается целиком; LoginReport.operations; Store claim по operation_ids; D-222 · дальше I4.3
+2026-10-15 · I4.3 · done · probes через provider operations, дедупликация и recovery worker · финальный gate зелёный

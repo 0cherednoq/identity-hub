@@ -934,6 +934,14 @@ class ProviderOperationRecord(IdentityHubBase):
             postgresql_where=text("state IN ('pending', 'retryable')"),
         ),
         Index("ix_ih_provider_operations_identity", "identity_id", "created_at"),
+        # одна живая операция вида на аккаунт: параллельные пробы и входы не запускаются (0032, D-223)
+        Index(
+            "uq_ih_provider_operations_live",
+            "identity_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("state IN ('pending', 'running')"),
+        ),
         Index(
             "ix_ih_provider_operations_stale",
             "claim_expires_at",

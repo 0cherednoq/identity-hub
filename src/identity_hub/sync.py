@@ -17,13 +17,22 @@ from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
 from identity_hub.auth import ALL_LIFECYCLES
+from identity_hub.domain.provider_operations import safe_error_code
 from identity_hub.domain.regions import Observation, Outcome
 from identity_hub.enums import Availability, ChangeSource, Standing
-from identity_hub.errors import LeaseUnavailable, ValidationFailed, describe_error
+from identity_hub.errors import (
+    AlreadyExists,
+    LeaseOwnershipLost,
+    LeaseUnavailable,
+    ValidationFailed,
+    describe_error,
+)
 from identity_hub.protocols import ProbeResult
+from identity_hub.provider_worker import NO_RETRY
 from identity_hub.service import PROBE_OPERATION, Service
-from identity_hub.state import DEFAULT_SLOT
-from identity_hub.store.base import CandidateQuery
+from identity_hub.state import DEFAULT_SLOT, apply_region_change
+from identity_hub.store.base import CandidateQuery, ProviderClaim, StoreTx
+from identity_hub.verifications import apply_verification
 
 if TYPE_CHECKING:
     from identity_hub.lease import Lease
@@ -196,6 +205,7 @@ class SyncMixin(SpaceBase):
             raise ValidationFailed(f"у сервиса {service.name} нет Probes")
         ctx = _ProbeContext(lease)
         results: dict[str, str] = {}
+        # квота пробы списывается здесь, один раз на сверку аккаунта — до первой пробы (D-223)
         async with lease.operation(PROBE_OPERATION):
             for region, key in targets:
                 label = f"{region}:{key}" if region == "verification" else region
@@ -203,41 +213,129 @@ class SyncMixin(SpaceBase):
                 if method is None:
                     results[label] = "not_probed"
                     continue
-                async with asyncio.timeout(service.probe_timeout.total_seconds()):
-                    result: ProbeResult | None = await (
-                        method(ctx, key) if region == "verification" else method(ctx)
-                    )
+                claim = await self._claim_probe(lease, service, f"probe:{label}")
+                if claim is None:
+                    results[label] = "busy"  # живая операция того же вида — у другой сверки
+                    continue
+                try:
+                    async with asyncio.timeout(service.probe_timeout.total_seconds()):
+                        result: ProbeResult | None = await (
+                            method(ctx, key) if region == "verification" else method(ctx)
+                        )
+                except Exception as exc:
+                    code = "ProbeTimeout" if isinstance(exc, TimeoutError) else safe_error_code(exc)
+                    await self._finish_probe(lease, claim, "failed", error_code=code)
+                    raise
                 if result is None:
+                    await self._finish_probe(lease, claim, "succeeded", result={"outcome": "not_probed"})
                     results[label] = "not_probed"
                     continue
-                results[label] = await self._apply_probe(lease, service, region, key, result)
+                results[label] = await self._apply_probe(lease, service, region, key, result, claim)
         return results
 
+    async def _claim_probe(self, lease: Lease, service: Service, kind: str) -> ProviderClaim | None:
+        """Операция пробы: claim коммитится до вызова; живая операция того же вида — None (D-223)."""
+        claim_for = service.probe_timeout + timedelta(minutes=1)
+        try:
+            async with self._tx(own=True) as tx:
+                await lease._check_ownership(tx)
+                operation = await tx.enqueue_provider_operation(lease.identity_id, kind)
+                (claim,) = await tx.claim_provider_operations(
+                    lease.holder, limit=1, claim_for=claim_for, operation_ids=[operation.id]
+                )
+        except AlreadyExists:
+            return None
+        return claim
+
+    @staticmethod
+    async def _apply_operation(
+        tx: StoreTx,
+        lease: Lease,
+        claim: ProviderClaim,
+        outcome: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        applied = await tx.apply_provider_operation(
+            claim, outcome, result=result, error_code=error_code, fence=lease.fence, policy=NO_RETRY
+        )
+        if not applied:  # claim истёк и операцию восстановили: поздний ответ ничего не пишет
+            raise LeaseOwnershipLost(
+                lease.lease_id, "late", identity_id=lease.identity_id, fencing=lease.fencing
+            )
+
+    async def _finish_probe(
+        self,
+        lease: Lease,
+        claim: ProviderClaim,
+        outcome: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        async with self._tx(own=True) as tx:
+            await self._apply_operation(tx, lease, claim, outcome, result=result, error_code=error_code)
+
     async def _apply_probe(
-        self, lease: Lease, service: Service, region: str, key: str, result: ProbeResult
+        self, lease: Lease, service: Service, region: str, key: str, result: ProbeResult, claim: ProviderClaim
     ) -> str:
         if region == "verification":
-            status = await lease.verification(key).reconcile(result)
-            return status.state
+
+            def step(flow: Any, status: Any, verified: frozenset[str], now: Any) -> Any:
+                observation = Observation(
+                    result.state,
+                    observed_at=result.observed_at or now,
+                    source=ChangeSource.PROBE,
+                    raw_status=result.raw_status,
+                    code=result.code,
+                    until=result.until,
+                    actor=lease.holder,
+                )
+                return flow.reconcile(status, observation, now)
+
+            async with self._tx(own=True) as tx:
+                await lease._check_fencing(tx)
+                verification_decision = await apply_verification(
+                    self,
+                    tx,
+                    lease.identity_id,
+                    key,
+                    step,
+                    actor=lease.holder,
+                    lease_id=lease.lease_id,
+                )
+                await self._apply_operation(
+                    tx,
+                    lease,
+                    claim,
+                    "succeeded",
+                    result={"outcome": verification_decision.status.state},
+                )
+            return verification_decision.status.state
         state = result.state
         if region == "standing" and state is None and result.code is not None:
             state = service.standing_for_code(result.code)  # коды платформы объявляет сервис (§3.2)
+        # итог операции и наблюдение — одна транзакция с проверкой claim и lease fence (D-223)
         async with self._tx(own=True) as tx:
             observed_at = result.observed_at or await tx.now()
-        decision = await self._observe(  # type: ignore[attr-defined]
-            lease.identity_id,
-            region,
-            Observation(
-                state,
-                observed_at=observed_at,
-                source=ChangeSource.PROBE,
-                raw_status=result.raw_status,
-                code=result.code,
-                until=result.until,
-                actor=lease.holder,
-            ),
-            key=key,
-            lease_id=lease.lease_id,
-        )
-        outcome: Outcome = decision.outcome
+            region_decision = await apply_region_change(
+                self,
+                tx,
+                lease.identity_id,
+                region,
+                key,
+                Observation(
+                    state,
+                    observed_at=observed_at,
+                    source=ChangeSource.PROBE,
+                    raw_status=result.raw_status,
+                    code=result.code,
+                    until=result.until,
+                    actor=lease.holder,
+                ),
+                lease_id=lease.lease_id,
+            )
+            outcome: Outcome = region_decision.outcome
+            await self._apply_operation(tx, lease, claim, "succeeded", result={"outcome": str(outcome)})
         return str(outcome)
