@@ -817,31 +817,72 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
   `https://privy.io`; `http://1.2.3.4:8000` сохраняется как есть; невалидный URL — ошибка при
   старте; `None` допустим; оба бэкенда.
 
-### S11.2 Выбор предпочтительной креды без перебора
+### S11.2 Доступ к кредам: `active_credential` и типизация по схеме
 
 Зависит от S9 (поля валидности уже есть).
 
-Проблема нейминга: уже заняты `credentials()` (запись `default`), `credential(kind, name)`
-(точная запись), `active_credentials()` (словарь всех активных). Нужен **явно отличный** глагол
-выбора, чтобы не путать «дай конкретную» и «выбери за меня».
+Две эргономические доработки доступа к кредам из адаптера/аренды.
 
-- Новый аксессор на `Lease` и `LoginContext`: **`pick_credential(kind="default")`** →
-  предпочтительная запись этого вида или `None`. Правило выбора: среди `active` и непросроченных,
-  **исключая** помеченные `last_rejected_at`; приоритет у `last_verified_at` (свежайшая), затем —
-  непробованные. Имя `pick_` выбрано как глагол выбора, визуально далёкий от `credential(s)`.
-- Сессии отдельного `pick` не получают: у слота одна текущая сессия, `session(slot)` уже отдаёт
-  только валидную (`valid_only`), перебора нет; несколько кандидатов сессий — это разные слоты,
-  адресуются именем слота. Это зафиксировать в документации, чтобы не плодить похожий метод.
-- Приёмка (`AcceptanceWorker`) и примеры адаптеров используют `pick_credential`, чтобы «взять
-  рабочую» было одной строкой; при отказе адаптер метит `reject_credential`, при успехе —
-  `verify_credential`, и следующий `pick_credential` уже предпочтёт проверенную.
-- Документация: `03-accounts.md` — выбор кредов (`credential` vs `pick_credential` vs
-  `active_credentials`), оговорка про сессии; `api.md`, allowlist; CHANGELOG.
+**1. `active_credential` — первая пригодная запись без перебора.**
+- Новый аксессор на `Lease` и `LoginContext`: **`active_credential(kind="default")`** → первая
+  пригодная запись вида или `None`. «Пригодная» = `active`, не просрочена, **не** помечена
+  `last_rejected_at`. Без приоритета «проверенной» — просто первая годная (нужна «первая
+  рабочая», не «лучшая»); порядок детерминированный (по `name`).
+- Пара с существующим `active_credentials()` (словарь всех активных) — та же семантика
+  «активная», в единственном и множественном числе; `credential(kind, name)` остаётся точечным
+  доступом.
+- С `reject_credential` работает как итератор «до рабочей» без отдельного списка: отклонённая
+  запись выбывает из выборки, следующий вызов отдаёт другую.
+  ```python
+  while (creds := await ctx.active_credential("default")) is not None:
+      if await try_sign_in(creds):
+          await ctx.verify_credential("default", name=creds.name); break
+      await ctx.reject_credential("default", name=creds.name, code="bad")
+  ```
+- Сессии своего аналога не получают: у слота одна валидная сессия (`session(slot)` уже отдаёт
+  только её), кандидаты сессий — это разные слоты. Зафиксировать в документации.
+
+- **Нет пригодных или нет кредов вообще.** `active_credential` (и `credentials()`) возвращает
+  `None` и когда записей нет совсем, и когда все `disabled`/`revoked`/просрочены/`reject` — это
+  штатный возврат, не исключение: часть сервисов логинится без кредов (соц-логин через связь).
+  Решает адаптер: нужны креды и пришёл `None` → `LoginFailure(code, retryable=False)`; вход через
+  `ctx.linked(...)` → `None` игнорируется. Отличить «кредов не было» от «все сгорели» —
+  `active_credentials()` (пусто) плюс `secrets.credentials()` (метаданные всех, включая `revoked`).
+  Правило приёмки «не брать, когда все отклонены» (S9.2) применяется только к аккаунтам, у
+  которых есть креды нужного вида и все непригодны; аккаунт с нулём кредов под него не подпадает.
+
+**2. Типизированный доступ по схеме.**
+- Сейчас `credentials()`/`credential()`/`session()`/`active_credential()` возвращают
+  `BaseModel | None` — IDE и mypy не видят полей схемы сервиса. Добавить необязательный параметр
+  `schema`, типизирующий результат:
+  ```python
+  @overload
+  async def credentials(self, schema: type[M]) -> M | None: ...
+  @overload
+  async def credentials(self) -> BaseModel | None: ...
+  ```
+  То же для `credential(kind, name, schema=...)`, `session(slot, schema=...)`,
+  `active_credential(kind, schema=...)`. Переданная схема проверяется на совпадение с
+  `Service.credential_schema(kind)`/`session_schema(slot)` (иначе `ValidationFailed`), результат
+  типизирован ей.
+  ```python
+  creds = await ctx.active_credential("default", schema=TgCredentials)  # тип TgCredentials | None
+  ```
+- Форма без `schema` остаётся (возвращает `BaseModel | None`) для совместимости. Автоматический
+  вывод типа из `Service` без аргумента не вводится: контекст не параметризован типами сервиса,
+  поэтому схема передаётся явно — это даёт точный тип для mypy без магии.
+
+- Приёмка (`AcceptanceWorker`) и примеры адаптеров используют `active_credential`, чтобы «взять
+  рабочую» было одной строкой.
+- Документация: `03-accounts.md` — доступ к кредам (`credential` vs `active_credential` vs
+  `active_credentials`), типизация через `schema`, оговорка про сессии; `api.md`, allowlist;
+  CHANGELOG.
 - `tests/test_server_admins_traceability.py` покрывает `S11.*`.
-- **DoD:** `pick_credential` возвращает проверенную раньше непробованной и никогда —
-  отклонённую/просроченную; `None`, когда пригодных нет; доступен на `lease` и `ctx`; адаптер
-  берёт рабочую без цикла; оба бэкенда; полный `bash scripts/check.sh` зелёный; все задачи `S11`
-  в статусе `done`/`cancelled` с записью `D-NNN`.
+- **DoD:** `active_credential` отдаёт первую пригодную (active, не просрочена, не `reject`) и
+  `None`, когда таких нет; доступен на `lease` и `ctx`; с `schema` результат типизирован (проверка
+  mypy в тесте типов), несовпадение схемы — `ValidationFailed`; форма без `schema` работает как
+  прежде; адаптер берёт рабочую без цикла; оба бэкенда; полный `bash scripts/check.sh` зелёный;
+  все задачи `S11` в статусе `done`/`cancelled` с записью `D-NNN`.
 
 ---
 
