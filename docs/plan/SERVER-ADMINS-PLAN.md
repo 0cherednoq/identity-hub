@@ -4,7 +4,7 @@
 тексты ишью — [`../isue/server-admins/`](../isue/server-admins/) (копия
 `template2/server-admins/docs/issues/identity-hub` от 2026-10-14).
 Прогресс: [`SERVER-ADMINS-PROGRESS.md`](SERVER-ADMINS-PROGRESS.md).
-Решения: [`DECISIONS.md`](DECISIONS.md) (`D-310`, `D-311`).
+Решения: [`DECISIONS.md`](DECISIONS.md) (`D-310`–`D-314`).
 Протокол автономной работы: [`CLAUDE.md`](../../CLAUDE.md).
 
 Этот файл — спецификация задач `S<фаза>.<номер>`. Статусы ведутся только в
@@ -27,6 +27,10 @@
 | 07 | Сигналы репутации при входе теряются | обосновано, P1 | S1.2 |
 | 08 | Пример публичного `Observation` неверен | уже исправлено | не выполняется |
 
+Запросы владельца, добавленные к очереди: временный бан (`S2.2`, `D-311`), открытое хранение
+credentials и сессий (фаза `S5`, `D-313`), стандартные форматы сессий и credentials
+(фаза `S6`, `D-314`). Обе фазы добавлены после закрытия `S4.1` и закрываются задачей `S6.6`.
+
 ## Границы
 
 - Код поведения `quarantined → cooling` не меняется (ишью 06): карантин строже охлаждения.
@@ -38,8 +42,10 @@
   по-прежнему пробует. Приложение фильтрует по коду отказа в карточке (`D-310`, п. 4).
 - Срок standing разрешён только там, где автомат его снимает: `limited` (`S2.1`) и `banned`
   (`S2.2`, временный бан — `D-311`). `frozen`, `appealing` и `deleted` срока не принимают.
-- Миграции не нужны: код региона `auth` уже хранится в `ih_region_states.code`. Если задаче
-  всё же понадобится колонка — следующий свободный номер после `0032` и запись `D-NNN`.
+- Миграции не нужны фазам `S0`–`S3` и `S6`: код региона `auth` уже хранится в
+  `ih_region_states.code`. Миграция есть только в `S5.1`. Номер — следующий свободный после
+  `0032` (её заняла `I4.3`); если задаче `S0`–`S3` всё же понадобится
+  колонка — так же и запись `D-NNN`.
 
 ---
 
@@ -286,6 +292,251 @@
 
 ---
 
+## Фаза S5 — открытое хранение credentials и сессий
+
+Запрос владельца (`D-313`): читать credentials и сессии прямо из базы в читаемом виде. Сейчас
+секреты лежат в `ih_credentials` и `ih_sessions` шифром AES-GCM в бинарных колонках
+(`EncryptedPayloadMixin`: `key_id`, `wrapped_dek`, `nonce`, `ciphertext`, все `NOT NULL`).
+Флаг «не шифровать» в `Envelope` задачу не решает: `bytea` в `SELECT` не читается.
+
+Границы:
+- открыто хранятся **только** `ih_credentials` и `ih_sessions`; прокси, вебхуки, каналы
+  уведомлений, staged-импорт и зашифрованный профиль остаются под шифром;
+- мастер-ключ нужен всегда: без него не прочитать остальные секреты и не вывести ключ
+  отпечатков;
+- read-схема (`READ_TABLES`) секретов не получает; доступ к двум таблицам — правами PostgreSQL;
+- по умолчанию ничего не меняется: `secret_storage="encrypted"`.
+
+### S5.1 Режим `secret_storage="plaintext"`: схема, запись, чтение
+
+- Миграция (следующий свободный номер после `0032`, `D-012`): у `ih_credentials` и
+  `ih_sessions` колонка `payload jsonb NULL`; колонки шифра становятся `NULL`; `CHECK`: заполнен
+  ровно один формат — `payload` либо все четыре колонки шифра. Модели `postgres/models.py`
+  и `MemoryStore` — так же.
+- Настройка `IdentityHub(secret_storage="encrypted" | "plaintext")`; неизвестное значение —
+  `ValidationFailed` при старте.
+- Запись: в режиме `plaintext` credentials и сессия пишутся в `payload` JSON-ом модели схемы
+  сервиса (`model_dump(mode="json")`, `SecretStr` раскрывается). Остальные секреты — как прежде.
+- Чтение понимает оба формата независимо от режима: в одной базе могут лежать зашифрованные и
+  открытые строки.
+- Идемпотентность (`idempotency_key`, `D-208`): HMAC-тег считается тем же ключом отпечатков,
+  что и сейчас; формат хранения на тег не влияет.
+- Лимит размера секрета (512 KiB) действует и для `payload`.
+- Метаданные без значений (`public_value`, `expires_at`, `status`) не меняются.
+- **DoD:** в режиме `plaintext` запрос `SELECT payload->>'password' FROM ih_credentials`
+  возвращает пароль; `lease.credentials()`, `lease.session()`, `secrets.reveal` и импорт
+  работают в обоих режимах на обоих бэкендах; смешанная база читается; в режиме `encrypted`
+  поведение и данные прежние (существующие тесты зелёные).
+
+### S5.2 Перевод хранения, предупреждения и документация
+
+Зависит от `S5.1`.
+
+- Команда `identity-hub secrets convert --to plaintext|encrypted [--space SLUG] [--batch N]`
+  и метод `hub.doctor.convert_secrets(to=...)`: пачками перекладывает строки двух таблиц в
+  нужный формат, по образцу `rotate-key`; повтор безопасен; прерывание не портит строки.
+  Ревизии и версии сессий не меняются, событий домена нет; в журнал администратора
+  (`admin_audit`) — запись с числом строк.
+- Предупреждение при старте хаба и в `identity-hub doctor`, если режим `plaintext` или в базе
+  есть открытые строки: «credentials и сессии хранятся открытыми».
+- `02-services.md` и `03-accounts.md`: режим, что хранится открыто, пример SQL, права доступа к
+  таблицам, риск (дамп базы выдаёт все аккаунты), перевод в обе стороны. `limitations.md`,
+  CHANGELOG.
+- **DoD:** `convert --to plaintext`, затем `--to encrypted` возвращает базу к шифру без потери
+  данных (оба бэкенда, тест на 1000 строк); предупреждение видно в логе и в `doctor`.
+
+---
+
+## Фаза S6 — стандартные форматы сессий и credentials
+
+Запрос владельца (`D-314`). Исследование и спецификация моделей и конвертеров —
+[`../research/SESSION-FORMATS.md`](../research/SESSION-FORMATS.md) (далее — «исследование»);
+задачи ссылаются на его разделы. Хранение и миграции не меняются: модели ложатся в
+существующие `credentials`, `credential_kinds`, `session` и `profile` сервиса.
+
+Общие правила фазы:
+- **Публичный API — неймспейсы `dump` и `load` на моделях** (исследование, раздел 5.0;
+  `D-314`, п. 6):
+  - выгрузка: `session.dump.playwright()`, `session.cookies.dump.netscape()`;
+  - загрузка: `BrowserSession.load.playwright(state)`, `Cookies.load.netscape(text)`;
+  - автоопределение формата: `Cookies.load(data)`, `BrowserSession.load(data)`.
+  
+  Для обычной работы импортировать модули форматов не нужно.
+- **Реализация — модули `identity_hub.formats.<формат>`** с функциями `dump` и `load`.
+  Методы неймспейсов вызывают их в одну строку; логика форматов в моделях не живёт.
+  Модули тоже публичные: ими пользуются для сырых данных без модели.
+- **Неймспейсы — дескрипторы с точными типами** (`dump.playwright() -> StorageState`,
+  `dump.cookiejar() -> CookieJar`, `load.netscape() -> Cookies`). У pydantic-моделей они
+  объявляются как `ClassVar`, чтобы не стать полями. Объект `load` вызываемый: вызов без
+  формата — автоопределение.
+- На самой модели — только данные и операции над ними: `for_url`, `header_for`, `get`,
+  `expires_at`. Методов `to_*`/`from_*` под форматы нет.
+- **Живые инструменты** — методы аренды с ленивым импортом: `lease.playwright_context(browser)`
+  и `lease.selenium_apply(driver)`. Они не конвертируют, а открывают контекст или добавляют
+  cookie в браузер.
+- **Никаких новых обязательных зависимостей**: `dump` возвращает `dict`, `list`, `str` и объекты
+  stdlib. Модули форматов не импортируют Playwright, Selenium, httpx, aiohttp, curl_cffi.
+- **Потери при конвертации** везде обрабатываются одинаково: Python-предупреждение
+  `FormatLossWarning` (публичный класс), а `strict=True` превращает его в `ValidationFailed`.
+  Тип результата от `strict` не меняется.
+- Публичные имена — в allowlist и `api.md`.
+- **Секреты.** Значения cookie, токенов и паролей не попадают в `repr`, логи и тексты ошибок —
+  тест на каждую модель.
+- **Образцы.** Золотые образцы реальных выгрузок — `tests/fixtures/formats/<формат>/`. При
+  закрытии задачи у каждого её формата есть образец и круговой тест
+  `X.load.<f>(X.dump.<f>()) == X` там, где формат без потерь (исследование, раздел 7).
+
+### S6.1 Модели, нормализация и каркас `dump`/`load`
+
+Исследование, разделы 4 (классификация — 4.3) и 5.0.
+
+- **Модели:**
+  - `Cookie`, `Cookies` (коллекция с ключом `(domain, host_only, path, name, partition_key)`),
+    `SameSite`, `PartitionKey`;
+  - сессии: `BrowserSession`, `OriginStorage`, `TokenSession` (OAuth 2.0 и OIDC:
+    `authorization_header`, `is_expired`, `id_claims`), `OAuth1Session`, `HeaderSession`;
+  - креды: `PasswordCredentials` (`basic_auth`), `OtpSecret` (TOTP и HOTP: `from_uri`,
+    `to_uri`, `code` по RFC 6238 / RFC 4226 на stdlib), `RecoveryCodes` (`take`), `ApiKey`,
+    `SigningKey`, `OAuthClient`, `OAuth1Client`, `PrivateKeyCredentials`, `ClientCertificate`;
+  - классификация — по форме данных, а не по протоколу (исследование, раздел 4.3): отдельных
+    типов для Basic, OIDC, CAS, SAML нет; модели не ходят в сеть, не проверяют подпись
+    `id_token` и не подписывают запросы;
+  - почта для восстановления — связанный аккаунт (`links`), модели `EmailAccess` нет;
+  - `BrowserFingerprint` и вложенные `Screen`, `Viewport`, `WebGl`, `Geolocation`,
+    `UserAgentData`.
+- **Нормализация на входе:**
+  - домен без точки и в нижнем регистре плюс `host_only`;
+  - все представления сессионной cookie → `expires=None`;
+  - `same_site` из всех диалектов;
+  - `http_only` из `rest` без учёта регистра.
+- **Проверки RFC 6265bis:** нарушение правил `__Host-` и `__Secure-` — ошибка; `SameSite=None` и
+  partitioned без `secure` — предупреждение.
+- **Схема сессии на слот:** сейчас `Service.session` одна на все слоты. Добавить
+  `Service(session_slots={"api": TokenSession})`: слот без своей схемы использует
+  `Service.session`; запись в слот проверяется его схемой на обоих бэкендах. Если это меняет
+  контракт хранения — записать `D-NNN`.
+- **Операции:** `Cookie.key`, `is_expired`, `matches(url)`; `Cookies.for_url(url)`,
+  `header_for(url)`, `get(name, domain=, path=)`; `BrowserSession.expires_at(auth_cookies)`.
+- **Каркас:**
+  - базовые классы неймспейсов `DumpNamespace` и `LoadNamespace`;
+  - `FormatLossWarning`;
+  - модуль `identity_hub.formats` и первый формат на нём — `json`, каноническое представление
+    самой модели (`Cookies.dump.json()` / `Cookies.load.json()`). На нём проверяются типы
+    неймспейсов и `ClassVar` у pydantic.
+- **DoD:**
+  - модели работают как схемы `Service` на обоих бэкендах (создание, аренда, чтение);
+  - TOTP и HOTP совпадают с тестовыми векторами RFC 6238 и RFC 4226;
+  - `RecoveryCodes.take` не выдаёт израсходованный код;
+  - сессия `BrowserSession` в слоте `default` и `TokenSession` в слоте `api` одного
+    аккаунта сохраняются и читаются своими схемами;
+  - тесты нормализации на все случаи из таблицы 3.2;
+  - mypy видит точные типы `dump.json()` и `load.json()`;
+  - сериализация модели не содержит `dump` и `load`.
+
+### S6.2 Браузеры: `dump`/`load` для Playwright, CDP, Selenium, расширений и Crawlee
+
+Зависит от `S6.1`. Исследование, раздел 5.1.
+
+- `playwright`: cookies и `storage_state` (`sessionStorage` — предупреждение, `indexedDB` — как
+  есть); `BrowserSession.dump.playwright()`, `Cookies.dump.playwright()`, обратные `load`.
+- `cdp`, `puppeteer` (`partitionKey` — объект; у Puppeteer `sourceOrigin`); `extras`
+  возвращаются при `dump.cdp()`.
+- `selenium`: `expiry` целым, partitioned пропускаются с `FormatLossWarning`.
+- `chrome_extension` (Cookie-Editor, EditThisCookie, AdsPower, GoLogin), `crawlee` (Python
+  `CookieParam`), `tough_cookie` (Crawlee JS).
+- Методы аренды `lease.playwright_context(browser, **options)` (контекст с отпечатком, прокси и
+  сессией; при выходе — `storage_state` в `lease.save_session`) и `lease.selenium_apply(driver)`
+  (группировка по хосту, переход на хост, `add_cookie`). Импорт Playwright и Selenium — внутри
+  методов.
+- **DoD:** образцы каждого формата загружаются; круговые тесты; необязательный интеграционный
+  тест Playwright (`add_cookies` → `cookies()`) и `lease.playwright_context`, если пакет
+  установлен (маркер, без новой обязательной зависимости).
+
+### S6.3 HTTP-клиенты: `dump`/`load` для CookieJar, aiohttp, заголовков и Scrapy
+
+Зависит от `S6.1`. Исследование, разделы 3.3 и 5.2.
+
+- **`cookiejar`:** `Cookies.dump.cookiejar()` / `Cookies.load.cookiejar(jar)`. `Cookie` stdlib
+  создаётся напрямую, не через `set()`; при загрузке разбирается `http_only: "True"/"False"`
+  от curl_cffi.
+- **`aiohttp`:** `Cookies.dump.aiohttp()` возвращает пары (`SimpleCookie`, `response_url`).
+- **`set_cookie`:** `Cookies.load.set_cookie(headers, url=, received_at=)` — свой разбор, без
+  `SimpleCookie`.
+- **`scrapy`:** `Cookies.dump.scrapy()`.
+- Строка `Cookie` — операция `Cookies.header_for(url)` из `S6.1`: RFC 6265 (домен, путь,
+  secure, срок, длинный путь первым), а не формат.
+- **Прокси** (исследование, 5.6): новое свойство аренды `lease.proxy` → `ProxyUrl | None` с
+  неймспейсом `dump`: `playwright()`, `httpx()`, `requests()`, `aiohttp()`. `lease.proxy_url`
+  остаётся строкой, как раньше. Реализация — модуль `formats.proxy`.
+- **DoD:**
+  - cookie уходит только на свой домен и путь — тест против локального HTTP-сервера для
+    httpx, requests, curl_cffi, aiohttp (необязательный маркер, если пакеты установлены);
+  - одно имя на двух путях не теряется;
+  - host-only cookie не уходит на поддомен.
+
+### S6.4 Файлы и автоопределение
+
+Зависит от `S6.1`, `S6.2`. Исследование, разделы 5.3 и 5.5.
+
+- **`netscape`:** `Cookies.dump.netscape(session_expires="zero"|"empty")` /
+  `Cookies.load.netscape(text)` — свой читатель и писатель: `#HttpOnly_`, `0` и пустое поле →
+  сессионная, терпимость к несовпадению точки и флага, CRLF.
+- **`har`:** `Cookies.load.har(har)`.
+- **Автоопределение:** `Cookies.load(data)` и `BrowserSession.load(data)` без формата
+  распознают JSON-массив любого диалекта, `storage_state`, Netscape, строку `Cookie` и base64 от
+  них. Неизвестное — `ValidationFailed` с перечнем ожидаемых форматов.
+- **Строки продавцов** — только по шаблону: `formats.lines.load_account(line, template, sep)` и
+  `formats.lines.load_proxy(line, template)`.
+- **Не загружается никогда:** pickle и Chrome `Cookies` SQLite (шифр). Firefox
+  `cookies.sqlite` — вне задачи.
+- **DoD:** образцы curl, `MozillaCookieJar.save`, Cookie-Editor и EditThisCookie (Netscape и
+  JSON), HAR загружаются; автоопределение верно распознаёт каждый образец.
+
+### S6.5 Отпечаток: `dump`/`load` для генераторов и инструментов
+
+Зависит от `S6.1`, `S6.2`. Исследование, раздел 5.4.
+
+- `BrowserFingerprint.load.browserforge(fp)`, `load.fingerprint_suite(json)` (исходник — в
+  `raw`).
+- `BrowserFingerprint.dump.playwright_context(proxy=)`, `dump.camoufox()`, `dump.adspower()`,
+  `dump.gologin()`.
+- `BrowserFingerprint.dump.impersonate(client)` для `curl_cffi`, `tls_client`, `primp`, `rnet`:
+  ближайшая доступная версия того же браузера не новее UA, `FormatLossWarning` при
+  расхождении. Таблицы целей — данные модуля с указанием версии клиента, с которой они сверены.
+- **DoD:**
+  - образцы browserforge и fingerprint-suite загружаются;
+  - выбор цели для набора UA (chrome 130/131/150, firefox, safari) проверен тестом;
+  - неизвестный клиент — `ValidationFailed`.
+
+### S6.6 Интеграция с хабом и документация
+
+Зависит от `S6.1`–`S6.5`.
+
+- **`Service(session_auth_cookies=frozenset[str])`.** При записи сессии типа `BrowserSession`
+  (`lease.save_session`, `secrets.replace_session`, импорт) библиотека заполняет `expires_at`
+  сессии минимальным сроком этих cookie, если вызывающий не передал свой.
+- **Фильтр пулов по отпечатку.** `filterable_profile` сейчас проверяет только поля верхнего
+  уровня профиля (`service.py`, `pool.py`). Либо поддержать путь `fingerprint.browser`, либо
+  описать рецепт с плоскими полями профиля; выбор записать `D-NNN`.
+- **Импорт.** `ImportRecord.sessions` принимает `BrowserSession` и результат `Cookies.load(data)`.
+- **Руководство:**
+  - раздел «Стандартные форматы» в `02-services.md`: таблица `dump.*`/`load.*` и потерь
+    каждого формата;
+  - рецепт «браузерный аккаунт» в `12-recipes.md` (пример из исследования, раздел 6);
+  - CHANGELOG.
+- **Закрытие фаз `S5`–`S6`:**
+  - `tests/test_server_admins_traceability.py` покрывает новые задачи (строки «Запрос
+    владельца» в матрице);
+  - CHANGELOG и `limitations.md` сверены;
+  - полный `bash scripts/check.sh` зелёный, наборы со временем — 3 прогона.
+- **DoD:**
+  - рецепт выполняется тестом на `MemoryStore`;
+  - `expires_at` сессии выставляется по cookie;
+  - документация сверена с allowlist публичного API;
+  - все задачи `S5`–`S6` в статусе `done` или `cancelled` с записью `D-NNN`.
+
+---
+
 ## 8. Матрица трассировки
 
 | Ишью | Задачи плана |
@@ -298,4 +549,7 @@
 | 06. cool_down из quarantined | S3.1 |
 | 07. Репутация при входе | S1.2 |
 | 08. Публичный Observation | не выполняется |
+| Запрос владельца: временный бан | S2.2 |
 | Закрытие | S4.1 |
+| Запрос владельца: открытое хранение | S5.1, S5.2 |
+| Запрос владельца: стандартные форматы | S6.1, S6.2, S6.3, S6.4, S6.5, S6.6 |
