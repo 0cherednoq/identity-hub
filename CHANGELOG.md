@@ -17,6 +17,9 @@
 - `identity_hub.formats`: канонические модели cookie, браузерных/API-сессий, credentials и
   browser fingerprint; типизированные неймспейсы `dump`/`load` с JSON round-trip, RFC-векторы
   TOTP/HOTP и `Service.session_slots` для отдельной схемы каждого слота.
+- Браузерные конвертеры `Cookies.dump/load` для Playwright, CDP/Puppeteer, Selenium,
+  Chrome extensions, Crawlee и tough-cookie; `Lease.playwright_context()` и
+  `Lease.selenium_apply()` применяют сессию без обязательных зависимостей от этих библиотек.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается

@@ -1,0 +1,1 @@
+{"version":"tough-cookie@6.0.0","storeType":"MemoryCookieStore","cookies":[{"key":"sid","value":"tough","domain":"example.com","path":"/","expires":"2026-01-01T00:00:00.000Z","hostOnly":true,"httpOnly":true,"secure":true,"sameSite":"lax","creation":"2025-10-01T10:00:00.000Z"}]}

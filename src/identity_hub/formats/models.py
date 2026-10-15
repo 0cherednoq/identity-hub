@@ -168,7 +168,19 @@ class Cookie(BaseModel):
         if data.get("session") is True:
             data["expires"] = None
         data["expires"] = _expires(data.get("expires"))
+        if data.get("created_at") is not None:
+            data["created_at"] = _expires(data["created_at"])
         data["same_site"] = _same_site(data.get("same_site"))
+        partition = data.get("partition_key")
+        if isinstance(partition, Mapping):
+            partition_data = dict(partition)
+            _alias(partition_data, "top_level_site", "topLevelSite", "sourceOrigin")
+            _alias(
+                partition_data,
+                "has_cross_site_ancestor",
+                "hasCrossSiteAncestor",
+            )
+            data["partition_key"] = partition_data
         rest = data.get("rest")
         if "http_only" not in data and isinstance(rest, Mapping):
             for key, item in rest.items():
@@ -238,12 +250,77 @@ class CookiesDump(DumpNamespace[Any]):
         assert isinstance(result, list)
         return cast(list[dict[str, Any]], result)
 
+    def playwright(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import playwright
+
+        return cast(list[dict[str, Any]], playwright.dump(self._value, strict=strict))
+
+    def cdp(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import cdp
+
+        return cdp.dump(self._value, strict=strict)
+
+    def puppeteer(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import cdp
+
+        return cdp.dump(self._value, strict=strict, puppeteer=True)
+
+    def selenium(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import selenium
+
+        return selenium.dump(self._value, strict=strict)
+
+    def chrome_extension(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import chrome_extension
+
+        return chrome_extension.dump(self._value, strict=strict)
+
+    def crawlee(self, *, strict: bool = False) -> list[dict[str, Any]]:
+        from identity_hub.formats import crawlee
+
+        return crawlee.dump(self._value, strict=strict)
+
+    def tough_cookie(self, *, strict: bool = False) -> dict[str, Any]:
+        from identity_hub.formats import tough_cookie
+
+        return tough_cookie.dump(self._value, strict=strict)
+
 
 class CookiesLoad(LoadNamespace[Any]):
     def json(self, data: Any, *, strict: bool = False) -> Cookies:
         from identity_hub.formats import json as json_format
 
         return json_format.load(Cookies, data, strict=strict)
+
+    def playwright(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import playwright
+
+        return cast(Cookies, playwright.load(data, strict=strict))
+
+    def cdp(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import cdp
+
+        return cdp.load(data, strict=strict)
+
+    def selenium(self, data: Any, *, domain: str | None = None, strict: bool = False) -> Cookies:
+        from identity_hub.formats import selenium
+
+        return selenium.load(data, domain=domain, strict=strict)
+
+    def chrome_extension(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import chrome_extension
+
+        return chrome_extension.load(data, strict=strict)
+
+    def crawlee(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import crawlee
+
+        return crawlee.load(data, strict=strict)
+
+    def tough_cookie(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import tough_cookie
+
+        return tough_cookie.load(data, strict=strict)
 
 
 class Cookies(RootModel[list[Cookie]]):
@@ -298,12 +375,22 @@ class BrowserSessionDump(DumpNamespace[Any]):
         assert isinstance(result, dict)
         return result
 
+    def playwright(self, *, strict: bool = False) -> dict[str, Any]:
+        from identity_hub.formats import playwright
+
+        return cast(dict[str, Any], playwright.dump(self._value, strict=strict))
+
 
 class BrowserSessionLoad(LoadNamespace[Any]):
     def json(self, data: Any, *, strict: bool = False) -> BrowserSession:
         from identity_hub.formats import json as json_format
 
         return json_format.load(BrowserSession, data, strict=strict)
+
+    def playwright(self, data: Any, *, strict: bool = False) -> BrowserSession:
+        from identity_hub.formats import playwright
+
+        return cast(BrowserSession, playwright.load(data, session=True, strict=strict))
 
 
 class BrowserSession(BaseModel):

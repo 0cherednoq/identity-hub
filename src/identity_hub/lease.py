@@ -613,6 +613,77 @@ class Lease:
             await self._check_fencing(tx)
             await self._write_session(tx, payload, slot, mode=mode, expires_at=expires_at)
 
+    @contextlib.asynccontextmanager
+    async def playwright_context(self, browser: Any, **options: Any) -> AsyncIterator[Any]:
+        """Открыть Playwright context с сессией/профилем/прокси и сохранить state при выходе."""
+        from identity_hub.formats import BrowserFingerprint, BrowserSession
+
+        stored = await self.session()
+        if stored is None:
+            stored = BrowserSession()
+        if not isinstance(stored, BrowserSession):
+            raise ValidationFailed("playwright_context требует BrowserSession в default slot")
+        defaults: dict[str, Any] = {"storage_state": stored.dump.playwright()}
+        fingerprint_data = self.identity.profile.get("fingerprint")
+        if fingerprint_data is not None:
+            fingerprint = BrowserFingerprint.model_validate(fingerprint_data)
+            defaults.update(
+                user_agent=fingerprint.user_agent,
+                locale=fingerprint.locale,
+                timezone_id=fingerprint.timezone,
+            )
+            if fingerprint.viewport is not None:
+                defaults["viewport"] = {
+                    "width": fingerprint.viewport.width,
+                    "height": fingerprint.viewport.height,
+                }
+            if fingerprint.geolocation is not None:
+                defaults["geolocation"] = fingerprint.geolocation.model_dump(exclude_none=True)
+        defaults = {key: value for key, value in defaults.items() if value is not None}
+        proxy = self.proxy
+        if proxy is not None:
+            defaults["proxy"] = {"server": proxy.reveal()}
+        defaults.update(options)
+        context = browser.new_context(**defaults)
+        if inspect.isawaitable(context):
+            context = await context
+        try:
+            yield context
+        finally:
+            try:
+                try:
+                    state = context.storage_state(indexed_db=True)
+                except TypeError:  # Playwright до поддержки indexed_db
+                    state = context.storage_state()
+                if inspect.isawaitable(state):
+                    state = await state
+                await self.save_session(BrowserSession.load.playwright(state))
+            finally:
+                closed = context.close()
+                if inspect.isawaitable(closed):
+                    await closed
+
+    async def selenium_apply(self, driver: Any) -> None:
+        """Перейти на каждый host и добавить его cookie через WebDriver без зависимости Selenium."""
+        from identity_hub.formats import BrowserSession, Cookies
+
+        stored = await self.session()
+        if stored is None:
+            return
+        if not isinstance(stored, BrowserSession):
+            raise ValidationFailed("selenium_apply требует BrowserSession в default slot")
+        by_domain: dict[str, list[Any]] = {}
+        for cookie in stored.cookies:
+            by_domain.setdefault(cookie.domain, []).append(cookie)
+        for domain, cookies in by_domain.items():
+            navigated = driver.get(f"https://{domain}/")
+            if inspect.isawaitable(navigated):
+                await navigated
+            for row in Cookies(cookies).dump.selenium():
+                added = driver.add_cookie(row)
+                if inspect.isawaitable(added):
+                    await added
+
     def _seal_session(self, session: BaseModel | Mapping[str, Any], slot: str) -> Any:
         model = validate_model(self.pool.service.session_schema(slot), session, f"session {slot}")
         aad = associated_data("ih_sessions", self.identity_id, slot)

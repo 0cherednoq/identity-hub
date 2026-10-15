@@ -1,0 +1,1 @@
+[{"domain":".example.com","expirationDate":1767225600,"hostOnly":false,"httpOnly":true,"name":"sid","path":"/","sameSite":"lax","secure":true,"session":false,"storeId":"0","value":"extension"}]

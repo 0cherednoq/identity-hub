@@ -93,6 +93,14 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 JSON — первый канонический формат: `cookies.dump.json()`, `Cookies.load.json(data)` и
 `Cookies.load(data)`. `dump` и `load` — `ClassVar`, поэтому в сериализацию модели не попадают.
 Значения cookie, токенов, паролей и ключей скрыты в `repr`.
+
+Для браузеров доступны `playwright`, `cdp`, `puppeteer` (только dump), `selenium`,
+`chrome_extension`, `crawlee` и `tough_cookie`, например
+`cookies.dump.cdp()` и `Cookies.load.cdp(rows)`. `BrowserSession.dump/load.playwright()`
+работает с полным `storage_state`; потеря `sessionStorage` выдаёт `FormatLossWarning`, а при
+`strict=True` — `ValidationFailed`. Аренда с `BrowserSession` может создать и сохранить
+контекст через `async with lease.playwright_context(browser)` либо применить cookie к уже
+открытому WebDriver через `await lease.selenium_apply(driver)`.
 | `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
 | `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |
