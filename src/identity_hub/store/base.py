@@ -451,6 +451,9 @@ class CandidateQuery:
     # окна квот операции: аккаунт с исчерпанным текущим окном не выдаётся (require_quota, N1.3)
     quotas: tuple[QuotaCharge, ...] = ()
     priority: int = 0  # учитывает короткую бронь после кооперативной уступки (N3.2b)
+    without_link: frozenset[str] = frozenset()
+    not_target_of: tuple[str, str | None] | None = None
+    is_target_of: tuple[str, str | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -826,6 +829,10 @@ class CredentialRow:
     version: int
     created_at: datetime
     updated_at: datetime
+    value_fingerprint: str | None = None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -833,6 +840,9 @@ class CredentialMetadataRow:
     present: bool
     version: int | None
     updated_at: datetime | None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -854,6 +864,10 @@ class SessionHistoryRow:
     created_at: datetime
     updated_at: datetime
     revoked_at: datetime | None
+    value_fingerprint: str | None = None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -864,6 +878,9 @@ class SessionMetadataRow:
     version: int
     written_by_fencing: int
     updated_at: datetime | None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -889,6 +906,9 @@ class SearchFilter:
     sort_tiers: dict[str, tuple[frozenset[str], ...]] = field(default_factory=dict)
     proxy: str | None = None
     linked: bool | None = None
+    without_link: frozenset[str] = frozenset()
+    not_target_of: tuple[str, str | None] | None = None
+    is_target_of: tuple[str, str | None] | None = None
     created_from: datetime | None = None
     created_to: datetime | None = None
     last_leased_from: datetime | None = None
@@ -1212,7 +1232,13 @@ class StoreTx(ABC):
         """Какие из аккаунтов есть в этом пространстве."""
 
     @abstractmethod
-    async def put_credentials(self, identity_id: UUID, payload: StoredPayload) -> None:
+    async def put_credentials(
+        self,
+        identity_id: UUID,
+        payload: StoredPayload,
+        *,
+        value_fingerprint: str | None = None,
+    ) -> None:
         """Запись `default`/`default` (прежний единственный blob, D-214)."""
 
     @abstractmethod
@@ -1225,6 +1251,7 @@ class StoreTx(ABC):
         *,
         public_value: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
+        value_fingerprint: str | None = None,
     ) -> CredentialRow:
         """Создать или заменить запись (identity, kind, name): секрет, открытая часть и срок вместе,
         `revision` и `version` + 1 у существующей. Жизненный цикл не меняет (D-214)."""
@@ -1245,6 +1272,23 @@ class StoreTx(ABC):
         """Записи credentials аккаунта пространства без секретов, по (kind, name)."""
 
     @abstractmethod
+    async def mark_credential_validity(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        *,
+        rejected: bool,
+        code: str | None = None,
+        disable: bool = False,
+    ) -> CredentialRow | None:
+        """Атомарно пометить конкретную запись проверенной или отклонённой."""
+
+    @abstractmethod
+    async def credential_candidate_state(self, identity_id: UUID) -> bool | None:
+        """True — есть активная пара; False — записи есть, но кандидатов нет; None — записей нет."""
+
+    @abstractmethod
     async def put_session(
         self,
         identity_id: UUID,
@@ -1254,6 +1298,7 @@ class StoreTx(ABC):
         fencing: int,
         expires_at: datetime | None = None,
         mode: str = "in_place",
+        value_fingerprint: str | None = None,
     ) -> SessionWrite | None:
         """Записать сессию слота (G-1.4, IMP-10, D-218). `None` — запись более новой аренды не перезаписать.
 
@@ -1268,6 +1313,17 @@ class StoreTx(ABC):
     @abstractmethod
     async def session_history(self, identity_id: UUID, slot: str) -> list[SessionHistoryRow]:
         """Все записи слота без секретов по времени создания."""
+
+    @abstractmethod
+    async def mark_session_validity(
+        self,
+        identity_id: UUID,
+        slot: str,
+        *,
+        rejected: bool,
+        code: str | None = None,
+    ) -> bool:
+        """Пометить текущую сессию слота проверенной или отклонённой."""
 
     @abstractmethod
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
@@ -2291,6 +2347,18 @@ class Store(ABC):
         self, active_key_id: str, limit: int, after: UUID | None
     ) -> list[tuple[str, ProxyRow]]:
         """(slug, прокси) с отпечатком не активным ключом или без ключа, по возрастанию id после `after`."""
+
+    @abstractmethod
+    async def rekey_secret_value_fingerprints(
+        self,
+        envelope: Any,
+        fingerprints: Any,
+        *,
+        table: str,
+        limit: int,
+        after: tuple[Any, ...] | None = None,
+    ) -> RotationBatch:
+        """Пересчитать HMAC значения credentials/session постранично; секрет наружу не отдавать."""
 
     @abstractmethod
     async def renew_leases(self, tokens: Sequence[UUID], ttl_seconds: float) -> dict[UUID, LeaseRenewal]:

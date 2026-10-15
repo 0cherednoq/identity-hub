@@ -375,10 +375,14 @@ async def _renormalize(hub: IdentityHub, args: argparse.Namespace) -> int:
 async def _rekey_fingerprints(hub: IdentityHub, args: argparse.Namespace) -> int:
     report = await hub.doctor.rekey_fingerprints(batch_size=args.batch_size)
     print(f"updated: {report.updated}")
+    for table, count in sorted(report.value_updated.items()):
+        print(f"value-updated[{table}]: {count}")
     for proxy_id in report.conflicts:
         print(f"conflict: {proxy_id}")
     for proxy_id in report.unreadable:
         print(f"unreadable: {proxy_id}")
+    for row in report.value_unreadable:
+        print(f"value-unreadable[{row.table}]: {row.id}")
     return 0 if report.complete else 1
 
 

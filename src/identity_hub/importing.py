@@ -21,11 +21,11 @@ from pydantic import BaseModel
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
 from identity_hub.acceptance import AcceptPolicy
-from identity_hub.crypto import associated_data, reveal
+from identity_hub.crypto import associated_data, credential_associated_data, reveal
 from identity_hub.crypto.envelope import DecryptionFailed
 from identity_hub.domain.credentials import CredentialInput
 from identity_hub.domain.regions import Observation
-from identity_hub.enums import AuthState, ChangeSource, Lifecycle
+from identity_hub.enums import AuthState, ChangeSource, Lifecycle, SessionStatus
 from identity_hub.errors import IdentityHubError, ValidationFailed, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
@@ -81,6 +81,7 @@ class ImportRecord:
 class OnExisting(StrEnum):
     SKIP = "skip"
     UPDATE_SESSION = "update_session"
+    MERGE = "merge"
     FAIL = "fail"
 
 
@@ -91,6 +92,7 @@ class ImportReport:
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (external_ref, причина)
     failed: list[tuple[str, str]] = field(default_factory=list)
     hook_failed: list[list[UUID]] = field(default_factory=list)  # пачки, для которых хук упал — повторить
+    merge_details: list[tuple[str, str]] = field(default_factory=list)
     # нормализованный ref → id обновлённой identity: фоновый импорт сопоставляет исход по ref (R2-F07)
     updated_refs: dict[str, UUID] = field(default_factory=dict, repr=False)
 
@@ -114,6 +116,7 @@ class ImportingMixin(SpaceBase):
         records: Iterable[ImportRecord] | AsyncIterable[ImportRecord],
         batch_size: int = 500,
         on_existing: OnExisting | str = OnExisting.SKIP,
+        merge_sessions: str = "keep",
         verify_sessions: bool | None = None,
         accept: AcceptPolicy | None = None,
         on_batch_committed: BatchHook | None = None,
@@ -139,6 +142,8 @@ class ImportingMixin(SpaceBase):
                 svc.name,
             )
         mode = OnExisting(on_existing)
+        if merge_sessions not in {"keep", "replace"}:
+            raise ValidationFailed("merge_sessions: keep или replace")
         if max_identities < 1:
             raise ValidationFailed("max_identities ≥ 1")
         report = ImportReport()
@@ -156,6 +161,7 @@ class ImportingMixin(SpaceBase):
                     report,
                     run_id,
                     max_identities,
+                    merge_sessions,
                     on_batch=on_batch,
                     accept=accept_policy,
                 )
@@ -171,6 +177,7 @@ class ImportingMixin(SpaceBase):
                 report,
                 run_id,
                 max_identities,
+                merge_sessions,
                 on_batch=on_batch,
                 accept=accept_policy,
             )
@@ -299,6 +306,7 @@ class ImportingMixin(SpaceBase):
         report: ImportReport,
         run_id: UUID | None,
         max_identities: int = 3,
+        merge_sessions: str = "keep",
         *,
         on_batch: BatchHook | None = None,
         accept: AcceptPolicy | None = None,
@@ -354,6 +362,7 @@ class ImportingMixin(SpaceBase):
             return
 
         created: list[UUID] = []
+        created_items: list[_Prepared] = []
         updated: list[UUID] = []
         skipped: list[tuple[str, str]] = []
         failed: list[tuple[str, str]] = []
@@ -362,7 +371,7 @@ class ImportingMixin(SpaceBase):
                 refs = [(svc.name, p.prepared.row.unique_ref) for p in ready]
                 existing = await tx.find_by_refs(refs)
                 by_id = await tx.existing_identities([p.prepared.row.id for p in ready if p.record.id])
-                if mode is OnExisting.UPDATE_SESSION:
+                if mode in {OnExisting.UPDATE_SESSION, OnExisting.MERGE}:
                     # обновляемые identity — одной блокировкой по возрастанию id (IMP-14): иначе
                     # две пачки с общими ref держат FOR SHARE и взаимно ждут повышения до UPDATE
                     await tx.lock_identities(
@@ -377,7 +386,17 @@ class ImportingMixin(SpaceBase):
                     found = existing.get((svc.name, row.unique_ref))
                     if found is not None or row.id in by_id:
                         await self._existing_record(
-                            tx, svc, item, found, mode, verify_sessions, updated, skipped, failed, report
+                            tx,
+                            svc,
+                            item,
+                            found,
+                            mode,
+                            verify_sessions,
+                            updated,
+                            skipped,
+                            failed,
+                            report,
+                            merge_sessions,
                         )
                         continue
                     if row.unique_ref in unlinkable:
@@ -405,9 +424,12 @@ class ImportingMixin(SpaceBase):
                         await self._initial_verification(tx, row.id, factor, state, actor)
                     inserted[row.unique_ref] = row.id
                     created.append(row.id)
+                    created_items.append(item)
                     if item.record.links:
                         to_link.append(item)
                 await self._import_links(tx, svc, to_link, inserted)
+                for item in created_items:
+                    await self._emit_registered(tx, svc, item.prepared, actor=actor)  # type: ignore[attr-defined]
                 if created and accept is not None:
                     await tx.enqueue_acceptance(created, accept.dump())
                 if created or updated:  # пачка из одних обновлений тоже видна в событиях (R2-F24)
@@ -455,6 +477,7 @@ class ImportingMixin(SpaceBase):
         skipped: list[tuple[str, str]],
         failed: list[tuple[str, str]],
         report: ImportReport,
+        merge_sessions: str,
     ) -> None:
         ref = item.record.external_ref
         if found is not None and found[1] != tx.space.id:
@@ -462,6 +485,24 @@ class ImportingMixin(SpaceBase):
             return
         if mode is OnExisting.FAIL:
             failed.append((ref, "уже существует"))
+            return
+        if mode is OnExisting.MERGE:
+            if found is None:
+                skipped.append((ref, "уже существует по id"))
+                return
+            changed, details = await self._merge_existing(
+                tx,
+                svc,
+                found[0],
+                item,
+                merge_sessions=merge_sessions,
+            )
+            report.merge_details.extend((ref, detail) for detail in details)
+            if changed:
+                updated.append(found[0])
+                report.updated_refs[item.prepared.row.unique_ref] = found[0]
+            else:
+                skipped.append((ref, details[0] if details else "полный дубликат"))
             return
         if mode is OnExisting.SKIP or found is None or not item.prepared.sessions:
             skipped.append((ref, "уже существует"))
@@ -478,6 +519,7 @@ class ImportingMixin(SpaceBase):
                 resealed,
                 fencing=fencing or 0,
                 expires_at=item.prepared.session_expirations.get(slot),
+                value_fingerprint=item.prepared.session_fingerprints.get(slot),
             )
         from identity_hub.state import DEFAULT_SLOT, apply_region_change
 
@@ -549,6 +591,129 @@ class ImportingMixin(SpaceBase):
                         break
         return rejected
 
+    async def _merge_existing(
+        self,
+        tx: Any,
+        svc: Service,
+        identity_id: UUID,
+        item: _Prepared,
+        *,
+        merge_sessions: str,
+    ) -> tuple[bool, list[str]]:
+        """Добавить существующей identity новые значения, не меняя её состояния (D-319)."""
+        prepared = item.prepared
+        temporary_id = prepared.row.id
+        changed = False
+        details: list[str] = []
+        existing_credentials = await tx.list_credentials(identity_id)
+        names_by_kind: dict[str, set[str]] = {}
+        for row in existing_credentials:
+            names_by_kind.setdefault(row.kind, set()).add(row.name)
+
+        credential_values: list[tuple[str, str, Any, dict[str, Any] | None, datetime | None, str]] = []
+        if prepared.credentials is not None and prepared.credential_fingerprint is not None:
+            credential_values.append(
+                (
+                    "default",
+                    "default",
+                    prepared.credentials,
+                    None,
+                    None,
+                    prepared.credential_fingerprint,
+                )
+            )
+        credential_values.extend(
+            (
+                record.kind,
+                record.name,
+                record.payload,
+                record.public_value,
+                record.expires_at,
+                record.value_fingerprint,
+            )
+            for record in prepared.credential_records
+        )
+        for kind, wanted_name, payload, public_value, expires_at, fingerprint in credential_values:
+            source_aad = credential_associated_data(temporary_id, kind, wanted_name)
+            model = self.hub._open_stored_model(svc.credential_schema(kind), payload, source_aad)
+            tags = self.hub._value_fingerprint_tags(model)
+            duplicate = next(
+                (
+                    row
+                    for row in existing_credentials
+                    if row.kind == kind
+                    and row.value_fingerprint is not None
+                    and row.value_fingerprint in tags
+                ),
+                None,
+            )
+            if duplicate is not None:
+                details.append(f"credentials {kind}/{duplicate.name}: дубликат")
+                continue
+            names = names_by_kind.setdefault(kind, set())
+            name = (
+                wanted_name if wanted_name not in names else self._merge_credential_name(fingerprint, names)
+            )
+            target_aad = credential_associated_data(identity_id, kind, name)
+            stored = self.hub._seal_stored_model(model, target_aad)
+            row = await tx.put_credential(
+                identity_id,
+                kind,
+                name,
+                stored,
+                public_value=public_value,
+                expires_at=expires_at,
+                value_fingerprint=fingerprint,
+            )
+            existing_credentials.append(row)
+            names.add(name)
+            changed = True
+            details.append(f"credentials {kind}/{name}: добавлено")
+
+        fencing = await tx.current_fencing(identity_id, lock=True)
+        for slot, payload in prepared.sessions.items():
+            source_aad = associated_data("ih_sessions", temporary_id, slot)
+            model = self.hub._open_stored_model(svc.session_schema(slot), payload, source_aad)
+            tags = self.hub._value_fingerprint_tags(model)
+            history = await tx.session_history(identity_id, slot)
+            current = next((row for row in reversed(history) if row.status != SessionStatus.REVOKED), None)
+            if (
+                current is not None
+                and current.value_fingerprint is not None
+                and current.value_fingerprint in tags
+            ):
+                details.append(f"session {slot}: дубликат")
+                continue
+            if current is not None and current.status == SessionStatus.ACTIVE and merge_sessions == "keep":
+                details.append(f"session {slot}: активная сохранена")
+                continue
+            target_aad = associated_data("ih_sessions", identity_id, slot)
+            stored = self.hub._seal_stored_model(model, target_aad)
+            written = await tx.put_session(
+                identity_id,
+                slot,
+                stored,
+                fencing=fencing or 0,
+                expires_at=prepared.session_expirations.get(slot),
+                mode="replace" if current is not None else "in_place",
+                value_fingerprint=prepared.session_fingerprints.get(slot),
+            )
+            if written is None:
+                raise ValidationFailed("merge session lost its fencing boundary")
+            changed = True
+            details.append(f"session {slot}: добавлена")
+        return changed, details
+
+    @staticmethod
+    def _merge_credential_name(fingerprint: str, occupied: set[str]) -> str:
+        base = f"import-{fingerprint[:16]}"
+        if base not in occupied:
+            return base
+        suffix = 2
+        while f"{base}-{suffix}" in occupied:
+            suffix += 1
+        return f"{base}-{suffix}"
+
     async def _proxy_has_room(self, tx: Any, proxy: Any, capacity: dict[str, list[int]]) -> bool:
         """Есть ли у прокси записи импорта свободная ёмкость (R2-F09)."""
         state = capacity.get(proxy.fingerprint)
@@ -588,6 +753,7 @@ class ImportingMixin(SpaceBase):
                 wanted.add(self._link_ref(svc, target))
         known = await tx.find_by_refs(sorted(wanted))
         for item in items:
+            resolved: dict[str, UUID] = {}
             for role, target in item.record.links.items():
                 service_name, ref = self._link_ref(svc, target)
                 linked = inserted.get(ref) if service_name == svc.name else None
@@ -597,6 +763,8 @@ class ImportingMixin(SpaceBase):
                         raise IdentityHubError(f"связь {role}: аккаунт {service_name}:{ref} не найден")
                     linked = found[0]
                 await tx.insert_link(item.prepared.row.id, role, linked)
+                resolved[role] = linked
+            item.prepared = replace(item.prepared, links=resolved)
 
     def _link_ref(self, svc: Service, target: str) -> tuple[str, str]:
         """Ссылка `[service:]external_ref` → (сервис, нормализованный ref целевого сервиса)."""
@@ -850,6 +1018,7 @@ def _merge(report: ImportReport, part: ImportReport) -> None:
     report.skipped.extend(part.skipped)
     report.failed.extend(part.failed)
     report.hook_failed.extend(part.hook_failed)
+    report.merge_details.extend(part.merge_details)
     report.updated_refs.update(part.updated_refs)
 
 

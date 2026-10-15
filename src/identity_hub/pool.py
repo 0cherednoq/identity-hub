@@ -171,6 +171,9 @@ class Pool:
         among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
         require_quota: bool = False,
+        without_link: str | Iterable[str] | None = None,
+        not_target_of: tuple[str, str | None] | None = None,
+        is_target_of: tuple[str, str | None] | None = None,
     ) -> CandidateQuery:
         """Фильтры пула + фильтры вызова; `for_operation` компилирует правило операции в выборку.
 
@@ -210,6 +213,9 @@ class Pool:
             ),
             proxy_enabled=bool(self.proxy_policy and self.proxy_policy.sticky),
             quotas=quotas,
+            without_link=frozenset([without_link] if isinstance(without_link, str) else (without_link or ())),
+            not_target_of=not_target_of,
+            is_target_of=is_target_of,
         )
 
     def lease(
@@ -222,6 +228,9 @@ class Pool:
         # список id, подзапрос read-схемы (только PostgreSQL) или предикат от Identity (F5.1)
         among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
+        without_link: str | Iterable[str] | None = None,
+        not_target_of: tuple[str, str | None] | None = None,
+        is_target_of: tuple[str, str | None] | None = None,
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,
         on_lost: OnLost | None = None,
@@ -255,6 +264,9 @@ class Pool:
             profile=profile,
             among=among,
             exclude=exclude,
+            without_link=without_link,
+            not_target_of=not_target_of,
+            is_target_of=is_target_of,
             wait=wait,
             idempotency_key=idempotency_key,
             purpose=purpose,
@@ -275,6 +287,9 @@ class Pool:
         # список id, подзапрос read-схемы (только PostgreSQL) или предикат от Identity (F5.1)
         among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
         exclude: Iterable[UUID] = (),
+        without_link: str | Iterable[str] | None = None,
+        not_target_of: tuple[str, str | None] | None = None,
+        is_target_of: tuple[str, str | None] | None = None,
         wait: timedelta | float | None = None,
         idempotency_key: str | None = None,
         query: CandidateQuery | None = None,
@@ -299,6 +314,9 @@ class Pool:
             profile=profile,
             among=among,
             exclude=exclude,
+            without_link=without_link,
+            not_target_of=not_target_of,
+            is_target_of=is_target_of,
             wait=wait,
             idempotency_key=idempotency_key,
             query=query,

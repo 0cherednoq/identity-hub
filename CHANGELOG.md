@@ -8,6 +8,19 @@
 
 ### Added
 
+- Выборки по связям аккаунтов: `IdentityFilter` и аренда поддерживают `without_link`,
+  `not_target_of=(role, from_service)` и `is_target_of=(role, from_service)`. Публичная
+  PostgreSQL read-схема получила таблицу `hub.read.identity_links` без повышения версии.
+- Точечная валидность credentials и сессий: карточки показывают последнюю успешную проверку
+  или отказ, а `LoginContext.verify_credential`/`reject_credential` и
+  `LoginFailure(credential=...)` атомарно отмечают конкретную пару. Миграция `0035` хранит
+  HMAC-отпечатки значений и метаданные проверки.
+- `imports.run(..., on_existing="merge")` накапливает новые пары credentials и сессии без
+  изменения состояния аккаунта; дубликаты определяются по HMAC, активная сессия защищена
+  режимом `merge_sessions="keep"`.
+- Импорт пишет `identity.registered` для каждого созданного аккаунта перед сводным
+  `identity.imported`; подписчики на регистрацию теперь одинаково видят одиночное,
+  пакетное и импортированное создание.
 - `AcceptPolicy`, `Service.default_accept` и `hub.workers.acceptance`: импорт может поставить
   новые аккаунты в durable-очередь проверки, активировать успешные, вывести окончательно
   отклонённые и повторить временные ошибки. Миграция `0034` хранит очередь и `retryable` auth.

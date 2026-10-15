@@ -95,6 +95,14 @@ class LoginContext(Protocol):
         """Запись credentials по виду и имени; выключенная, отозванная или истёкшая — `None` (D-216)."""
         ...
 
+    async def reject_credential(self, kind: str, *, name: str = "default", code: str) -> None:
+        """Пометить конкретную пару отклонённой атомарно с итогом входа."""
+        ...
+
+    async def verify_credential(self, kind: str, *, name: str = "default") -> None:
+        """Пометить конкретную пару успешно проверенной атомарно с итогом входа."""
+        ...
+
     async def session(self, slot: str = "default") -> BaseModel | None:
         """Последняя сохранённая сессия слота, в том числе недействительная (повторный вход), или None."""
         ...
@@ -142,6 +150,7 @@ class LoginFailure(Exception):
         retryable: bool = True,
         fault: Fault | None = None,
         raw_status: str | None = None,
+        credential: tuple[str, str] | None = None,
     ) -> None:
         value = str(code)
         if _LOGIN_FAILURE_CODE.fullmatch(value) is None:
@@ -150,6 +159,13 @@ class LoginFailure(Exception):
         self.retryable = retryable
         self.fault = fault
         self.raw_status = raw_status
+        if credential is not None:
+            kind, name = credential
+            if not isinstance(kind, str) or not 1 <= len(kind) <= 64:
+                raise ValueError("LoginFailure.credential kind должен содержать от 1 до 64 символов")
+            if not isinstance(name, str) or not 1 <= len(name) <= 128:
+                raise ValueError("LoginFailure.credential name должен содержать от 1 до 128 символов")
+        self.credential = credential
         super().__init__(value)
 
 

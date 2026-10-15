@@ -50,7 +50,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `space.webhooks`, `space.notifications` | доставки | `create`, `create_rule`, `send_test`… | [События](10-events.md) |
 | `space.admin` | read-модели UI | `overview`, `identity_page`, `lease_dashboard`, `event_page`, `human_queue`… | для админок |
 | `space.analytics` | отчёты | `series`, `funnel`, `cohorts`, `ban_rate`, `utilization`… | для админок |
-| `hub.read` | read-схема Core | `identities`, `leases`, `lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings` — для join и `among=` | [Интеграция](../integrations.md#read-схема-join-с-таблицами-приложения) |
+| `hub.read` | read-схема Core | `identities`, `identity_links`, `leases`, `lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings` — для join и `among=` | [Интеграция](../integrations.md#read-схема-join-с-таблицами-приложения) |
 | `space.maintenance` | обслуживание | `expire_challenges`, `expire_verifications`, `reindex_search` | обычно вызывает диспетчер |
 
 ## Контракт хаба
@@ -83,6 +83,11 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 
 Политика приёмки импорта экспортируется как `AcceptPolicy`; её задают в
 `imports.run(..., accept=...)` или как `Service.default_accept`.
+Публичные типы `OnExisting`, `ImportReport`, `LoginContext` и `LoginFailure` описывают этот
+контракт: `OnExisting.MERGE` включает накопительный импорт, а `ImportReport.merge_details`
+объясняет дедупликацию и сохранение активной сессии. Контекст предоставляет
+`verify_credential` и `reject_credential`; короткая форма —
+`LoginFailure(code, credential=(kind, name))`.
 
 Модуль `identity_hub.formats` и корневой импорт `identity_hub` экспортируют модели:
 
@@ -171,6 +176,7 @@ JSON. Неизвестный ввод завершается `ValidationFailed`;
 | `Service.probe_timeout` | 1 мин | предел одного вызова пробы |
 | `LoginChallenge.expires_in` | 1 ч | срок вопроса платформы, если `expires_in` не задан |
 | `LoginFailure.code` | 1–64 символа | машинный код `[a-z][a-z0-9_.-]*`; рекомендуемые значения — `LoginFailureCode` |
+| `Service.disable_rejected_credentials` | `False` | переводить отклонённую адаптером пару в `disabled` |
 | `ProxyHealthPolicy.error_threshold` | 3.0 | счёт ошибок прокси до карантина |
 | `ProxyHealthPolicy.check_timeout` | 15 с | предел одной проверки прокси |
 | `ProxyHealthPolicy.max_backoff` | 1 ч | наибольшая пауза между перепроверками |
@@ -242,6 +248,9 @@ result = await space.identities.create_many([...], on_conflict="skip", actor="op
 identity = await space.identities.get(identity_id)
 identity = await space.identities.get_by_ref("telegram", "+12025550123")
 page = await space.identities.list(IdentityFilter(service="telegram", standing="banned"))
+unlinked = await space.identities.find(IdentityFilter(
+    service="twitter", not_target_of=("registered_from", "privy"),
+))
 page = await space.identities.search("tag:parser farm:eu-1")
 card = await space.identities.card(identity_id)        # состояние, квоты, аренда, blockers
 
@@ -249,6 +258,11 @@ await space.identities.update(identity_id, profile={"city": "Berlin"}, labels={"
 await space.identities.add_tags(identity_id, ["vip"], actor="operator")
 await space.identities.delete(identity_id, actor="operator")
 ```
+
+`IdentityFilter.without_link` (`without_link`) исключает исходящие связи указанных ролей;
+`not_target_of=(role, from_service)` и `is_target_of=(role, from_service)` проверяют входящие
+связи (`from_service=None` — любой сервис). Такие же аргументы принимают
+`pool.candidate_query()`, `pool.acquire()` и `pool.lease()`.
 
 `Identity.auth_code` — безопасный машинный код последнего состояния `auth` (например,
 `credentials_rejected`); `None` после успешного или нового входа. Полная история и `raw_status`

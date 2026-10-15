@@ -148,6 +148,45 @@ processed = await hub.workers.acceptance.run_once(limit=20)
 выдаёт предупреждение: уже `authenticated` аккаунт будет принят без нового логина. Без
 `accept=` и без `Service.default_accept` импорт, как раньше, оставляет аккаунт приложению.
 
+### Несколько паролей-кандидатов на один аккаунт
+
+Первый файл создаёт аккаунт, следующие поставки накапливают кандидатов через `merge`. Имя пары
+задавайте, если источник его знает; при конфликте импорт выберет безопасное `import-…` сам.
+
+```python
+from identity_hub import CredentialInput, ImportRecord
+
+created = await space.imports.run(
+    service=TELEGRAM,
+    records=[ImportRecord("user-1", credentials={"username": "user-1", "password": "old"})],
+    actor="supplier-a",
+)
+await space.imports.run(
+    service=TELEGRAM,
+    records=[
+        ImportRecord(
+            "user-1",
+            credential_records=[
+                CredentialInput(
+                    "default",
+                    {"username": "user-1", "password": "candidate-2"},
+                    name="supplier-b",
+                )
+            ],
+        )
+    ],
+    on_existing="merge",
+    actor="supplier-b",
+)
+await hub.workers.acceptance.run_once()
+```
+
+Адаптер перебирает записи через `ctx.credential(...)`, вызывает `reject_credential` для
+неподошедших и `verify_credential` для победившей. Отметки применяются вместе с итогом входа:
+worker повторит попытку, пока остаётся активная неотклонённая пара, и перестанет брать аккаунт,
+когда отвергнуты все кандидаты. `Service(disable_rejected_credentials=True)` дополнительно
+переводит проигравшие записи в `disabled`.
+
 Оператор получает Telegram-уведомление о `identity.challenge.opened`, вводит код в вашем UI,
 тот вызывает `space.auth.answer_challenge(challenge_id, code, actor="operator")`. Подписчик на
 `identity.login.succeeded` переводит аккаунт в `ready`.
@@ -210,6 +249,28 @@ class TgAuthenticator:
 
 `await space.links.impact(mail.id)` покажет, какие аккаунты пострадают, если почту
 потеряют.
+
+## Кампания создания связанных аккаунтов
+
+Воркеры могут выбирать исходные аккаунты, на которые ещё не ссылается нужный сервис:
+
+```python
+pool = space.pools.define("privy-registration", service="twitter", holder=worker_id)
+async with pool.lease(not_target_of=("registered_from", "privy")) as lease:
+    privy = await space.identities.create(
+        IdentityCreate(
+            service="privy",
+            external_ref=result.id,
+            links={"registered_from": lease.identity.id},
+        ),
+        actor=worker_id,
+    )
+```
+
+Для собственного планировщика тот же набор доступен через
+`identities.list(IdentityFilter(...))`; передайте выбранный id в `lease(among=[id])` и
+повторите проверку перед внешним эффектом. Две эксклюзивные аренды не выдадут один исходный
+аккаунт одновременно.
 
 ## Несколько клиентов в одной базе
 

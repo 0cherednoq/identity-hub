@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -176,6 +177,10 @@ class _SessionRecord:
     created_at: datetime
     updated_at: datetime
     revoked_at: datetime | None = None
+    value_fingerprint: str | None = None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass
@@ -539,9 +544,21 @@ class MemoryTx(StoreTx):
     async def existing_identities(self, ids: Sequence[UUID]) -> set[UUID]:
         return {identity_id for identity_id in ids if self._own(identity_id) is not None}
 
-    async def put_credentials(self, identity_id: UUID, payload: StoredPayload) -> None:
+    async def put_credentials(
+        self,
+        identity_id: UUID,
+        payload: StoredPayload,
+        *,
+        value_fingerprint: str | None = None,
+    ) -> None:
         if self._own(identity_id):
-            await self.put_credential(identity_id, "default", "default", payload)
+            await self.put_credential(
+                identity_id,
+                "default",
+                "default",
+                payload,
+                value_fingerprint=value_fingerprint,
+            )
 
     async def put_credential(
         self,
@@ -552,6 +569,7 @@ class MemoryTx(StoreTx):
         *,
         public_value: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
+        value_fingerprint: str | None = None,
     ) -> CredentialRow:
         if self._own(identity_id) is None:
             raise NotFound("identity", identity_id)
@@ -570,6 +588,7 @@ class MemoryTx(StoreTx):
                 1,
                 self._now,
                 self._now,
+                value_fingerprint,
             )
         else:
             row = replace(
@@ -579,6 +598,10 @@ class MemoryTx(StoreTx):
                 revision=old[1].revision + 1,
                 version=old[1].version + 1,
                 updated_at=self._now,
+                value_fingerprint=value_fingerprint,
+                last_verified_at=None,
+                last_rejected_at=None,
+                reject_code=None,
             )
         self.state.credentials[key] = (deepcopy(payload), row)
         return row
@@ -608,6 +631,42 @@ class MemoryTx(StoreTx):
             row for (owner, _, _), (_, row) in sorted(self.state.credentials.items()) if owner == identity_id
         ]
 
+    async def mark_credential_validity(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        *,
+        rejected: bool,
+        code: str | None = None,
+        disable: bool = False,
+    ) -> CredentialRow | None:
+        found = await self.get_credential(identity_id, kind, name)
+        if found is None:
+            return None
+        row = replace(
+            found[1],
+            lifecycle=("disabled" if disable and found[1].lifecycle != "revoked" else found[1].lifecycle),
+            last_verified_at=None if rejected else self._now,
+            last_rejected_at=self._now if rejected else None,
+            reject_code=code if rejected else None,
+            revision=found[1].revision + 1,
+            updated_at=self._now,
+        )
+        self.state.credentials[(identity_id, kind, name)] = (found[0], row)
+        return row
+
+    async def credential_candidate_state(self, identity_id: UUID) -> bool | None:
+        rows = await self.list_credentials(identity_id)
+        if not rows:
+            return None
+        return any(
+            row.lifecycle == "active"
+            and (row.expires_at is None or row.expires_at > self._now)
+            and row.last_rejected_at is None
+            for row in rows
+        )
+
     async def put_session(
         self,
         identity_id: UUID,
@@ -617,6 +676,7 @@ class MemoryTx(StoreTx):
         fencing: int,
         expires_at: datetime | None = None,
         mode: str = "in_place",
+        value_fingerprint: str | None = None,
     ) -> SessionWrite | None:
         if self._own(identity_id) is None:
             return None
@@ -633,6 +693,10 @@ class MemoryTx(StoreTx):
                 version=current.version + 1,
                 revision=current.revision + 1,
                 updated_at=self._now,
+                value_fingerprint=value_fingerprint,
+                last_verified_at=None,
+                last_rejected_at=None,
+                reject_code=None,
             )
             self.state.sessions[current.id] = updated
             return SessionWrite(current.id, updated.revision)
@@ -652,6 +716,8 @@ class MemoryTx(StoreTx):
             current.revision + 1 if current is not None else 1,
             self._now,
             self._now,
+            None,
+            value_fingerprint,
         )
         self.state.sessions[record.id] = record
         self.state.session_slots[(identity_id, slot)] = record.id
@@ -679,9 +745,41 @@ class MemoryTx(StoreTx):
             key=lambda r: (r.revision, r.created_at),
         )
         return [
-            SessionHistoryRow(r.id, r.status, r.revision, r.created_at, r.updated_at, r.revoked_at)
+            SessionHistoryRow(
+                r.id,
+                r.status,
+                r.revision,
+                r.created_at,
+                r.updated_at,
+                r.revoked_at,
+                r.value_fingerprint,
+                r.last_verified_at,
+                r.last_rejected_at,
+                r.reject_code,
+            )
             for r in records
         ]
+
+    async def mark_session_validity(
+        self,
+        identity_id: UUID,
+        slot: str,
+        *,
+        rejected: bool,
+        code: str | None = None,
+    ) -> bool:
+        current = self._current_session(identity_id, slot) if self._own(identity_id) else None
+        if current is None:
+            return False
+        self.state.sessions[current.id] = replace(
+            current,
+            last_verified_at=None if rejected else self._now,
+            last_rejected_at=self._now if rejected else None,
+            reject_code=code if rejected else None,
+            revision=current.revision + 1,
+            updated_at=self._now,
+        )
+        return True
 
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
         key = (identity_id, role)
@@ -857,6 +955,14 @@ class MemoryTx(StoreTx):
         if query.profile and not self._contains(row.profile, query.profile):
             return False
         if query.exclude and row.id in query.exclude:
+            return False
+        if query.without_link and any(
+            source == row.id and role in query.without_link for source, role in self.state.links
+        ):
+            return False
+        if query.not_target_of is not None and self._is_target_of(row.id, query.not_target_of):
+            return False
+        if query.is_target_of is not None and not self._is_target_of(row.id, query.is_target_of):
             return False
         if query.among is not None and row.id not in query.among:  # множество из `_with_among_ids`
             return False
@@ -1998,6 +2104,14 @@ class MemoryTx(StoreTx):
         )
         if flt.linked is not None and is_linked != flt.linked:
             return False
+        if flt.without_link and any(
+            source == row.id and role in flt.without_link for source, role in self.state.links
+        ):
+            return False
+        if flt.not_target_of is not None and self._is_target_of(row.id, flt.not_target_of):
+            return False
+        if flt.is_target_of is not None and not self._is_target_of(row.id, flt.is_target_of):
+            return False
         if flt.created_from is not None and row.created_at < flt.created_from:
             return False
         if flt.created_to is not None and row.created_at >= flt.created_to:
@@ -2021,6 +2135,22 @@ class MemoryTx(StoreTx):
             and (flt.standing_changed_from is None or state.changed_at >= flt.standing_changed_from)
             and (flt.standing_changed_to is None or state.changed_at < flt.standing_changed_to)
             for region, _, state in regions
+        )
+
+    def _is_target_of(self, identity_id: UUID, predicate: tuple[str, str | None]) -> bool:
+        role, from_service = predicate
+        return any(
+            linked_id == identity_id
+            and link_role == role
+            and (
+                from_service is None
+                or (
+                    (source_row := self.state.identities.get(source)) is not None
+                    and source_row.space_id == self.space.id
+                    and source_row.service == from_service
+                )
+            )
+            for (source, link_role), linked_id in self.state.links.items()
         )
 
     async def tag_counts(self, *, service: str | None, limit: int) -> list[tuple[str, int]]:
@@ -2491,10 +2621,23 @@ class MemoryTx(StoreTx):
             default is not None,
             default[1].version if default is not None else None,
             default[1].updated_at if default is not None else None,
+            default[1].last_verified_at if default is not None else None,
+            default[1].last_rejected_at if default is not None else None,
+            default[1].reject_code if default is not None else None,
         )
         current = [self._current_session(owner, slot) for owner, slot in sorted(self.state.session_slots)]
         sessions = [
-            SessionMetadataRow(r.slot, r.status, r.expires_at, r.version, r.written_by_fencing, r.updated_at)
+            SessionMetadataRow(
+                r.slot,
+                r.status,
+                r.expires_at,
+                r.version,
+                r.written_by_fencing,
+                r.updated_at,
+                r.last_verified_at,
+                r.last_rejected_at,
+                r.reject_code,
+            )
             for r in current
             if r is not None and r.identity_id == identity_id
         ]
@@ -4177,6 +4320,70 @@ class MemoryStore(Store):
                 rotated += 1
         last = page[-1][0] if len(page) >= size else None
         return RotationBatch(rotated, tuple(unreadable), last)
+
+    async def rekey_secret_value_fingerprints(
+        self,
+        envelope: Any,
+        fingerprints: Any,
+        *,
+        table: str,
+        limit: int,
+        after: tuple[Any, ...] | None = None,
+    ) -> RotationBatch:
+        if table not in {"credentials", "sessions"}:
+            raise ValidationFailed("value fingerprints exist only for credentials and sessions")
+        size = max(1, limit)
+        async with self._lock:
+            entries: list[tuple[tuple[str, ...], Any, StoredPayload, Any]]
+            if table == "credentials":
+                entries = [
+                    (_rotation_cursor(key), key, payload, row)
+                    for key, (payload, row) in self._state.credentials.items()
+                ]
+            else:
+                entries = [
+                    (_rotation_cursor(key), key, row.payload, row)
+                    for key, row in self._state.sessions.items()
+                ]
+            page = [entry for entry in sorted(entries) if after is None or entry[0] > after][:size]
+            updated = 0
+            unreadable: list[UnreadableSecret] = []
+            for _cursor, key, payload, row in page:
+                aad = (
+                    credential_associated_data(row.identity_id, row.kind, row.name)
+                    if table == "credentials"
+                    else associated_data("ih_sessions", row.identity_id, row.slot)
+                )
+                try:
+                    value = (
+                        payload.value
+                        if isinstance(payload, PlaintextPayload)
+                        else envelope.open_json(payload, aad)
+                    )
+                except DecryptionFailed:
+                    label = (
+                        credential_label(row.identity_id, row.kind, row.name)
+                        if table == "credentials"
+                        else f"{row.identity_id}/{row.slot}"
+                    )
+                    unreadable.append(UnreadableSecret(table, label))
+                    continue
+                canonical = json.dumps(
+                    pydantic_core.to_jsonable_python(value),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                fingerprint = fingerprints.tag(canonical)
+                if row.value_fingerprint == fingerprint:
+                    continue
+                if table == "credentials":
+                    self._state.credentials[key] = (payload, replace(row, value_fingerprint=fingerprint))
+                else:
+                    self._state.sessions[key] = replace(row, value_fingerprint=fingerprint)
+                updated += 1
+        last = page[-1][0] if len(page) >= size else None
+        return RotationBatch(updated, tuple(unreadable), last)
 
     async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
         usage: dict[str, dict[str, int]] = {}

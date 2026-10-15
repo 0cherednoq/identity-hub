@@ -8,6 +8,7 @@ import pytest
 
 from identity_hub import (
     IdentityCreate,
+    IdentityHub,
     ImportRecord,
     Lifecycle,
     NotFound,
@@ -15,6 +16,7 @@ from identity_hub import (
     SpaceHandle,
     ValidationFailed,
 )
+from identity_hub.events import Event
 from identity_hub.read.events import EventFilters
 
 pytestmark = [pytest.mark.conformance]
@@ -36,6 +38,59 @@ async def test_run_reports_and_resolves_links_by_ref(space: SpaceHandle) -> None
     assert first.lifecycle is Lifecycle.PROVISIONING  # FR-2.5: импорт не переводит в ready
     card = await space.identities.card(first.id)
     assert [(link.role, link.identity_id) for link in card.links.outgoing] == [("recovery", second.id)]
+
+
+async def test_import_emits_registered_per_created_identity_before_summary(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    delivered: list[Event] = []
+
+    async def receive(event: Event) -> None:
+        delivered.append(event)
+
+    hub_under_test.events.subscribe(
+        "import-registered",
+        receive,
+        space=space,
+        types={"identity.registered", "identity.imported"},
+        start="now",
+    )
+    await hub_under_test.dispatcher.run_once()
+    records = [
+        ImportRecord(external_ref="+event-1", links={"recovery": "+event-2"}, tags=frozenset({"batch"})),
+        ImportRecord(external_ref="+event-2", sessions={"default": {"auth_key": "first"}}),
+    ]
+
+    report = await space.imports.run(service="fake_tg", records=records, actor="test")
+    await hub_under_test.dispatcher.drain()
+
+    assert [event.type for event in delivered] == [
+        "identity.registered",
+        "identity.registered",
+        "identity.imported",
+    ]
+    assert [event.identity_id for event in delivered[:2]] == report.created
+    assert delivered[0].data == {
+        "external_ref": "+event-1",
+        "lifecycle": "provisioning",
+        "auth": "no_session",
+        "tags": ["batch"],
+        "labels": {},
+        "links": {"recovery": str(report.created[1])},
+    }
+    assert delivered[1].data["external_ref"] == "+event-2"
+    assert delivered[2].data["count"] == 2
+
+    await space.imports.run(service="fake_tg", records=records, actor="test", on_existing="skip")
+    await space.imports.run(
+        service="fake_tg",
+        records=[ImportRecord(external_ref="+event-2", sessions={"default": {"auth_key": "second"}})],
+        actor="test",
+        on_existing="update_session",
+    )
+    await hub_under_test.dispatcher.drain()
+
+    assert sum(event.type == "identity.registered" for event in delivered) == 2
 
 
 async def test_run_partial_failure_keeps_valid_records(space: SpaceHandle) -> None:

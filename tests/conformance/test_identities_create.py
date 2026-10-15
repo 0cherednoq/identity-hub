@@ -16,6 +16,7 @@ from identity_hub import (
     SpaceHandle,
     ValidationFailed,
 )
+from identity_hub.read.events import EventFilters
 
 pytestmark = [pytest.mark.conformance]
 
@@ -39,6 +40,11 @@ async def test_create_returns_identity_and_rejects_duplicate(space: SpaceHandle)
     assert exc.value.existing_id == identity.id
     with pytest.raises(AlreadyExists):
         await space.identities.create(_spec("+other", id=identity.id), actor="test")
+
+    registered = await space.admin.event_page(
+        filters=EventFilters(type="identity.registered", identity_id=identity.id)
+    )
+    assert registered.items[0].data["lifecycle"] == "ready"
 
 
 async def test_ensure_returns_existing_without_changes(space: SpaceHandle) -> None:

@@ -33,7 +33,7 @@ from identity_hub.errors import (
 )
 from identity_hub.events import EventDraft
 from identity_hub.operation import apply_fault_effects
-from identity_hub.protocols import Authenticator, Blame, Fault, LoginChallenge, LoginFailure
+from identity_hub.protocols import Authenticator, Blame, Fault, LinkedIdentity, LoginChallenge, LoginFailure
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, ChallengeRow, ProviderClaim, StoreTx
@@ -67,6 +67,14 @@ class LoginReport:
     failed: dict[UUID, str] = field(default_factory=dict)
     # identity → операция провайдера попытки (D-222): незавершённые видны в admin.provider_operations
     operations: dict[UUID, UUID] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class _CredentialMark:
+    kind: str
+    name: str
+    rejected: bool
+    code: str | None = None
 
 
 class _LinkedIdentity:
@@ -104,6 +112,7 @@ class _LoginContext:
         self._answer = answer
         self._context = context
         self._linked: dict[str, Lease] = {}
+        self._credential_marks: list[_CredentialMark] = []
         self.attempt_id: UUID | None = None  # claim_id операции: ключ идемпотентности для платформы
 
     @property
@@ -132,12 +141,21 @@ class _LoginContext:
     async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
         return await self._lease.credential(kind, name)
 
+    async def reject_credential(self, kind: str, *, name: str = "default", code: str) -> None:
+        kind, name = self._lease.pool.service.credential_key(kind, name)
+        checked = LoginFailure(code, credential=(kind, name))
+        self._credential_marks.append(_CredentialMark(kind, name, True, checked.code))
+
+    async def verify_credential(self, kind: str, *, name: str = "default") -> None:
+        kind, name = self._lease.pool.service.credential_key(kind, name)
+        self._credential_marks.append(_CredentialMark(kind, name, False))
+
     async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
         """Последняя сохранённая сессия слота, в том числе признанная недействительной: при повторном
         входе из неё берут параметры устройства и т.п. (R2-F27). Нет сессии — None."""
         return await self._lease._stored_session(slot, valid_only=False)
 
-    async def linked(self, role: str) -> _LinkedIdentity | None:
+    async def linked(self, role: str) -> LinkedIdentity | None:
         """Связанный аккаунт по роли, взятый в аренду (FR-4.3). Нет связи — None."""
         if role in self._linked:
             return _LinkedIdentity(self._linked[role])
@@ -234,7 +252,10 @@ class LoginMixin(SpaceBase):
                 query = replace(query, exclude=query.exclude | {lease.identity_id})  # одна попытка на аккаунт
                 async with self._tx(own=True) as tx:
                     auth = await tx.load_region(lease.identity_id, "auth", DEFAULT_SLOT)
-                if auth is not None and auth.retryable is False:
+                    credential_candidate = await tx.credential_candidate_state(lease.identity_id)
+                if credential_candidate is False or (
+                    auth is not None and auth.retryable is False and credential_candidate is not True
+                ):
                     await lease.release()
                     continue
                 attempts += 1
@@ -402,10 +423,19 @@ class LoginMixin(SpaceBase):
                     # функция входа приведена к объекту протокола в Service.__post_init__
                     session = await cast(Authenticator, svc.authenticator).login(ctx)
             except LoginChallenge as asked:
-                await self._open_challenge(lease, asked, claim=claim, previous=challenge)
+                await self._open_challenge(
+                    lease,
+                    asked,
+                    claim=claim,
+                    previous=challenge,
+                    credential_marks=ctx._credential_marks,
+                )
                 entered = False
                 return LoginOutcome.CHALLENGED, None
             except LoginFailure as failure:
+                if failure.credential is not None:
+                    kind, name = svc.credential_key(*failure.credential)
+                    ctx._credential_marks.append(_CredentialMark(kind, name, True, failure.code))
                 fault = failure.fault
                 if fault is not None and failure.raw_status is not None and fault.raw_status is None:
                     fault = replace(fault, raw_status=failure.raw_status)
@@ -435,6 +465,7 @@ class LoginMixin(SpaceBase):
                     auth_retryable=failure.retryable,
                     fault=fault,
                     previous=challenge,
+                    credential_marks=ctx._credential_marks,
                 )
                 if fault is not None and fault.blame is Blame.PROXY and lease.proxy_id is not None:
                     try:
@@ -460,11 +491,14 @@ class LoginMixin(SpaceBase):
                     outcome="failed",
                     error_code=code,
                     previous=challenge,
+                    credential_marks=ctx._credential_marks,
                 )
                 entered = False
                 return LoginOutcome.FAILED, name
             # новый вход — новая запись сессии, прежняя остаётся в истории отозванной (D-219)
-            payload, session_expires_at = lease._seal_session_with_expiry(session, DEFAULT_SLOT)
+            payload, session_expires_at, session_fingerprint = lease._seal_session_with_expiry(
+                session, DEFAULT_SLOT
+            )
             await self._set_auth(
                 lease,
                 AuthState.AUTHENTICATED,
@@ -475,7 +509,9 @@ class LoginMixin(SpaceBase):
                 result={"outcome": "succeeded"},
                 session=payload,
                 session_expires_at=session_expires_at,
+                session_fingerprint=session_fingerprint,
                 previous=challenge,
+                credential_marks=ctx._credential_marks,
             )
             entered = False
             return LoginOutcome.SUCCEEDED, None
@@ -585,7 +621,9 @@ class LoginMixin(SpaceBase):
         fault: Fault | None = None,
         session: Any = None,
         session_expires_at: datetime | None = None,
+        session_fingerprint: str | None = None,
         previous: ChallengeRow | None = None,
+        credential_marks: list[_CredentialMark] | None = None,
     ) -> None:
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)
@@ -599,6 +637,16 @@ class LoginMixin(SpaceBase):
                     DEFAULT_SLOT,
                     mode="replace",
                     expires_at=session_expires_at,
+                    value_fingerprint=session_fingerprint,
+                )
+                await tx.mark_session_validity(lease.identity_id, DEFAULT_SLOT, rejected=False)
+            await self._apply_credential_marks(tx, lease, credential_marks or [])
+            if state is AuthState.SESSION_INVALID and session is None:
+                await tx.mark_session_validity(
+                    lease.identity_id,
+                    DEFAULT_SLOT,
+                    rejected=True,
+                    code=auth_code,
                 )
             if previous is not None:
                 await tx.resolve_challenge(previous.id)
@@ -631,6 +679,7 @@ class LoginMixin(SpaceBase):
         *,
         claim: ProviderClaim | None = None,
         previous: ChallengeRow | None = None,
+        credential_marks: list[_CredentialMark] | None = None,
     ) -> None:
         challenge_id = new_id()
         aad = associated_data("ih_challenges", lease.identity_id, str(challenge_id))
@@ -641,6 +690,7 @@ class LoginMixin(SpaceBase):
             await lease._check_fencing(tx)
             # попытка входа завершилась вопросом платформы: операция succeeded, исход — challenged
             await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})
+            await self._apply_credential_marks(tx, lease, credential_marks or [])
             if previous is not None:
                 await tx.resolve_challenge(previous.id)
             now = await tx.now()
@@ -676,6 +726,20 @@ class LoginMixin(SpaceBase):
                     },
                 ),
             )
+
+    async def _apply_credential_marks(self, tx: StoreTx, lease: Lease, marks: list[_CredentialMark]) -> None:
+        disable = lease.pool.service.disable_rejected_credentials
+        for mark in marks:
+            row = await tx.mark_credential_validity(
+                lease.identity_id,
+                mark.kind,
+                mark.name,
+                rejected=mark.rejected,
+                code=mark.code,
+                disable=disable and mark.rejected,
+            )
+            if row is None:
+                raise NotFound("credentials", f"{mark.kind}/{mark.name}")
 
     async def _resolve(self, challenge_id: UUID) -> None:
         async with self._tx(own=True) as tx:

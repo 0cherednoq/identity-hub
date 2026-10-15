@@ -73,6 +73,7 @@ EXPECTED_COLUMNS = {
         "disabled_at",
     },
     "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at"},
+    "identity_links": {"identity_id", "space_id", "role", "linked_identity_id", "created_at"},
 }  # fmt: skip
 
 
@@ -228,6 +229,35 @@ async def test_proxy_bindings_join_accounts_with_proxies(hub: IdentityHub, db: A
     assert hosts == {ids[0]: "10.1.0.1", ids[1]: "10.1.0.1", ids[2]: None}
     assert bound == {busy.id: 2, idle.id: 0}
     assert binding is not None and binding["proxy_id"] == busy.id and binding["bound_at"] is not None
+
+
+async def test_identity_links_support_public_anti_join(hub: IdentityHub, db: AsyncEngine) -> None:
+    space = hub.space(f"read-links-{uuid4().hex[:6]}", create=True)
+    ref = await space.ref()
+    identities = [
+        await space.identities.create(
+            IdentityCreate(service="fake_tg", external_ref=f"{space.slug}-{index}"),
+            actor="test",
+        )
+        for index in range(3)
+    ]
+    await space.links.add(identities[0].id, "backup", identities[2].id, actor="test")
+    read = hub.read
+    stmt = (
+        select(read.identities.c.id)
+        .join(
+            read.identity_links,
+            (read.identity_links.c.identity_id == read.identities.c.id)
+            & (read.identity_links.c.role == "backup"),
+            isouter=True,
+        )
+        .where(
+            read.identities.c.space_id == ref.id,
+            read.identity_links.c.linked_identity_id.is_(None),
+        )
+    )
+    async with db.connect() as conn:
+        assert set((await conn.execute(stmt)).scalars()) == {identities[1].id, identities[2].id}
 
 
 def test_column_allowlist_and_version() -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
@@ -598,8 +599,20 @@ class PgTx(StoreTx):
         )
         return set(rows.scalars())
 
-    async def put_credentials(self, identity_id: UUID, payload: StoredPayload) -> None:
-        await self.put_credential(identity_id, "default", "default", payload)
+    async def put_credentials(
+        self,
+        identity_id: UUID,
+        payload: StoredPayload,
+        *,
+        value_fingerprint: str | None = None,
+    ) -> None:
+        await self.put_credential(
+            identity_id,
+            "default",
+            "default",
+            payload,
+            value_fingerprint=value_fingerprint,
+        )
 
     async def put_credential(
         self,
@@ -610,6 +623,7 @@ class PgTx(StoreTx):
         *,
         public_value: dict[str, Any] | None = None,
         expires_at: datetime | None = None,
+        value_fingerprint: str | None = None,
     ) -> CredentialRow:
         c = CREDENTIALS.c
         stmt = insert(CREDENTIALS).values(
@@ -620,6 +634,7 @@ class PgTx(StoreTx):
             name=name,
             public_value=public_value,
             expires_at=expires_at,
+            value_fingerprint=value_fingerprint,
             **_stored_payload_columns(payload),
         )
         upsert = stmt.on_conflict_do_update(
@@ -628,6 +643,10 @@ class PgTx(StoreTx):
                 **_stored_payload_columns(payload),
                 "public_value": stmt.excluded.public_value,
                 "expires_at": stmt.excluded.expires_at,
+                "value_fingerprint": stmt.excluded.value_fingerprint,
+                "last_verified_at": None,
+                "last_rejected_at": None,
+                "reject_code": None,
                 "version": c.version + 1,
                 "revision": c.revision + 1,
                 "updated_at": func.now(),
@@ -696,6 +715,70 @@ class PgTx(StoreTx):
         )
         return [_credential_row(row) for row in rows.mappings()]
 
+    async def mark_credential_validity(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        *,
+        rejected: bool,
+        code: str | None = None,
+        disable: bool = False,
+    ) -> CredentialRow | None:
+        c = CREDENTIALS.c
+        values: dict[str, Any] = {
+            "last_verified_at": None if rejected else func.now(),
+            "last_rejected_at": func.now() if rejected else None,
+            "reject_code": code if rejected else None,
+            "revision": c.revision + 1,
+            "updated_at": func.now(),
+        }
+        if disable:
+            values["lifecycle"] = case(
+                (c.lifecycle == "revoked", c.lifecycle),
+                else_="disabled",
+            )
+        row = (
+            (
+                await self.execute(
+                    update(CREDENTIALS)
+                    .where(
+                        c.identity_id == identity_id,
+                        c.space_id == self.space.id,
+                        c.kind == kind,
+                        c.name == name,
+                    )
+                    .values(**values)
+                    .returning(*_CREDENTIAL_COLUMNS)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _credential_row(row) if row is not None else None
+
+    async def credential_candidate_state(self, identity_id: UUID) -> bool | None:
+        c = CREDENTIALS.c
+        rows = list(
+            (
+                await self.execute(
+                    select(c.lifecycle, c.expires_at, c.last_rejected_at).where(
+                        c.identity_id == identity_id,
+                        c.space_id == self.space.id,
+                    )
+                )
+            ).all()
+        )
+        if not rows:
+            return None
+        now = await self.now()
+        return any(
+            row.lifecycle == "active"
+            and (row.expires_at is None or row.expires_at > now)
+            and row.last_rejected_at is None
+            for row in rows
+        )
+
     async def put_session(
         self,
         identity_id: UUID,
@@ -705,6 +788,7 @@ class PgTx(StoreTx):
         fencing: int,
         expires_at: datetime | None = None,
         mode: str = "in_place",
+        value_fingerprint: str | None = None,
     ) -> SessionWrite | None:
         c = SESSIONS.c
         for _ in range(2):  # повтор — если параллельная транзакция успела вставить первую запись слота
@@ -732,6 +816,10 @@ class PgTx(StoreTx):
                             status=SessionStatus.ACTIVE,
                             expires_at=expires_at,
                             written_by_fencing=fencing,
+                            value_fingerprint=value_fingerprint,
+                            last_verified_at=None,
+                            last_rejected_at=None,
+                            reject_code=None,
                             version=c.version + 1,
                             revision=c.revision + 1,
                             updated_at=func.now(),
@@ -760,6 +848,7 @@ class PgTx(StoreTx):
                         expires_at=expires_at,
                         written_by_fencing=fencing,
                         revision=revision,
+                        value_fingerprint=value_fingerprint,
                         **_stored_payload_columns(payload),
                     )
                     .on_conflict_do_nothing(
@@ -789,11 +878,49 @@ class PgTx(StoreTx):
     async def session_history(self, identity_id: UUID, slot: str) -> list[SessionHistoryRow]:
         c = SESSIONS.c
         rows = await self.execute(
-            select(c.id, c.status, c.revision, c.created_at, c.updated_at, c.revoked_at)
+            select(
+                c.id,
+                c.status,
+                c.revision,
+                c.created_at,
+                c.updated_at,
+                c.revoked_at,
+                c.value_fingerprint,
+                c.last_verified_at,
+                c.last_rejected_at,
+                c.reject_code,
+            )
             .where(c.identity_id == identity_id, c.slot == slot, c.space_id == self.space.id)
             .order_by(c.revision, c.created_at)
         )
         return [SessionHistoryRow(**dict(row)) for row in rows.mappings()]
+
+    async def mark_session_validity(
+        self,
+        identity_id: UUID,
+        slot: str,
+        *,
+        rejected: bool,
+        code: str | None = None,
+    ) -> bool:
+        c = SESSIONS.c
+        result = await self.execute(
+            update(SESSIONS)
+            .where(
+                c.identity_id == identity_id,
+                c.space_id == self.space.id,
+                c.slot == slot,
+                c.status != SessionStatus.REVOKED,
+            )
+            .values(
+                last_verified_at=None if rejected else func.now(),
+                last_rejected_at=func.now() if rejected else None,
+                reject_code=code if rejected else None,
+                revision=c.revision + 1,
+                updated_at=func.now(),
+            )
+        )
+        return bool(result.rowcount)  # type: ignore[attr-defined]
 
     async def insert_link(self, identity_id: UUID, role: str, linked_identity_id: UUID) -> bool:
         stmt = (
@@ -1025,6 +1152,20 @@ class PgTx(StoreTx):
 
     # --------------------------------------------------------- аренда
 
+    def _incoming_link_exists(self, identity_id: Any, predicate: tuple[str, str | None]) -> Any:
+        role, from_service = predicate
+        incoming = select(literal(1)).where(
+            LINKS.c.space_id == self.space.id,
+            LINKS.c.linked_identity_id == identity_id,
+            LINKS.c.role == role,
+        )
+        if from_service is not None:
+            source = IDENTITIES.alias("link_source")
+            incoming = incoming.select_from(LINKS.join(source, source.c.id == LINKS.c.identity_id)).where(
+                source.c.service == from_service, source.c.space_id == self.space.id
+            )
+        return incoming.exists()
+
     def _candidate_conditions(self, query: CandidateQuery) -> list[Any]:
         i, lease = IDENTITIES.c, LEASES.c
         now = func.now()
@@ -1071,6 +1212,17 @@ class PgTx(StoreTx):
             conditions.append(i.id.in_(among))
         if query.exclude:
             conditions.append(i.id.not_in(list(query.exclude)))
+        if query.without_link:
+            outgoing = select(literal(1)).where(
+                LINKS.c.space_id == self.space.id,
+                LINKS.c.identity_id == i.id,
+                LINKS.c.role.in_(sorted(query.without_link)),
+            )
+            conditions.append(~outgoing.exists())
+        if query.not_target_of is not None:
+            conditions.append(~self._incoming_link_exists(i.id, query.not_target_of))
+        if query.is_target_of is not None:
+            conditions.append(self._incoming_link_exists(i.id, query.is_target_of))
         if not query.shared:
             # NOT EXISTS, а не outer join с OR: иначе планировщик недооценивает число строк и
             # соединяет хешем все живые аренды с сортировкой вместо обхода индекса LRU (D-209)
@@ -1745,7 +1897,13 @@ class PgTx(StoreTx):
     ) -> tuple[CredentialMetadataRow, list[SessionMetadataRow]]:
         credential_row = (
             await self.execute(
-                select(CREDENTIALS.c.version, CREDENTIALS.c.updated_at).where(
+                select(
+                    CREDENTIALS.c.version,
+                    CREDENTIALS.c.updated_at,
+                    CREDENTIALS.c.last_verified_at,
+                    CREDENTIALS.c.last_rejected_at,
+                    CREDENTIALS.c.reject_code,
+                ).where(
                     CREDENTIALS.c.identity_id == identity_id,
                     CREDENTIALS.c.space_id == self.space.id,
                     CREDENTIALS.c.kind == "default",
@@ -1757,6 +1915,9 @@ class PgTx(StoreTx):
             credential_row is not None,
             credential_row.version if credential_row is not None else None,
             credential_row.updated_at if credential_row is not None else None,
+            credential_row.last_verified_at if credential_row is not None else None,
+            credential_row.last_rejected_at if credential_row is not None else None,
+            credential_row.reject_code if credential_row is not None else None,
         )
         rows = await self.execute(
             select(
@@ -1766,6 +1927,9 @@ class PgTx(StoreTx):
                 SESSIONS.c.version,
                 SESSIONS.c.written_by_fencing,
                 SESSIONS.c.updated_at,
+                SESSIONS.c.last_verified_at,
+                SESSIONS.c.last_rejected_at,
+                SESSIONS.c.reject_code,
             )
             .where(
                 SESSIONS.c.identity_id == identity_id,
@@ -1782,6 +1946,9 @@ class PgTx(StoreTx):
                 row.version,
                 row.written_by_fencing,
                 row.updated_at,
+                row.last_verified_at,
+                row.last_rejected_at,
+                row.reject_code,
             )
             for row in rows
         ]
@@ -3099,6 +3266,17 @@ class PgTx(StoreTx):
                 .exists()
             )
             conditions.append(linked if flt.linked else ~linked)
+        if flt.without_link:
+            outgoing = select(literal(1)).where(
+                LINKS.c.space_id == self.space.id,
+                LINKS.c.identity_id == i.id,
+                LINKS.c.role.in_(sorted(flt.without_link)),
+            )
+            conditions.append(~outgoing.exists())
+        if flt.not_target_of is not None:
+            conditions.append(~self._incoming_link_exists(i.id, flt.not_target_of))
+        if flt.is_target_of is not None:
+            conditions.append(self._incoming_link_exists(i.id, flt.is_target_of))
         if flt.created_from is not None:
             conditions.append(i.created_at >= flt.created_from)
         if flt.created_to is not None:
@@ -6513,6 +6691,72 @@ class PgStore(Store):
                 rotated += 1
         cursor = tuple(rows[-1][column.name] for column in primary) if len(rows) >= size else None
         return RotationBatch(rotated, tuple(unreadable), cursor)
+
+    async def rekey_secret_value_fingerprints(
+        self,
+        envelope: Any,
+        fingerprints: Any,
+        *,
+        table: str,
+        limit: int,
+        after: tuple[Any, ...] | None = None,
+    ) -> RotationBatch:
+        target, _prefix, aad_of = self._rotation_specs()[table]
+        if table not in {"credentials", "sessions"}:
+            raise ValidationFailed("value fingerprints exist only for credentials and sessions")
+        size = max(1, limit)
+        primary = list(target.primary_key.columns)
+        stmt = select(target)
+        if after is not None:
+            bound = [literal(value, type_=column.type) for column, value in zip(primary, after, strict=True)]
+            stmt = stmt.where(tuple_(*primary) > tuple_(*bound))
+        updated = 0
+        unreadable: list[UnreadableSecret] = []
+        async with self._own() as session:
+            rows = list(
+                (
+                    await _execute(
+                        session,
+                        stmt.order_by(*primary).limit(size).with_for_update(skip_locked=True),
+                        execution_options=self.options,
+                    )
+                ).mappings()
+            )
+            for row in rows:
+                payload = _stored_payload(row)
+                try:
+                    value = (
+                        payload.value
+                        if isinstance(payload, PlaintextPayload)
+                        else envelope.open_json(payload, aad_of(row))
+                    )
+                except DecryptionFailed:
+                    label = (
+                        credential_label(row["identity_id"], row["kind"], row["name"])
+                        if table == "credentials"
+                        else f"{row['identity_id']}/{row['slot']}"
+                    )
+                    unreadable.append(UnreadableSecret(table, label))
+                    continue
+                canonical = json.dumps(
+                    pydantic_core.to_jsonable_python(value),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                fingerprint = fingerprints.tag(canonical)
+                if row["value_fingerprint"] == fingerprint:
+                    continue
+                await _execute(
+                    session,
+                    update(target)
+                    .where(*[column == row[column.name] for column in primary])
+                    .values(value_fingerprint=fingerprint),
+                    execution_options=self.options,
+                )
+                updated += 1
+        cursor = tuple(rows[-1][column.name] for column in primary) if len(rows) >= size else None
+        return RotationBatch(updated, tuple(unreadable), cursor)
 
     async def inactive_key_usage(self, active: str) -> dict[str, dict[str, int]]:
         usage: dict[str, dict[str, int]] = {}

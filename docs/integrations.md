@@ -62,7 +62,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ## Read-схема: join с таблицами приложения
 
 `hub.read` — публичная read-схема на SQLAlchemy Core (версия `hub.read.version`). Она даёт
-стабильные selectable без секретов и служебных полей: `identities`, `leases`,
+стабильные selectable без секретов и служебных полей: `identities`, `identity_links`, `leases`,
 `lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`. Физические таблицы библиотеки приватны и
 могут меняться между версиями; read-схема меняется только с повышением версии.
 
@@ -89,6 +89,9 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
   агрегата, а не номер события (`D-205`), у `events` появилась колонка `revision`. С версии 3 у `leases` и `lease_history` есть колонки `purpose` и `ref` — назначение аренды, с версии 4 — `hold_deadline`, потолок удержания. Секретов (`credentials`, сессии, логины прокси), `token` аренды, fencing и
   fingerprint в схеме нет.
 - Только чтение: изменения — через `space.*`.
+- **Связи.** `identity_links` содержит `identity_id`, `role`, `linked_identity_id`,
+  `space_id`, `created_at`. Таблица предназначена в том числе для своих join/anti-join;
+  её добавление не меняет `READ_SCHEMA_VERSION`, поскольку это совместимое расширение.
 - **Прокси аккаунтов.** `proxy_bindings` (`identity_id`, `proxy_id`, `space_id`, `bound_at`) —
   sticky-привязки. Список аккаунтов с прокси — одним запросом:
 

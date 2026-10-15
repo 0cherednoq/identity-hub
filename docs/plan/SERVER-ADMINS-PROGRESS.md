@@ -10,12 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** S8.1 Событийные контракты и регрессионные тесты
-- **Начата:** 2026-10-16
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Эмиссия identity.registered в импорте
-  - [ ] Документация и traceability
-  - [ ] Целевые проверки
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -41,13 +39,15 @@
 | S6.6 | Интеграция с хабом и документация | S5.2, S6.1, S6.2, S6.3, S6.4, S6.5 | done |  | `D-314`; закрытие S5–S6 |
 | S7.1 | `AcceptPolicy`: модель, дефолт сервиса, постановка на приёмку | — | done |  | запрос владельца, `D-317` |
 | S7.2 | `AcceptanceWorker`: применение политики, retryable, закрытие фазы | S7.1 | done |  | `D-317` |
-| S8.1 | `imports.run` пишет `identity.registered` на аккаунт | — | in_progress |  | запрос владельца, `D-318` |
-| S9.1 | Отпечаток значения и признак валидности у записи | — | todo |  | запрос владельца, `D-319`; миграция |
-| S9.2 | Пометка валидности из адаптера и учёт в приёмке | S9.1 | todo |  | `D-319` |
-| S9.3 | Импорт с накоплением: режим `OnExisting.MERGE` | S9.1 | todo |  | `D-319` |
-| S9.4 | Документация и закрытие фазы | S9.1, S9.2, S9.3 | todo |  | `D-319` |
+| S8.1 | `imports.run` пишет `identity.registered` на аккаунт | — | done |  | запрос владельца, `D-318` |
+| S9.1 | Отпечаток значения и признак валидности у записи | — | done |  | запрос владельца, `D-319`; миграция |
+| S9.2 | Пометка валидности из адаптера и учёт в приёмке | S9.1 | done |  | `D-319` |
+| S9.3 | Импорт с накоплением: режим `OnExisting.MERGE` | S9.1 | done |  | `D-319` |
+| S9.4 | Документация и закрытие фазы | S9.1, S9.2, S9.3 | done |  | `D-319` |
+| S10.1 | Связи аккаунтов в read-схеме | — | done |  | запрос владельца, `D-320` |
+| S10.2 | Предикаты связей в `IdentityFilter` и аренде | S10.1 | done |  | `D-320` |
 
-**Итого:** 19 / 24 done
+**Итого:** 26 / 26 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -69,3 +69,10 @@
 2026-10-16 · S6.6 · done · Hub integration, nested fingerprint filters, guide/traceability; full check 2128 passed, 5 skipped; anti-flake 3x60 passed
 2026-10-16 · S7.1 · done · AcceptPolicy, default_accept, migration 0034 and bulk durable queue; 6 tests on MemoryStore/PostgreSQL
 2026-10-16 · S7.2 · done · AcceptanceWorker, auth retryable and import checker docs; full check 2136 passed, 5 skipped; anti-flake 3x68 passed
+2026-10-16 · S8.1 · done · identity.registered на каждый созданный импортом аккаунт; 41 целевой тест, полный gate 2157 passed
+2026-10-16 · S9.1 · done · migration 0035, canonical HMAC and validity metadata on both backends
+2026-10-16 · S9.2 · done · adapter marks exact credential; acceptance retries while a fresh candidate remains
+2026-10-16 · S9.3 · done · merge accumulation, deterministic names, active-session keep/replace and four-case matrix
+2026-10-16 · S9.4 · done · docs and public contract; full gate 2157 passed, 5 skipped; anti-flake 3x74 passed
+2026-10-16 · S10.1 · done · read-схема identity_links и PostgreSQL anti-join
+2026-10-16 · S10.2 · done · link-aware find/list/count и эксклюзивная аренда · очередь S закрыта

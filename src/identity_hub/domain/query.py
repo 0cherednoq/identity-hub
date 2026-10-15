@@ -61,6 +61,9 @@ class SearchQuery:
     terms: tuple[str, ...] = ()
     exact_id: UUID | None = None
     short_id: str | None = None
+    without_link: frozenset[str] = frozenset()
+    not_target_of: tuple[str, str | None] | None = None
+    is_target_of: tuple[str, str | None] | None = None
 
     @property
     def is_empty(self) -> bool:
@@ -73,6 +76,9 @@ class SearchQuery:
             or self.terms
             or self.exact_id
             or self.short_id
+            or self.without_link
+            or self.not_target_of
+            or self.is_target_of
         )
 
 

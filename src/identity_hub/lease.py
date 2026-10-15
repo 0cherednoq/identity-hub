@@ -611,14 +611,21 @@ class Lease:
         """
         self.check()
         mode = session_mode(mode)
-        payload, inferred_expiry = self._seal_session_with_expiry(
+        payload, inferred_expiry, value_fingerprint = self._seal_session_with_expiry(
             session, slot
         )  # до открытия транзакции (T-5)
         if expires_at is None:
             expires_at = inferred_expiry
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
-            await self._write_session(tx, payload, slot, mode=mode, expires_at=expires_at)
+            await self._write_session(
+                tx,
+                payload,
+                slot,
+                mode=mode,
+                expires_at=expires_at,
+                value_fingerprint=value_fingerprint,
+            )
 
     @contextlib.asynccontextmanager
     async def playwright_context(self, browser: Any, **options: Any) -> AsyncIterator[Any]:
@@ -682,25 +689,42 @@ class Lease:
 
     def _seal_session(self, session: BaseModel | Mapping[str, Any], slot: str) -> Any:
         """Внутренний контракт login-пайплайна: вернуть только sealed payload."""
-        payload, _ = self._seal_session_with_expiry(session, slot)
+        payload, _, _ = self._seal_session_with_expiry(session, slot)
         return payload
 
     def _seal_session_with_expiry(
         self, session: BaseModel | Mapping[str, Any], slot: str
-    ) -> tuple[Any, datetime | None]:
+    ) -> tuple[Any, datetime | None, str]:
         service = self.pool.service
         model = validate_model(
             service.session_schema(slot), service.session_input(slot, session), f"session {slot}"
         )
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub._seal_stored_model(model, aad), service.session_expiry(model)
+        return (
+            self.pool.space.hub._seal_stored_model(model, aad),
+            service.session_expiry(model),
+            self.pool.space.hub._value_fingerprint(model),
+        )
 
     async def _write_session(
-        self, tx: StoreTx, payload: Any, slot: str, *, mode: str, expires_at: datetime | None = None
+        self,
+        tx: StoreTx,
+        payload: Any,
+        slot: str,
+        *,
+        mode: str,
+        expires_at: datetime | None = None,
+        value_fingerprint: str | None = None,
     ) -> None:
         """Запись сессии и событие `session.saved` в транзакции вызывающего (fence уже проверен)."""
         written = await tx.put_session(
-            self.identity_id, slot, payload, fencing=self.fencing, expires_at=expires_at, mode=mode
+            self.identity_id,
+            slot,
+            payload,
+            fencing=self.fencing,
+            expires_at=expires_at,
+            mode=mode,
+            value_fingerprint=value_fingerprint,
         )
         if written is None:
             raise StaleFencing(self.identity_id, self.fencing)
@@ -947,6 +971,9 @@ async def acquire(
     profile: Mapping[str, Any] | None = None,
     among: Any = None,
     exclude: Iterable[UUID] = (),
+    without_link: str | Iterable[str] | None = None,
+    not_target_of: tuple[str, str | None] | None = None,
+    is_target_of: tuple[str, str | None] | None = None,
     wait: timedelta | float | None = None,
     idempotency_key: str | None = None,
     query: CandidateQuery | None = None,
@@ -984,6 +1011,9 @@ async def acquire(
             profile=profile,
             among=among,
             exclude=exclude,
+            without_link=without_link,
+            not_target_of=not_target_of,
+            is_target_of=is_target_of,
             require_quota=require_quota,
         )
     elif require_quota:

@@ -47,7 +47,7 @@ class RenormalizeReport:
 
 @dataclass(frozen=True, slots=True)
 class FingerprintRekeyReport:
-    """Итог `Doctor.rekey_fingerprints`: пересчитано, занятые и нерасшифрованные прокси (только id).
+    """Итог пересчёта HMAC прокси и значений credentials/session.
 
     `conflicts` — прокси, чей новый отпечаток уже у другого прокси пространства: это дубли одного
     адреса и логина, их нужно удалить или объединить вручную. Пока список не пуст, прежний ключ
@@ -57,10 +57,12 @@ class FingerprintRekeyReport:
     updated: int
     conflicts: list[UUID]
     unreadable: list[UUID]
+    value_updated: dict[str, int] = field(default_factory=dict)
+    value_unreadable: tuple[UnreadableSecret, ...] = ()
 
     @property
     def complete(self) -> bool:
-        return not self.conflicts and not self.unreadable
+        return not self.conflicts and not self.unreadable and not self.value_unreadable
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +221,33 @@ class Doctor:
                         updated += 1
                     else:
                         conflicts.append(row.id)
-        return FingerprintRekeyReport(updated, conflicts, unreadable)
+        value_updated: Counter[str] = Counter()
+        value_unreadable: dict[tuple[str, str], UnreadableSecret] = {}
+        for table in ("credentials", "sessions"):
+            cursor: tuple[object, ...] | None = None
+            while True:
+                value_batch = await hub._store.rekey_secret_value_fingerprints(
+                    hub._envelope,
+                    hub._fingerprints,
+                    table=table,
+                    limit=batch_size,
+                    after=cursor,
+                )
+                value_updated[table] += value_batch.rotated
+                for unreadable_value in value_batch.unreadable:
+                    value_unreadable.setdefault(
+                        (unreadable_value.table, unreadable_value.id), unreadable_value
+                    )
+                cursor = value_batch.cursor
+                if cursor is None:
+                    break
+        return FingerprintRekeyReport(
+            updated,
+            conflicts,
+            unreadable,
+            {table: count for table, count in value_updated.items() if count},
+            tuple(value_unreadable.values()),
+        )
 
     async def renormalize(self, service: Service | str, *, batch_size: int = 1000) -> RenormalizeReport:
         """Пересчитать `normalized_ref` identity сервиса после смены `normalize_ref_version` (D-149).

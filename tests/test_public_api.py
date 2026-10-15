@@ -111,6 +111,27 @@ def test_standard_format_exports_are_allowlisted_and_documented() -> None:
     assert [name for name in sorted(names) if f"`{name}`" not in guide] == []
 
 
+def test_import_merge_and_credential_validity_contract_is_public_and_documented() -> None:
+    from identity_hub import ImportReport, LoginContext, OnExisting
+
+    names = {"ImportReport", "LoginContext", "LoginFailure", "OnExisting"}
+    assert names <= set(identity_hub.__all__)
+    assert OnExisting.MERGE == "merge"
+    assert "merge_details" in ImportReport.__dataclass_fields__
+    assert {"verify_credential", "reject_credential"} <= set(LoginContext.__dict__)
+    guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
+    assert [name for name in sorted(names) if f"`{name}`" not in guide] == []
+
+
+def test_link_filter_contract_is_public_and_documented() -> None:
+    from identity_hub import IdentityFilter
+
+    fields = IdentityFilter.__dataclass_fields__
+    assert {"without_link", "not_target_of", "is_target_of"} <= set(fields)
+    guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
+    assert all(f"`{name}" in guide for name in ("without_link", "not_target_of", "is_target_of"))
+
+
 HUB_PUBLIC = {
     # жизненный цикл и реестр сервисов
     "start",

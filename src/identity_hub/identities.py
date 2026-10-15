@@ -59,6 +59,7 @@ class PreparedCredential:
     payload: StoredPayload
     public_value: dict[str, Any] | None
     expires_at: datetime | None
+    value_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,8 @@ class PreparedIdentity:
     credentials: StoredPayload | None
     sessions: dict[str, StoredPayload]
     session_expirations: dict[str, datetime | None]
+    credential_fingerprint: str | None
+    session_fingerprints: dict[str, str]
     links: dict[str, UUID]
     credential_records: tuple[PreparedCredential, ...] = ()
 
@@ -108,9 +111,11 @@ def prepare_identity(
     validate_json_payload(clean_labels, "labels")
 
     creds_payload = None
+    credential_fingerprint = None
     if credentials is not None:
         creds = validate_model(service.credentials, credentials, "credentials")
         creds_payload = space.hub._seal_stored_model(creds, associated_data("ih_credentials", identity_id))
+        credential_fingerprint = space.hub._value_fingerprint(creds)
     records: list[PreparedCredential] = []
     seen: set[tuple[str, str]] = {("default", "default")} if credentials is not None else set()
     for record in credential_records:
@@ -123,9 +128,19 @@ def prepare_identity(
         if public is not None:
             validate_json_payload(public, f"public_value {kind}/{name}")
         sealed = space.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
-        records.append(PreparedCredential(kind, name, sealed, public, record.expires_at))
+        records.append(
+            PreparedCredential(
+                kind,
+                name,
+                sealed,
+                public,
+                record.expires_at,
+                space.hub._value_fingerprint(model),
+            )
+        )
     session_payloads: dict[str, StoredPayload] = {}
     session_expirations: dict[str, datetime | None] = {}
+    session_fingerprints: dict[str, str] = {}
     for slot, data in (sessions or {}).items():
         model = validate_model(
             service.session_schema(slot), service.session_input(slot, data), f"sessions.{slot}"
@@ -134,6 +149,7 @@ def prepare_identity(
             model, associated_data("ih_sessions", identity_id, slot)
         )
         session_expirations[slot] = service.session_expiry(model)
+        session_fingerprints[slot] = space.hub._value_fingerprint(model)
     profile_secret = (
         envelope.seal_model(secret_profile, associated_data("ih_identities", identity_id, "profile"))
         if secret_profile
@@ -168,6 +184,8 @@ def prepare_identity(
         credentials=creds_payload,
         sessions=session_payloads,
         session_expirations=session_expirations,
+        credential_fingerprint=credential_fingerprint,
+        session_fingerprints=session_fingerprints,
         links=link_map,
         credential_records=tuple(records),
     )
@@ -290,7 +308,11 @@ class IdentitiesMixin(SpaceBase):
         """Секреты, сессии, начальные регионы и связи только что вставленного аккаунта."""
         identity_id = prepared.row.id
         if prepared.credentials is not None:
-            await tx.put_credentials(identity_id, prepared.credentials)
+            await tx.put_credentials(
+                identity_id,
+                prepared.credentials,
+                value_fingerprint=prepared.credential_fingerprint,
+            )
         for record in prepared.credential_records:  # в той же транзакции, что и аккаунт (D-217)
             await tx.put_credential(
                 identity_id,
@@ -299,6 +321,7 @@ class IdentitiesMixin(SpaceBase):
                 record.payload,
                 public_value=record.public_value,
                 expires_at=record.expires_at,
+                value_fingerprint=record.value_fingerprint,
             )
         for slot, payload in prepared.sessions.items():
             await tx.put_session(
@@ -307,6 +330,7 @@ class IdentitiesMixin(SpaceBase):
                 payload,
                 fencing=0,
                 expires_at=prepared.session_expirations.get(slot),
+                value_fingerprint=prepared.session_fingerprints.get(slot),
             )
         now = await tx.now()
         await tx.save_region(

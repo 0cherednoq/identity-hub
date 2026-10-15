@@ -131,7 +131,10 @@ class AcceptanceWorker:
             return False
         async with space._tx(own=True) as tx:
             auth = await tx.load_region(identity_id, "auth", DEFAULT_SLOT)
-        if auth is not None and auth.retryable is False:
+            credential_candidate = await tx.credential_candidate_state(identity_id)
+        if credential_candidate is False or (
+            auth is not None and auth.retryable is False and credential_candidate is not True
+        ):
             await self._retire_or_finish(space, identity_id, policy, identity.auth_code, identity.standing)
             return True
 
@@ -149,6 +152,7 @@ class AcceptanceWorker:
         current = await space.identities.get(identity_id)
         async with space._tx(own=True) as tx:
             auth = await tx.load_region(identity_id, "auth", DEFAULT_SLOT)
+            credential_candidate = await tx.credential_candidate_state(identity_id)
         code = current.auth_code
         if code in policy.retire_on or current.standing in policy.retire_on:
             await space.identities.retire(
@@ -157,7 +161,11 @@ class AcceptanceWorker:
                 reason=f"acceptance rejected: {code or current.standing}",
             )
             await self._finish(space, identity_id)
-        elif (auth is not None and auth.retryable is False) or attempts + 1 >= policy.max_attempts:
+        elif (
+            credential_candidate is False
+            or (auth is not None and auth.retryable is False and credential_candidate is not True)
+            or attempts + 1 >= policy.max_attempts
+        ):
             await self._finish(space, identity_id)
         else:
             async with space._tx(own=True) as tx:

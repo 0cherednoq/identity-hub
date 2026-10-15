@@ -58,6 +58,13 @@ flowchart LR
 `IdentityHub(redact_refs_in_events=True)`: `external_ref`, `normalized_ref` и `labels` во всех
 событиях заменяются на `[redacted]`, аккаунт остаётся опознаваемым по `identity_id`.
 
+`identity.registered` создаётся для каждого нового аккаунта независимо от способа создания:
+`identities.create`, `identities.create_many` и `imports.run`/`run_files`. При импорте события
+отдельных аккаунтов записываются перед сводным `identity.imported`; режимы `skip` и
+`update_session` повторную регистрацию не создают. Если аккаунт сразу создан с
+`lifecycle="ready"`, готовность видна уже в `identity.registered`: отдельного
+`identity.lifecycle.changed` для такого начального состояния может не быть.
+
 ## Основные типы
 
 | Группа | События | Когда полезно |

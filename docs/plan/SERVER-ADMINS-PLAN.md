@@ -740,6 +740,60 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
 
 ---
 
+## Фаза S10 — выборки по связям аккаунтов
+
+Запрос владельца (`D-320`): выбирать аккаунты по наличию/отсутствию связи — например, «твиттеры
+в `ready`, на которые ещё не ссылается ни один privy» для кампании кросс-сервисной регистрации.
+Сейчас связи аккаунт-аккаунт доступны только поштучно (`links.of`, `links.impact`); сет-выборок
+нет, а `ih_identity_links` не в read-схеме, поэтому анти-join пишется сырым SQL к внутренней
+таблице.
+
+### S10.1 Связи аккаунтов в read-схеме
+
+- Добавить в `READ_TABLES` (`postgres/read_schema.py`) таблицу `identity_links` →
+  `ih_identity_links` с публичными колонками `identity_id`, `role`, `linked_identity_id`
+  (и `created_at`, если есть). Экспонировать `hub.read.identity_links: Table`.
+- Добавление таблицы в read-схему **не повышает** `READ_SCHEMA_VERSION` (правило read-схемы:
+  новые колонки/таблицы добавляются без смены версии).
+- Это стабильная поверхность для своих join/анти-join: «аккаунты сервиса `X` без связи роли `R`»
+  пишется через `hub.read.identities` + `hub.read.identity_links` без обращения к внутренним
+  таблицам.
+- Read-схема — PostgreSQL (как и остальной `hub.read`); ограничение `MemoryStore` уже описано
+  (`D-227`).
+- **DoD:** `hub.read.identity_links` присутствует; анти-join (identities LEFT JOIN identity_links
+  по роли, `linked_identity_id IS NULL`) возвращает верный набор на PostgreSQL; колонки совпадают
+  с allowlist read-схемы; `READ_SCHEMA_VERSION` не изменился.
+
+### S10.2 Предикаты связей в `IdentityFilter` и выдаче аренды
+
+Зависит от `S10.1`.
+
+- Расширить `IdentityFilter` (`api/identities.py`) и доменный `SearchQuery`
+  (`domain/query.py`) предикатами связей:
+  - `without_link: str | Collection[str]` — у аккаунта нет исходящей связи этой роли;
+  - `not_target_of: tuple[str, str | None]` — на аккаунт никто не ссылается ролью (опц. из
+    конкретного сервиса-источника);
+  - `is_target_of: tuple[str, str | None]` — на аккаунт кто-то ссылается этой ролью.
+- Предикаты реализуются подзапросом к связям в `PgTx` **и** `MemoryTx`, работают в
+  `find`/`list`/`count` на обоих бэкендах.
+- Те же условия доступны выдаче аренды: `pool.candidate_query`/`acquire` принимают их (или
+  готовый `among`-`Select`), чтобы «дай любой аккаунт без privy» работало и как pull-воркер.
+- Пример:
+  ```python
+  await space.identities.find(IdentityFilter(
+      service="twitter", lifecycle="ready", not_target_of=("twitter", "privy")))
+  ```
+- **Руководство:** `03-accounts.md` — выборки по связям; `12-recipes.md` — рецепт кампании
+  кросс-сервисной регистрации (select без privy → задача на id → `lease(among=[id])` → re-check →
+  create privy + link); `api.md`, allowlist, CHANGELOG.
+- `tests/test_server_admins_traceability.py` покрывает `S10.*`.
+- **DoD:** `find`/`list`/`count` с `not_target_of` и `without_link` дают верный набор на обоих
+  бэкендах; тот же предикат отбирает кандидатов в `pool.lease`; две параллельные кампании не
+  берут один аккаунт дважды (аренда эксклюзивна); полный `bash scripts/check.sh` зелёный; все
+  задачи `S10` в статусе `done` или `cancelled` с записью `D-NNN`.
+
+---
+
 ## 8. Матрица трассировки
 
 | Ишью | Задачи плана |
@@ -759,3 +813,4 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
 | Запрос владельца: приёмка импорта | S7.1, S7.2 |
 | Запрос владельца: событие импорта | S8.1 |
 | Запрос владельца: точечная валидность и накопление | S9.1, S9.2, S9.3, S9.4 |
+| Запрос владельца: выборки по связям | S10.1, S10.2 |

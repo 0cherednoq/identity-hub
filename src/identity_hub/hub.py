@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import weakref
 from collections import Counter
 from collections.abc import Collection, Iterable, Mapping
@@ -248,6 +249,18 @@ class IdentityHub:
         if isinstance(payload, PlaintextPayload):
             return schema.model_validate(payload.value)
         return self._envelope.open_model(schema, payload, aad)
+
+    def _value_fingerprint(self, model: BaseModel | Mapping[str, Any]) -> str:
+        """HMAC канонического JSON значения credentials/session; наружу не возвращается."""
+        value = pydantic_core.to_jsonable_python(reveal(model))
+        canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return self._fingerprints.tag(canonical)
+
+    def _value_fingerprint_tags(self, model: BaseModel | Mapping[str, Any]) -> set[str]:
+        """Теги значения всеми ключами кольца — для дедупликации во время ротации."""
+        value = pydantic_core.to_jsonable_python(reveal(model))
+        canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return set(self._fingerprints.tags(canonical).values())
 
     # --------------------------------------------------------- сервисы
 

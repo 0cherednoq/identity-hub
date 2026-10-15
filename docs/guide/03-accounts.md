@@ -244,11 +244,12 @@ report = await space.imports.run(
     service=TELEGRAM,
     records=records,                 # список, генератор или async-генератор
     batch_size=500,
-    on_existing=OnExisting.SKIP,     # SKIP | UPDATE_SESSION | FAIL
+    on_existing=OnExisting.SKIP,     # SKIP | UPDATE_SESSION | MERGE | FAIL
     accept=AcceptPolicy(activate_on_login=True, max_attempts=3),
     actor="operator",
 )
 report.created, report.updated, report.skipped, report.failed   # списки id / (ref, причина)
+report.merge_details                  # что MERGE добавил или намеренно сохранил
 ```
 
 | | `identities.create_many` | `imports.run` |
@@ -256,7 +257,7 @@ report.created, report.updated, report.skipped, report.failed   # списки i
 | Транзакция | одна на всё | одна на пачку |
 | Ошибка записи | откат всего | запись в `failed`, пачка идёт дальше |
 | Lifecycle | как в `IdentityCreate` | всегда `provisioning` |
-| Существующие | `fail` или `skip` | `skip`, `update_session` или `fail` |
+| Существующие | `fail` или `skip` | `skip`, `update_session`, `merge` или `fail` |
 | Связи | по id | по строковому ref, в том числе внутри пачки |
 | Прокси и верификации | нет | да |
 
@@ -273,6 +274,12 @@ report.created, report.updated, report.skipped, report.failed   # списки i
   свежие. Запись сопоставляется с аккаунтом по нормализованному `external_ref`. С
   `verify_sessions=True` новая сессия не считается рабочей: `auth` аккаунта становится
   `no_session`, пока её не подтвердит вход или проба.
+- `MERGE` добавляет недостающие значения, но не меняет `lifecycle`, `standing` и `auth`.
+  Credentials дедуплицируются по `(kind, HMAC значения)`; если входное имя занято другой
+  парой, импорт создаёт стабильное имя `import-…`. Для сессии дедуп — `(slot, HMAC значения)`.
+  Другая активная сессия по умолчанию сохраняется (`merge_sessions="keep"`); `"replace"`
+  всегда создаёт новую ревизию, а при `invalidated` замена выполняется и в режиме `keep`.
+  Полный дубль попадает в `skipped`, аккаунт с добавленными данными — в `updated`.
 - **Приёмка.** `accept=` ставит только созданные аккаунты в durable-очередь
   `hub.workers.acceptance`; `Service.default_accept` задаёт политику по умолчанию. При политике
   `verify_sessions` по умолчанию включён. Без политики импорт не запускает вход и сохраняет
@@ -485,7 +492,10 @@ await space.secrets.put_credential(
     expires_at=deadline, actor="ops",
 )
 for item in await space.secrets.credentials(identity_id):   # без секретов
-    print(item.kind, item.name, item.lifecycle, item.expired, item.public_value)
+    print(
+        item.kind, item.name, item.lifecycle, item.expired, item.public_value,
+        item.last_verified_at, item.last_rejected_at, item.reject_code,
+    )
 await space.secrets.disable_credential(identity_id, "api_key", "trading", actor="ops")
 await space.secrets.enable_credential(identity_id, "api_key", "trading", actor="ops")
 await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="ops", reason="утечка")
@@ -505,6 +515,8 @@ await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="
 key = await lease.credential("api_key", "trading")       # None: нет, выключена, отозвана, истекла
 everything = await lease.active_credentials()             # {("api_key", "trading"): ApiKey(...), ...}
 login = await ctx.credential("default")                   # то же, что ctx.credentials()
+await ctx.reject_credential("default", name="old", code="wrong_password")
+await ctx.verify_credential("default", name="working")
 value = await space.secrets.reveal(
     identity_id, SecretRef.credential("api_key", "trading"), actor="admin", reason="проверка"
 )
@@ -514,9 +526,10 @@ value = await space.secrets.reveal(
 `identity.secret.revealed` с видом и именем записи, но без значения.
 
 Записи можно передать сразу при создании и импорте (`D-217`): они проверяются и шифруются до
-транзакции и пишутся вместе с аккаунтом. Импорт пишет их только новому аккаунту — повтор импорта
-дубликатов не создаёт. `secrets.describe(id).credential_records` перечисляет все записи без
-секретов.
+транзакции и пишутся вместе с аккаунтом. Обычный повтор импорта их не меняет; режим `merge`
+добавляет только новое значение и не воскрешает отклонённую или отозванную запись-дубликат.
+`secrets.describe(id).credential_records` перечисляет все записи и отметки валидности без
+секретов и внутренних HMAC-отпечатков. Замена значения сбрасывает прежний отказ.
 
 ```python
 from identity_hub import CredentialInput
@@ -545,6 +558,25 @@ await space.links.remove(tg_id, "recovery_email", actor="operator")
 
 Внутри `Authenticator.login` связанный аккаунт доступен через `await ctx.linked("recovery_email")`
 — библиотека берёт его в аренду на время входа.
+
+Связи можно использовать в наборных выборках:
+
+```python
+free = IdentityFilter(
+    service="twitter",
+    lifecycle="ready",
+    without_link="recovery_email",
+    not_target_of=("registered_from", "privy"),
+)
+page = await space.identities.list(free)
+one = await space.identities.find(free)
+total = await space.identities.count(free)
+```
+
+Пара `(role, from_service)` задаёт роль первой; `from_service=None` принимает любой сервис
+источника. `is_target_of` задаётся так же, но требует наличие входящей связи. Эти же три
+условия принимает `pool.lease()`/`pool.acquire()`; проверка выполняется в транзакции выдачи,
+а эксклюзивная аренда защищает один аккаунт от двух параллельных воркеров.
 
 ## Свои данные домена
 

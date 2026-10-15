@@ -172,6 +172,16 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "bound_at": "bound_at",
         },
     ),
+    "identity_links": (
+        "ih_identity_links",
+        {
+            "identity_id": "identity_id",
+            "space_id": "space_id",
+            "role": "role",
+            "linked_identity_id": "linked_identity_id",
+            "created_at": "created_at",
+        },
+    ),
 }
 
 
@@ -211,6 +221,7 @@ class ReadSchema:
         self.events: Table = built["events"]
         self.proxies: Table = built["proxies"]
         self.proxy_bindings: Table = built["proxy_bindings"]
+        self.identity_links: Table = built["identity_links"]
 
     def __repr__(self) -> str:
         return f"ReadSchema(version={self.version}, db_schema={self.db_schema!r})"

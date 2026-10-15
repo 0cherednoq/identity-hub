@@ -635,6 +635,10 @@ class CredentialsRecord(DualSecretPayloadMixin, IdentityHubBase):
     public_value: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # логин, id ключа: без секрета
     lifecycle: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # срок — по времени
+    value_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reject_code: Mapped[str | None] = mapped_column(String(64))
     revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -669,6 +673,10 @@ class SessionRecord(DualSecretPayloadMixin, IdentityHubBase):
 
     status: Mapped[str] = mapped_column(String(16), default=SessionStatus.ACTIVE, server_default="active")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    value_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reject_code: Mapped[str | None] = mapped_column(String(64))
     version: Mapped[int] = mapped_column(Integer, default=1)
     revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))
     written_by_fencing: Mapped[int] = mapped_column(BigInteger)  # запись отклоняется, если меньше текущего

@@ -92,6 +92,9 @@ class CredentialInfo:
     present: bool
     version: int | None
     updated_at: datetime | None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +105,9 @@ class SessionInfo:
     version: int
     written_by_fencing: int
     updated_at: datetime | None
+    last_verified_at: datetime | None = None
+    last_rejected_at: datetime | None = None
+    reject_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +125,9 @@ class Credential:
     version: int
     created_at: datetime
     updated_at: datetime
+    last_verified_at: datetime | None
+    last_rejected_at: datetime | None
+    reject_code: str | None
 
     @classmethod
     def from_row(cls, row: Any, now: datetime) -> Credential:
@@ -134,6 +143,9 @@ class Credential:
             version=row.version,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            last_verified_at=row.last_verified_at,
+            last_rejected_at=row.last_rejected_at,
+            reject_code=row.reject_code,
         )
 
 
@@ -332,7 +344,14 @@ class CardsMixin(SpaceBase):
             records = await tx.list_credentials(identity_id)
             now = await tx.now()
         return AccessCard(
-            CredentialInfo(credential.present, credential.version, credential.updated_at),
+            CredentialInfo(
+                credential.present,
+                credential.version,
+                credential.updated_at,
+                credential.last_verified_at,
+                credential.last_rejected_at,
+                credential.reject_code,
+            ),
             [
                 SessionInfo(
                     row.slot,
@@ -341,6 +360,9 @@ class CardsMixin(SpaceBase):
                     row.version,
                     row.written_by_fencing,
                     row.updated_at,
+                    row.last_verified_at,
+                    row.last_rejected_at,
+                    row.reject_code,
                 )
                 for row in sessions
             ],

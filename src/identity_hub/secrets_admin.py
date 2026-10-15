@@ -51,6 +51,7 @@ class SecretsAdminMixin(SpaceBase):
             service = self.hub.service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.credentials, credentials, "credentials")
         payload = self.hub._seal_stored_model(model, associated_data("ih_credentials", identity_id))
+        value_fingerprint = self.hub._value_fingerprint(model)
         command = {"identity_id": identity_id, "reset_auth": reset_auth}
         async with self._tx(checked=idempotency_key is None) as tx:
             if not await self._claim_secret_command(
@@ -58,7 +59,7 @@ class SecretsAdminMixin(SpaceBase):
             ):
                 return
             row = await self._identity(tx, identity_id)
-            await tx.put_credentials(identity_id, payload)
+            await tx.put_credentials(identity_id, payload, value_fingerprint=value_fingerprint)
             if reset_auth and row.auth_state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
                 await apply_region_change(
                     self,
@@ -103,6 +104,7 @@ class SecretsAdminMixin(SpaceBase):
         if expires_at is None:
             expires_at = service.session_expiry(model)
         payload = self.hub._seal_stored_model(model, associated_data("ih_sessions", identity_id, slot))
+        value_fingerprint = self.hub._value_fingerprint(model)
         command = {"identity_id": identity_id, "slot": slot, "expires_at": expires_at, "mode": mode}
         async with self._tx(checked=idempotency_key is None) as tx:
             if not await self._claim_secret_command(tx, idempotency_key, "replace_session", command, model):
@@ -111,7 +113,13 @@ class SecretsAdminMixin(SpaceBase):
             fencing = await tx.current_fencing(identity_id, lock=True)
             written = (
                 await tx.put_session(
-                    identity_id, slot, payload, fencing=fencing, expires_at=expires_at, mode=mode
+                    identity_id,
+                    slot,
+                    payload,
+                    fencing=fencing,
+                    expires_at=expires_at,
+                    mode=mode,
+                    value_fingerprint=value_fingerprint,
                 )
                 if fencing is not None
                 else None
@@ -278,13 +286,20 @@ class CredentialsMixin(SpaceBase):
         if public is not None:
             validate_json_payload(public, "public_value")  # открытая часть: только JSON, с лимитом размера
         payload = self.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
+        value_fingerprint = self.hub._value_fingerprint(model)
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
             current = await tx.get_credential(identity_id, kind, name)
             if current is not None and current[1].lifecycle == REVOKED:
                 raise TransitionNotAllowed("credentials", REVOKED, ACTIVE, "revoked — конечное состояние")
             stored = await tx.put_credential(
-                identity_id, kind, name, payload, public_value=public, expires_at=expires_at
+                identity_id,
+                kind,
+                name,
+                payload,
+                public_value=public,
+                expires_at=expires_at,
+                value_fingerprint=value_fingerprint,
             )
             await self._credential_event(
                 tx, row, kind, name, "put", actor, fields=sorted(type(model).model_fields)

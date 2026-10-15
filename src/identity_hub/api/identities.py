@@ -217,6 +217,9 @@ class IdentityFilter:
     tags: Collection[str] = ()
     labels: Mapping[str, Any] = field(default_factory=dict)
     profile: Mapping[str, Any] = field(default_factory=dict)
+    without_link: str | Collection[str] | None = None
+    not_target_of: tuple[str, str | None] | None = None
+    is_target_of: tuple[str, str | None] | None = None
 
     def services(self) -> frozenset[str]:
         raw = self.service
@@ -250,6 +253,9 @@ class IdentityFilter:
             regions=regions,
             tags=frozenset(normalize_tag(tag) for tag in self.tags),
             filters=filters,
+            without_link=_values(self.without_link),
+            not_target_of=self.not_target_of,
+            is_target_of=self.is_target_of,
         )
 
 
@@ -299,12 +305,17 @@ class Identities(Namespace):
 
     async def find(
         self,
-        identity_id: UUID | None = None,
+        identity_id: UUID | IdentityFilter | None = None,
         *,
         service: str | Service | None = None,
         external_ref: str | None = None,
     ) -> Identity | None:
-        """Identity по id или по паре `(service, external_ref)`; нет в этом пространстве — `None`."""
+        """Identity по id, паре `(service, external_ref)` или первый по `IdentityFilter`; иначе `None`."""
+        if isinstance(identity_id, IdentityFilter):
+            if service is not None or external_ref is not None:
+                raise ValidationFailed("фильтр нельзя сочетать с service/external_ref")
+            page = await self.list(identity_id, limit=1)
+            return page.items[0] if page.items else None
         by_ref = service is not None or external_ref is not None
         if (identity_id is None) == (not by_ref) or (by_ref and (service is None or external_ref is None)):
             raise ValidationFailed("укажите identity_id или пару service и external_ref")

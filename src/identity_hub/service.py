@@ -207,6 +207,8 @@ class Service:
     credential_kinds: Mapping[str, type[BaseModel]] = field(default_factory=dict)
     # Default import acceptance policy; a per-import policy takes precedence (D-317).
     default_accept: AcceptPolicy | None = None
+    # Отклонённая адаптером пара сразу выключается из ручного выбора (D-319).
+    disable_rejected_credentials: bool = False
 
     def session_schema(self, slot: str) -> type[BaseModel]:
         """Схема конкретного слота; необъявленный слот использует прежнюю общую `session`."""
@@ -359,6 +361,8 @@ class Service:
             errors.append("session_auth_cookies: имена cookie должны быть непустыми строками")
         if self.default_accept is not None and not isinstance(self.default_accept, AcceptPolicy):
             errors.append("default_accept: нужен AcceptPolicy")
+        if not isinstance(self.disable_rejected_credentials, bool):
+            errors.append("disable_rejected_credentials: нужен bool")
         for code, state in self.standing_codes.items():
             if state not in set(Standing):
                 errors.append(f"standing_codes[{code!r}]: неизвестное состояние {state!r}")
