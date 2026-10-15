@@ -1,0 +1,16 @@
+{
+  "log": {
+    "version": "1.2",
+    "entries": [
+      {
+        "request": {"url": "https://example.test/account"},
+        "response": {
+          "cookies": [
+            {"name": "sid", "value": "har-secret", "path": "/", "httpOnly": true, "secure": true, "expires": "2033-05-18T03:33:20Z"},
+            {"name": "domain", "value": "yes", "domain": ".example.test", "path": "/"}
+          ]
+        }
+      }
+    ]
+  }
+}

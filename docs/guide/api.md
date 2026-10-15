@@ -112,6 +112,14 @@ response_url)`. Входящие заголовки разбираются ка�
 доступен только явным `reveal()`, а клиентские формы — через `dump.playwright()`,
 `dump.httpx()`, `dump.requests()` и `dump.aiohttp()`.
 
+Файловые формы: `cookies.dump.netscape(session_expires="zero" | "empty")`,
+`Cookies.load.netscape(text)` и `Cookies.load.har(har)`. Вызов `Cookies.load(data)` без имени
+формата распознаёт поддерживаемые JSON-диалекты, Netscape, строку `Cookie` (для неё обязателен
+`url=`) и base64 от них; `BrowserSession.load(data)` распознаёт `storage_state` и канонический
+JSON. Неизвестный ввод завершается `ValidationFailed`; pickle и Chrome `Cookies` SQLite не
+загружаются ни при каких условиях. Нестандартные строки принимают только явные шаблоны
+`identity_hub.formats.lines.load_account(...)` и `load_proxy(...)`.
+
 | `hub.sessionmaker` | фабрика сессий PostgreSQL для своей транзакции и `space.using(session)`; `None` для другого хранилища |
 | `hub.clock`, `hub.retention`, `hub.timezone`, `hub.admin_base_url`, `hub.db_schema` | настройки конструктора, только для чтения |
 | `hub.proxy_health`, `hub.webhook_policy`, `hub.webhook_dev_hosts` | политики прокси и доставки |

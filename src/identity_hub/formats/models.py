@@ -302,8 +302,29 @@ class CookiesDump(DumpNamespace[Any]):
 
         return scrapy.dump(self._value, strict=strict)
 
+    def netscape(
+        self,
+        *,
+        session_expires: Literal["zero", "empty"] = "zero",
+        strict: bool = False,
+    ) -> str:
+        from identity_hub.formats import netscape
+
+        return netscape.dump(self._value, session_expires=session_expires, strict=strict)
+
 
 class CookiesLoad(LoadNamespace[Any]):
+    def __call__(
+        self,
+        data: Any,
+        *,
+        strict: bool = False,
+        url: str | None = None,
+    ) -> Cookies:
+        from identity_hub.formats import autodetect
+
+        return autodetect.load_cookies(data, strict=strict, url=url)
+
     def json(self, data: Any, *, strict: bool = False) -> Cookies:
         from identity_hub.formats import json as json_format
 
@@ -355,6 +376,16 @@ class CookiesLoad(LoadNamespace[Any]):
         from identity_hub.formats import set_cookie
 
         return set_cookie.load(data, url=url, received_at=received_at, strict=strict)
+
+    def netscape(self, data: str | bytes, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import netscape
+
+        return netscape.load(data, strict=strict)
+
+    def har(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import har
+
+        return har.load(data, strict=strict)
 
 
 class Cookies(RootModel[list[Cookie]]):
@@ -416,6 +447,11 @@ class BrowserSessionDump(DumpNamespace[Any]):
 
 
 class BrowserSessionLoad(LoadNamespace[Any]):
+    def __call__(self, data: Any, *, strict: bool = False) -> BrowserSession:
+        from identity_hub.formats import autodetect
+
+        return autodetect.load_browser_session(data, strict=strict)
+
     def json(self, data: Any, *, strict: bool = False) -> BrowserSession:
         from identity_hub.formats import json as json_format
 

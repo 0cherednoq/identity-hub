@@ -1,0 +1,2 @@
+# Netscape HTTP Cookie File
+example.test	FALSE	/	FALSE		session	value

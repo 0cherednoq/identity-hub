@@ -23,6 +23,9 @@
 - HTTP-конвертеры cookie для `http.cookiejar`, aiohttp, `Set-Cookie` и Scrapy, включая строгую
   host-only политику; маскированный `ProxyUrl` формирует аргументы Playwright, httpx, requests
   и aiohttp через `lease.proxy.dump.*`.
+- Netscape/curl и HAR, безопасное автоопределение JSON/Netscape/Cookie/base64 в
+  `Cookies.load(...)` и Playwright/canonical JSON в `BrowserSession.load(...)`; pickle и Chrome
+  Cookies SQLite явно отвергаются. Строки продавцов разбираются только по заданному шаблону.
 - `LoginFailure(code, retryable=, fault=, raw_status=)` и `LoginFailureCode`: адаптер входа
   сообщает безопасный машинный отказ, видимый в карточке, событии и durable operation.
 - `Fault.until` для временных `limited` и `banned`; бан со сроком автоматически снимается

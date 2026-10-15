@@ -1,0 +1,3 @@
+# Netscape HTTP Cookie File
+#HttpOnly_.example.test	TRUE	/	TRUE	2000000000	sid	secret
+example.test	FALSE	/account	FALSE	0	host	only
