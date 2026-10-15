@@ -65,6 +65,7 @@ class Command:
     clear_code: bool = False
     until: datetime | None = None
     reason: str | None = None
+    retryable: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,7 @@ class RegionState:
     observed_at: datetime | None = None
     pending_observation: str | None = None
     pinned_until: datetime | None = None
+    retryable: bool | None = None
 
     def is_pinned(self, now: datetime) -> bool:
         return self.pinned_until is not None and self.pinned_until > now
@@ -280,9 +282,10 @@ def _apply_command(
         if cmd.until is not None and (until is None or cmd.until > until):
             until = cmd.until
         code = None if cmd.clear_code else (cmd.code if cmd.code is not None else cur.code)
-        if until == cur.until and code == cur.code:
+        retryable = cmd.retryable
+        if until == cur.until and code == cur.code and retryable == cur.retryable:
             return RegionDecision(Outcome.UNCHANGED, cur, cur)
-        new = replace(cur, until=until, code=code, version=cur.version + 1)
+        new = replace(cur, until=until, code=code, retryable=retryable, version=cur.version + 1)
         events = _changed_events(spec, cur, new, key) if code != cur.code else ()
         return RegionDecision(Outcome.APPLIED, cur, new, events)
     if not spec.can_command(cur.state, cmd.to):
@@ -299,6 +302,7 @@ def _apply_command(
         changed_by=cmd.actor,
         change_reason=cmd.reason,
         pending_observation=None,
+        retryable=cmd.retryable,
         version=cur.version + 1,
     )
     return RegionDecision(Outcome.APPLIED, cur, new, _changed_events(spec, cur, new, key))
@@ -352,6 +356,7 @@ def _apply_observation(
         changed_by=obs.actor,
         change_reason=None,
         pending_observation=None,
+        retryable=None,
     )
     return RegionDecision(Outcome.APPLIED, cur, new, _changed_events(spec, cur, new, key))
 
@@ -376,6 +381,7 @@ def _apply_override(
         change_reason=ov.reason,
         pending_observation=None,
         pinned_until=now + ov.pin_for if ov.pin_for else None,
+        retryable=None,
         version=cur.version + 1,
     )
     overridden = RegionEvent(
@@ -445,6 +451,7 @@ def _apply_timer(spec: RegionSpec, cur: RegionState, timer: Timer, now: datetime
         changed_by=timer.actor,
         change_reason=None,
         pending_observation=None,
+        retryable=None,
         version=cur.version + 1,
     )
     return RegionDecision(Outcome.APPLIED, cur, new, _changed_events(spec, cur, new, key))

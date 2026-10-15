@@ -173,6 +173,7 @@ class Maintenance:
                 report.add("leases", await tx.expire_leases(self.schedule.batch_size))
         # операции провайдера с истёкшим claim — без сетевого I/O (IMP-11, D-223)
         report.add("provider_operations", await self.hub._provider_worker.run_once(self.schedule.batch_size))
+        report.add("acceptance", await self.hub.workers.acceptance.run_once(self.schedule.batch_size))
         return report
 
     def _retention(self) -> dict[str, timedelta]:

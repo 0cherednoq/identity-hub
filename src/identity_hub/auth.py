@@ -231,8 +231,13 @@ class LoginMixin(SpaceBase):
                     lease = await pool.acquire(query=query)
                 except LeaseUnavailable:
                     break
-                attempts += 1
                 query = replace(query, exclude=query.exclude | {lease.identity_id})  # одна попытка на аккаунт
+                async with self._tx(own=True) as tx:
+                    auth = await tx.load_region(lease.identity_id, "auth", DEFAULT_SLOT)
+                if auth is not None and auth.retryable is False:
+                    await lease.release()
+                    continue
+                attempts += 1
                 outcome, error = await self._login(lease, svc, None, None, None, report.operations)
                 _record(report, lease.identity_id, outcome, error)
         return report
@@ -427,6 +432,7 @@ class LoginMixin(SpaceBase):
                     result={"outcome": "failed", "retryable": failure.retryable},
                     error_code=failure.code,
                     auth_code=failure.code,
+                    auth_retryable=failure.retryable,
                     fault=fault,
                     previous=challenge,
                 )
@@ -575,6 +581,7 @@ class LoginMixin(SpaceBase):
         result: dict[str, Any] | None = None,
         error_code: str | None = None,
         auth_code: str | None = None,
+        auth_retryable: bool | None = None,
         fault: Fault | None = None,
         session: Any = None,
         session_expires_at: datetime | None = None,
@@ -601,7 +608,7 @@ class LoginMixin(SpaceBase):
                 lease.identity_id,
                 "auth",
                 DEFAULT_SLOT,
-                Command(state, actor=lease.holder, code=auth_code),
+                Command(state, actor=lease.holder, code=auth_code, retryable=auth_retryable),
                 lease_id=lease.lease_id,
             )
             if event is not None:

@@ -111,20 +111,42 @@ senders = space.pools.define(
 ввести SMS-код и только потом пустить в работу.
 
 ```python
-report = await space.imports.run(service=TELEGRAM, records=read_supplier_csv(path), actor="operator")
-# все в provisioning, auth = no_session
+from identity_hub import AcceptPolicy, ImportRecord, PasswordCredentials
 
-async def onboarding_tick(space):          # запускать по расписанию, например раз в минуту
-    batch = await space.auth.login_many(service=TELEGRAM, limit=20)
-    for identity_id in batch.succeeded:
-        await space.identities.activate(identity_id, actor="onboarding")
-    for identity_id, error in batch.failed.items():
-        log.warning("вход не удался: %s %s", identity_id, error)
+TELEGRAM = Service(
+    ...,
+    credentials=PasswordCredentials,
+    default_accept=AcceptPolicy(
+        activate_on_login=True,
+        retire_on=frozenset({"credentials_rejected", "identity_banned", "banned"}),
+        max_attempts=3,
+    ),
+)
+
+def email_password_lines(path):
+    for line in path.read_text().splitlines():
+        email, password = line.split(maxsplit=1)
+        yield ImportRecord(email, credentials={"username": email, "password": password})
+
+report = await space.imports.run(
+    service=TELEGRAM,
+    records=email_password_lines(path),
+    actor="operator",
+)
+# В отдельном broker/worker-процессе; maintenance вызывает тот же worker автоматически.
+processed = await hub.workers.acceptance.run_once(limit=20)
 ```
 
-`auth.login_many` берёт аккаунты в `no_session` и `session_invalid`, поэтому неудачные попытки
-будут повторяться на каждом тике — ограничьте число попыток своим счётчиком (например, в
-`data.save`) и выводите безнадёжные аккаунты через `identities.retire`.
+Политика хранится вместе с durable-отметкой партии. Успешный вход переводит аккаунт в `ready`,
+заданные окончательные коды — в `retired`, а временный отказ остаётся в `provisioning` до
+следующего запуска и не превышает `max_attempts`. `retryable=False` блокирует автоматические
+повторы и в worker, и в `auth.login_many`; заменить credentials и разрешить новую проверку можно
+через `secrets.replace_credentials(..., reset_auth=True)`.
+
+Импорт сессий при непустой политике по умолчанию использует `verify_sessions=True`, поэтому
+наличие сессии не обходит проверку. Явный `verify_sessions=False` оставляет прежнее поведение и
+выдаёт предупреждение: уже `authenticated` аккаунт будет принят без нового логина. Без
+`accept=` и без `Service.default_accept` импорт, как раньше, оставляет аккаунт приложению.
 
 Оператор получает Telegram-уведомление о `identity.challenge.opened`, вводит код в вашем UI,
 тот вызывает `space.auth.answer_challenge(challenge_id, code, actor="operator")`. Подписчик на

@@ -1,5 +1,6 @@
 """Публичный API Identity Hub."""
 
+from identity_hub.acceptance import AcceptPolicy
 from identity_hub.api.batch import BatchRejection, BatchResult
 from identity_hub.api.identities import (
     CreateManyResult,
@@ -162,6 +163,7 @@ from identity_hub.verifications import Verification
 __version__ = "1.0.0a2"
 
 __all__ = [
+    "AcceptPolicy",
     "AlreadyExists",
     "ApiKey",
     "AttemptsExhausted",

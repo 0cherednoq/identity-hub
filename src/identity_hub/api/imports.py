@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from identity_hub.acceptance import AcceptPolicy
 from identity_hub.api._base import Namespace
 from identity_hub.errors import NotFound
 from identity_hub.importing import BatchHook, ImportRecord, ImportReport, OnExisting
@@ -35,7 +36,8 @@ class Imports(Namespace):
         records: Iterable[ImportRecord] | AsyncIterable[ImportRecord],
         batch_size: int = 500,
         on_existing: OnExisting | str = OnExisting.SKIP,
-        verify_sessions: bool = False,
+        verify_sessions: bool | None = None,
+        accept: AcceptPolicy | None = None,
         on_batch_committed: BatchHook | None = None,
         actor: str,
         run_id: UUID | None = None,
@@ -60,6 +62,7 @@ class Imports(Namespace):
             batch_size=batch_size,
             on_existing=on_existing,
             verify_sessions=verify_sessions,
+            accept=accept,
             on_batch_committed=on_batch_committed,
             actor=actor,
             run_id=run_id,
@@ -74,7 +77,8 @@ class Imports(Namespace):
         paths: Iterable[str | Path],
         batch_size: int = 500,
         on_existing: OnExisting | str = OnExisting.SKIP,
-        verify_sessions: bool = False,
+        verify_sessions: bool | None = None,
+        accept: AcceptPolicy | None = None,
         on_batch_committed: BatchHook | None = None,
         actor: str,
         run_id: UUID | None = None,
@@ -97,6 +101,7 @@ class Imports(Namespace):
             batch_size=batch_size,
             on_existing=on_existing,
             verify_sessions=verify_sessions,
+            accept=accept,
             on_batch_committed=on_batch_committed,
             actor=actor,
             run_id=run_id,

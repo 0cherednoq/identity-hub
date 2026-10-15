@@ -16,6 +16,7 @@ import pydantic_core
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
+from identity_hub.acceptance import Workers
 from identity_hub.admin_audit import AdminAuditMixin
 from identity_hub.api.admin import Admin
 from identity_hub.api.analytics import Analytics
@@ -201,6 +202,7 @@ class IdentityHub:
         self.dispatcher.add_pump(self._notification_dispatcher.deliver_due)
         self._import_runner = ImportRunner(self)
         self._provider_worker = ProviderOperationsWorker(self)  # восстановление операций провайдера (D-223)
+        self.workers = Workers(self)
         self.dispatcher.add_pump(self._import_runner.run_once)
         self.maintenance = Maintenance(self, maintenance)
         self.dispatcher.add_pump(self.maintenance.run_due)

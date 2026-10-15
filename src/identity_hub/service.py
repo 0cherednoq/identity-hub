@@ -17,6 +17,7 @@ from typing import Any, get_args
 
 from pydantic import BaseModel, ConfigDict
 
+from identity_hub.acceptance import AcceptPolicy
 from identity_hub.domain.region_specs import REGIONS
 from identity_hub.domain.regions import Normalizer, RegionSpec
 from identity_hub.domain.verification import VERIFICATION, VerificationSpec, VerificationTier
@@ -204,6 +205,8 @@ class Service:
     normalize_ref_version: int = 0
     # виды credentials кроме `default` (его схема — `credentials`): пароль, TOTP, API-ключи (IMP-09)
     credential_kinds: Mapping[str, type[BaseModel]] = field(default_factory=dict)
+    # Default import acceptance policy; a per-import policy takes precedence (D-317).
+    default_accept: AcceptPolicy | None = None
 
     def session_schema(self, slot: str) -> type[BaseModel]:
         """Схема конкретного слота; необъявленный слот использует прежнюю общую `session`."""
@@ -354,6 +357,8 @@ class Service:
             errors.append(f"searchable_profile: нет в схеме profile: {sorted(unknown_searchable)}")
         if any(not isinstance(name, str) or not name for name in self.session_auth_cookies):
             errors.append("session_auth_cookies: имена cookie должны быть непустыми строками")
+        if self.default_accept is not None and not isinstance(self.default_accept, AcceptPolicy):
+            errors.append("default_accept: нужен AcceptPolicy")
         for code, state in self.standing_codes.items():
             if state not in set(Standing):
                 errors.append(f"standing_codes[{code!r}]: неизвестное состояние {state!r}")

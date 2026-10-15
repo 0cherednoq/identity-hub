@@ -62,6 +62,7 @@ from identity_hub.store.base import (
     NO_LEASE_OPTIONS,
     PICK_DEMOTE_CHUNK,
     UNREADABLE_IMPORT_ITEM,
+    AcceptanceRow,
     AttentionChallengeRow,
     AttentionIdentityRow,
     CandidateQuery,
@@ -207,6 +208,7 @@ class _MemoryState:
     operation_keys: dict[tuple[str, str], _IdempotencyRecord] = field(default_factory=dict)
     import_runs: dict[UUID, ImportRunRow] = field(default_factory=dict)
     import_items: dict[tuple[UUID, int], dict[str, Any]] = field(default_factory=dict)
+    acceptance: dict[UUID, AcceptanceRow] = field(default_factory=dict)
     provider_operations: dict[UUID, ProviderOperationRow] = field(default_factory=dict)
     proxies: dict[UUID, ProxyRow] = field(default_factory=dict)
     proxy_load: dict[UUID, int] = field(default_factory=dict)
@@ -709,6 +711,7 @@ class MemoryTx(StoreTx):
         if self._own(identity_id) is None:
             return False
         del self.state.identities[identity_id]
+        self.state.acceptance.pop(identity_id, None)
         self.state.probe_attempts.pop(identity_id, None)
         # как каскад в PostgreSQL: строка аренды уходит, а её незакрытая история закрывается (R2-D14)
         stale = self.state.leases.pop(identity_id, None)
@@ -2985,6 +2988,43 @@ class MemoryTx(StoreTx):
             for key in [key for key in self.state.import_items if key[0] == run_id]:
                 del self.state.import_items[key]
         return deepcopy(row)
+
+    async def enqueue_acceptance(self, identity_ids: Sequence[UUID], policy: dict[str, Any]) -> int:
+        inserted = 0
+        for identity_id in identity_ids:
+            if self._own(identity_id) is None or identity_id in self.state.acceptance:
+                continue
+            self.state.acceptance[identity_id] = AcceptanceRow(
+                identity_id=identity_id,
+                space_id=self.space.id,
+                policy=deepcopy(policy),
+                attempts=0,
+                created_at=self._now,
+                updated_at=self._now,
+            )
+            inserted += 1
+        return inserted
+
+    async def list_acceptance(self, *, limit: int = 100) -> list[AcceptanceRow]:
+        rows = [row for row in self.state.acceptance.values() if row.space_id == self.space.id]
+        rows.sort(key=lambda row: (row.created_at, row.identity_id))
+        return deepcopy(rows[:limit])
+
+    async def update_acceptance(
+        self, identity_id: UUID, *, attempts: int | None = None, done: bool = False
+    ) -> bool:
+        row = self.state.acceptance.get(identity_id)
+        if row is None or row.space_id != self.space.id:
+            return False
+        if done:
+            del self.state.acceptance[identity_id]
+        else:
+            self.state.acceptance[identity_id] = replace(
+                row,
+                attempts=row.attempts if attempts is None else attempts,
+                updated_at=self._now,
+            )
+        return True
 
     async def enqueue_provider_operation(
         self,

@@ -131,6 +131,7 @@ HUB_PUBLIC = {
     "events",
     "dispatcher",
     "maintenance",
+    "workers",
     "doctor",
     "equivalence_tag",
     "metrics",

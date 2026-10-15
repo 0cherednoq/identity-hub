@@ -37,10 +37,10 @@
 | S6.4 | Файлы и автоопределение | S6.1, S6.2 | done |  | `D-314` |
 | S6.5 | Отпечаток: `dump`/`load` | S6.1, S6.2 | done |  | `D-314` |
 | S6.6 | Интеграция с хабом и документация | S5.2, S6.1, S6.2, S6.3, S6.4, S6.5 | done |  | `D-314`; закрытие S5–S6 |
-| S7.1 | `AcceptPolicy`: модель, дефолт сервиса, постановка на приёмку | — | todo |  | запрос владельца, `D-315` |
-| S7.2 | `AcceptanceWorker`: применение политики, retryable, закрытие фазы | S7.1 | todo |  | `D-315` |
+| S7.1 | `AcceptPolicy`: модель, дефолт сервиса, постановка на приёмку | — | done |  | запрос владельца, `D-317` |
+| S7.2 | `AcceptanceWorker`: применение политики, retryable, закрытие фазы | S7.1 | done |  | `D-317` |
 
-**Итого:** 17 / 19 done
+**Итого:** 19 / 19 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -60,3 +60,5 @@
 2026-10-15 · S6.4 · done · Netscape/HAR, safe autodetect, base64, explicit line templates and unsafe binary rejection; 51 passed, 2 optional skipped
 2026-10-15 · S6.5 · done · Browserforge/fingerprint-suite, browser and antidetect dumps, versioned impersonation targets; 93 passed, 2 optional skipped
 2026-10-16 · S6.6 · done · Hub integration, nested fingerprint filters, guide/traceability; full check 2128 passed, 5 skipped; anti-flake 3x60 passed
+2026-10-16 · S7.1 · done · AcceptPolicy, default_accept, migration 0034 and bulk durable queue; 6 tests on MemoryStore/PostgreSQL
+2026-10-16 · S7.2 · done · AcceptanceWorker, auth retryable and import checker docs; full check 2136 passed, 5 skipped; anti-flake 3x68 passed

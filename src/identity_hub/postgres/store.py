@@ -97,6 +97,7 @@ from identity_hub.postgres import schema_options
 from identity_hub.postgres.migrate import SCHEMA_COMPATIBLE, SCHEMA_HEAD, VERSION_TABLE
 from identity_hub.postgres.models import (
     XID8,
+    AcceptanceRecord,
     BindingRecord,
     ChallengeRecord,
     CredentialsRecord,
@@ -137,6 +138,7 @@ from identity_hub.store.base import (
     NOTIFY_CHANNEL,
     PICK_DEMOTE_CHUNK,
     UNREADABLE_IMPORT_ITEM,
+    AcceptanceRow,
     AttentionChallengeRow,
     AttentionIdentityRow,
     CandidateQuery,
@@ -300,6 +302,7 @@ def _stored_payload(row: Any) -> StoredPayload:
 
 NOTIFICATION_RULES = cast(Table, NotificationRuleRecord.__table__)
 NOTIFICATIONS = cast(Table, NotificationRecord.__table__)
+ACCEPTANCE = cast(Table, AcceptanceRecord.__table__)
 PROXY_FIELDS = tuple(f.name for f in fields(ProxyRow))
 LEASE_HISTORY_FIELDS = tuple(f.name for f in fields(LeaseHistoryRow))
 IDENTITY_FIELDS = tuple(f.name for f in fields(IdentityRow))
@@ -4364,6 +4367,58 @@ class PgTx(StoreTx):
         if state == "cancelled":
             await self.execute(delete(IMPORT_ITEMS).where(IMPORT_ITEMS.c.run_id == run_id))
         return await self.get_import_run(run_id)
+
+    async def enqueue_acceptance(self, identity_ids: Sequence[UUID], policy: dict[str, Any]) -> int:
+        if not identity_ids:
+            return 0
+        result = await self.execute(
+            insert(ACCEPTANCE)
+            .values(
+                [
+                    {"identity_id": identity_id, "space_id": self.space.id, "policy": policy}
+                    for identity_id in identity_ids
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=[ACCEPTANCE.c.identity_id])
+        )
+        return int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def list_acceptance(self, *, limit: int = 100) -> list[AcceptanceRow]:
+        rows = (
+            await self.execute(
+                select(ACCEPTANCE)
+                .where(ACCEPTANCE.c.space_id == self.space.id)
+                .order_by(ACCEPTANCE.c.created_at, ACCEPTANCE.c.identity_id)
+                .limit(limit)
+            )
+        ).mappings()
+        return [
+            AcceptanceRow(
+                identity_id=row["identity_id"],
+                space_id=row["space_id"],
+                policy=dict(row["policy"]),
+                attempts=row["attempts"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
+    async def update_acceptance(
+        self, identity_id: UUID, *, attempts: int | None = None, done: bool = False
+    ) -> bool:
+        condition = and_(
+            ACCEPTANCE.c.identity_id == identity_id,
+            ACCEPTANCE.c.space_id == self.space.id,
+        )
+        if done:
+            result = await self.execute(delete(ACCEPTANCE).where(condition))
+        else:
+            values: dict[str, Any] = {"updated_at": func.now()}
+            if attempts is not None:
+                values["attempts"] = attempts
+            result = await self.execute(update(ACCEPTANCE).where(condition).values(**values))
+        return bool(result.rowcount)  # type: ignore[attr-defined]
 
     async def enqueue_provider_operation(
         self,

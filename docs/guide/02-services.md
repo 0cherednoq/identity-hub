@@ -59,6 +59,7 @@ TELEGRAM = Service(
 | `verifications`, `tiers` | `()` | Факторы и уровни верификации → [верификация](06-verification.md) |
 | `quarantine_threshold` | `5.0` | Порог `error_score` для автоматического карантина |
 | `importers` | `()` | Ваши читатели файлов для `imports.run_files` |
+| `default_accept` | `None` | Политика проверки новых импортированных аккаунтов через `hub.workers.acceptance` |
 
 Пустая модель запрещает лишние поля: если сервис не объявил `session`, передать сессию нельзя.
 

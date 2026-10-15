@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
+from identity_hub.acceptance import AcceptPolicy
 from identity_hub.crypto import associated_data, reveal
 from identity_hub.crypto.envelope import DecryptionFailed
 from identity_hub.domain.credentials import CredentialInput
@@ -113,18 +114,30 @@ class ImportingMixin(SpaceBase):
         records: Iterable[ImportRecord] | AsyncIterable[ImportRecord],
         batch_size: int = 500,
         on_existing: OnExisting | str = OnExisting.SKIP,
-        verify_sessions: bool = False,
+        verify_sessions: bool | None = None,
+        accept: AcceptPolicy | None = None,
         on_batch_committed: BatchHook | None = None,
         actor: str = "import",
         run_id: UUID | None = None,
         max_identities: int = 3,
         on_batch: BatchHook | None = None,
+        _use_default_accept: bool = True,
     ) -> ImportReport:
         """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`.
 
         `max_identities` — ёмкость прокси, которые импорт создаёт из `ImportRecord.proxy`.
         """
         svc = self.hub.service(service)
+        accept_policy = (
+            accept if accept is not None else (svc.default_accept if _use_default_accept else None)
+        )
+        if verify_sessions is None:
+            verify_sessions = accept_policy is not None
+        elif accept_policy is not None and not verify_sessions:
+            logger.warning(
+                "import acceptance for service %s uses verify_sessions=False; existing sessions skip login",
+                svc.name,
+            )
         mode = OnExisting(on_existing)
         if max_identities < 1:
             raise ValidationFailed("max_identities ≥ 1")
@@ -144,6 +157,7 @@ class ImportingMixin(SpaceBase):
                     run_id,
                     max_identities,
                     on_batch=on_batch,
+                    accept=accept_policy,
                 )
                 batch = []
         if batch:
@@ -158,6 +172,7 @@ class ImportingMixin(SpaceBase):
                 run_id,
                 max_identities,
                 on_batch=on_batch,
+                accept=accept_policy,
             )
         return report
 
@@ -286,6 +301,7 @@ class ImportingMixin(SpaceBase):
         max_identities: int = 3,
         *,
         on_batch: BatchHook | None = None,
+        accept: AcceptPolicy | None = None,
     ) -> None:
         from identity_hub.identities import prepare_identity
 
@@ -392,6 +408,8 @@ class ImportingMixin(SpaceBase):
                     if item.record.links:
                         to_link.append(item)
                 await self._import_links(tx, svc, to_link, inserted)
+                if created and accept is not None:
+                    await tx.enqueue_acceptance(created, accept.dump())
                 if created or updated:  # пачка из одних обновлений тоже видна в событиях (R2-F24)
                     await self._emit(
                         tx,
@@ -739,6 +757,7 @@ class ImportRunner:
             verify_sessions=run.verify_sessions,
             actor=run.actor,
             run_id=run.id,
+            _use_default_accept=False,
         )
         created = set(report.created)
         skipped = {external_ref: reason for external_ref, reason in report.skipped}

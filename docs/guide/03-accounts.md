@@ -225,7 +225,7 @@ result.skipped      # уже существовавшие (только при o
 ## Импорт
 
 ```python
-from identity_hub import ImportRecord, OnExisting
+from identity_hub import AcceptPolicy, ImportRecord, OnExisting
 
 records = [
     ImportRecord(
@@ -245,7 +245,9 @@ report = await space.imports.run(
     records=records,                 # список, генератор или async-генератор
     batch_size=500,
     on_existing=OnExisting.SKIP,     # SKIP | UPDATE_SESSION | FAIL
-, actor="operator")
+    accept=AcceptPolicy(activate_on_login=True, max_attempts=3),
+    actor="operator",
+)
 report.created, report.updated, report.skipped, report.failed   # списки id / (ref, причина)
 ```
 
@@ -271,6 +273,10 @@ report.created, report.updated, report.skipped, report.failed   # списки i
   свежие. Запись сопоставляется с аккаунтом по нормализованному `external_ref`. С
   `verify_sessions=True` новая сессия не считается рабочей: `auth` аккаунта становится
   `no_session`, пока её не подтвердит вход или проба.
+- **Приёмка.** `accept=` ставит только созданные аккаунты в durable-очередь
+  `hub.workers.acceptance`; `Service.default_accept` задаёт политику по умолчанию. При политике
+  `verify_sessions` по умолчанию включён. Без политики импорт не запускает вход и сохраняет
+  прежнее поведение.
 - Пачка, в которой есть созданные или обновлённые аккаунты, порождает событие
   `identity.imported` (`count`, `updated`, `skipped`).
 - `space.imports.stage(...)` — фоновый импорт до 10 000 записей: данные сохраняются

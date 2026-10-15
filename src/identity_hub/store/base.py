@@ -34,6 +34,7 @@ __all__ = [
     "PICK_DEMOTE_CHUNK",
     "ROTATION_TABLES",
     "UNREADABLE_IMPORT_ITEM",
+    "AcceptanceRow",
     "AttentionChallengeRow",
     "AttentionIdentityRow",
     "CandidateQuery",
@@ -168,6 +169,16 @@ class ImportItemResult:
     external_ref: str | None = None
     error_code: str | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptanceRow:
+    identity_id: UUID
+    space_id: UUID
+    policy: dict[str, Any]
+    attempts: int
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -1915,6 +1926,20 @@ class StoreTx(ABC):
     @abstractmethod
     async def request_import_cancel(self, run_id: UUID) -> ImportRunRow | None:
         """Stop new claims and cancel now or after the currently claimed batch."""
+
+    @abstractmethod
+    async def enqueue_acceptance(self, identity_ids: Sequence[UUID], policy: dict[str, Any]) -> int:
+        """Mark imported identities for acceptance in one bulk store operation (D-317)."""
+
+    @abstractmethod
+    async def list_acceptance(self, *, limit: int = 100) -> list[AcceptanceRow]:
+        """Oldest pending acceptance entries in this transaction's space."""
+
+    @abstractmethod
+    async def update_acceptance(
+        self, identity_id: UUID, *, attempts: int | None = None, done: bool = False
+    ) -> bool:
+        """Advance an acceptance entry or remove it after a terminal outcome."""
 
     @abstractmethod
     async def enqueue_provider_operation(
