@@ -851,26 +851,37 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
   Правило приёмки «не брать, когда все отклонены» (S9.2) применяется только к аккаунтам, у
   которых есть креды нужного вида и все непригодны; аккаунт с нулём кредов под него не подпадает.
 
-**2. Типизированный доступ по схеме.**
-- Сейчас `credentials()`/`credential()`/`session()`/`active_credential()` возвращают
-  `BaseModel | None` — IDE и mypy не видят полей схемы сервиса. Добавить необязательный параметр
-  `schema`, типизирующий результат:
+**2. Типизированный доступ: generic-контекст (основной) + `schema=` (запасной).**
+- Сделать `Service`, `Pool`, `Lease`, `LoginContext`, `Authenticator` **дженериками** по типам
+  кредов и сессии: `Service[TCreds, TSession]`, `Pool[TCreds, TSession]`, `Lease[...]`,
+  `LoginContext[...]`. Это только уровень типов; в рантайме ничего не меняется, дженерики
+  стираются, схему для валидации по-прежнему держит `Service`.
+- **Аренда типизируется из значения сервиса** — без аннотаций и `schema=`, потому что `Service`
+  передаётся в `pool()`:
   ```python
-  @overload
-  async def credentials(self, schema: type[M]) -> M | None: ...
-  @overload
-  async def credentials(self) -> BaseModel | None: ...
+  TELEGRAM: Service[TgCredentials, TgSession] = Service(credentials=TgCredentials, session=TgSession, ...)
+  async with space.pool(TELEGRAM).lease() as lease:     # Pool[TgCredentials, TgSession]
+      creds = await lease.active_credential("default")  # → TgCredentials | None
+      sess  = await lease.session()                     # → TgSession | None
   ```
-  То же для `credential(kind, name, schema=...)`, `session(slot, schema=...)`,
-  `active_credential(kind, schema=...)`. Переданная схема проверяется на совпадение с
-  `Service.credential_schema(kind)`/`session_schema(slot)` (иначе `ValidationFailed`), результат
-  типизирован ей.
+- **Контекст входа типизируется аннотацией подписи** (один раз на функцию): внутри `login` объекта
+  `Service` нет, тип приходит из сигнатуры:
   ```python
-  creds = await ctx.active_credential("default", schema=TgCredentials)  # тип TgCredentials | None
+  async def tg_login(ctx: LoginContext[TgCredentials, TgSession]) -> TgSession:
+      creds = await ctx.active_credential("default")    # → TgCredentials | None, без schema=
   ```
-- Форма без `schema` остаётся (возвращает `BaseModel | None`) для совместимости. Автоматический
-  вывод типа из `Service` без аргумента не вводится: контекст не параметризован типами сервиса,
-  поэтому схема передаётся явно — это даёт точный тип для mypy без магии.
+- **`schema=` остаётся запасным** — для именованных видов/слотов, которые один generic-параметр не
+  покрывает, и для ad-hoc:
+  ```python
+  totp = await ctx.credential("totp", schema=TotpSecret)
+  api  = await ctx.session("api", schema=ApiTokens)
+  ```
+  `credentials`/`credential`/`session`/`active_credential` получают `@overload` с `schema`;
+  переданная схема сверяется с `Service.credential_schema(kind)`/`session_schema(slot)` (иначе
+  `ValidationFailed`).
+- **Совместимость:** `Service` без параметров = `Service[BaseModel, BaseModel]`; весь существующий
+  код и тесты продолжают тайпчекаться и работать. Дженерики инвариантны по умолчанию — проверить
+  вариантность на типах кредов/сессии и зафиксировать.
 
 - Приёмка (`AcceptanceWorker`) и примеры адаптеров используют `active_credential`, чтобы «взять
   рабочую» было одной строкой.
@@ -879,10 +890,12 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
   CHANGELOG.
 - `tests/test_server_admins_traceability.py` покрывает `S11.*`.
 - **DoD:** `active_credential` отдаёт первую пригодную (active, не просрочена, не `reject`) и
-  `None`, когда таких нет; доступен на `lease` и `ctx`; с `schema` результат типизирован (проверка
-  mypy в тесте типов), несовпадение схемы — `ValidationFailed`; форма без `schema` работает как
-  прежде; адаптер берёт рабочую без цикла; оба бэкенда; полный `bash scripts/check.sh` зелёный;
-  все задачи `S11` в статусе `done`/`cancelled` с записью `D-NNN`.
+  `None`, когда таких нет или кредов нет; доступен на `lease` и `ctx`; **generic-вывод**: в
+  тесте типов `space.pool(SVC).lease().active_credential()` и `ctx.credentials()` имеют тип
+  схемы сервиса без `schema=` (mypy); `schema=` типизирует именованные виды/слоты,
+  несовпадение — `ValidationFailed`; код без параметров тайпчекается как прежде; адаптер берёт
+  рабочую без цикла; оба бэкенда; полный `bash scripts/check.sh` зелёный; все задачи `S11` в
+  статусе `done`/`cancelled` с записью `D-NNN`.
 
 ---
 
