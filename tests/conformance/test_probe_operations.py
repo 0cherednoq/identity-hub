@@ -13,7 +13,7 @@ from tests.fixtures.services import FAKE_TG
 
 from identity_hub import IdentityCreate, IdentityHub, Override, ProbeResult, SpaceHandle
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.asyncio, pytest.mark.conformance]
 
 
 class GatedProbes:

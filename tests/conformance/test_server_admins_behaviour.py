@@ -31,7 +31,7 @@ from identity_hub.domain.regions import Outcome
 from identity_hub.read.events import EventFilters
 from identity_hub.rollups import BucketSize
 
-pytestmark = [pytest.mark.anyio, pytest.mark.conformance]
+pytestmark = [pytest.mark.asyncio, pytest.mark.conformance]
 
 
 class FailingAuthenticator:
