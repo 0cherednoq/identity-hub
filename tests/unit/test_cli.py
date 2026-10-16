@@ -120,7 +120,11 @@ async def _rotation_hub(keys: dict[str, bytes]) -> IdentityHub:
     """Хаб с одним прокси под `k1`; затем процесс «перезапущен» с набором `keys` и активным `k2`."""
     from identity_hub.crypto import Envelope
 
-    hub = IdentityHub(store=MemoryStore(), secrets=StaticSecretsProvider({"k1": _K1}, "k1"))
+    hub = IdentityHub(
+        store=MemoryStore(),
+        secrets=StaticSecretsProvider({"k1": _K1}, "k1"),
+        secret_storage="encrypted",
+    )
     await hub.start()
     await hub.space("main", "Main", create=True).proxies.create("http://user:pw@10.0.0.1:8080", group="g")
     hub._envelope = Envelope(StaticSecretsProvider(keys, "k2"))
@@ -193,7 +197,7 @@ def test_secrets_convert_and_doctor_warning(capsys: pytest.CaptureFixture[str]) 
 
     plaintext_factory = f"{__name__}:plaintext_hub_factory"
     assert main(["doctor", "--factory", plaintext_factory]) == 0
-    assert "warning: credentials и сессии хранятся открытыми: 2" in capsys.readouterr().out
+    assert "warning: секреты хранятся открытыми: 2" in capsys.readouterr().out
 
 
 def test_keygen_prints_usable_key(capsys: pytest.CaptureFixture[str]) -> None:

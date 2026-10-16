@@ -169,11 +169,13 @@ async def _fingerprints_with_optional_session(
 class CandidateAuthenticator:
     async def login(self, ctx: Any) -> TgSession:
         bad = await ctx.active_credential("default")
-        assert bad is not None and bad.password.get_secret_value() == "bad"
-        await ctx.reject_credential("default", name="bad", code="wrong_password")
+        assert bad is not None and bad.value.password.get_secret_value() == "bad"
+        assert bad.key == ("default", "bad")
+        await ctx.reject_credential(bad.kind, name=bad.name, code="wrong_password")
         good = await ctx.active_credential("default")
-        assert good is not None and good.password.get_secret_value() == "good"
-        await ctx.verify_credential("default", name="good")
+        assert good is not None and good.value.password.get_secret_value() == "good"
+        assert good.key == ("default", "good")
+        await ctx.verify_credential(good.kind, name=good.name)
         return TgSession(auth_key=SecretStr("accepted"))
 
 
@@ -209,8 +211,9 @@ async def test_authenticator_marks_losing_and_winning_pairs_atomically(
     lease = await space.pools.define("validity-active", service=service).acquire()
     try:
         active = await lease.active_credential(schema=TgCredentials)
-        assert active is not None and active.password is not None
-        assert active.password.get_secret_value() == "good"
+        assert active is not None and active.value.password is not None
+        assert active.key == ("default", "good")
+        assert active.value.password.get_secret_value() == "good"
         assert await lease.credentials(schema=TgCredentials) is None  # legacy default name remains exact
         assert set(await lease.active_credentials()) == {("default", "good")}
         assert await lease.credential("default", "bad") is not None  # точечный доступ сохранён
@@ -229,13 +232,16 @@ class ShortcutAuthenticator:
 
     async def login(self, ctx: Any) -> TgSession:
         self.calls += 1
+        candidate = await ctx.active_credential("default")
+        assert candidate is not None
         if self.calls == 1:
             raise LoginFailure(
                 "credentials_rejected",
                 retryable=False,
-                credential=("default", "default"),
+                credential=candidate.key,
             )
-        await ctx.verify_credential("default", name="fresh")
+        assert candidate.name == "fresh"
+        await ctx.verify_credential(candidate.kind, name=candidate.name)
         return TgSession(auth_key=SecretStr("fresh-session"))
 
 

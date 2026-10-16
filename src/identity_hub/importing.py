@@ -263,8 +263,8 @@ class ImportingMixin(SpaceBase):
         items = [
             NewImportItem(
                 position=position,
-                payload=self.hub._envelope.seal(
-                    pydantic_core.to_json(_record_payload(record)),
+                payload=self.hub._seal_stored_json(
+                    _record_payload(record),
                     _import_aad(import_id, position),
                 ),
             )
@@ -511,8 +511,8 @@ class ImportingMixin(SpaceBase):
         fencing = await tx.current_fencing(identity_id, lock=True)
         for slot, payload in item.prepared.sessions.items():
             # шифротекст привязан к id записи импорта через AAD — перешифровать под существующий id
-            session = self.hub._envelope.open_json(payload, _aad(item.prepared.row.id, slot))
-            resealed = self.hub._envelope.seal(_to_json(session), _aad(identity_id, slot))
+            session = self.hub._open_stored_json(payload, _aad(item.prepared.row.id, slot))
+            resealed = self.hub._seal_stored_json(session, _aad(identity_id, slot))
             await tx.put_session(
                 identity_id,
                 slot,
@@ -871,7 +871,7 @@ class ImportRunner:
         results: list[ImportItemResult] = []
         for item in claimed:
             try:
-                raw = self.hub._envelope.open_json(item.payload, _import_aad(run.id, item.position))
+                raw = self.hub._open_stored_json(item.payload, _import_aad(run.id, item.position))
                 records.append((item, _payload_record(raw)))
             except DecryptionFailed:
                 # ключа нет или шифртекст повреждён: запись остаётся в БД, прогон завершится failed

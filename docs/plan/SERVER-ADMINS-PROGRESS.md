@@ -1,6 +1,6 @@
 # Прогресс исправлений по ишью server-admins
 
-> Единственный источник правды о статусе очереди `S` (ишью 01–08 из `docs/isue/server-admins/`, аудит `docs/isue/09-assessment.md`; запросы владельца `D-311`–`D-314`).
+> Единственный источник правды о статусе очереди `S` (ишью 01–12 из `docs/isue/server-admins/`, первичный аудит 01–08 в `docs/isue/09-assessment.md`; запросы владельца `D-311`–`D-314`).
 > Обновляется в том же коммите, что и код задачи.
 > Статусы: `todo` · `in_progress` · `done` · `blocked` · `cancelled`.
 > Спецификация: [`SERVER-ADMINS-PLAN.md`](SERVER-ADMINS-PLAN.md).
@@ -10,11 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** S20.2 Финальная сверка и выпуск исправления
+- **Начата:** 2026-10-16
 - **Шаги:**
-  - [ ] —
-- **Заметки для следующей сессии:** —
+  - [x] сводные targeted и typing проверки
+  - [x] PostgreSQL gate после D-323 migration 0037
+  - [x] полный scripts/check.sh (эквивалентный split-run)
+  - [ ] версия, changelog и release
+  - [ ] публичная установка из PyPI
+- **Заметки для следующей сессии:** S13.1/S13.2 и S17-S20 реализованы локально; полный split-gate — 2191 passed, 5 skipped, Ruff/mypy/import-lint green. Остались версия/release и проверка PyPI.
 
 ## Статус задач
 
@@ -50,8 +54,16 @@
 | S11.2 | Доступ к кредам: `active_credential` и типизация | — | done |  | `D-321` |
 | S12.1 | Формат `eazy` в конвертерах cookies и сессии | — | done |  | запрос владельца, `D-322` |
 | S12.2 | `lease.session_revision` и модуль `integrations.eazy` | S12.1 | done |  | `D-322` |
+| S13.1 | Plaintext для всех секретных хранилищ | — | done |  | `D-323`; миграция `0037` |
+| S13.2 | Plaintext по умолчанию | S13.1 | done |  | `D-323` |
+| S17.1 | Ключ и значение из `active_credential` | — | done |  | issue 09, P0 |
+| S17.2 | Временный обход и миграция документации | S17.1 | done |  | issue 09 |
+| S18.1 | `retryable` в карточке identity | — | done |  | issue 10, P1 |
+| S19.1 | `put_credential(reset_auth=...)` | — | done |  | issue 11, P1 |
+| S20.1 | Ревизия схемы в changelog и release-gate | — | done |  | issue 12, P1 |
+| S20.2 | Финальная сверка и выпуск исправления | S17.1, S17.2, S18.1, S19.1, S20.1 | in_progress |  | закрытие issues 09–12 |
 
-**Итого:** 30 / 30 done
+**Итого:** 37 / 38 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -84,3 +96,11 @@
 2026-10-16 · S11.2 · done · active_credential, generic schema typing и schema= validation · дальше S12.1
 2026-10-16 · S12.1 · done · eazy cookie primitives и lazy CookieState bridge · дальше S12.2
 2026-10-16 · S12.2 · done · session_revision и fenced HubSessionStore; split full gate 2173 passed, 5 skipped · очередь закрыта
+2026-10-16 · S17.1 · done · CredentialCandidate(kind, name, value), точная пометка отказа; Ruff, mypy 165 files, 29 targeted passed · дальше S17.2
+2026-10-16 · S17.2 · done · обход ограничен версиями <=1.0.0a3; guides и исторический план используют CredentialCandidate; 13 docs/public tests passed · дальше S18.1
+2026-10-16 · S18.1 · done · RegionInfo.retryable, admin API/UI tri-state; Memory 16 passed, admin 1 passed; PostgreSQL gate отложен из-за незавершённой D-323 schema 0037 · дальше S19.1
+2026-10-16 · S19.1 · done · put_credential(reset_auth=True), общий транзакционный helper, rollback/session/authenticated тесты; Memory 16 passed, Ruff/mypy green; PostgreSQL gate в S20.2 · дальше S20.1
+2026-10-16 · S20.1 · done · CHANGELOG и GitHub Release исправлены на 0036; pre-build release metadata gate, 6 tests passed · дальше S20.2
+2026-10-16 · S13.1 · done · migration 0037, dual-format всех девяти наборов, doctor round-trip и защищённый downgrade; 39 targeted passed · дальше S13.2
+2026-10-16 · S13.2 · done · plaintext стал дефолтом, encrypted fixtures явные, guides/CLI/warning обновлены · дальше S20.2 full gate
+2026-10-16 · S20.2 · in_progress · полный эквивалент scripts/check.sh: 2191 passed, 5 skipped; Ruff, mypy 166 files и import-lint green · дальше version/release/PyPI

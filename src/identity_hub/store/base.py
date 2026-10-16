@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID
 
 from identity_hub.clock import Clock
-from identity_hub.crypto.envelope import EncryptedPayload, StoredPayload
+from identity_hub.crypto.envelope import StoredPayload
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import LeaseEndReason
 from identity_hub.errors import SecretConfigurationError
@@ -149,7 +149,7 @@ class NewImportRun:
 @dataclass(frozen=True, slots=True)
 class NewImportItem:
     position: int
-    payload: EncryptedPayload
+    payload: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +157,7 @@ class ImportItemRow:
     run_id: UUID
     position: int
     claim_token: int
-    payload: EncryptedPayload
+    payload: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,7 +398,7 @@ class NewIdentity:
     labels: dict[str, Any]
     note: str | None
     search_text: str
-    profile_secret: EncryptedPayload | None = None
+    profile_secret: StoredPayload | None = None
     normalized_ref: str = ""  # пусто — `external_ref.strip()` (нормализация по умолчанию)
     normalize_version: int = 0
 
@@ -645,7 +645,7 @@ class NewProxy:
     port: int
     fingerprint: str
     max_identities: int
-    secret: EncryptedPayload
+    secret: StoredPayload
     fingerprint_key_id: str | None = None
     # отпечатки того же адреса и логина другими ключами кольца и прежний SHA-256 (D-207)
     aliases: tuple[str, ...] = ()
@@ -673,7 +673,7 @@ class ProxyRow:
     pending_observation: str | None
     max_identities: int
     created_at: datetime
-    secret: EncryptedPayload
+    secret: StoredPayload
     fingerprint_key_id: str | None = None  # NULL — SHA-256 до миграции 0018
     # намерение оператора (D-224): выключенный прокси не выдаётся и не трогается автоматикой
     enabled: bool = True
@@ -787,9 +787,10 @@ class ChallengeRow:
     identity_id: UUID
     kind: str
     hint: str
-    context: EncryptedPayload
+    context: StoredPayload
     answer_nonce: bytes | None
     answer_ciphertext: bytes | None
+    answer_payload: str | None
     created_at: datetime
     expires_at: datetime | None
     answered_at: datetime | None
@@ -805,7 +806,7 @@ class VerificationRow:
     submitted_at: datetime | None
     verified_at: datetime | None
     expires_at: datetime | None
-    evidence: EncryptedPayload | None
+    evidence: StoredPayload | None
     via_identity_id: UUID | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -995,7 +996,7 @@ class NewWebhookEndpoint:
     event_types: list[str]
     filter: dict[str, Any]
     min_severity: str
-    secret: EncryptedPayload
+    secret: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1012,7 +1013,7 @@ class WebhookEndpointRow:
     disabled_reason: str | None
     failure_streak: int
     created_at: datetime
-    secret: EncryptedPayload
+    secret: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1052,7 +1053,7 @@ class WebhookAttempt:
     attempt: int
     endpoint_id: UUID
     url: str
-    secret: EncryptedPayload
+    secret: StoredPayload
     event: Event
 
 
@@ -1061,7 +1062,7 @@ class NewNotificationChannel:
     id: UUID
     title: str
     config: dict[str, Any]
-    secret: EncryptedPayload
+    secret: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1077,7 +1078,7 @@ class NotificationChannelRow:
 class NotificationChannelSecretRow:
     id: UUID
     config: dict[str, Any]
-    secret: EncryptedPayload
+    secret: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1113,7 +1114,7 @@ class NotificationTargetRow:
     rule: NotificationRuleRow
     space_slug: str
     channel_config: dict[str, Any]
-    channel_secret: EncryptedPayload
+    channel_secret: StoredPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1133,7 +1134,7 @@ class NotificationAttempt:
     channel_id: UUID
     template: str | None
     channel_config: dict[str, Any]
-    channel_secret: EncryptedPayload
+    channel_secret: StoredPayload
     events: tuple[Event, ...]
 
 
@@ -1333,10 +1334,10 @@ class StoreTx(ABC):
     # --------------------------------------------------------- данные аккаунта (P2.5)
 
     @abstractmethod
-    async def get_profile_secret(self, identity_id: UUID) -> EncryptedPayload | None: ...
+    async def get_profile_secret(self, identity_id: UUID) -> StoredPayload | None: ...
 
     @abstractmethod
-    async def set_profile_secret(self, identity_id: UUID, payload: EncryptedPayload | None) -> None: ...
+    async def set_profile_secret(self, identity_id: UUID, payload: StoredPayload | None) -> None: ...
 
     @abstractmethod
     async def incoming_links(self, identity_id: UUID) -> list[tuple[UUID, str]]:
@@ -1611,7 +1612,7 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def set_proxy_secret(
-        self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload, *, fingerprint_key_id: str | None
+        self, proxy_id: UUID, fingerprint: str, secret: StoredPayload, *, fingerprint_key_id: str | None
     ) -> bool:
         """Заменить логин и пароль прокси (шифртекст) вместе с отпечатком."""
 
@@ -1713,7 +1714,7 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def save_verification(
-        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: EncryptedPayload | None = None
+        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: StoredPayload | None = None
     ) -> None:
         """Upsert строки ih_verifications; `evidence` — перезаписать доказательства."""
 
@@ -1824,7 +1825,7 @@ class StoreTx(ABC):
         identity_id: UUID,
         kind: str,
         hint: str,
-        context: EncryptedPayload,
+        context: StoredPayload,
         expires_at: datetime | None,
     ) -> bool:
         """False — у аккаунта уже открыт challenge (FR-5.5, уникальный частичный индекс)."""
@@ -1836,7 +1837,14 @@ class StoreTx(ABC):
     async def open_challenge_of(self, identity_id: UUID) -> ChallengeRow | None: ...
 
     @abstractmethod
-    async def answer_challenge(self, challenge_id: UUID, nonce: bytes, ciphertext: bytes) -> bool:
+    async def answer_challenge(
+        self,
+        challenge_id: UUID,
+        nonce: bytes | None = None,
+        ciphertext: bytes | None = None,
+        *,
+        plaintext: str | None = None,
+    ) -> bool:
         """Сохранить зашифрованный ответ; False — challenge уже закрыт."""
 
     @abstractmethod
@@ -1870,7 +1878,7 @@ class StoreTx(ABC):
     async def get_webhook_endpoint(self, endpoint_id: UUID) -> WebhookEndpointRow | None: ...
 
     @abstractmethod
-    async def update_webhook_secret(self, endpoint_id: UUID, secret: EncryptedPayload) -> bool: ...
+    async def update_webhook_secret(self, endpoint_id: UUID, secret: StoredPayload) -> bool: ...
 
     @abstractmethod
     async def update_webhook_endpoint(
@@ -1920,7 +1928,7 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def update_notification_channel(
-        self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
+        self, channel_id: UUID, values: dict[str, Any], secret: StoredPayload | None
     ) -> bool: ...
 
     @abstractmethod

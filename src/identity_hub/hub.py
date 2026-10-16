@@ -98,7 +98,7 @@ if TYPE_CHECKING:
 
 __all__ = ["IdentityHub", "Retention", "SpaceBase", "SpaceHandle", "Spaces"]
 
-PLAINTEXT_SECRET_WARNING = "credentials и сессии хранятся открытыми"
+PLAINTEXT_SECRET_WARNING = "секреты хранятся открытыми"
 
 
 @dataclass(frozen=True)
@@ -145,7 +145,7 @@ class IdentityHub:
         metrics: MetricsHook | None = None,
         timezone: str = "UTC",
         migrate: str = "check",
-        secret_storage: str = "encrypted",
+        secret_storage: str = "plaintext",
     ) -> None:
         if migrate not in ("check", "auto", "off"):
             raise ValidationFailed("migrate: check, auto или off")
@@ -233,7 +233,7 @@ class IdentityHub:
         self._proxy_exhausted_at: dict[tuple[str, str, str], float] = {}
 
     def _seal_stored_model(self, model: BaseModel | Mapping[str, Any], aad: bytes) -> StoredPayload:
-        """Подготовить credentials/session в выбранном формате; прочие секреты сюда не идут."""
+        """Подготовить любой секрет (credentials/session/proxy/profile/…) в выбранном формате (D-323)."""
         if self._secret_storage == "encrypted":
             return self._envelope.seal_model(model, aad)
         encoded = pydantic_core.to_json(reveal(model))
@@ -249,6 +249,21 @@ class IdentityHub:
         if isinstance(payload, PlaintextPayload):
             return schema.model_validate(payload.value)
         return self._envelope.open_model(schema, payload, aad)
+
+    def _seal_stored_json(self, value: Any, aad: bytes) -> StoredPayload:
+        """То же для сырого JSON-объекта (стейджинг импорта): без схемы модели (D-323)."""
+        if self._secret_storage == "encrypted":
+            return self._envelope.seal(pydantic_core.to_json(value), aad)
+        if len(pydantic_core.to_json(value)) > MAX_SECRET_BYTES:
+            raise ValidationFailed(f"секрет больше {MAX_SECRET_BYTES // 1024} KiB")
+        if not isinstance(value, dict):
+            raise ValidationFailed("секрет должен быть JSON-объектом")
+        return PlaintextPayload(value)
+
+    def _open_stored_json(self, payload: StoredPayload, aad: bytes) -> Any:
+        if isinstance(payload, PlaintextPayload):
+            return payload.value
+        return self._envelope.open_json(payload, aad)
 
     def _value_fingerprint(self, model: BaseModel | Mapping[str, Any]) -> str:
         """HMAC канонического JSON значения credentials/session; наружу не возвращается."""

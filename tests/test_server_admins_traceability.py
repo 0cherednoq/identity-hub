@@ -28,7 +28,7 @@ def _progress() -> dict[str, str]:
 def test_every_server_admins_issue_is_traced() -> None:
     issue_numbers = {int(path.name[:2]) for path in ISSUES.glob("[0-9][0-9]-*.md") if path.name[:2].isdigit()}
     matrix = _matrix()
-    assert issue_numbers == set(range(1, 9)) == set(matrix)
+    assert issue_numbers == set(range(1, 13)) == set(matrix)
     for number, cell in matrix.items():
         if number == 8:
             assert cell.strip() == "не выполняется"

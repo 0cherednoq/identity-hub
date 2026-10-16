@@ -99,7 +99,6 @@ def prepare_identity(
     if str(lifecycle) not in set(Lifecycle):
         raise ValidationFailed(f"lifecycle: неизвестное значение {lifecycle!r}")
     identity_id = identity_id or new_id()
-    envelope = space.hub._envelope
 
     attrs = validate_model(service.attributes, attributes or {}, "attributes").model_dump(mode="json")
     profile_model = validate_model(service.profile, profile or {}, "profile")
@@ -151,7 +150,7 @@ def prepare_identity(
         session_expirations[slot] = service.session_expiry(model)
         session_fingerprints[slot] = space.hub._value_fingerprint(model)
     profile_secret = (
-        envelope.seal_model(secret_profile, associated_data("ih_identities", identity_id, "profile"))
+        space.hub._seal_stored_model(secret_profile, associated_data("ih_identities", identity_id, "profile"))
         if secret_profile
         else None
     )
@@ -524,7 +523,7 @@ class IdentitiesMixin(SpaceBase):
             model = validate_model(service.profile, merged, "profile")
             open_part, secret = split_profile(service, model)
             payload = (
-                self.hub._envelope.seal_model(secret, associated_data("ih_identities", row.id, "profile"))
+                self.hub._seal_stored_model(secret, associated_data("ih_identities", row.id, "profile"))
                 if secret
                 else None
             )
@@ -576,7 +575,7 @@ class IdentitiesMixin(SpaceBase):
                 open_part, secret = split_profile(service, model)
                 values["profile"] = open_part
                 values[_PROFILE_SECRET] = (
-                    self.hub._envelope.seal_model(secret, associated_data("ih_identities", row.id, "profile"))
+                    self.hub._seal_stored_model(secret, associated_data("ih_identities", row.id, "profile"))
                     if secret
                     else None
                 )
@@ -649,7 +648,7 @@ class IdentitiesMixin(SpaceBase):
                 secret = await tx.get_profile_secret(identity_id)
                 if secret is not None:
                     aad = associated_data("ih_identities", identity_id, "profile")
-                    profile |= self.hub._envelope.open_json(secret, aad)
+                    profile |= self.hub._open_stored_json(secret, aad)
             values = mutate(row, profile)
             for field in ("profile", "labels", "attributes"):
                 if field in values:

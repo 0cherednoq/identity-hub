@@ -23,6 +23,7 @@ from identity_hub import (
     LoginOutcome,
     Observation,
     Override,
+    RevisionConflict,
     SpaceHandle,
     Standing,
     TransitionNotAllowed,
@@ -122,7 +123,9 @@ async def test_login_failure_code_is_in_card_event_and_operation(
 
     assert await space.auth.login(identity_id) is LoginOutcome.FAILED
     assert (await space.identities.get(identity_id)).auth_code == "credentials_rejected"
-    assert (await _region(space, identity_id, "auth")).code == "credentials_rejected"
+    auth_region = await _region(space, identity_id, "auth")
+    assert auth_region.code == "credentials_rejected"
+    assert auth_region.retryable is False
     events = await space.admin.event_page(
         filters=EventFilters(type="identity.login.failed", include_journal=True)
     )
@@ -152,6 +155,21 @@ async def test_login_failure_code_is_in_card_event_and_operation(
         group_by="code",
     )
     assert [group.key for group in series.groups] == ["credentials_rejected"]
+
+
+async def test_retryable_login_failure_is_visible_in_card(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    identity_id = await _login_identity(
+        hub_under_test,
+        space,
+        "sa_login_retryable_card",
+        LoginFailure("temporary", retryable=True),
+    )
+
+    assert await space.auth.login(identity_id) is LoginOutcome.FAILED
+    assert (await _region(space, identity_id, "auth")).retryable is True
+    assert (await _region(space, identity_id, "lifecycle")).retryable is None
 
 
 async def test_login_failure_fault_applies_ban_and_cooling(
@@ -477,6 +495,82 @@ async def test_replace_credentials_resets_auth_code_only_when_requested(
     assert auth.state == "no_session" and auth.code is None
     access = await space.secrets.describe(identity_id)
     assert access.sessions and access.sessions[0].status == "active"
+
+
+async def test_put_credential_resets_auth_only_when_requested(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    identity_id = await _login_identity(
+        hub_under_test,
+        space,
+        "sa_put_reset_auth",
+        LoginFailure("credentials_rejected", retryable=False),
+    )
+    await space.secrets.replace_session(
+        identity_id, {"auth_key": "still-valid"}, actor="admin", mode="replace"
+    )
+    assert await space.auth.login(identity_id) is LoginOutcome.FAILED
+
+    revision = (await space.identities.get(identity_id)).revision
+    await space.secrets.put_credential(
+        identity_id,
+        "default",
+        {"phone": "+201"},
+        name="fresh",
+        actor="admin",
+        expected_revision=revision,
+    )
+    unchanged = await _region(space, identity_id, "auth")
+    assert unchanged.code == "credentials_rejected" and unchanged.retryable is False
+
+    revision = (await space.identities.get(identity_id)).revision
+    with pytest.raises(RevisionConflict):
+        await space.secrets.put_credential(
+            identity_id,
+            "default",
+            {"phone": "+202"},
+            name="newer",
+            actor="admin",
+            expected_revision=revision - 1,
+            reset_auth=True,
+        )
+    assert (await _region(space, identity_id, "auth")).code == "credentials_rejected"
+    assert "newer" not in {item.name for item in (await space.secrets.credentials(identity_id))}
+
+    await space.secrets.put_credential(
+        identity_id,
+        "default",
+        {"phone": "+202"},
+        name="newer",
+        actor="admin",
+        expected_revision=revision,
+        reset_auth=True,
+    )
+    auth = await _region(space, identity_id, "auth")
+    assert auth.state == "no_session" and auth.code is None and auth.retryable is None
+    access = await space.secrets.describe(identity_id)
+    assert access.sessions and access.sessions[0].status == "active"
+
+    service = hub_under_test.service("sa_put_reset_auth")
+    authenticated = await space.identities.create(
+        IdentityCreate(
+            service=service.name,
+            external_ref="sa-put-reset-authenticated",
+            lifecycle="ready",
+            credentials={"phone": "+203"},
+            sessions={"default": {"auth_key": "authenticated"}},
+        ),
+        actor="test",
+    )
+    assert (await space.identities.get(authenticated.id)).auth == "authenticated"
+    await space.secrets.put_credential(
+        authenticated.id,
+        "default",
+        {"phone": "+204"},
+        actor="admin",
+        reset_auth=True,
+    )
+    assert (await space.identities.get(authenticated.id)).auth == "authenticated"
 
 
 async def test_reset_auth_participates_in_credentials_idempotency(

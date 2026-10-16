@@ -282,23 +282,27 @@ def _resume_deliveries(endpoint_id: UUID) -> Any:
 NOTIFICATION_CHANNELS = cast(Table, NotificationChannelRecord.__table__)
 
 
-def _stored_payload_columns(payload: StoredPayload) -> dict[str, Any]:
+def _stored_payload_columns(payload: StoredPayload, prefix: str = "") -> dict[str, Any]:
+    p = prefix
     if isinstance(payload, PlaintextPayload):
         return {
-            "payload": payload.value,
-            "key_id": None,
-            "wrapped_dek": None,
-            "nonce": None,
-            "ciphertext": None,
+            f"{p}payload": payload.value,
+            f"{p}key_id": None,
+            f"{p}wrapped_dek": None,
+            f"{p}nonce": None,
+            f"{p}ciphertext": None,
         }
-    return {"payload": None, **payload.columns()}
+    return {f"{p}payload": None, **payload.columns(p)}
 
 
-def _stored_payload(row: Any) -> StoredPayload:
-    value = row["payload"]
+def _stored_payload(row: Any, prefix: str = "") -> StoredPayload:
+    p = prefix
+    value = row[f"{p}payload"]
     if value is not None:
         return PlaintextPayload(dict(value))
-    return EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
+    return EncryptedPayload(
+        row[f"{p}key_id"], row[f"{p}wrapped_dek"], row[f"{p}nonce"], row[f"{p}ciphertext"]
+    )
 
 
 NOTIFICATION_RULES = cast(Table, NotificationRuleRecord.__table__)
@@ -574,7 +578,7 @@ class PgTx(StoreTx):
             "search_text": row.search_text,
         }
         if row.profile_secret is not None:
-            values |= row.profile_secret.columns("profile_")
+            values |= _stored_payload_columns(row.profile_secret, "profile_")
         stmt = insert(IDENTITIES).values(**values).on_conflict_do_nothing()
         return bool((await self.execute(stmt)).rowcount)  # type: ignore[attr-defined]
 
@@ -937,27 +941,39 @@ class PgTx(StoreTx):
 
     # --------------------------------------------------------- данные аккаунта
 
-    async def get_profile_secret(self, identity_id: UUID) -> EncryptedPayload | None:
+    async def get_profile_secret(self, identity_id: UUID) -> StoredPayload | None:
         c = IDENTITIES.c
         row = (
-            await self.execute(
-                select(c.profile_key_id, c.profile_wrapped_dek, c.profile_nonce, c.profile_ciphertext).where(
-                    c.id == identity_id, c.space_id == self.space.id
+            (
+                await self.execute(
+                    select(
+                        c.profile_key_id,
+                        c.profile_wrapped_dek,
+                        c.profile_nonce,
+                        c.profile_ciphertext,
+                        c.profile_payload,
+                    ).where(c.id == identity_id, c.space_id == self.space.id)
                 )
             )
-        ).one_or_none()
-        if row is None or row.profile_ciphertext is None:
-            return None
-        return EncryptedPayload(
-            row.profile_key_id, row.profile_wrapped_dek, row.profile_nonce, row.profile_ciphertext
+            .mappings()
+            .one_or_none()
         )
+        if row is None or (row["profile_ciphertext"] is None and row["profile_payload"] is None):
+            return None
+        return _stored_payload(row, "profile_")
 
-    async def set_profile_secret(self, identity_id: UUID, payload: EncryptedPayload | None) -> None:
+    async def set_profile_secret(self, identity_id: UUID, payload: StoredPayload | None) -> None:
         values: dict[str, Any] = (
-            payload.columns("profile_")
+            _stored_payload_columns(payload, "profile_")
             if payload
             else dict.fromkeys(
-                ("profile_key_id", "profile_wrapped_dek", "profile_nonce", "profile_ciphertext")
+                (
+                    "profile_key_id",
+                    "profile_wrapped_dek",
+                    "profile_nonce",
+                    "profile_ciphertext",
+                    "profile_payload",
+                )
             )
         )
         await self.update_identity(identity_id, values)
@@ -2238,7 +2254,7 @@ class PgTx(StoreTx):
                 fingerprint=row.fingerprint,
                 fingerprint_key_id=row.fingerprint_key_id,
                 max_identities=row.max_identities,
-                **row.secret.columns(),
+                **_stored_payload_columns(row.secret),
             )
             .on_conflict_do_nothing(index_elements=[PROXIES.c.space_id, PROXIES.c.fingerprint])
             .returning(PROXIES.c.id)
@@ -2281,7 +2297,7 @@ class PgTx(StoreTx):
                             "fingerprint": row.fingerprint,
                             "fingerprint_key_id": row.fingerprint_key_id,
                             "max_identities": row.max_identities,
-                            **row.secret.columns(),
+                            **_stored_payload_columns(row.secret),
                         }
                         for row in pending.values()
                     ]
@@ -2365,12 +2381,16 @@ class PgTx(StoreTx):
         return found
 
     async def set_proxy_secret(
-        self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload, *, fingerprint_key_id: str | None
+        self, proxy_id: UUID, fingerprint: str, secret: StoredPayload, *, fingerprint_key_id: str | None
     ) -> bool:
         result = await self.execute(
             update(PROXIES)
             .where(PROXIES.c.id == proxy_id, PROXIES.c.space_id == self.space.id)
-            .values(fingerprint=fingerprint, fingerprint_key_id=fingerprint_key_id, **secret.columns())
+            .values(
+                fingerprint=fingerprint,
+                fingerprint_key_id=fingerprint_key_id,
+                **_stored_payload_columns(secret),
+            )
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -2929,7 +2949,7 @@ class PgTx(StoreTx):
         identity_id: UUID,
         kind: str,
         hint: str,
-        context: EncryptedPayload,
+        context: StoredPayload,
         expires_at: datetime | None,
     ) -> bool:
         stmt = (
@@ -2941,7 +2961,7 @@ class PgTx(StoreTx):
                 kind=kind,
                 hint=hint,
                 expires_at=expires_at,
-                **context.columns("context_"),
+                **_stored_payload_columns(context, "context_"),
             )
             .on_conflict_do_nothing()
         )
@@ -2977,7 +2997,14 @@ class PgTx(StoreTx):
         )
         return _challenge_row(row) if row else None
 
-    async def answer_challenge(self, challenge_id: UUID, nonce: bytes, ciphertext: bytes) -> bool:
+    async def answer_challenge(
+        self,
+        challenge_id: UUID,
+        nonce: bytes | None = None,
+        ciphertext: bytes | None = None,
+        *,
+        plaintext: str | None = None,
+    ) -> bool:
         result = await self.execute(
             update(CHALLENGES)
             .where(
@@ -2985,7 +3012,12 @@ class PgTx(StoreTx):
                 CHALLENGES.c.space_id == self.space.id,
                 CHALLENGES.c.resolved_at.is_(None),
             )
-            .values(answer_nonce=nonce, answer_ciphertext=ciphertext, answered_at=func.now())
+            .values(
+                answer_nonce=nonce,
+                answer_ciphertext=ciphertext,
+                answer_payload=plaintext,
+                answered_at=func.now(),
+            )
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -2994,7 +3026,7 @@ class PgTx(StoreTx):
             update(CHALLENGES)
             .where(CHALLENGES.c.id == challenge_id, CHALLENGES.c.resolved_at.is_(None))
             # ответ (SMS-код, пароль 2FA) после закрытия не нужен: шифртекст не хранится (R2-F20)
-            .values(resolved_at=func.now(), answer_nonce=None, answer_ciphertext=None)
+            .values(resolved_at=func.now(), answer_nonce=None, answer_ciphertext=None, answer_payload=None)
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -3030,13 +3062,8 @@ class PgTx(StoreTx):
         if row is None:
             return None
         evidence = (
-            EncryptedPayload(
-                row["evidence_key_id"],
-                row["evidence_wrapped_dek"],
-                row["evidence_nonce"],
-                row["evidence_ciphertext"],
-            )
-            if row["evidence_ciphertext"] is not None
+            _stored_payload(row, "evidence_")
+            if (row["evidence_ciphertext"] is not None or row["evidence_payload"] is not None)
             else None
         )
         return VerificationRow(
@@ -3051,11 +3078,11 @@ class PgTx(StoreTx):
         )
 
     async def save_verification(
-        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: EncryptedPayload | None = None
+        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: StoredPayload | None = None
     ) -> None:
         data = dict(values)
         if evidence is not None:
-            data |= evidence.columns("evidence_")
+            data |= _stored_payload_columns(evidence, "evidence_")
         stmt = insert(VERIFICATIONS).values(
             identity_id=identity_id, factor=factor, space_id=self.space.id, **data
         )
@@ -3831,7 +3858,7 @@ class PgTx(StoreTx):
             "event_types": row.event_types,
             "filter": row.filter,
             "min_severity": row.min_severity,
-            **row.secret.columns(),
+            **_stored_payload_columns(row.secret),
         }
         stored = (
             (await self.execute(insert(WEBHOOK_ENDPOINTS).values(**values).returning(WEBHOOK_ENDPOINTS)))
@@ -3855,14 +3882,14 @@ class PgTx(StoreTx):
         )
         return _webhook_endpoint_row(row, self.space.slug) if row else None
 
-    async def update_webhook_secret(self, endpoint_id: UUID, secret: EncryptedPayload) -> bool:
+    async def update_webhook_secret(self, endpoint_id: UUID, secret: StoredPayload) -> bool:
         result = await self.execute(
             update(WEBHOOK_ENDPOINTS)
             .where(
                 WEBHOOK_ENDPOINTS.c.id == endpoint_id,
                 WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
             )
-            .values(**secret.columns())
+            .values(**_stored_payload_columns(secret))
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -4026,7 +4053,7 @@ class PgTx(StoreTx):
                         kind="telegram",
                         title=row.title,
                         config=row.config,
-                        **row.secret.columns(),
+                        **_stored_payload_columns(row.secret),
                     )
                     .returning(NOTIFICATION_CHANNELS)
                 )
@@ -4064,15 +4091,15 @@ class PgTx(StoreTx):
         return NotificationChannelSecretRow(
             id=row["id"],
             config=dict(row["config"]),
-            secret=EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]),
+            secret=_stored_payload(row),
         )
 
     async def update_notification_channel(
-        self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
+        self, channel_id: UUID, values: dict[str, Any], secret: StoredPayload | None
     ) -> bool:
         changes = dict(values)
         if secret is not None:
-            changes.update(secret.columns())
+            changes.update(_stored_payload_columns(secret))
         if not changes:
             return await self._notification_channel_exists(channel_id)
         result = await self.execute(
@@ -4276,10 +4303,7 @@ class PgTx(StoreTx):
                             "run_id": run.id,
                             "position": item.position,
                             "space_id": self.space.id,
-                            "key_id": item.payload.key_id,
-                            "wrapped_dek": item.payload.wrapped_dek,
-                            "nonce": item.payload.nonce,
-                            "ciphertext": item.payload.ciphertext,
+                            **_stored_payload_columns(item.payload),
                         }
                         for item in items
                     ]
@@ -4373,6 +4397,7 @@ class PgTx(StoreTx):
                     IMPORT_ITEMS.c.wrapped_dek,
                     IMPORT_ITEMS.c.nonce,
                     IMPORT_ITEMS.c.ciphertext,
+                    IMPORT_ITEMS.c.payload,
                 )
             )
         ).all()
@@ -4386,7 +4411,7 @@ class PgTx(StoreTx):
                 run_id=row.run_id,
                 position=row.position,
                 claim_token=row.claim_token,
-                payload=EncryptedPayload(row.key_id, row.wrapped_dek, row.nonce, row.ciphertext),
+                payload=_stored_payload(row._mapping),
             )
             for row in sorted(rows, key=lambda item: item.position)
         ]
@@ -4998,7 +5023,7 @@ def _webhook_endpoint_row(row: Any, space_slug: str) -> WebhookEndpointRow:
         disabled_reason=row["disabled_reason"],
         failure_streak=row["failure_streak"],
         created_at=row["created_at"],
-        secret=EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]),
+        secret=_stored_payload(row),
     )
 
 
@@ -5050,11 +5075,10 @@ def _challenge_row(row: Any) -> ChallengeRow:
         identity_id=row["identity_id"],
         kind=row["kind"],
         hint=row["hint"],
-        context=EncryptedPayload(
-            row["context_key_id"], row["context_wrapped_dek"], row["context_nonce"], row["context_ciphertext"]
-        ),
+        context=_stored_payload(row, "context_"),
         answer_nonce=row["answer_nonce"],
         answer_ciphertext=row["answer_ciphertext"],
+        answer_payload=row["answer_payload"],
         created_at=row["created_at"],
         expires_at=row["expires_at"],
         answered_at=row["answered_at"],
@@ -5076,8 +5100,7 @@ def _new_cursor(consumer: str, start_now: bool) -> dict[str, Any]:
 
 def _proxy_row(row: Any) -> ProxyRow:
     values = {f: row[f] for f in PROXY_FIELDS if f != "secret"}
-    secret = EncryptedPayload(row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"])
-    return ProxyRow(**values, secret=secret)
+    return ProxyRow(**values, secret=_stored_payload(row))
 
 
 def _counter_values(counters: LeaseCounters) -> dict[str, Any]:
@@ -5826,6 +5849,7 @@ class PgStore(Store):
                         ep.wrapped_dek,
                         ep.nonce,
                         ep.ciphertext,
+                        ep.payload,
                     )
                     .select_from(WEBHOOK_DELIVERIES)
                     .join(WEBHOOK_ENDPOINTS, ep.id == d.endpoint_id)
@@ -5842,9 +5866,7 @@ class PgStore(Store):
                     attempt=row["delivery_attempt"],
                     endpoint_id=row["endpoint_id"],
                     url=row["endpoint_url"],
-                    secret=EncryptedPayload(
-                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
-                    ),
+                    secret=_stored_payload(row),
                     event=_event(row),
                 )
                 for row in rows
@@ -5988,6 +6010,7 @@ class PgStore(Store):
                         c.wrapped_dek,
                         c.nonce,
                         c.ciphertext,
+                        c.payload,
                     )
                     .join(NOTIFICATION_CHANNELS, c.id == r.channel_id)
                     .join(SPACES, SPACES.c.id == r.space_id)
@@ -6000,9 +6023,7 @@ class PgStore(Store):
                     rule=_notification_rule_row(row),
                     space_slug=row["space_slug"],
                     channel_config=dict(row["channel_config"]),
-                    channel_secret=EncryptedPayload(
-                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
-                    ),
+                    channel_secret=_stored_payload(row),
                 )
                 for row in rows
             ]
@@ -6101,6 +6122,7 @@ class PgStore(Store):
                             c.wrapped_dek,
                             c.nonce,
                             c.ciphertext,
+                            c.payload,
                         )
                         .join(NOTIFICATION_RULES, r.id == n.rule_id)
                         .join(NOTIFICATION_CHANNELS, c.id == n.channel_id)
@@ -6129,9 +6151,7 @@ class PgStore(Store):
                     channel_id=row["channel_id"],
                     template=row["template"],
                     channel_config=dict(row["channel_config"]),
-                    channel_secret=EncryptedPayload(
-                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
-                    ),
+                    channel_secret=_stored_payload(row),
                     events=tuple(events[event_id] for event_id in row["event_ids"] if event_id in events),
                 )
                 for row in rows
@@ -6788,14 +6808,18 @@ class PgStore(Store):
         limit: int,
         space: str | None = None,
     ) -> SecretConversionBatch:
-        target = {"credentials": CREDENTIALS, "sessions": SESSIONS}[table]
+        target, prefix, aad_of = self._rotation_specs()[table]
         c = target.c
-        wanted = c.ciphertext.is_not(None) if to == "plaintext" else c.payload.is_not(None)
+        wanted = (
+            c[f"{prefix}ciphertext"].is_not(None)
+            if to == "plaintext"
+            else c[f"{prefix}payload"].is_not(None)
+        )
         stmt = (
             select(target, SPACES.c.slug.label("_space_slug"))
             .join(SPACES, SPACES.c.id == c.space_id)
             .where(wanted)
-            .order_by(c.id)
+            .order_by(*target.primary_key.columns)
             .limit(limit)
             .with_for_update(of=target)
         )
@@ -6805,23 +6829,45 @@ class PgStore(Store):
         async with self._own() as session:
             rows = list((await _execute(session, stmt, execution_options=self.options)).mappings())
             for row in rows:
-                if table == "credentials":
-                    aad = credential_associated_data(row["identity_id"], row["kind"], row["name"])
-                else:
-                    aad = associated_data("ih_sessions", row["identity_id"], row["slot"])
+                aad = aad_of(row)
                 if to == "plaintext":
                     current = EncryptedPayload(
-                        row["key_id"], row["wrapped_dek"], row["nonce"], row["ciphertext"]
+                        row[f"{prefix}key_id"],
+                        row[f"{prefix}wrapped_dek"],
+                        row[f"{prefix}nonce"],
+                        row[f"{prefix}ciphertext"],
                     )
                     value = envelope.open_json(current, aad)
                     if not isinstance(value, dict):
                         raise ValidationFailed("секрет должен быть JSON-объектом")
                     payload: StoredPayload = PlaintextPayload(value)
                 else:
-                    payload = envelope.seal(pydantic_core.to_json(row["payload"]), aad)
+                    plaintext = PlaintextPayload(dict(row[f"{prefix}payload"]))
+                    payload = envelope.seal(pydantic_core.to_json(plaintext.value), aad)
+                changes = _stored_payload_columns(payload, prefix)
+                if table == "challenges":
+                    if to == "plaintext" and row["answer_ciphertext"] is not None:
+                        answer = envelope.open_sibling(
+                            current,
+                            aad,
+                            row["answer_nonce"],
+                            row["answer_ciphertext"],
+                            "answer",
+                        ).decode()
+                        changes.update(answer_nonce=None, answer_ciphertext=None, answer_payload=answer)
+                    elif to == "encrypted" and row["answer_payload"] is not None:
+                        assert isinstance(payload, EncryptedPayload)
+                        nonce, ciphertext = envelope.seal_sibling(
+                            payload, aad, row["answer_payload"].encode(), "answer"
+                        )
+                        changes.update(
+                            answer_nonce=nonce, answer_ciphertext=ciphertext, answer_payload=None
+                        )
                 await _execute(
                     session,
-                    update(target).where(c.id == row["id"]).values(**_stored_payload_columns(payload)),
+                    update(target)
+                    .where(*[column == row[column.name] for column in target.primary_key.columns])
+                    .values(**changes),
                     execution_options=self.options,
                 )
                 counts[row["_space_slug"]] += 1
@@ -6830,9 +6876,9 @@ class PgStore(Store):
     async def plaintext_secret_counts(self, *, space: str | None = None) -> dict[str, int]:
         counts: dict[str, int] = {}
         async with self.sessionmaker() as session:
-            for name, target in (("credentials", CREDENTIALS), ("sessions", SESSIONS)):
+            for name, (target, prefix, _aad) in self._rotation_specs().items():
                 c = target.c
-                stmt = select(func.count()).select_from(target).where(c.payload.is_not(None))
+                stmt = select(func.count()).select_from(target).where(c[f"{prefix}payload"].is_not(None))
                 if space is not None:
                     stmt = stmt.join(SPACES, SPACES.c.id == c.space_id).where(SPACES.c.slug == space)
                 count = int((await _execute(session, stmt, execution_options=self.options)).scalar_one())

@@ -6,11 +6,32 @@
 
 ## [Unreleased]
 
+## [1.0.0a4] - 2026-10-16
+
+Четвёртый альфа-релиз исправляет контракты server-admins и распространяет управляемый режим
+plaintext/encrypted на все секретные хранилища. Ревизия схемы — `0037`: перед обновлением
+примените `identity-hub migrate`.
+
+### Changed
+
+- `secret_storage="plaintext"` теперь используется по умолчанию и распространяется на все
+  секретные хранилища: credentials, сессии, прокси, закрытый профиль, evidence, challenge,
+  staged-импорт и токены интеграций. Явный `secret_storage="encrypted"` сохраняет прежнее
+  envelope-шифрование; `secrets convert` переводит все наборы. Миграция схемы — `0037`.
+- `Lease.active_credential()` и `LoginContext.active_credential()` теперь возвращают
+  `CredentialCandidate(kind, name, value)`, чтобы адаптер мог атомарно пометить именно выбранную
+  запись через `reject_credential(...)` или `LoginFailure(credential=candidate.key)`. Для доступа
+  к прежней модели используйте `candidate.value`.
+- `IdentityCard.regions` показывает nullable-признак `retryable` для последнего состояния
+  региона. Для `auth` он отличает временный отказ входа от окончательного.
+- `secrets.put_credential(..., reset_auth=True)` может атомарно снять прежний окончательный
+  отказ `auth` после точечной замены credentials; по умолчанию отказ сохраняется.
+
 ## [1.0.0a3] - 2026-10-16
 
 Третий альфа-релиз: инструменты для интеграции с server-admins, стандартные форматы
 credentials и сессий, управляемая приёмка импортированных аккаунтов и точечная проверка
-секретов. Ревизия схемы — `0035`: перед обновлением примените `identity-hub migrate`.
+секретов. Ревизия схемы — `0036`: перед обновлением примените `identity-hub migrate`.
 
 ### Added
 

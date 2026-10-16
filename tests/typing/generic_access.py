@@ -6,7 +6,7 @@ from typing import assert_type
 
 from pydantic import BaseModel
 
-from identity_hub import LoginContext, Pool, Service, SpaceHandle
+from identity_hub import CredentialCandidate, LoginContext, Pool, Service, SpaceHandle
 
 
 class Credentials(BaseModel):
@@ -36,7 +36,7 @@ async def _lease_contract(space: SpaceHandle) -> None:
     assert_type(pool, Pool[Credentials, Session])
     async with pool.lease() as lease:
         assert_type(await lease.credentials(), Credentials | None)
-        assert_type(await lease.active_credential(), Credentials | None)
+        assert_type(await lease.active_credential(), CredentialCandidate[Credentials] | None)
         assert_type(await lease.session(), Session | None)
         assert_type(
             await lease.credential("totp", schema=TotpSecret),
@@ -46,7 +46,7 @@ async def _lease_contract(space: SpaceHandle) -> None:
 
 async def _login_contract(ctx: LoginContext[Credentials, Session]) -> Session:
     assert_type(await ctx.credentials(), Credentials | None)
-    assert_type(await ctx.active_credential(), Credentials | None)
+    assert_type(await ctx.active_credential(), CredentialCandidate[Credentials] | None)
     assert_type(await ctx.session(), Session | None)
     assert_type(await ctx.credential("totp", schema=TotpSecret), TotpSecret | None)
     return Session(token="ok")

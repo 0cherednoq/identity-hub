@@ -151,12 +151,24 @@ class Secrets(Namespace):
         expires_at: datetime | None = None,
         actor: str,
         expected_revision: int | None = None,
+        reset_auth: bool = False,
     ) -> Credential:
         """Создать или заменить запись (kind, name): секрет по схеме `Service.credential_schema(kind)`,
-        открытая часть и срок. Отозванную запись заменить нельзя — `TransitionNotAllowed` (D-215)."""
+        открытая часть и срок. Отозванную запись заменить нельзя — `TransitionNotAllowed` (D-215).
+
+        `reset_auth=True` атомарно снимает прошлый отказ `no_session`/`session_invalid`, не
+        отзывает сессию. По умолчанию состояние `auth` не меняется.
+        """
         space = self._at(identity_id, expected_revision)
         row = await space._put_credential(
-            identity_id, kind, value, name=name, public_value=public_value, expires_at=expires_at, actor=actor
+            identity_id,
+            kind,
+            value,
+            name=name,
+            public_value=public_value,
+            expires_at=expires_at,
+            actor=actor,
+            reset_auth=reset_auth,
         )
         return Credential.from_row(row, row.updated_at)
 

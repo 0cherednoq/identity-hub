@@ -201,7 +201,7 @@ class ProxiesMixin(SpaceBase):
         secret = ProxySecret(
             username=parsed.username, password=SecretStr(parsed.password) if parsed.password else None
         )
-        payload = self.hub._envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
+        payload = self.hub._seal_stored_model(secret, associated_data("ih_proxies", proxy_id))
         tag, key_id, aliases = self._proxy_fingerprints(
             parsed.scheme, parsed.host, parsed.port, parsed.username
         )
@@ -288,7 +288,7 @@ class ProxiesMixin(SpaceBase):
         return url
 
     def _proxy_url_of(self, row: ProxyRow) -> str:
-        secret = self.hub._envelope.open_model(ProxySecret, row.secret, associated_data("ih_proxies", row.id))
+        secret = self.hub._open_stored_model(ProxySecret, row.secret, associated_data("ih_proxies", row.id))
         auth = ""
         if secret.username:
             auth = quote(secret.username, safe="")
@@ -659,7 +659,7 @@ class ProxiesMixin(SpaceBase):
         if password and not username:
             raise ValidationFailed("прокси: пароль без логина не задаётся")
         secret = ProxySecret(username=username, password=SecretStr(password) if password else None)
-        payload = self.hub._envelope.seal_model(secret, associated_data("ih_proxies", proxy_id))
+        payload = self.hub._seal_stored_model(secret, associated_data("ih_proxies", proxy_id))
         async with self._tx() as tx:
             row = await self._proxy(tx, proxy_id)
             tag, key_id, aliases = self._proxy_fingerprints(row.scheme, row.host, row.port, username)
@@ -690,7 +690,7 @@ class ProxiesMixin(SpaceBase):
         async with self._tx() as tx:
             row = await self._proxy(tx, proxy_id)
             ad = associated_data("ih_proxies", proxy_id)
-            current = self.hub._envelope.open_model(ProxySecret, row.secret, ad)
+            current = self.hub._open_stored_model(ProxySecret, row.secret, ad)
             old_password = current.password.get_secret_value() if current.password else None
             new_username = current.username if isinstance(username, _Unset) else username
             new_password = old_password if isinstance(password, _Unset) else password
@@ -722,7 +722,7 @@ class ProxiesMixin(SpaceBase):
                     proxy_id, {"scheme": address.scheme, "host": address.host, "port": address.port}
                 )
             await tx.set_proxy_secret(
-                proxy_id, tag, self.hub._envelope.seal_model(secret, ad), fingerprint_key_id=key_id
+                proxy_id, tag, self.hub._seal_stored_model(secret, ad), fingerprint_key_id=key_id
             )
             data: dict[str, Any] = {
                 "fields": fields,

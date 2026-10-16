@@ -24,9 +24,10 @@ from identity_hub import LoginChallenge, LoginContext, LoginFailure
 
 class TgAuthenticator:
     async def login(self, ctx: LoginContext[TgCredentials, TgSession]) -> TgSession:
-        creds = await ctx.active_credential()
-        if creds is None:
+        candidate = await ctx.active_credential()
+        if candidate is None:
             raise LoginFailure("credentials_missing", retryable=False)
+        creds = candidate.value
         client = make_client(proxy=ctx.proxy_url)
 
         if ctx.challenge_answer is None:
@@ -40,10 +41,15 @@ class TgAuthenticator:
             )
 
         # повторный вызов: человек ответил
-        await client.sign_in(
-            creds.phone, ctx.challenge_answer,
-            phone_code_hash=ctx.challenge_context["phone_code_hash"],
-        )
+        try:
+            await client.sign_in(
+                creds.phone, ctx.challenge_answer,
+                phone_code_hash=ctx.challenge_context["phone_code_hash"],
+            )
+        except PlatformPasswordRejected:
+            raise LoginFailure(
+                "credentials_rejected", retryable=False, credential=candidate.key,
+            ) from None
         return TgSession(auth_key=client.export_key())     # сессия по схеме Service.session
 
 
@@ -94,6 +100,10 @@ challenge = card.open_challenge       # {"id", "kind", "hint", "expires_at"} и�
 
 outcome = await space.auth.answer_challenge(UUID(challenge["id"]), "12345", actor="operator:anna")
 ```
+
+В `card.regions` строка региона `auth` содержит `retryable`: `True` означает временный отказ,
+`False` — окончательный, `None` — повторяемость для текущего состояния не задана. Поле доступно
+и в разделе состояния admin API; интерфейс показывает `Да`, `Нет` или `—` соответственно.
 
 - Если платформа спросила ещё раз (неверный код, второй фактор), `login` снова бросает
   `LoginChallenge` — открывается новый challenge, исход `"challenged"`.

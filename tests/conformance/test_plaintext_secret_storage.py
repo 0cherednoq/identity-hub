@@ -60,6 +60,26 @@ def test_unknown_secret_storage_is_rejected() -> None:
         )
 
 
+async def test_plaintext_is_the_default_storage_mode() -> None:
+    hub = IdentityHub(
+        secrets=StaticSecretsProvider(TEST_KEYS, "k1"),
+        services=[FAKE_TG],
+        store=MemoryStore(),
+    )
+    await hub.start()
+    space = hub.space(f"plain-default-{uuid4().hex[:8]}", create=True)
+    await space.identities.create(
+        IdentityCreate(
+            service="fake_tg",
+            external_ref="+plain-default",
+            credentials={"phone": "+plain-default", "password": "visible"},
+        ),
+        actor="test",
+    )
+    assert await hub.doctor.plaintext_secrets(space=space.slug) == {"credentials": 1}
+    await hub.aclose()
+
+
 async def test_plaintext_public_flows_and_mixed_storage(plaintext_hub: IdentityHub) -> None:
     slug = f"plain-{uuid4().hex[:8]}"
     space = plaintext_hub.space(slug, create=True)

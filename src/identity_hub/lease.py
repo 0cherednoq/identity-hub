@@ -48,7 +48,7 @@ from identity_hub.errors import (
 from identity_hub.events import EventDraft
 from identity_hub.formats.proxy import ProxyUrl
 from identity_hub.metrics import record_metric
-from identity_hub.protocols import TCreds, TSession
+from identity_hub.protocols import CredentialCandidate, TCreds, TSession
 from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import (
@@ -590,15 +590,17 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
     @overload
     async def active_credential[M: BaseModel](
         self, kind: str = "default", *, schema: type[M]
-    ) -> M | None: ...
+    ) -> CredentialCandidate[M] | None: ...
 
     @overload
-    async def active_credential(self, kind: str = "default", *, schema: None = None) -> TCreds | None: ...
+    async def active_credential(
+        self, kind: str = "default", *, schema: None = None
+    ) -> CredentialCandidate[TCreds] | None: ...
 
     async def active_credential(
         self, kind: str = "default", *, schema: type[BaseModel] | None = None
-    ) -> BaseModel | None:
-        """Первая по имени пригодная запись вида: active, не истекла и не отклонена."""
+    ) -> CredentialCandidate[BaseModel] | None:
+        """Первая пригодная запись вида с ключом: active, не истекла и не отклонена."""
         return await self._active_credential(kind, schema=schema, excluded=frozenset())
 
     async def _active_credential(
@@ -607,7 +609,7 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         *,
         schema: type[BaseModel] | None,
         excluded: frozenset[str],
-    ) -> BaseModel | None:
+    ) -> CredentialCandidate[BaseModel] | None:
         self.check()
         model_schema = self._credential_schema(kind, schema)
         async with self.pool.space._tx(own=True) as tx:
@@ -630,7 +632,8 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         if row is None or found is None:
             return None
         aad = credential_associated_data(self.identity_id, row.kind, row.name)
-        return self.pool.space.hub._open_stored_model(model_schema, found[0], aad)
+        value = self.pool.space.hub._open_stored_model(model_schema, found[0], aad)
+        return CredentialCandidate(row.kind, row.name, value)
 
     def _credential_schema(self, kind: str, schema: type[BaseModel] | None) -> type[BaseModel]:
         expected = self.pool.service.credential_schema(kind)

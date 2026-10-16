@@ -193,7 +193,7 @@ class _MemoryState:
     credentials: dict[tuple[UUID, str, str], tuple[StoredPayload, CredentialRow]] = field(
         default_factory=dict
     )
-    profile_secrets: dict[UUID, EncryptedPayload] = field(default_factory=dict)
+    profile_secrets: dict[UUID, StoredPayload] = field(default_factory=dict)
     # все записи сессий по id, включая отозванные (история, D-218); текущая запись слота — в session_slots
     sessions: dict[UUID, _SessionRecord] = field(default_factory=dict)
     session_slots: dict[tuple[UUID, str], UUID] = field(default_factory=dict)
@@ -231,7 +231,7 @@ class _MemoryState:
     snapshot_coverage: dict[tuple[UUID, datetime], tuple[datetime, str, bool]] = field(default_factory=dict)
     webhook_endpoints: dict[UUID, WebhookEndpointRow] = field(default_factory=dict)
     webhook_deliveries: dict[int, WebhookDeliveryRow] = field(default_factory=dict)
-    notification_channels: dict[UUID, tuple[NotificationChannelRow, EncryptedPayload, UUID]] = field(
+    notification_channels: dict[UUID, tuple[NotificationChannelRow, StoredPayload, UUID]] = field(
         default_factory=dict
     )
     notification_rules: dict[UUID, NotificationRuleRow] = field(default_factory=dict)
@@ -789,10 +789,10 @@ class MemoryTx(StoreTx):
         self.state.link_times[key] = self._now
         return True
 
-    async def get_profile_secret(self, identity_id: UUID) -> EncryptedPayload | None:
+    async def get_profile_secret(self, identity_id: UUID) -> StoredPayload | None:
         return self.state.profile_secrets.get(identity_id) if self._own(identity_id) else None
 
-    async def set_profile_secret(self, identity_id: UUID, payload: EncryptedPayload | None) -> None:
+    async def set_profile_secret(self, identity_id: UUID, payload: StoredPayload | None) -> None:
         if self._own(identity_id) is None:
             return
         if payload is None:
@@ -1586,7 +1586,7 @@ class MemoryTx(StoreTx):
         return found[0] if found else None
 
     async def set_proxy_secret(
-        self, proxy_id: UUID, fingerprint: str, secret: EncryptedPayload, *, fingerprint_key_id: str | None
+        self, proxy_id: UUID, fingerprint: str, secret: StoredPayload, *, fingerprint_key_id: str | None
     ) -> bool:
         row = await self.get_proxy(proxy_id)
         if row is None:
@@ -1935,7 +1935,7 @@ class MemoryTx(StoreTx):
         return self.state.verifications.get((identity_id, factor)) if self._own(identity_id) else None
 
     async def save_verification(
-        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: EncryptedPayload | None = None
+        self, identity_id: UUID, factor: str, values: dict[str, Any], evidence: StoredPayload | None = None
     ) -> None:
         if self._own(identity_id) is None:
             return
@@ -2546,13 +2546,24 @@ class MemoryTx(StoreTx):
         identity_id: UUID,
         kind: str,
         hint: str,
-        context: EncryptedPayload,
+        context: StoredPayload,
         expires_at: datetime | None,
     ) -> bool:
         if self._own(identity_id) is None or await self.open_challenge_of(identity_id) is not None:
             return False
         self.state.challenges[challenge_id] = ChallengeRow(
-            challenge_id, identity_id, kind, hint, context, None, None, self._now, expires_at, None, None
+            challenge_id,
+            identity_id,
+            kind,
+            hint,
+            context,
+            None,
+            None,
+            None,
+            self._now,
+            expires_at,
+            None,
+            None,
         )
         return True
 
@@ -2574,12 +2585,23 @@ class MemoryTx(StoreTx):
             else None
         )
 
-    async def answer_challenge(self, challenge_id: UUID, nonce: bytes, ciphertext: bytes) -> bool:
+    async def answer_challenge(
+        self,
+        challenge_id: UUID,
+        nonce: bytes | None = None,
+        ciphertext: bytes | None = None,
+        *,
+        plaintext: str | None = None,
+    ) -> bool:
         row = await self.get_challenge(challenge_id)
         if row is None or row.resolved_at is not None:
             return False
         self.state.challenges[challenge_id] = replace(
-            row, answer_nonce=nonce, answer_ciphertext=ciphertext, answered_at=self._now
+            row,
+            answer_nonce=nonce,
+            answer_ciphertext=ciphertext,
+            answer_payload=plaintext,
+            answered_at=self._now,
         )
         return True
 
@@ -2588,7 +2610,7 @@ class MemoryTx(StoreTx):
         if row is None or row.resolved_at is not None:
             return False
         self.state.challenges[challenge_id] = replace(
-            row, resolved_at=self._now, answer_nonce=None, answer_ciphertext=None
+            row, resolved_at=self._now, answer_nonce=None, answer_ciphertext=None, answer_payload=None
         )
         return True
 
@@ -2666,7 +2688,7 @@ class MemoryTx(StoreTx):
         row = self.state.webhook_endpoints.get(endpoint_id)
         return row if row is not None and row.space_id == self.space.id else None
 
-    async def update_webhook_secret(self, endpoint_id: UUID, secret: EncryptedPayload) -> bool:
+    async def update_webhook_secret(self, endpoint_id: UUID, secret: StoredPayload) -> bool:
         row = await self.get_webhook_endpoint(endpoint_id)
         if row is None:
             return False
@@ -2810,7 +2832,7 @@ class MemoryTx(StoreTx):
         return NotificationChannelSecretRow(channel.id, deepcopy(channel.config), secret)
 
     async def update_notification_channel(
-        self, channel_id: UUID, values: dict[str, Any], secret: EncryptedPayload | None
+        self, channel_id: UUID, values: dict[str, Any], secret: StoredPayload | None
     ) -> bool:
         item = self.state.notification_channels.get(channel_id)
         if item is None:
@@ -4409,40 +4431,46 @@ class MemoryStore(Store):
         async with self._lock:
             slug_by_space = {ref.id: ref.slug for ref in self._state.spaces.values()}
             pending: list[tuple[Any, StoredPayload, str]] = []
-            if table == "credentials":
-                rows = sorted(self._state.credentials.items(), key=lambda item: item[1][1].id)
-                for key, (payload, cred_row) in rows:
-                    identity = self._state.identities[cred_row.identity_id]
-                    slug = slug_by_space[identity.space_id]
-                    if space is not None and slug != space:
-                        continue
-                    if (to == "plaintext") != isinstance(payload, EncryptedPayload):
-                        continue
-                    aad = credential_associated_data(cred_row.identity_id, cred_row.kind, cred_row.name)
-                    converted = self._converted_payload(envelope, payload, aad, to)
-                    pending.append((key, converted, slug))
-                    if len(pending) == limit:
-                        break
-                for key, payload, _slug in pending:
-                    _old, row = self._state.credentials[key]
-                    self._state.credentials[key] = (payload, row)
-            else:
-                for session_id, session_row in sorted(self._state.sessions.items()):
-                    identity = self._state.identities[session_row.identity_id]
-                    slug = slug_by_space[identity.space_id]
-                    if space is not None and slug != space:
-                        continue
-                    if (to == "plaintext") != isinstance(session_row.payload, EncryptedPayload):
-                        continue
-                    aad = associated_data("ih_sessions", session_row.identity_id, session_row.slot)
-                    converted = self._converted_payload(envelope, session_row.payload, aad, to)
-                    pending.append((session_id, converted, slug))
-                    if len(pending) == limit:
-                        break
-                for session_id, payload, _slug in pending:
-                    self._state.sessions[session_id] = replace(
-                        self._state.sessions[session_id], payload=payload
-                    )
+            view, aad_of = self._rotation_views()[table]
+            rows = sorted(view.items(), key=lambda item: _rotation_cursor(item[0]))
+            for key, payload in rows:
+                space_id = self._secret_space_id(table, key)
+                slug = slug_by_space[space_id]
+                if space is not None and slug != space:
+                    continue
+                if (to == "plaintext") != isinstance(payload, EncryptedPayload):
+                    continue
+                converted = self._converted_payload(envelope, payload, aad_of(key), to)
+                pending.append((key, converted, slug))
+                if len(pending) == limit:
+                    break
+            for key, payload, _slug in pending:
+                if table == "challenges":
+                    row = self._state.challenges[key]
+                    aad = aad_of(key)
+                    if isinstance(row.context, EncryptedPayload) and row.answer_ciphertext is not None:
+                        answer = envelope.open_sibling(
+                            row.context, aad, row.answer_nonce, row.answer_ciphertext, "answer"
+                        ).decode()
+                        row = replace(
+                            row,
+                            answer_nonce=None,
+                            answer_ciphertext=None,
+                            answer_payload=answer,
+                        )
+                    elif isinstance(row.context, PlaintextPayload) and row.answer_payload is not None:
+                        assert isinstance(payload, EncryptedPayload)
+                        nonce, ciphertext = envelope.seal_sibling(
+                            payload, aad, row.answer_payload.encode(), "answer"
+                        )
+                        row = replace(
+                            row,
+                            answer_nonce=nonce,
+                            answer_ciphertext=ciphertext,
+                            answer_payload=None,
+                        )
+                    self._state.challenges[key] = row
+                view[key] = payload
             counts: dict[str, int] = defaultdict(int)
             for _key, _payload, slug in pending:
                 counts[slug] += 1
@@ -4462,19 +4490,37 @@ class MemoryStore(Store):
     async def plaintext_secret_counts(self, *, space: str | None = None) -> dict[str, int]:
         async with self._lock:
             space_ids = {ref.id for ref in self._state.spaces.values() if space is None or ref.slug == space}
-            credentials = sum(
-                isinstance(payload, PlaintextPayload)
-                and self._state.identities[row.identity_id].space_id in space_ids
-                for payload, row in self._state.credentials.values()
-            )
-            sessions = sum(
-                isinstance(row.payload, PlaintextPayload)
-                and self._state.identities[row.identity_id].space_id in space_ids
-                for row in self._state.sessions.values()
-            )
-        return {
-            name: count for name, count in (("credentials", credentials), ("sessions", sessions)) if count
-        }
+            counts = {
+                table: sum(
+                    isinstance(payload, PlaintextPayload)
+                    and self._secret_space_id(table, key) in space_ids
+                    for key, payload in view.items()
+                )
+                for table, (view, _aad) in self._rotation_views().items()
+            }
+        return {name: count for name, count in counts.items() if count}
+
+    def _secret_space_id(self, table: str, key: Any) -> UUID:
+        state = self._state
+        if table == "credentials":
+            return state.identities[state.credentials[key][1].identity_id].space_id
+        if table == "sessions":
+            return state.identities[state.sessions[key].identity_id].space_id
+        if table == "challenges":
+            return state.identities[state.challenges[key].identity_id].space_id
+        if table == "verifications":
+            return state.identities[key[0]].space_id
+        if table == "proxies":
+            return state.proxies[key].space_id
+        if table == "webhooks":
+            return state.webhook_endpoints[key].space_id
+        if table == "notification_channels":
+            return state.notification_channels[key][2]
+        if table == "profiles":
+            return state.identities[key].space_id
+        if table == "import_items":
+            return state.import_runs[key[0]].space_id
+        raise ValidationFailed(f"unknown secret table: {table}")
 
     async def metrics_snapshot(self, slugs: frozenset[str] | None = None) -> MetricsSnapshot:
         async with self._lock:
@@ -4551,10 +4597,10 @@ class _ItemPayloadView:
         self.source = source
         self.field_name = field_name
 
-    def items(self) -> list[tuple[Any, EncryptedPayload]]:
+    def items(self) -> list[tuple[Any, StoredPayload]]:
         return [(key, row[self.field_name]) for key, row in self.source.items()]
 
-    def __setitem__(self, key: Any, value: EncryptedPayload) -> None:
+    def __setitem__(self, key: Any, value: StoredPayload) -> None:
         self.source[key][self.field_name] = value
 
 
@@ -4565,10 +4611,10 @@ class _PayloadView:
         self.source = source
         self.index = index
 
-    def items(self) -> list[tuple[Any, EncryptedPayload]]:
+    def items(self) -> list[tuple[Any, StoredPayload]]:
         return [(key, row[self.index]) for key, row in self.source.items()]
 
-    def __setitem__(self, key: Any, value: EncryptedPayload) -> None:
+    def __setitem__(self, key: Any, value: StoredPayload) -> None:
         row = list(self.source[key])
         row[self.index] = value
         self.source[key] = tuple(row)
@@ -4582,9 +4628,9 @@ class _AttributePayloadView:
         self.attribute = attribute
         self.skip_none = skip_none
 
-    def items(self) -> list[tuple[Any, EncryptedPayload]]:
+    def items(self) -> list[tuple[Any, StoredPayload]]:
         rows = [(key, getattr(row, self.attribute)) for key, row in self.source.items()]
         return [(key, value) for key, value in rows if value is not None]
 
-    def __setitem__(self, key: Any, value: EncryptedPayload) -> None:
+    def __setitem__(self, key: Any, value: StoredPayload) -> None:
         self.source[key] = replace(self.source[key], **{self.attribute: value})

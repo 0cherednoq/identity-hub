@@ -407,23 +407,24 @@ await space.identities.delete(identity_id, actor="ops", revoke=True)
 
 | Данные | Хранение |
 |---|---|
-| credentials, сессии | AES-256-GCM по умолчанию; JSON в колонке `payload` при явном `secret_storage="plaintext"` |
-| evidence верификаций, логины прокси и остальные секреты | всегда зашифрованы (AES-256-GCM, свой ключ на запись) |
-| profile | открыто; при `profile_encrypted=True` открыты только `filterable_profile` |
+| credentials, сессии и staged-импорт | JSON в `payload` по умолчанию; AES-256-GCM при `secret_storage="encrypted"` |
+| evidence, прокси, challenge, секреты webhooks/уведомлений | тот же выбранный режим хранения |
+| profile | открыто; закрытая часть при `profile_encrypted=True` следует выбранному режиму |
 | attributes, labels, tags, note | открыто |
 
-Формат новых credentials и сессий выбирается один раз при создании хаба:
+Формат всех новых секретов выбирается один раз при создании хаба:
 
 ```python
-hub = IdentityHub(..., secret_storage="encrypted")  # значение по умолчанию
-hub = IdentityHub(..., secret_storage="plaintext")  # осознанно открытое хранение
+hub = IdentityHub(...)                              # plaintext по умолчанию
+hub = IdentityHub(..., secret_storage="encrypted") # явное envelope-шифрование
 ```
 
 Чтение определяет формат каждой строки, поэтому во время перевода одна база может содержать оба
-варианта. Мастер-ключ обязателен и в `plaintext`: все остальные виды секретов остаются под шифром.
+варианта. Мастер-ключ обязателен и в `plaintext`: он нужен для защищённых отпечатков значений
+и прокси, хотя сами payload в этом режиме читаются из дампа базы.
 
-В PostgreSQL открытые значения находятся только в `ih_credentials.payload` и
-`ih_sessions.payload`. Например:
+В PostgreSQL открытые значения находятся в колонках `payload` соответствующих таблиц
+(`profile_payload`, `evidence_payload` и `context_payload` для именованных групп). Например:
 
 ```sql
 SELECT payload->>'password' FROM ih_credentials WHERE identity_id = :identity_id;
@@ -431,8 +432,8 @@ SELECT payload->>'password' FROM ih_credentials WHERE identity_id = :identity_id
 
 Не выдавайте роли приложения `SELECT` на эти таблицы без необходимости: read-схема хаба их не
 экспортирует. Право чтения таблиц или дампа базы в режиме `plaintext` означает доступ ко всем
-паролям, cookie и токенам. Прокси, webhook/notification secrets, staged-импорт, evidence и
-зашифрованная часть профиля при этом остаются под AES-GCM.
+паролям, cookie, прокси и токенам интеграций. Для защиты всех этих данных явно выберите
+`secret_storage="encrypted"`.
 
 Перевод существующих строк выполняется короткими атомарными пачками и безопасен при повторе:
 
@@ -490,6 +491,7 @@ await space.secrets.put_credential(
     identity_id, "api_key", {"secret": key}, name="trading",
     public_value={"key_id": "AK-1"},        # открытая часть: видна в списке и админке
     expires_at=deadline, actor="ops",
+    reset_auth=True,                          # явно снять старый окончательный отказ входа
 )
 for item in await space.secrets.credentials(identity_id):   # без секретов
     print(
@@ -508,16 +510,19 @@ await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="
 - Каждая команда пишет событие `identity.credentials.updated` с видом, именем и действием
   (`put`, `disable`, `enable`, `revoke`) — без секрета и без `public_value` — и поднимает ревизию
   аккаунта. Все команды принимают `expected_revision`.
+- `put_credential(..., reset_auth=True)` атомарно очищает прежние `auth.code` и
+  `auth.retryable` в `no_session`/`session_invalid`, не отзывает сохранённую сессию. Значение по
+  умолчанию `False` сохраняет прежний отказ.
 
 Под арендой и в `Authenticator`/пробах запись берут по виду и имени (`D-216`):
 
 ```python
 key = await lease.credential("api_key", "trading")       # точечный доступ по имени
-working = await lease.active_credential("api_key")        # первая пригодная запись по имени
+working = await lease.active_credential("api_key")        # CredentialCandidate(kind, name, value)
 everything = await lease.active_credentials()             # {("api_key", "trading"): ApiKey(...), ...}
 login = await ctx.active_credential("default")            # первая пригодная для входа
-await ctx.reject_credential("default", name="old", code="wrong_password")
-await ctx.verify_credential("default", name="working")
+if login is not None:
+    await ctx.reject_credential(login.kind, name=login.name, code="wrong_password")
 value = await space.secrets.reveal(
     identity_id, SecretRef.credential("api_key", "trading"), actor="admin", reason="проверка"
 )
@@ -525,9 +530,12 @@ value = await space.secrets.reveal(
 
 `credential(kind, name)` читает конкретную запись и сохраняет смысл точечного доступа.
 `active_credential(kind)` выбирает первую по `name` пригодную запись: активную, не истёкшую и
-без последней отметки `reject`. `active_credentials()` возвращает все записи с той же
-семантикой. Если записей нет или все непригодны, эти удобные аксессоры возвращают `None` или
-пустой словарь — это штатный результат; адаптер сам решает, можно ли войти без credentials.
+без последней отметки `reject`. Результат `CredentialCandidate` содержит `kind`, `name`,
+`value` и короткий ключ `key`; передайте этот ключ в
+`LoginFailure(credential=candidate.key)` или используйте имя в `reject_credential()`.
+`active_credentials()` возвращает словарь всех пригодных значений. Если записей нет или все
+непригодны, эти удобные аксессоры возвращают `None` или пустой словарь — это штатный результат;
+адаптер сам решает, можно ли войти без credentials.
 После `ctx.reject_credential(...)` следующий вызов `ctx.active_credential(...)` уже в той же
 попытке выберет другую запись.
 
@@ -538,7 +546,8 @@ EXCHANGE: Service[Login, ExchangeSession] = Service(
     "exchange", "Exchange", credentials=Login, session=ExchangeSession,
 )
 async with space.pools.define("exchange", service=EXCHANGE).lease() as lease:
-    creds = await lease.active_credential()  # Login | None
+    candidate = await lease.active_credential()  # CredentialCandidate[Login] | None
+    creds = candidate.value if candidate is not None else None
     session = await lease.session()           # ExchangeSession | None
 ```
 

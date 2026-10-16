@@ -85,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
     secrets = sub.add_parser("secrets", help="обслуживание хранения credentials и сессий")
     _factory_argument(secrets)
     secrets_sub = secrets.add_subparsers(dest="secrets_command")
-    convert = secrets_sub.add_parser("convert", help="перевести credentials и сессии между форматами")
+    convert = secrets_sub.add_parser("convert", help="перевести все секреты между форматами")
     _factory_argument(convert, inherited=True)
     convert.add_argument("--to", choices=("plaintext", "encrypted"), required=True)
     convert.add_argument("--space", help="только указанное пространство")

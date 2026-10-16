@@ -147,13 +147,32 @@ class EncryptedPayloadMixin:
 
 
 class DualSecretPayloadMixin:
-    """Credentials/session: ровно один из encrypted envelope и открытого JSON payload (D-313)."""
+    """Секрет записи: ровно один из encrypted envelope и открытого JSON payload (D-313, D-323)."""
 
     key_id: Mapped[str | None] = mapped_column(String(64))
     wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary)
     nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
     ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+
+
+def payload_format_check(
+    name: str = "payload_format_valid", *, prefix: str = "", optional: bool = False
+) -> CheckConstraint:
+    """CHECK: ровно один формат секрета (D-323). `optional=True` допускает отсутствие обоих.
+
+    Для группы из колонок `{p}key_id/{p}wrapped_dek/{p}nonce/{p}ciphertext` и `{p}payload`.
+    """
+    p = prefix
+    enc = (
+        f"{p}key_id IS NOT NULL AND {p}wrapped_dek IS NOT NULL "
+        f"AND {p}nonce IS NOT NULL AND {p}ciphertext IS NOT NULL"
+    )
+    enc_null = f"{p}key_id IS NULL AND {p}wrapped_dek IS NULL AND {p}nonce IS NULL AND {p}ciphertext IS NULL"
+    clauses = [f"({p}payload IS NOT NULL AND {enc_null})", f"({p}payload IS NULL AND {enc})"]
+    if optional:
+        clauses.append(f"({p}payload IS NULL AND {enc_null})")
+    return CheckConstraint(" OR ".join(clauses), name=name)
 
 
 # ---------------------------------------------------------------- пространства и сервисы
@@ -235,8 +254,8 @@ class ImportRunRecord(IdentityHubBase):
     )
 
 
-class ImportItemRecord(EncryptedPayloadMixin, IdentityHubBase):
-    """Encrypted normalized input retained only while its import can resume."""
+class ImportItemRecord(DualSecretPayloadMixin, IdentityHubBase):
+    """Normalized input retained only while its import can resume (encrypted or plaintext, D-323)."""
 
     __tablename__ = "ih_import_items"
 
@@ -261,6 +280,7 @@ class ImportItemRecord(EncryptedPayloadMixin, IdentityHubBase):
             "state IN ('pending', 'running', 'succeeded', 'skipped', 'failed')",
             name="state_valid",
         ),
+        payload_format_check(),
         Index(
             "ix_ih_import_items_claim",
             "run_id",
@@ -349,11 +369,13 @@ class IdentityRecord(IdentityHubBase):
     # Поддерживается библиотекой при каждом переходе в ih_verifications.
     verified_factors: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=text("'{}'"))
 
-    # нефильтруемая часть профиля при Service.profile_encrypted (D-109, миграция 0002)
+    # нефильтруемая часть профиля при Service.profile_encrypted (D-109, миграция 0002);
+    # шифр или открытый profile_payload (D-323)
     profile_key_id: Mapped[str | None] = mapped_column(String(64))
     profile_wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary)
     profile_nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
     profile_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    profile_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
 
     error_score: Mapped[float] = mapped_column(Float, default=0.0)
     fencing_seq: Mapped[int] = mapped_column(BigInteger, default=0)  # растёт с каждой арендой
@@ -385,6 +407,7 @@ class IdentityRecord(IdentityHubBase):
         _enum_check("standing", Standing),
         _enum_check("auth_state", AuthState),
         _enum_check("availability", Availability),
+        payload_format_check("profile_payload_format_valid", prefix="profile_", optional=True),
         # выборка аренды: готовые, авторизованные, не забаненные — сразу в порядке LRU (IMP-01)
         Index(
             "ix_ih_identities_pick",
@@ -599,14 +622,17 @@ class VerificationRecord(IdentityHubBase):
     via_identity_id: Mapped[UUID | None] = mapped_column(ForeignKey("ih_identities.id", ondelete="SET NULL"))
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))  # не секретное
 
-    # секретные доказательства (номер документа и т.п.), если сервис их объявил
+    # секретные доказательства (номер документа и т.п.), если сервис их объявил;
+    # шифр или открытый evidence_payload (D-323)
     evidence_key_id: Mapped[str | None] = mapped_column(String(64))
     evidence_wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary)
     evidence_nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
     evidence_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    evidence_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
 
     __table_args__ = (
         _identity_fk(),
+        payload_format_check("evidence_payload_format_valid", prefix="evidence_", optional=True),
         Index(
             "ix_ih_verifications_expires_at",
             "expires_at",
@@ -724,13 +750,16 @@ class ChallengeRecord(IdentityHubBase):
     kind: Mapped[str] = mapped_column(String(32))  # sms_code, captcha, email_confirm
     hint: Mapped[str] = mapped_column(Text)
 
-    # context (phone_code_hash и т.п.) и answer — секреты, храним зашифрованными
-    context_key_id: Mapped[str] = mapped_column(String(64))
-    context_wrapped_dek: Mapped[bytes] = mapped_column(LargeBinary)
-    context_nonce: Mapped[bytes] = mapped_column(LargeBinary)
-    context_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    # context (phone_code_hash и т.п.) и answer — секреты; шифр или открытый payload (D-323)
+    context_key_id: Mapped[str | None] = mapped_column(String(64))
+    context_wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary)
+    context_nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    context_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    context_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     answer_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
     answer_nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # ответ в plaintext-режиме хранится открытой строкой (sibling-DEK контекста недоступен, D-323)
+    answer_payload: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -739,6 +768,11 @@ class ChallengeRecord(IdentityHubBase):
 
     __table_args__ = (
         _identity_fk(),
+        payload_format_check("context_payload_format_valid", prefix="context_"),
+        CheckConstraint(
+            "NOT (answer_payload IS NOT NULL AND answer_ciphertext IS NOT NULL)",
+            name="answer_payload_format_valid",
+        ),
         # не больше одного открытого вопроса на аккаунт
         Index(
             "uq_ih_challenges_open",
@@ -1014,9 +1048,9 @@ class ProviderOperationRecord(IdentityHubBase):
 # ---------------------------------------------------------------- прокси
 
 
-class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
+class ProxyRecord(DualSecretPayloadMixin, IdentityHubBase):
     """Прокси. host/port открыто (для админки и дедупликации),
-    логин и пароль — в зашифрованном payload."""
+    логин и пароль — в зашифрованном или открытом payload (D-323)."""
 
     __tablename__ = "ih_proxies"
 
@@ -1061,6 +1095,7 @@ class ProxyRecord(EncryptedPayloadMixin, IdentityHubBase):
         CheckConstraint("bound_count >= 0", name="bound_count_nonnegative"),
         CheckConstraint("max_identities >= 1", name="max_identities_positive"),
         CheckConstraint("port BETWEEN 1 AND 65535", name="port_valid"),
+        payload_format_check(),
         Index("ix_ih_proxies_pick", "space_id", "pool", "status"),
         Index("ix_ih_proxies_host", "host", postgresql_using="gin", postgresql_ops={"host": "gin_trgm_ops"}),
     )
@@ -1255,8 +1290,8 @@ class StateSnapshotRecord(IdentityHubBase):
 # ---------------------------------------------------------------- исходящие вебхуки
 
 
-class WebhookEndpointRecord(EncryptedPayloadMixin, IdentityHubBase):
-    """Получатель событий. Секрет подписи HMAC — в зашифрованном payload."""
+class WebhookEndpointRecord(DualSecretPayloadMixin, IdentityHubBase):
+    """Получатель событий. Секрет подписи HMAC — в зашифрованном или открытом payload (D-323)."""
 
     __tablename__ = "ih_webhook_endpoints"
 
@@ -1277,6 +1312,7 @@ class WebhookEndpointRecord(EncryptedPayloadMixin, IdentityHubBase):
 
     __table_args__ = (
         _enum_check("min_severity", Severity),
+        payload_format_check(),
         Index("ix_ih_webhook_endpoints_space_id", "space_id"),
     )
 
@@ -1314,8 +1350,8 @@ class WebhookDeliveryRecord(IdentityHubBase):
 # ---------------------------------------------------------------- уведомления (Telegram)
 
 
-class NotificationChannelRecord(EncryptedPayloadMixin, IdentityHubBase):
-    """Канал доставки уведомлений. v1: только Telegram-бот; токен — в зашифрованном payload."""
+class NotificationChannelRecord(DualSecretPayloadMixin, IdentityHubBase):
+    """Канал доставки уведомлений. v1: только Telegram-бот; токен — в зашифрованном или открытом payload (D-323)."""
 
     __tablename__ = "ih_notification_channels"
 
@@ -1331,6 +1367,7 @@ class NotificationChannelRecord(EncryptedPayloadMixin, IdentityHubBase):
 
     __table_args__ = (
         CheckConstraint("kind IN ('telegram')", name="kind_valid"),
+        payload_format_check(),
         Index("ix_ih_notification_channels_space_id", "space_id"),
     )
 

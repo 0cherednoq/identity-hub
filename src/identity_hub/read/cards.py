@@ -49,6 +49,7 @@ class RegionInfo:
     pinned_until: datetime | None
     pending_observation: str | None
     version: int
+    retryable: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +217,7 @@ def _region_info(region: str, key: str, state: RegionState) -> RegionInfo:
         pinned_until=state.pinned_until,
         pending_observation=state.pending_observation,
         version=state.version,
+        retryable=state.retryable,
     )
 
 

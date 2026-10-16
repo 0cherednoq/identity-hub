@@ -31,9 +31,28 @@ from identity_hub.enums import AuthState
 from identity_hub.errors import NotFound, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
-from identity_hub.store.base import CredentialRow, IdempotencyRequest, StoreTx
+from identity_hub.store.base import CredentialRow, IdempotencyRequest, IdentityRow, StoreTx
 
 __all__ = ["CredentialsMixin", "SecretsAdminMixin", "SessionRevokeMixin"]
+
+
+async def _reset_auth_after_credentials(
+    space: SpaceBase,
+    tx: StoreTx,
+    row: IdentityRow,
+    *,
+    actor: str,
+) -> None:
+    """Явно снять прежний отказ входа в транзакции записи новых credentials."""
+    if row.auth_state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
+        await apply_region_change(
+            space,
+            tx,
+            row.id,
+            "auth",
+            DEFAULT_SLOT,
+            Command(AuthState.NO_SESSION, actor=actor, clear_code=True),
+        )
 
 
 class SecretsAdminMixin(SpaceBase):
@@ -60,15 +79,8 @@ class SecretsAdminMixin(SpaceBase):
                 return
             row = await self._identity(tx, identity_id)
             await tx.put_credentials(identity_id, payload, value_fingerprint=value_fingerprint)
-            if reset_auth and row.auth_state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
-                await apply_region_change(
-                    self,
-                    tx,
-                    identity_id,
-                    "auth",
-                    DEFAULT_SLOT,
-                    Command(AuthState.NO_SESSION, actor=actor, clear_code=True),
-                )
+            if reset_auth:
+                await _reset_auth_after_credentials(self, tx, row, actor=actor)
             await self._emit(
                 tx,
                 EventDraft(
@@ -192,7 +204,6 @@ class SecretsAdminMixin(SpaceBase):
         actor, reason = require_actor_and_reason(actor, reason, "раскрытие секрета")
         kind, _, key = field.partition(":")
         audit: dict[str, str] = {}  # вид и имя записи credentials — в событие, значение — нет
-        envelope = self.hub._envelope
         async with self._tx(own=True) as tx:
             row = await self._identity(tx, identity_id)
             service = self.hub.service(row.service)
@@ -232,7 +243,9 @@ class SecretsAdminMixin(SpaceBase):
             elif kind == "profile":
                 secret = await tx.get_profile_secret(identity_id)
                 value = (
-                    envelope.open_json(secret, associated_data("ih_identities", identity_id, "profile"))
+                    self.hub._open_stored_json(
+                        secret, associated_data("ih_identities", identity_id, "profile")
+                    )
                     if secret
                     else None
                 )
@@ -240,7 +253,7 @@ class SecretsAdminMixin(SpaceBase):
                 spec = service.verification(key)
                 ver = await tx.load_verification(identity_id, key)
                 value = (
-                    envelope.open_model(
+                    self.hub._open_stored_model(
                         spec.evidence, ver.evidence, associated_data("ih_verifications", identity_id, key)
                     )
                     if spec.evidence and ver and ver.evidence
@@ -277,6 +290,7 @@ class CredentialsMixin(SpaceBase):
         public_value: Mapping[str, Any] | None,
         expires_at: datetime | None,
         actor: str,
+        reset_auth: bool = False,
     ) -> CredentialRow:
         async with self._tx(own=True) as tx:
             service = self.hub.service((await self._identity(tx, identity_id)).service)
@@ -304,6 +318,8 @@ class CredentialsMixin(SpaceBase):
             await self._credential_event(
                 tx, row, kind, name, "put", actor, fields=sorted(type(model).model_fields)
             )
+            if reset_auth:
+                await _reset_auth_after_credentials(self, tx, row, actor=actor)
             return stored
 
     async def _credential_list(self, identity_id: UUID) -> tuple[list[CredentialRow], datetime]:

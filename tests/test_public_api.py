@@ -28,7 +28,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_release_candidate_version_is_consistent() -> None:
-    assert identity_hub.__version__ == "1.0.0a3"
+    assert identity_hub.__version__ == "1.0.0a4"
     assert version("identity-hub") == identity_hub.__version__
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert metadata["project"]["version"] == identity_hub.__version__
@@ -112,10 +112,11 @@ def test_standard_format_exports_are_allowlisted_and_documented() -> None:
 
 
 def test_import_merge_and_credential_validity_contract_is_public_and_documented() -> None:
-    from identity_hub import ImportReport, LoginContext, OnExisting
+    from identity_hub import CredentialCandidate, ImportReport, LoginContext, OnExisting
 
-    names = {"ImportReport", "LoginContext", "LoginFailure", "OnExisting"}
+    names = {"CredentialCandidate", "ImportReport", "LoginContext", "LoginFailure", "OnExisting"}
     assert names <= set(identity_hub.__all__)
+    assert CredentialCandidate("api_key", "trading", object()).key == ("api_key", "trading")
     assert OnExisting.MERGE == "merge"
     assert "merge_details" in ImportReport.__dataclass_fields__
     assert {"active_credential", "verify_credential", "reject_credential"} <= set(LoginContext.__dict__)

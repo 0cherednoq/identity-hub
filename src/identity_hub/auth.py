@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
-from identity_hub.crypto import associated_data
+from identity_hub.crypto import PlaintextPayload, associated_data
 from identity_hub.domain.provider_operations import RetryPolicy, safe_error_code
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
@@ -36,6 +36,7 @@ from identity_hub.operation import apply_fault_effects
 from identity_hub.protocols import (
     Authenticator,
     Blame,
+    CredentialCandidate,
     Fault,
     LinkedIdentity,
     LoginChallenge,
@@ -111,7 +112,7 @@ class _LinkedIdentity:
 
     async def active_credential(
         self, kind: str = "default", *, schema: type[BaseModel] | None = None
-    ) -> BaseModel | None:
+    ) -> CredentialCandidate[BaseModel] | None:
         return await self._lease.active_credential(kind, schema=schema)
 
     async def session(
@@ -170,7 +171,7 @@ class _LoginContext:
 
     async def active_credential(
         self, kind: str = "default", *, schema: type[BaseModel] | None = None
-    ) -> BaseModel | None:
+    ) -> CredentialCandidate[BaseModel] | None:
         rejected = frozenset(
             mark.name for mark in self._credential_marks if mark.kind == kind and mark.rejected
         )
@@ -329,8 +330,12 @@ class LoginMixin(SpaceBase):
                 raise ValidationFailed("challenge истёк")
             identity = await self._identity(tx, challenge.identity_id)
             aad = associated_data("ih_challenges", challenge.identity_id, str(challenge.id))
-            nonce, ciphertext = envelope.seal_sibling(challenge.context, aad, answer.encode(), "answer")
-            if not await tx.answer_challenge(challenge_id, nonce, ciphertext):
+            if isinstance(challenge.context, PlaintextPayload):
+                answered = await tx.answer_challenge(challenge_id, plaintext=answer)
+            else:
+                nonce, ciphertext = envelope.seal_sibling(challenge.context, aad, answer.encode(), "answer")
+                answered = await tx.answer_challenge(challenge_id, nonce, ciphertext)
+            if not answered:
                 raise ValidationFailed("challenge уже закрыт")
             await self._emit(
                 tx,
@@ -345,7 +350,7 @@ class LoginMixin(SpaceBase):
         svc = self.hub.service(identity.service)
         if svc.authenticator is None:
             raise ValidationFailed(f"у сервиса {svc.name} нет Authenticator")
-        context = envelope.open_json(challenge.context, aad)
+        context = self.hub._open_stored_json(challenge.context, aad)
         pool: Pool = self._pool(LOGIN_POOL, service=svc)  # type: ignore[attr-defined]
         query = CandidateQuery(
             service=svc.name,
@@ -724,7 +729,7 @@ class LoginMixin(SpaceBase):
         challenge_id = new_id()
         aad = associated_data("ih_challenges", lease.identity_id, str(challenge_id))
         context = asked.context if asked.context is not None else {}
-        payload = self.hub._envelope.seal_model(context, aad)
+        payload = self.hub._seal_stored_model(context, aad)
         hint = sanitize_text(asked.hint) or ""  # уходит во внешнее событие и очередь человека
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)

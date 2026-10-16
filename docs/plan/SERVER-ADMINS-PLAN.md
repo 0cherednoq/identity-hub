@@ -834,10 +834,10 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
 - С `reject_credential` работает как итератор «до рабочей» без отдельного списка: отклонённая
   запись выбывает из выборки, следующий вызов отдаёт другую.
   ```python
-  while (creds := await ctx.active_credential("default")) is not None:
-      if await try_sign_in(creds):
-          await ctx.verify_credential("default", name=creds.name); break
-      await ctx.reject_credential("default", name=creds.name, code="bad")
+  while (candidate := await ctx.active_credential("default")) is not None:
+      if await try_sign_in(candidate.value):
+          await ctx.verify_credential(candidate.kind, name=candidate.name); break
+      await ctx.reject_credential(candidate.kind, name=candidate.name, code="bad")
   ```
 - Сессии своего аналога не получают: у слота одна валидная сессия (`session(slot)` уже отдаёт
   только её), кандидаты сессий — это разные слоты. Зафиксировать в документации.
@@ -861,14 +861,14 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
   ```python
   TELEGRAM: Service[TgCredentials, TgSession] = Service(credentials=TgCredentials, session=TgSession, ...)
   async with space.pool(TELEGRAM).lease() as lease:     # Pool[TgCredentials, TgSession]
-      creds = await lease.active_credential("default")  # → TgCredentials | None
+      candidate = await lease.active_credential("default")  # → CredentialCandidate[TgCredentials] | None
       sess  = await lease.session()                     # → TgSession | None
   ```
 - **Контекст входа типизируется аннотацией подписи** (один раз на функцию): внутри `login` объекта
   `Service` нет, тип приходит из сигнатуры:
   ```python
   async def tg_login(ctx: LoginContext[TgCredentials, TgSession]) -> TgSession:
-      creds = await ctx.active_credential("default")    # → TgCredentials | None, без schema=
+      candidate = await ctx.active_credential("default")  # → CredentialCandidate[TgCredentials] | None
   ```
 - **`schema=` остаётся запасным** — для именованных видов/слотов, которые один generic-параметр не
   покрывает, и для ad-hoc:
@@ -969,6 +969,146 @@ expires_at: ISO|null, secure, http_only, same_site: str ("" = не задан)}`
 
 ---
 
+## Фаза S13 — единый режим хранения всех секретов
+
+### S13.1 Распространить dual-format на все секретные хранилища
+
+- Добавить миграцию `0037`: `payload`-колонки и CHECK ровно одного формата для прокси,
+  закрытого профиля, evidence, challenge, staged-импорта, webhooks и notification channels.
+- Перевести запись и чтение на общие `_seal_stored_*`/`_open_stored_*`, сохранив смешанные базы.
+- Расширить `doctor.convert_secrets()` и `plaintext_secret_counts()` на все девять наборов;
+  challenge context и временный answer переводить одной транзакцией.
+- Downgrade разрешать только после явной конвертации всех строк обратно в encrypted.
+- **DoD:** все хранилища читаются в обоих форматах, round-trip не теряет значения,
+  schema/migration tests и PostgreSQL conformance зелёные.
+
+### S13.2 Сделать plaintext режимом по умолчанию
+
+Зависит от `S13.1`.
+
+- Изменить дефолт `IdentityHub(secret_storage=...)` на `plaintext`; `encrypted` оставить явным
+  opt-in без изменения envelope-контракта.
+- В тестах, проверяющих именно шифрование, указывать `secret_storage="encrypted"` явно.
+- Обновить guides, CLI и предупреждение о том, что дамп раскрывает все типы секретов.
+- **DoD:** поведенческий тест подтверждает plaintext без параметра, явный encrypted и смешанная
+  база продолжают работать.
+
+---
+
+## Фаза S17 — безопасный выбор credentials (issue 09)
+
+### S17.1 Возвращать ключ выбранной записи вместе со значением
+
+- Добавить публичную generic-модель `CredentialCandidate[T]` с полями `kind`, `name`, `value`
+  и свойством `key -> tuple[str, str]`.
+- Изменить `Lease.active_credential()` и `LoginContext.active_credential()` так, чтобы они
+  возвращали `CredentialCandidate[T] | None`. Это намеренная корректировка контракта,
+  выпущенного только в alpha-версии: безопасный путь должен быть путём по умолчанию.
+- Сохранить правила выбора без изменений: первая по имени запись заданного вида, `active`, не
+  просроченная, без `last_rejected_at` и без пометки отказа текущей попытки входа.
+- Обновить overload-ы и generic-вывод в `Lease`, `LoginContext`, `_LinkedIdentity` и публичных
+  протоколах. `candidate.value` должен иметь схему сервиса или явно переданный `schema=`.
+- Обновить примеры адаптеров. При отказе они передают
+  `credential=candidate.key` либо вызывают
+  `reject_credential(candidate.kind, name=candidate.name, code=...)`.
+- Добавить заметку о несовместимости в changelog и короткую миграцию с прежнего доступа
+  `credentials.field` на `candidate.value.field`.
+- Тесты на обоих Store: выбор второй записи после отказа первой, сохранение точного имени,
+  `LoginFailure(credential=candidate.key)`, исключение записи в рамках текущей попытки,
+  `None` после исчерпания, runtime-проверка `schema=` и mypy-контракт generic-типа.
+- **DoD:** адаптер может получить значение и точный ключ одним вызовом; окончательный отказ
+  первой записи исключает её из следующего входа; существующие правила сортировки и fencing не
+  изменились.
+
+### S17.2 Документировать временный обход и убрать его после исправления
+
+Зависит от `S17.1`.
+
+- До выпуска исправления поддерживается только обход с заранее известным именем через
+  `ctx.credential(kind, name)` и явный `LoginFailure(credential=(kind, name))`.
+- Не рекомендовать `active_credential()` без возможности сохранить ключ. Для динамически
+  именованных записей честно указать, что надёжного обхода в текущем `LoginContext` нет.
+- После реализации `S17.1` заменить обход в интеграционных примерах на `CredentialCandidate`.
+- **DoD:** документация не предлагает повторный выбор без пометки конкретной записи; временный
+  текст явно привязан к версиям до исправления.
+
+---
+
+## Фаза S18 — диагностическая карточка (issue 10)
+
+### S18.1 Показывать `retryable` в `RegionInfo`
+
+- Добавить `retryable: bool | None` в `RegionInfo` и копировать значение из `RegionState` в
+  `_region_info()` для сохранённых регионов. Для синтетических колонковых регионов значение
+  равно `None`.
+- Проверить сериализацию карточки библиотекой и admin backend. Если схема ответа описана
+  отдельно, добавить nullable-поле без переименования существующих полей.
+- В интерфейсе администратора различать `retryable=True`, `False` и неизвестное `None`; не
+  выводить `None` как окончательный отказ.
+- Добавить conformance-тест карточки после временного и окончательного `LoginFailure`, плюс
+  тест обратной совместимости сериализации.
+- Обновить `docs/guide/api.md` и описание приёмки.
+- **DoD:** `identities.card(id)` позволяет определить повторяемость последнего отказа `auth`, а
+  карточки остальных регионов остаются корректными.
+
+---
+
+## Фаза S19 — точечная замена credentials (issue 11)
+
+### S19.1 Добавить `put_credential(..., reset_auth=False)`
+
+- Добавить keyword-only параметр `reset_auth: bool = False` в публичный API и внутренний
+  `_put_credential()`.
+- Вынести общий шаг сброса `auth` из `replace_credentials()` и использовать его в обеих
+  командах. При `reset_auth=True` всё выполняется в одной транзакции с записью credentials и
+  событием:
+  - `no_session` остаётся `no_session`, но очищает `code` и `retryable`;
+  - `session_invalid` переходит в `no_session` и очищает отказ;
+  - другие состояния `auth` не меняются;
+  - сессия не отзывается.
+- `reset_auth=False` полностью сохраняет текущее поведение. Новая или заменённая запись, как и
+  сейчас, очищает только собственные метки валидности.
+- Проверить `expected_revision`, единый rollback и число повышений aggregate revision. Не
+  добавлять миграцию схемы.
+- Добавить тесты обоих Store для `no_session`, `session_invalid`, `authenticated`, значения по
+  умолчанию, rollback и повторного допуска `AcceptanceWorker`/`login_many`.
+- Обновить API guide, рецепт приёмки и changelog.
+- **DoD:** точечная замена credentials может атомарно снять старый неповторяемый отказ, не
+  отзывая сессию и не меняя поведение без явного флага.
+
+---
+
+## Фаза S20 — метаданные релиза и закрытие issues 09–12
+
+### S20.1 Исправить ревизию схемы и добавить release-gate
+
+- Исправить итоговую ревизию схемы релиза `1.0.0a3` в `CHANGELOG.md` с `0035` на `0036`.
+  Упоминание миграции `0035` у конкретной функции оставить без изменений.
+- Синхронизировать текст GitHub Release, потому что опубликованный wheel уже изменить нельзя;
+  исправление документации не требует новой миграции.
+- Расширить проверку релиза: для версии из тега секция changelog должна существовать и указывать
+  тот же schema head, что `identity_hub.postgres.migrate.SCHEMA_HEAD`. Проверку запускать в
+  release workflow, чтобы обычная разработка следующей миграции не делала последний релиз
+  ложнокрасным.
+- **DoD:** changelog и GitHub Release для `1.0.0a3` сообщают `0036`; будущая публикация падает до
+  загрузки в PyPI при расхождении версии или schema head.
+
+### S20.2 Финальная сверка и выпуск исправления
+
+Зависит от `S17.1`, `S17.2`, `S18.1`, `S19.1`, `S20.1`.
+
+- Обновить матрицу публичного API, changelog и traceability-тесты.
+- Выполнить целевые тесты на MemoryStore/PostgreSQL, typing-тесты, admin backend/frontend и
+  полный `scripts/check.sh`.
+- Повторить сценарий риска: две записи, первая отклонена адаптером, следующая попытка выбирает
+  вторую; после исчерпания первая больше не выбирается самопроизвольно.
+- Выпустить следующую alpha/patch-версию штатным GitHub Release и проверить установку публичного
+  артефакта из PyPI в чистом окружении.
+- **DoD:** issue 09–12 закрыты доказательствами тестов, все задачи S17–S20 имеют статус
+  `done`/`cancelled`, release workflow зелёный.
+
+---
+
 ## 8. Матрица трассировки
 
 | Ишью | Задачи плана |
@@ -981,6 +1121,10 @@ expires_at: ISO|null, secure, http_only, same_site: str ("" = не задан)}`
 | 06. cool_down из quarantined | S3.1 |
 | 07. Репутация при входе | S1.2 |
 | 08. Публичный Observation | не выполняется |
+| 09. Имя выбранной записи credentials | S17.1, S17.2 |
+| 10. `retryable` в карточке | S18.1 |
+| 11. `put_credential(reset_auth=...)` | S19.1 |
+| 12. Ревизия схемы в changelog | S20.1 |
 | Запрос владельца: временный бан | S2.2 |
 | Закрытие | S4.1 |
 | Запрос владельца: открытое хранение | S5.1, S5.2 |
@@ -991,3 +1135,5 @@ expires_at: ISO|null, secure, http_only, same_site: str ("" = не задан)}`
 | Запрос владельца: выборки по связям | S10.1, S10.2 |
 | Запрос владельца: адрес сервиса и выбор кредов | S11.1, S11.2 |
 | Запрос владельца: интеграция eazy_sdk | S12.1, S12.2 |
+| Запрос владельца: plaintext для всех секретов | S13.1, S13.2 |
+| Закрытие issues 09–12 | S20.2 |

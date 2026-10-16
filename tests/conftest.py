@@ -110,6 +110,7 @@ async def hub(sessionmaker: async_sessionmaker[AsyncSession]) -> IdentityHub:
         [FAKE_TG, FAKE_EXCHANGE],
         admin_base_url="https://admin.test",
         strict_events=True,
+        secret_storage="encrypted",
     )
     await instance.start()
     return instance

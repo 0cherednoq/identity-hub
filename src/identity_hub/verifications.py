@@ -15,7 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase
-from identity_hub.crypto import EncryptedPayload, associated_data
+from identity_hub.crypto import StoredPayload, associated_data
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.regions import Observation
 from identity_hub.domain.verification import (
@@ -50,7 +50,7 @@ async def apply_verification(
     *,
     actor: str,
     lease_id: UUID | None = None,
-    evidence: EncryptedPayload | None = None,
+    evidence: StoredPayload | None = None,
 ) -> VerificationDecision:
     """Шаг машины фактора; регион, ih_verifications, verified_factors и события — в `tx`."""
     now = await tx.now()
@@ -154,7 +154,7 @@ class Verification:
         self.factor = factor
         self.spec = lease.pool.service.verification(factor)  # ValidationFailed для неизвестного
 
-    async def _run(self, step: Step, evidence: EncryptedPayload | None = None) -> VerificationStatus:
+    async def _run(self, step: Step, evidence: StoredPayload | None = None) -> VerificationStatus:
         self.lease.check()
         space = self.lease.pool.space
         async with space._tx(own=True) as tx:
@@ -182,7 +182,7 @@ class Verification:
                 raise ValidationFailed(f"верификация {self.factor} не принимает evidence")
             model = validate_model(self.spec.evidence, evidence, "evidence")
             aad = associated_data("ih_verifications", self.lease.identity_id, self.factor)
-            payload = self.lease.pool.space.hub._envelope.seal_model(model, aad)
+            payload = self.lease.pool.space.hub._seal_stored_model(model, aad)
         actor = self.lease.holder
         return await self._run(lambda flow, s, verified, now: flow.start(s, verified, now, actor), payload)
 
@@ -239,7 +239,7 @@ class Verification:
         if row is None or row.evidence is None:
             return None
         aad = associated_data("ih_verifications", self.lease.identity_id, self.factor)
-        return self.lease.pool.space.hub._envelope.open_model(self.spec.evidence, row.evidence, aad)
+        return self.lease.pool.space.hub._open_stored_model(self.spec.evidence, row.evidence, aad)
 
 
 class VerificationsMixin(SpaceBase):

@@ -223,7 +223,7 @@ unreadable: 0198c1f3-…
 
 ## `secrets convert`
 
-Переводит только credentials и сессии между зашифрованным envelope и читаемым JSON:
+Переводит все секретные хранилища между зашифрованным envelope и читаемым JSON:
 
 ```bash
 identity-hub secrets convert --to plaintext [--space production] [--batch 500]

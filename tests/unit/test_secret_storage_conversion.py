@@ -42,7 +42,17 @@ async def test_convert_one_thousand_rows_in_batches() -> None:
 
     plaintext = await hub.doctor.convert_secrets(to="plaintext", batch=73)
     assert plaintext.total == 1000
-    assert plaintext.counts == {"credentials": 500, "sessions": 500}
+    assert plaintext.counts == {
+        "credentials": 500,
+        "sessions": 500,
+        "challenges": 0,
+        "verifications": 0,
+        "proxies": 0,
+        "webhooks": 0,
+        "notification_channels": 0,
+        "profiles": 0,
+        "import_items": 0,
+    }
     encrypted = await hub.doctor.convert_secrets(to="encrypted", batch=61)
     assert encrypted.total == 1000
     assert await hub.doctor.plaintext_secrets() == {}

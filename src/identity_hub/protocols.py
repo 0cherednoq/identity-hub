@@ -33,6 +33,7 @@ __all__ = [
     "AuthProbe",
     "Authenticator",
     "Blame",
+    "CredentialCandidate",
     "ErrorClassifier",
     "Fault",
     "FileImporter",
@@ -52,6 +53,19 @@ __all__ = [
 
 
 # ---------------------------------------------------------------- вход
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialCandidate[TValue: BaseModel]:
+    """Выбранная запись credentials вместе с ключом, нужным для точечной пометки результата."""
+
+    kind: str
+    name: str
+    value: TValue
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return self.kind, self.name
 
 
 class LinkedIdentity(Protocol):
@@ -77,7 +91,7 @@ class LinkedIdentity(Protocol):
 
     async def active_credential(
         self, kind: str = "default", *, schema: type[BaseModel] | None = None
-    ) -> BaseModel | None: ...
+    ) -> CredentialCandidate[BaseModel] | None: ...
 
     async def session(
         self, slot: str = "default", *, schema: type[BaseModel] | None = None
@@ -132,11 +146,15 @@ class LoginContext(Protocol, Generic[TCreds_co, TSession_co]):
         ...
 
     @overload
-    async def active_credential(self, kind: str = "default", *, schema: None = None) -> TCreds_co | None: ...
+    async def active_credential(
+        self, kind: str = "default", *, schema: None = None
+    ) -> CredentialCandidate[TCreds_co] | None: ...
 
     @overload
-    async def active_credential(self, kind: str = "default", *, schema: type[TModel]) -> TModel | None:
-        """Первая по имени пригодная запись вида или `None`."""
+    async def active_credential(
+        self, kind: str = "default", *, schema: type[TModel]
+    ) -> CredentialCandidate[TModel] | None:
+        """Первая по имени пригодная запись вида с её ключом или `None`."""
         ...
 
     async def reject_credential(self, kind: str, *, name: str = "default", code: str) -> None:

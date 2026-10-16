@@ -118,13 +118,13 @@ class Doctor:
         return await self.hub._store.inactive_key_usage(self.hub._envelope.active_key_id)
 
     async def plaintext_secrets(self, *, space: str | None = None) -> dict[str, int]:
-        """Число открытых строк credentials/session, чтобы doctor мог явно предупредить."""
+        """Число открытых строк во всех секретных хранилищах (D-323)."""
         return await self.hub._store.plaintext_secret_counts(space=space)
 
     async def convert_secrets(
         self, *, to: str, space: str | None = None, batch: int = 500
     ) -> SecretConversionReport:
-        """Пачками перевести credentials/session в `plaintext` или `encrypted` (D-313)."""
+        """Пачками перевести все секретные хранилища между форматами (D-313, D-323)."""
         if to not in ("plaintext", "encrypted"):
             raise ValidationFailed("to: plaintext или encrypted")
         if batch < 1:
@@ -133,7 +133,7 @@ class Doctor:
             raise NotFound("space", space)
         counts: Counter[str] = Counter()
         spaces: Counter[str] = Counter()
-        for table in ("credentials", "sessions"):
+        for table in ROTATION_TABLES:
             while True:
                 converted = await self.hub._store.convert_secret_storage(
                     self.hub._envelope, table=table, to=to, limit=batch, space=space
@@ -209,7 +209,7 @@ class Doctor:
             for slug, row in batch:
                 after = row.id
                 try:
-                    secret = hub._envelope.open_model(
+                    secret = hub._open_stored_model(
                         ProxySecret, row.secret, associated_data("ih_proxies", row.id)
                     )
                 except DecryptionFailed:

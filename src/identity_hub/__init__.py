@@ -128,6 +128,7 @@ from identity_hub.protocols import (
     Authenticator,
     AuthProbe,
     Blame,
+    CredentialCandidate,
     ErrorClassifier,
     Fault,
     FileImporter,
@@ -160,7 +161,7 @@ from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
-__version__ = "1.0.0a3"
+__version__ = "1.0.0a4"
 
 __all__ = [
     "AcceptPolicy",
@@ -185,6 +186,7 @@ __all__ = [
     "Cookie",
     "Cookies",
     "CreateManyResult",
+    "CredentialCandidate",
     "CredentialInput",
     "DatabaseBusy",
     "DeliveryStatus",

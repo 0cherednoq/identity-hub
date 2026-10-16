@@ -284,7 +284,7 @@ class Webhooks(Namespace):
         if not secret.get_secret_value():
             raise ValidationFailed("секрет вебхука не может быть пустым")
         endpoint_id = id or new_id()
-        payload = self.space.hub._envelope.seal_model(
+        payload = self.space.hub._seal_stored_model(
             _WebhookSecrets(current=secret), associated_data("ih_webhook_endpoints", endpoint_id)
         )
         async with self.space._tx() as tx:
@@ -339,7 +339,7 @@ class Webhooks(Namespace):
             row = await tx.get_webhook_endpoint(endpoint_id)
             if row is None:
                 raise NotFound("webhook endpoint", endpoint_id)
-            current = self.space.hub._envelope.open_model(
+            current = self.space.hub._open_stored_model(
                 _WebhookSecrets,
                 row.secret,
                 associated_data("ih_webhook_endpoints", endpoint_id),
@@ -349,7 +349,7 @@ class Webhooks(Namespace):
                 previous=current.current,
                 previous_until=self.space.hub.clock.now() + overlap,
             )
-            payload = self.space.hub._envelope.seal_model(
+            payload = self.space.hub._seal_stored_model(
                 rotated, associated_data("ih_webhook_endpoints", endpoint_id)
             )
             if not await tx.update_webhook_secret(endpoint_id, payload):
@@ -372,7 +372,7 @@ class Webhooks(Namespace):
         if row is None:
             raise NotFound("webhook endpoint", endpoint_id)
         validate_webhook_url(row.url, dev_hosts=self.space.hub.webhook_dev_hosts)
-        secrets = self.space.hub._envelope.open_model(
+        secrets = self.space.hub._open_stored_model(
             _WebhookSecrets,
             row.secret,
             associated_data("ih_webhook_endpoints", endpoint_id),
@@ -542,7 +542,7 @@ class WebhookDispatcher:
         return reachable
 
     def _active_secrets(self, endpoint_id: UUID, payload: Any) -> list[SecretStr]:
-        secrets = self.hub._envelope.open_model(
+        secrets = self.hub._open_stored_model(
             _WebhookSecrets,
             payload,
             associated_data("ih_webhook_endpoints", endpoint_id),

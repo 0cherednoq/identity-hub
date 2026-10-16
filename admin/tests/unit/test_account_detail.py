@@ -61,7 +61,9 @@ def test_account_card_sections_are_scoped_and_secret_free() -> None:
     assert detail.status_code == 200
     assert detail.json()["data"]["revision"] >= 0
     assert all(response.status_code == 200 for response in sections.values())
-    assert sections["state"].json()["data"]["data"]["regions"]
+    regions = sections["state"].json()["data"]["data"]["regions"]
+    assert regions
+    assert all("retryable" in region for region in regions)
     assert sections["state"].json()["data"]["actions"] == []
     assert sections["verification"].json()["data"]["actions"] == []
     assert sections["access"].json()["data"]["data"]["secret_values_included"] is False

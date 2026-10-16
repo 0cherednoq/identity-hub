@@ -74,6 +74,7 @@ async def memory_hub() -> IdentityHub:
         store=MemoryStore(clock),
         clock=clock,
         strict_events=True,
+        secret_storage="encrypted",
     )
     await hub.start()
     return hub

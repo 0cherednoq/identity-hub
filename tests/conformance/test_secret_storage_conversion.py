@@ -9,6 +9,16 @@ from identity_hub.read.events import EventFilters
 
 pytestmark = pytest.mark.conformance
 
+EMPTY_EXTENDED_COUNTS = {
+    "challenges": 0,
+    "verifications": 0,
+    "proxies": 0,
+    "webhooks": 0,
+    "notification_channels": 0,
+    "profiles": 0,
+    "import_items": 0,
+}
+
 
 async def test_convert_round_trip_preserves_values_and_revisions(space: SpaceHandle) -> None:
     hub = space.hub
@@ -31,7 +41,7 @@ async def test_convert_round_trip_preserves_values_and_revisions(space: SpaceHan
         session_before = await tx.session_history(identity_id, "default")
 
     plaintext = await hub.doctor.convert_secrets(to="plaintext", batch=2)
-    assert plaintext.counts == {"credentials": 3, "sessions": 3}
+    assert plaintext.counts == {"credentials": 3, "sessions": 3, **EMPTY_EXTENDED_COUNTS}
     assert plaintext.spaces == {space.slug: 6}
     assert await hub.doctor.plaintext_secrets(space=space.slug) == {
         "credentials": 3,
@@ -40,7 +50,7 @@ async def test_convert_round_trip_preserves_values_and_revisions(space: SpaceHan
     assert (await hub.doctor.convert_secrets(to="plaintext", batch=2)).total == 0
 
     encrypted = await hub.doctor.convert_secrets(to="encrypted", space=space.slug, batch=2)
-    assert encrypted.counts == {"credentials": 3, "sessions": 3}
+    assert encrypted.counts == {"credentials": 3, "sessions": 3, **EMPTY_EXTENDED_COUNTS}
     assert await hub.doctor.plaintext_secrets(space=space.slug) == {}
     assert (await hub.doctor.convert_secrets(to="encrypted", batch=2)).total == 0
 
@@ -85,6 +95,6 @@ async def test_convert_can_be_limited_to_one_space(space: SpaceHandle) -> None:
         )
 
     report = await space.hub.doctor.convert_secrets(to="plaintext", space=space.slug, batch=1)
-    assert report.counts == {"credentials": 1, "sessions": 0}
+    assert report.counts == {"credentials": 1, "sessions": 0, **EMPTY_EXTENDED_COUNTS}
     assert await space.hub.doctor.plaintext_secrets(space=space.slug) == {"credentials": 1}
     assert await space.hub.doctor.plaintext_secrets(space=other.slug) == {}

@@ -28,9 +28,10 @@ await hub.start()                       # синхронизирует серв�
 space = await hub.spaces.ensure("production", "Production")  # пространство: изоляция данных
 ```
 
-Новые credentials и сессии по умолчанию шифруются. Явный
-`secret_storage="plaintext"` хранит только эти два вида данных открытым JSON; неизвестное
-значение отклоняется при создании хаба, а мастер-ключ всё равно обязателен.
+Новые секреты по умолчанию хранятся открыто (`secret_storage="plaintext"`). Явный
+`secret_storage="encrypted"` включает envelope-шифрование для всех секретных хранилищ;
+неизвестное значение отклоняется при создании хаба. Мастер-ключ обязателен в обоих режимах:
+он используется для HMAC-отпечатков и идемпотентности.
 
 Один `IdentityHub` на процесс. Всё остальное — через пространство `space`: у него нет плоских
 методов, только **неймспейсы** по сущностям.
@@ -83,11 +84,13 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 
 Политика приёмки импорта экспортируется как `AcceptPolicy`; её задают в
 `imports.run(..., accept=...)` или как `Service.default_accept`.
-Публичные типы `OnExisting`, `ImportReport`, `LoginContext` и `LoginFailure` описывают этот
+Публичные типы `OnExisting`, `ImportReport`, `LoginContext`, `CredentialCandidate` и
+`LoginFailure` описывают этот
 контракт: `OnExisting.MERGE` включает накопительный импорт, а `ImportReport.merge_details`
 объясняет дедупликацию и сохранение активной сессии. Контекст предоставляет
-`active_credential`, `verify_credential` и `reject_credential`; короткая форма —
-`LoginFailure(code, credential=(kind, name))`.
+`active_credential`, `verify_credential` и `reject_credential`. `active_credential()` возвращает
+`CredentialCandidate(kind, name, value)`; короткая форма точечного отказа —
+`LoginFailure(code, credential=candidate.key)`.
 
 `Service[TCredentials, TSession]`, `Pool[...]`, `Lease[...]`, `LoginContext[...]` и
 `Authenticator[...]` сохраняют типы схем до адаптера и воркера. Методы `credentials`,

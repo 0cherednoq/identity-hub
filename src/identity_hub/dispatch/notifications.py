@@ -197,7 +197,7 @@ class Notifications(Namespace):
         if not bot_token.get_secret_value():
             raise ValidationFailed("bot_token не может быть пустым")
         channel_id = id or new_id()
-        secret = self.space.hub._envelope.seal_model(
+        secret = self.space.hub._seal_stored_model(
             _TelegramSecret(bot_token=bot_token),
             associated_data("ih_notification_channels", channel_id),
         )
@@ -243,7 +243,7 @@ class Notifications(Namespace):
             }
         secret = None
         if bot_token is not None:
-            secret = self.space.hub._envelope.seal_model(
+            secret = self.space.hub._seal_stored_model(
                 _TelegramSecret(bot_token=bot_token),
                 associated_data("ih_notification_channels", channel_id),
             )
@@ -337,7 +337,7 @@ class Notifications(Namespace):
             row = await tx.get_notification_channel_secret(channel_id)
         if row is None:
             raise NotFound("notification channel", channel_id)
-        token = self.space.hub._envelope.open_model(
+        token = self.space.hub._open_stored_model(
             _TelegramSecret,
             row.secret,
             associated_data("ih_notification_channels", channel_id),
@@ -414,7 +414,7 @@ class NotificationDispatcher:
                 error = "TelegramRateLimited"  # канал на паузе: запрос не отправляем
             else:
                 try:
-                    token = self.hub._envelope.open_model(
+                    token = self.hub._open_stored_model(
                         _TelegramSecret,
                         attempt.channel_secret,
                         associated_data("ih_notification_channels", attempt.channel_id),

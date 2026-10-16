@@ -38,10 +38,19 @@ async def hub_under_test(
     if backend_sessionmaker is None:
         clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
         hub = IdentityHub(
-            secrets=secrets, services=[FAKE_TG, FAKE_EXCHANGE], store=MemoryStore(clock), clock=clock
+            secrets=secrets,
+            services=[FAKE_TG, FAKE_EXCHANGE],
+            store=MemoryStore(clock),
+            clock=clock,
+            secret_storage="encrypted",
         )
     else:
-        hub = IdentityHub(backend_sessionmaker, secrets, [FAKE_TG, FAKE_EXCHANGE])
+        hub = IdentityHub(
+            backend_sessionmaker,
+            secrets,
+            [FAKE_TG, FAKE_EXCHANGE],
+            secret_storage="encrypted",
+        )
     await hub.start()
     yield hub
 
