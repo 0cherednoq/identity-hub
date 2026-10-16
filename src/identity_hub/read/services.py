@@ -103,6 +103,7 @@ class ServiceSpaceCount:
 class ServiceDescriptor:
     name: str
     title: str
+    url: str | None
     total: int
     spaces: tuple[ServiceSpaceCount, ...]
     schemas: tuple[ServiceSchema, ...]
@@ -167,6 +168,7 @@ def _descriptor(service: Service, counts: Mapping[str, int]) -> ServiceDescripto
     return ServiceDescriptor(
         name=service.name,
         title=service.title,
+        url=service.url,
         total=sum(counts.values()),
         spaces=tuple(ServiceSpaceCount(slug, count) for slug, count in sorted(counts.items())),
         schemas=_schemas(service),

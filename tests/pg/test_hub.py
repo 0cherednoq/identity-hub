@@ -21,8 +21,19 @@ async def test_start_syncs_service_registry(
     hub: IdentityHub, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     async with sessionmaker() as s:
-        rows = dict((await s.execute(select(ServiceRecord.name, ServiceRecord.title))).all())
-    assert rows == {"fake_tg": "Fake Telegram", "fake_exchange": "Fake Exchange"}
+        rows = {
+            row.name: (row.title, row.url)
+            for row in (await s.execute(select(ServiceRecord.name, ServiceRecord.title, ServiceRecord.url)))
+        }
+    assert rows == {
+        "fake_tg": ("Fake Telegram", "https://telegram.org"),
+        "fake_exchange": ("Fake Exchange", None),
+    }
+    async with sessionmaker() as s:
+        read_rows = dict(
+            (await s.execute(select(hub.read.services.c.name, hub.read.services.c.url))).all()
+        )
+    assert read_rows["fake_tg"] == "https://telegram.org"
     await hub.start()  # повторный старт — upsert
 
 

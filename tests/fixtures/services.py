@@ -36,6 +36,7 @@ class TgSession(BaseModel):
 FAKE_TG = Service(
     name="fake_tg",
     title="Fake Telegram",
+    url="https://telegram.org/apps",
     attributes=TgAttributes,
     profile=TgProfile,
     credentials=TgCredentials,

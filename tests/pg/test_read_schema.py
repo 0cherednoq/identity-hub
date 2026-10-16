@@ -41,6 +41,7 @@ FORBIDDEN = {
 }
 
 EXPECTED_COLUMNS = {
+    "services": {"name", "title", "url", "synced_at"},
     "identities": {
         "id", "space_id", "service", "external_ref", "normalized_ref", "lifecycle", "standing",
         "standing_code",

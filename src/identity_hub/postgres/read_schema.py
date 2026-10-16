@@ -30,6 +30,10 @@ READ_SCHEMA_VERSION = 4
 
 # Публичное имя таблицы → (физическая таблица, {публичная колонка: физическая колонка}).
 READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
+    "services": (
+        "ih_services",
+        {"name": "name", "title": "title", "url": "url", "synced_at": "synced_at"},
+    ),
     "identities": (
         "ih_identities",
         {
@@ -214,6 +218,7 @@ class ReadSchema:
             name: _table(self.metadata, physical[table], columns, db_schema)
             for name, (table, columns) in READ_TABLES.items()
         }
+        self.services: Table = built["services"]
         self.identities: Table = built["identities"]
         self.leases: Table = built["leases"]
         self.lease_history: Table = built["lease_history"]

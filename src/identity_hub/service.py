@@ -8,12 +8,14 @@
 from __future__ import annotations
 
 import inspect
+import ipaddress
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, get_args
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
 
@@ -53,6 +55,44 @@ PROBE_OPERATION = "probe"
 """Вид операции, который тратят пробы (FR-9.7). Добавляется в сервис автоматически."""
 
 _NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _normalize_service_url(value: str) -> str:
+    """Нормализовать адрес платформы до HTTP(S) origin без userinfo и пути."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("url: нужен непустой HTTP(S) адрес")
+    raw = value.strip()
+    parsed = urlsplit(raw if "://" in raw else f"https://{raw}")
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or parsed.hostname is None:
+        raise ValueError("url: поддерживаются только http и https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("url: логин и пароль запрещены")
+    host = parsed.hostname
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if all(label.isdigit() for label in host.split(".")):
+            raise ValueError("url: некорректный IP-адрес") from None
+        try:
+            host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            raise ValueError("url: некорректное имя хоста") from None
+        labels = host.split(".")
+        if not labels or any(
+            not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+            for label in labels
+        ):
+            raise ValueError("url: некорректное имя хоста") from None
+    else:
+        host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("url: некорректный порт") from None
+    default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    suffix = "" if port is None or default_port else f":{port}"
+    return f"{scheme}://{host}{suffix}"
 _EPOCH = datetime(2000, 1, 3, tzinfo=UTC)  # понедельник: недельные окна начинаются с понедельника
 
 
@@ -172,6 +212,7 @@ class Service:
 
     name: str
     title: str
+    url: str | None = None
     attributes: type[BaseModel] = EmptyModel
     profile: type[BaseModel] = EmptyModel
     credentials: type[BaseModel] = EmptyModel
@@ -251,6 +292,8 @@ class Service:
         return kind, name
 
     def __post_init__(self) -> None:
+        if self.url is not None:
+            object.__setattr__(self, "url", _normalize_service_url(self.url))
         errors = self._validate()
         if not errors:
             # функциональные формы адаптеров приводятся к объектам протоколов (R2-F27)
@@ -330,7 +373,7 @@ class Service:
         return self.standing_codes.get(code)
 
     def registry_row(self) -> dict[str, Any]:
-        return {"name": self.name, "title": self.title}
+        return {"name": self.name, "title": self.title, "url": self.url}
 
     # --------------------------------------------------------- валидация
 

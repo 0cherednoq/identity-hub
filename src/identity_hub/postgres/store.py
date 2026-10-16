@@ -5294,10 +5294,12 @@ class PgStore(Store):
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         if not services:
             return
-        stmt = insert(ServiceRecord).values([{"name": s.name, "title": s.title} for s in services])
+        stmt = insert(ServiceRecord).values(
+            [{"name": s.name, "title": s.title, "url": s.url} for s in services]
+        )
         stmt = stmt.on_conflict_do_update(
             index_elements=[ServiceRecord.name],
-            set_={"title": stmt.excluded.title, "synced_at": func.now()},
+            set_={"title": stmt.excluded.title, "url": stmt.excluded.url, "synced_at": func.now()},
         )
         async with self._own() as session:
             await _execute(session, stmt, execution_options=self.options)

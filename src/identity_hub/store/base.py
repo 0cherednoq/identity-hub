@@ -341,6 +341,7 @@ class AttentionIdentityRow:
 class ServiceRow:
     name: str
     title: str
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

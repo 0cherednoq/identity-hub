@@ -46,12 +46,12 @@
 | S9.4 | Документация и закрытие фазы | S9.1, S9.2, S9.3 | done |  | `D-319` |
 | S10.1 | Связи аккаунтов в read-схеме | — | done |  | запрос владельца, `D-320` |
 | S10.2 | Предикаты связей в `IdentityFilter` и аренде | S10.1 | done |  | `D-320` |
-| S11.1 | Колонка `url` у сервиса | — | todo |  | запрос владельца, `D-321`; миграция |
+| S11.1 | Колонка `url` у сервиса | — | done |  | запрос владельца, `D-321`; миграция |
 | S11.2 | Доступ к кредам: `active_credential` и типизация | — | todo |  | `D-321` |
 | S12.1 | Формат `eazy` в конвертерах cookies и сессии | — | todo |  | запрос владельца, `D-322` |
 | S12.2 | `lease.session_revision` и модуль `integrations.eazy` | S12.1 | todo |  | `D-322` |
 
-**Итого:** 26 / 30 done
+**Итого:** 27 / 30 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -80,3 +80,4 @@
 2026-10-16 · S9.4 · done · docs and public contract; full gate 2157 passed, 5 skipped; anti-flake 3x74 passed
 2026-10-16 · S10.1 · done · read-схема identity_links и PostgreSQL anti-join
 2026-10-16 · S10.2 · done · link-aware find/list/count и эксклюзивная аренда · очередь S закрыта
+2026-10-16 · S11.1 · done · Service.url origin, migration 0036, catalog and read schema
