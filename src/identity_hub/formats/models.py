@@ -245,6 +245,11 @@ class Cookie(BaseModel):
 
 
 class CookiesDump(DumpNamespace[Any]):
+    def eazy(self, *, strict: bool = False) -> list[dict[str, object]]:
+        from identity_hub.formats import eazy
+
+        return eazy.dump(self._value, strict=strict)
+
     def json(self, *, strict: bool = False) -> list[dict[str, Any]]:
         from identity_hub.formats import json as json_format
 
@@ -329,6 +334,11 @@ class CookiesLoad(LoadNamespace[Any]):
         from identity_hub.formats import json as json_format
 
         return json_format.load(Cookies, data, strict=strict)
+
+    def eazy(self, data: Any, *, strict: bool = False) -> Cookies:
+        from identity_hub.formats import eazy
+
+        return eazy.load(data, strict=strict)
 
     def playwright(self, data: Any, *, strict: bool = False) -> Cookies:
         from identity_hub.formats import playwright
@@ -433,6 +443,11 @@ class OriginStorage(BaseModel):
 
 
 class BrowserSessionDump(DumpNamespace[Any]):
+    def eazy_state(self, *, strict: bool = False) -> Any:
+        from identity_hub.formats import eazy
+
+        return eazy.dump_state(self._value, strict=strict)
+
     def json(self, *, strict: bool = False) -> dict[str, Any]:
         from identity_hub.formats import json as json_format
 
@@ -456,6 +471,11 @@ class BrowserSessionLoad(LoadNamespace[Any]):
         from identity_hub.formats import json as json_format
 
         return json_format.load(BrowserSession, data, strict=strict)
+
+    def eazy_state(self, data: Any, *, strict: bool = False) -> BrowserSession:
+        from identity_hub.formats import eazy
+
+        return eazy.load_state(data, strict=strict)
 
     def playwright(self, data: Any, *, strict: bool = False) -> BrowserSession:
         from identity_hub.formats import playwright

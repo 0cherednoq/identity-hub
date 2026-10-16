@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
+import types
 from pathlib import Path
 from typing import assert_type
 
@@ -124,6 +126,63 @@ def test_json_namespaces_are_typed_round_trip_and_not_model_fields() -> None:
     assert BrowserSession.load(session.dump.json()) == session
     assert "dump" not in session.model_dump() and "load" not in session.model_dump()
     assert "fixture-secret" not in repr(session)
+
+
+def test_eazy_cookie_state_golden_round_trip_and_loss_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    golden = json.loads(
+        (FIXTURES.parent / "eazy_cookie_state.json").read_text(encoding="utf-8")
+    )
+    cookies = Cookies.load.eazy(golden)
+    assert_type(cookies.dump.eazy(), list[dict[str, object]])
+    assert cookies.dump.eazy() == golden
+    assert cookies.root[0].expires == 1767225600.0
+    assert cookies.root[1].expires is None and cookies.root[1].same_site is None
+    naive = [dict(golden[0], expires_at="2026-01-01T00:00:00")]
+    with pytest.raises(ValidationFailed, match="timezone"):
+        Cookies.load.eazy(naive)
+
+    partitioned = Cookies(
+        [
+            Cookie(
+                name="chips",
+                value="secret",
+                domain="example.com",
+                secure=True,
+                partition_key={"top_level_site": "https://top.example"},
+            )
+        ]
+    )
+    with pytest.warns(FormatLossWarning, match="partition_key"):
+        primitive = partitioned.dump.eazy()
+    assert Cookies.load.eazy(primitive).root[0].partition_key is None
+    with pytest.raises(ValidationFailed, match="partition_key"):
+        partitioned.dump.eazy(strict=True)
+
+    class FakeCookieState:
+        def __init__(self, value: list[dict[str, object]]) -> None:
+            self.value = value
+
+        @classmethod
+        def from_primitive(cls, value: object) -> FakeCookieState:
+            assert isinstance(value, list)
+            return cls(value)
+
+        def to_primitive(self) -> list[dict[str, object]]:
+            return self.value
+
+    package = types.ModuleType("eazy_sdk")
+    module = types.ModuleType("eazy_sdk.cookies")
+    module.CookieState = FakeCookieState  # type: ignore[attr-defined]
+    package.cookies = module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "eazy_sdk", package)
+    monkeypatch.setitem(sys.modules, "eazy_sdk.cookies", module)
+
+    session = BrowserSession(cookies=cookies)
+    state = session.dump.eazy_state()
+    assert isinstance(state, FakeCookieState)
+    assert BrowserSession.load.eazy_state(state) == session
 
 
 def test_browser_session_expiry_and_token_helpers() -> None:

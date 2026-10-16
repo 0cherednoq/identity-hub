@@ -1,0 +1,24 @@
+[
+  {
+    "name": "sid",
+    "value": "fixture-secret",
+    "domain": "example.com",
+    "path": "/",
+    "host_only": true,
+    "expires_at": "2026-01-01T00:00:00+00:00",
+    "secure": true,
+    "http_only": true,
+    "same_site": "Lax"
+  },
+  {
+    "name": "session",
+    "value": "session-secret",
+    "domain": "example.com",
+    "path": "/account",
+    "host_only": false,
+    "expires_at": null,
+    "secure": false,
+    "http_only": false,
+    "same_site": ""
+  }
+]

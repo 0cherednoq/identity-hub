@@ -8,6 +8,9 @@
 
 ### Added
 
+- Конвертер `Cookies.dump/load.eazy()` и мост `BrowserSession.dump/load.eazy_state()` для
+  `eazy_sdk.CookieState`, включая timezone-aware сроки и предупреждение о потере CHIPS
+  `partition_key`.
 - `Lease.active_credential()` и `LoginContext.active_credential()` выбирают первую по имени
   пригодную запись credentials, исключая истёкшие и ранее отклонённые. `Service`, `Pool`,
   `Lease`, `LoginContext` и `Authenticator` теперь сохраняют generic-типы схем credentials и

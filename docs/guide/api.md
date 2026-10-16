@@ -109,6 +109,11 @@ JSON — первый канонический формат: `cookies.dump.json(
 `Cookies.load(data)`. `dump` и `load` — `ClassVar`, поэтому в сериализацию модели не попадают.
 Значения cookie, токенов, паролей и ключей скрыты в `repr`.
 
+Формат eazy_sdk доступен как `cookies.dump.eazy()` / `Cookies.load.eazy(data)`: срок переводится
+между Unix epoch и timezone-aware ISO, а пустой `same_site` — в `None`. Мост
+`BrowserSession.dump.eazy_state()` / `BrowserSession.load.eazy_state(state)` лениво импортирует
+опциональный `eazy_sdk`; неподдерживаемый `partition_key` выдаёт `FormatLossWarning`.
+
 Для браузеров доступны `playwright`, `cdp`, `puppeteer` (только dump), `selenium`,
 `chrome_extension`, `crawlee` и `tough_cookie`, например
 `cookies.dump.cdp()` и `Cookies.load.cdp(rows)`. `BrowserSession.dump/load.playwright()`

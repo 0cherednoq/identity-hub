@@ -114,6 +114,7 @@ auth-cookie или отсутствие подходящих cookie оставл
 |---|---|---|
 | Канонический JSON | `dump.json()` / `load.json()` | нет |
 | Playwright | `Cookies.dump/load.playwright()`, `BrowserSession.dump/load.playwright()` | `sessionStorage`; Chromium может нормализовать незаданный SameSite |
+| eazy_sdk | `Cookies.dump/load.eazy()`, `BrowserSession.dump/load.eazy_state()` | `partition_key`; `CookieState` хранит только cookies |
 | CDP / Puppeteer | `dump/load.cdp()`, `dump.puppeteer()` | Puppeteer — только выгрузка |
 | Selenium | `dump/load.selenium()` | partitioned cookie пропускаются |
 | Chrome extensions | `dump/load.chrome_extension()` | служебные поля расширений не канонизируются |
