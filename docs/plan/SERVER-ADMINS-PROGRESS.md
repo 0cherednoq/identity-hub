@@ -48,8 +48,10 @@
 | S10.2 | Предикаты связей в `IdentityFilter` и аренде | S10.1 | done |  | `D-320` |
 | S11.1 | Колонка `url` у сервиса | — | todo |  | запрос владельца, `D-321`; миграция |
 | S11.2 | Доступ к кредам: `active_credential` и типизация | — | todo |  | `D-321` |
+| S12.1 | Формат `eazy` в конвертерах cookies и сессии | — | todo |  | запрос владельца, `D-322` |
+| S12.2 | `lease.session_revision` и модуль `integrations.eazy` | S12.1 | todo |  | `D-322` |
 
-**Итого:** 26 / 28 done
+**Итого:** 26 / 30 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup

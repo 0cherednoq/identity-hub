@@ -4,7 +4,7 @@
 тексты ишью — [`../isue/server-admins/`](../isue/server-admins/) (копия
 `template2/server-admins/docs/issues/identity-hub` от 2026-10-14).
 Прогресс: [`SERVER-ADMINS-PROGRESS.md`](SERVER-ADMINS-PROGRESS.md).
-Решения: [`DECISIONS.md`](DECISIONS.md) (`D-310`–`D-321`).
+Решения: [`DECISIONS.md`](DECISIONS.md) (`D-310`–`D-322`).
 Протокол автономной работы: [`CLAUDE.md`](../../CLAUDE.md).
 
 Этот файл — спецификация задач `S<фаза>.<номер>`. Статусы ведутся только в
@@ -899,6 +899,76 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
 
 ---
 
+## Фаза S12 — интеграция с eazy_sdk
+
+Запрос владельца (`D-322`): eazy_sdk (тулкит сборки SDK, `A:/work/stardust/lib/RespLens/eazy_sdk`)
+хранит сессию через протокол `SessionStore`; хаб — надёжное шифрованное многопроцессное
+хранилище. Связываем их **на стороне хаба**: eazy_sdk — общий тулкит, зависеть от
+специализированного оркестратора не должен; его протокол `SessionStore` уже является швом.
+Направление зависимости: хаб → eazy_sdk, опционально и лениво; eazy_sdk не меняется.
+
+**Сверка форматов (готово).** eazy_sdk `StoredCookie.to_primitive()`:
+`{name, value, domain (нижний регистр, без ведущей точки), path, host_only: bool,
+expires_at: ISO|null, secure, http_only, same_site: str ("" = не задан)}`. Это **та же модель**,
+что наш `Cookie` (`D-314`): одинаковые `domain` в нижнем регистре без точки и явный `host_only`;
+`expires_at=None`/отсутствие = сессионная. Отличия только: срок — ISO-строка (у нас float epoch),
+`same_site=""` (у нас `None`), и у eazy **нет `partition_key`** (CHIPS).
+
+### S12.1 Формат `eazy` в конвертерах cookies и сессии
+
+- `Cookies.dump.eazy()` / `Cookies.load.eazy(data)` — список словарей формата
+  `StoredCookie.to_primitive()`. Маппинг:
+  - `domain`, `path`, `host_only`, `secure`, `http_only` — один в один (конвенция совпадает);
+  - срок: `dump` — float epoch → ISO в UTC, **tz-aware** (eazy требует timezone); `load` —
+    `datetime.fromisoformat` → float epoch; `None`/`null` ↔ сессионная;
+  - `same_site`: `dump` — `None` → `""`, enum → `"Lax"`/`"Strict"`/`"None"`; `load` — `""` → `None`,
+    иначе разбор без учёта регистра;
+  - `partition_key`: eazy не поддерживает — при `dump` cookie с `partition_key` даёт
+    `FormatLossWarning` (значение теряется, cookie остаётся обычной), при `load` — `None`.
+- `BrowserSession.dump.eazy_state()` / `load.eazy_state(CookieState)` — мост к eazy
+  `CookieState` (его `to_primitive()`/`from_primitive()` — тот же список). Это `SessionBridge`
+  со стороны хаба.
+- **DoD:** круговой тест `Cookies.load.eazy(Cookies.dump.eazy(c)) == c` без потерь, кроме
+  `partition_key` (с предупреждением); реальный `CookieState.to_primitive()` из eazy_sdk
+  (golden-fixture) загружается в наш `Cookie` и обратно; tz-aware срок сохраняется; `same_site`
+  пустой ↔ `None`; оба бэкенда не нужны (чистые конвертеры).
+
+### S12.2 `lease.session_revision` и модуль `integrations.eazy`
+
+Зависит от `S12.1`.
+
+- **Примитив ядра `lease.session_revision`** → `int`: ревизия текущей сессии слота из
+  `ih_sessions.revision`. Нужен, чтобы отдавать eazy `SessionRevision`; полезен и сам по себе.
+  Добавить рядом с `lease.session()`; для пустого слота — определить (например, `0`).
+- **Модуль `identity_hub.integrations.eazy`** (ленивый импорт eazy_sdk, без жёсткой
+  зависимости) с `HubSessionStore`, реализующим протокол eazy `SessionStore[TSession]`:
+  - конструктор принимает **уже взятую аренду** (`HubSessionStore(lease)`); аренду он **не
+    создаёт и не освобождает** — её жизненный цикл у вызывающего (`async with pool.lease()`);
+  - `load(key)` → `StoredSession(value, SessionRevision(lease.session_revision), cookies)`:
+    `value` — модель сессии слота (`lease.session()`), `cookies` — её cookies через
+    `dump.eazy_state()`; слот берётся из `SessionKey.value` (не секрет — это `(identity_id, slot)`);
+  - `save(key, value, revision, cookies)` → `lease.save_session(...)`: записывает значение и
+    cookies (из `CookieState` через `load.eazy_state`) в слот; ревизия сверяется с fencing;
+  - `invalidate(key, expected)` → `secrets.revoke_session`/перевод слота в `invalidated`.
+- Сессионная модель слота для eazy-сервиса держит и значение SDK, и cookies (например, модель с
+  полями `value` и `cookies: BrowserSession`); `HubSessionStore` раскладывает `StoredSession`
+  (value + cookies) по ней.
+- **Граница ответственности (из обсуждения):** вход (acquire) водит хаб через `authenticator`,
+  внутри которого крутится eazy_sdk; `HubSessionStore` — только хранилище под той же арендой, не
+  заводит своё durable-хранилище параллельно хабу. HTTP-клиент eazy_sdk ключуется по прокси
+  аренды (не на аккаунт).
+- **Документация:** рецепт «eazy_sdk-SDK на хранилище хаба» в `12-recipes.md` (аренда → store →
+  SDK; вход через `authenticator`, runtime-чтение через store); `api.md`, allowlist, CHANGELOG.
+- `tests/test_server_admins_traceability.py` покрывает `S12.*`.
+- **DoD:** `HubSessionStore(lease)` проходит контракт eazy `SessionStore` (load/save/invalidate) с
+  фейковым eazy, если пакет не установлен — тест пропускается (маркер, без обязательной
+  зависимости); сессия, сохранённая через store, читается хабом и наоборот; cookies переживают
+  круг; `lease.session_revision` совпадает с ревизией после `save`; аренда не создаётся внутри
+  store; полный `bash scripts/check.sh` зелёный; все задачи `S12` в статусе `done`/`cancelled` с
+  записью `D-NNN`.
+
+---
+
 ## 8. Матрица трассировки
 
 | Ишью | Задачи плана |
@@ -920,3 +990,4 @@ credentials и сессий (фаза `S5`, `D-313`), стандартные ф�
 | Запрос владельца: точечная валидность и накопление | S9.1, S9.2, S9.3, S9.4 |
 | Запрос владельца: выборки по связям | S10.1, S10.2 |
 | Запрос владельца: адрес сервиса и выбор кредов | S11.1, S11.2 |
+| Запрос владельца: интеграция eazy_sdk | S12.1, S12.2 |
