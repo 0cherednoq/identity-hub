@@ -84,9 +84,7 @@ def dump_state(value: BrowserSession, *, strict: bool = False) -> Any:
     try:
         from eazy_sdk.cookies import CookieState  # type: ignore[import-not-found]
     except ImportError:
-        raise ImportError(
-            "BrowserSession.dump.eazy_state() требует установленный eazy_sdk"
-        ) from None
+        raise ImportError("BrowserSession.dump.eazy_state() требует установленный eazy_sdk") from None
     return CookieState.from_primitive(dump(value.cookies, strict=strict))
 
 

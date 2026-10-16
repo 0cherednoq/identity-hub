@@ -82,8 +82,7 @@ def _normalize_service_url(value: str) -> str:
             raise ValueError("url: некорректное имя хоста") from None
         labels = host.split(".")
         if not labels or any(
-            not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-            for label in labels
+            not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels
         ):
             raise ValueError("url: некорректное имя хоста") from None
     else:
@@ -95,6 +94,8 @@ def _normalize_service_url(value: str) -> str:
     default_port = (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
     suffix = "" if port is None or default_port else f":{port}"
     return f"{scheme}://{host}{suffix}"
+
+
 _EPOCH = datetime(2000, 1, 3, tzinfo=UTC)  # понедельник: недельные окна начинаются с понедельника
 
 

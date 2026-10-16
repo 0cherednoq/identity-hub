@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from identity_hub import IdentityCreate, SpaceHandle, ValidationFailed
+from identity_hub import IdentityCreate, RevisionConflict, SpaceHandle, ValidationFailed
 from identity_hub.read.events import EventFilters
 
 pytestmark = [pytest.mark.conformance]
@@ -37,9 +37,14 @@ async def test_lease_save_in_place_and_replace(space: SpaceHandle) -> None:
     identity_id = await _identity(space)
     lease = await space.pools.define("work", service="fake_tg", holder="w").acquire()
     (original,) = await _history(space, identity_id)
+    assert await lease.session_revision() == 1
 
-    await lease.save_session({"auth_key": "k1"})
+    await lease.save_session({"auth_key": "k1"}, expected_revision=1)
+    assert await lease.session_revision() == 2
+    with pytest.raises(RevisionConflict):
+        await lease.save_session({"auth_key": "stale"}, expected_revision=1)
     await lease.save_session({"auth_key": "k2"}, mode="replace")
+    assert await lease.session_revision() == 3
     await lease.release()
 
     history = await _history(space, identity_id)

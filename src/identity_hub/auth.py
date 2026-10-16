@@ -97,9 +97,7 @@ class _LinkedIdentity:
     def external_ref(self) -> str:
         return self._lease.identity.external_ref
 
-    async def credentials(
-        self, *, schema: type[BaseModel] | None = None
-    ) -> BaseModel | None:
+    async def credentials(self, *, schema: type[BaseModel] | None = None) -> BaseModel | None:
         return await self.credential(schema=schema)
 
     async def credential(
@@ -158,9 +156,7 @@ class _LoginContext:
     def challenge_context(self) -> Mapping[str, Any] | None:
         return self._context
 
-    async def credentials(
-        self, *, schema: type[BaseModel] | None = None
-    ) -> BaseModel | None:
+    async def credentials(self, *, schema: type[BaseModel] | None = None) -> BaseModel | None:
         return await self.credential(schema=schema)
 
     async def credential(

@@ -40,6 +40,7 @@ from identity_hub.errors import (
     LeaseLost,
     LeaseRevoked,
     LeaseUnavailable,
+    RevisionConflict,
     StaleFencing,
     ValidationFailed,
     describe_error,
@@ -592,9 +593,7 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
     ) -> M | None: ...
 
     @overload
-    async def active_credential(
-        self, kind: str = "default", *, schema: None = None
-    ) -> TCreds | None: ...
+    async def active_credential(self, kind: str = "default", *, schema: None = None) -> TCreds | None: ...
 
     async def active_credential(
         self, kind: str = "default", *, schema: type[BaseModel] | None = None
@@ -627,19 +626,13 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
                 ),
                 None,
             )
-            found = (
-                await tx.get_credential(self.identity_id, row.kind, row.name)
-                if row is not None
-                else None
-            )
+            found = await tx.get_credential(self.identity_id, row.kind, row.name) if row is not None else None
         if row is None or found is None:
             return None
         aad = credential_associated_data(self.identity_id, row.kind, row.name)
         return self.pool.space.hub._open_stored_model(model_schema, found[0], aad)
 
-    def _credential_schema(
-        self, kind: str, schema: type[BaseModel] | None
-    ) -> type[BaseModel]:
+    def _credential_schema(self, kind: str, schema: type[BaseModel] | None) -> type[BaseModel]:
         expected = self.pool.service.credential_schema(kind)
         if schema is not None and schema is not expected:
             raise ValidationFailed(f"schema credentials {kind!r} не совпадает со схемой сервиса")
@@ -655,7 +648,8 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
             usable = [
                 row
                 for row in rows
-                if row.lifecycle == ACTIVE and not is_expired(row.lifecycle, row.expires_at, now)
+                if row.lifecycle == ACTIVE
+                and not is_expired(row.lifecycle, row.expires_at, now)
                 and row.last_rejected_at is None
             ]
             payloads = [await tx.get_credential(self.identity_id, row.kind, row.name) for row in usable]
@@ -702,6 +696,21 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
             schema or self.pool.service.session_schema(slot), found[0], aad
         )
 
+    async def session_revision(self, slot: str = DEFAULT_SLOT) -> int:
+        """Ревизия текущей записи слота; ``0``, если текущей сессии нет."""
+        self.check()
+        async with self.pool.space._tx(own=True) as tx:
+            await self._check_ownership(tx)
+            return await self._session_revision(tx, slot)
+
+    async def _session_revision(self, tx: StoreTx, slot: str) -> int:
+        history = await tx.session_history(self.identity_id, slot)
+        current = next(
+            (row for row in reversed(history) if row.status != SessionStatus.REVOKED),
+            None,
+        )
+        return 0 if current is None else current.revision
+
     async def save_session(
         self,
         session: BaseModel | Mapping[str, Any],
@@ -709,6 +718,7 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         *,
         expires_at: datetime | None = None,
         mode: str = "in_place",
+        expected_revision: int | None = None,
     ) -> None:
         """Сохранить сессию слота; запись устаревшей аренды — StaleFencing (FR-5.3, G-1.4).
 
@@ -724,6 +734,14 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
             expires_at = inferred_expiry
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
+            actual_revision = await self._session_revision(tx, slot)
+            if expected_revision is not None and expected_revision != actual_revision:
+                raise RevisionConflict(
+                    "session",
+                    f"{self.identity_id}/{slot}",
+                    expected_revision,
+                    actual_revision,
+                )
             await self._write_session(
                 tx,
                 payload,
@@ -732,6 +750,35 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
                 expires_at=expires_at,
                 value_fingerprint=value_fingerprint,
             )
+
+    async def _invalidate_session(self, slot: str, *, expected_revision: int | None = None) -> bool:
+        """Invalidate the current slot under this lease's fence (integration primitive)."""
+        self.check()
+        async with self.pool.space._tx(own=True) as tx:
+            await self._check_fencing(tx)
+            actual_revision = await self._session_revision(tx, slot)
+            if expected_revision is not None and expected_revision != actual_revision:
+                raise RevisionConflict(
+                    "session",
+                    f"{self.identity_id}/{slot}",
+                    expected_revision,
+                    actual_revision,
+                )
+            if actual_revision == 0:
+                return False
+            await tx.set_session_status(self.identity_id, slot, SessionStatus.INVALIDATED)
+            await self.pool.space._emit(
+                tx,
+                EventDraft(
+                    "identity.session.updated",
+                    actor=self.holder,
+                    service=self.service,
+                    identity_id=self.identity_id,
+                    lease_id=self.lease_id,
+                    data={"slot": slot, "mode": "invalidate"},
+                ),
+            )
+            return True
 
     @contextlib.asynccontextmanager
     async def playwright_context(self, browser: Any, **options: Any) -> AsyncIterator[Any]:
@@ -1326,9 +1373,7 @@ async def _unavailable_reason(
     return (LeaseUnavailableReason.BUSY if busy else LeaseUnavailableReason.NO_CANDIDATES), None
 
 
-def _observe_acquisition(
-    pool: Pool[Any, Any], started: float, wait_seconds: float, status: str
-) -> None:
+def _observe_acquisition(pool: Pool[Any, Any], started: float, wait_seconds: float, status: str) -> None:
     elapsed = max(0.0, pool.space.hub.clock.monotonic() - started)
     record_metric(
         pool.space.hub.metrics,

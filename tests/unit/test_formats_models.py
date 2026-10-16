@@ -131,9 +131,7 @@ def test_json_namespaces_are_typed_round_trip_and_not_model_fields() -> None:
 def test_eazy_cookie_state_golden_round_trip_and_loss_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    golden = json.loads(
-        (FIXTURES.parent / "eazy_cookie_state.json").read_text(encoding="utf-8")
-    )
+    golden = json.loads((FIXTURES.parent / "eazy_cookie_state.json").read_text(encoding="utf-8"))
     cookies = Cookies.load.eazy(golden)
     assert_type(cookies.dump.eazy(), list[dict[str, object]])
     assert cookies.dump.eazy() == golden

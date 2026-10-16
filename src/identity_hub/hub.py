@@ -171,9 +171,7 @@ class IdentityHub:
         self._fingerprints = FingerprintKeyring(secrets)  # ключи отпечатков, не KEK (IMP-04, D-207)
         self._heartbeats = HeartbeatBatcher(store)  # пакетный heartbeat аренд процесса (IMP-02, D-211)
         # живые аренды этого процесса по lease_id: отзыв будит их heartbeat сразу (D-213)
-        self._live_leases: weakref.WeakValueDictionary[UUID, Lease[Any, Any]] = (
-            weakref.WeakValueDictionary()
-        )
+        self._live_leases: weakref.WeakValueDictionary[UUID, Lease[Any, Any]] = weakref.WeakValueDictionary()
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         try:
@@ -343,9 +341,7 @@ class IdentityHub:
             expected, actual = await self._store.schema_revisions()
             if len(actual) != 1 or actual[0] not in self._store.compatible_revisions(expected):
                 raise SchemaIncompatible(expected, ", ".join(actual) or None)
-        await self._store.sync_services(
-            [ServiceRow(s.name, s.title, s.url) for s in self._services.values()]
-        )
+        await self._store.sync_services([ServiceRow(s.name, s.title, s.url) for s in self._services.values()])
         plaintext = await self._store.plaintext_secret_counts()
         if self._secret_storage == "plaintext" or plaintext:
             logger.warning("%s: %s", PLAINTEXT_SECRET_WARNING, plaintext or "режим plaintext")

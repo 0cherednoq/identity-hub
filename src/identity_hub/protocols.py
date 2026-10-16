@@ -132,14 +132,10 @@ class LoginContext(Protocol, Generic[TCreds_co, TSession_co]):
         ...
 
     @overload
-    async def active_credential(
-        self, kind: str = "default", *, schema: None = None
-    ) -> TCreds_co | None: ...
+    async def active_credential(self, kind: str = "default", *, schema: None = None) -> TCreds_co | None: ...
 
     @overload
-    async def active_credential(
-        self, kind: str = "default", *, schema: type[TModel]
-    ) -> TModel | None:
+    async def active_credential(self, kind: str = "default", *, schema: type[TModel]) -> TModel | None:
         """Первая по имени пригодная запись вида или `None`."""
         ...
 
@@ -155,9 +151,7 @@ class LoginContext(Protocol, Generic[TCreds_co, TSession_co]):
     async def session(self, slot: str = "default", *, schema: None = None) -> TSession_co | None: ...
 
     @overload
-    async def session(
-        self, slot: str = "default", *, schema: type[TModel]
-    ) -> TModel | None:
+    async def session(self, slot: str = "default", *, schema: type[TModel]) -> TModel | None:
         """Последняя сохранённая сессия слота, в том числе недействительная (повторный вход), или None."""
         ...
 
@@ -244,9 +238,7 @@ class _FunctionAuthenticator(Generic[TCreds, TSession]):
 
     __slots__ = ("_login",)
 
-    def __init__(
-        self, login: Callable[[LoginContext[TCreds, TSession]], Awaitable[TSession]]
-    ) -> None:
+    def __init__(self, login: Callable[[LoginContext[TCreds, TSession]], Awaitable[TSession]]) -> None:
         self._login = login
 
     async def login(self, ctx: LoginContext[TCreds, TSession]) -> TSession:

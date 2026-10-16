@@ -32,7 +32,7 @@ assert_type(SERVICE, Service[Credentials, Session])
 
 
 async def _lease_contract(space: SpaceHandle) -> None:
-    pool = space.pool(SERVICE)
+    pool = space.pools.define("typing-contract", service=SERVICE)
     assert_type(pool, Pool[Credentials, Session])
     async with pool.lease() as lease:
         assert_type(await lease.credentials(), Credentials | None)

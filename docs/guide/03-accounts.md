@@ -537,7 +537,7 @@ value = await space.secrets.reveal(
 EXCHANGE: Service[Login, ExchangeSession] = Service(
     "exchange", "Exchange", credentials=Login, session=ExchangeSession,
 )
-async with space.pool(EXCHANGE).lease() as lease:
+async with space.pools.define("exchange", service=EXCHANGE).lease() as lease:
     creds = await lease.active_credential()  # Login | None
     session = await lease.session()           # ExchangeSession | None
 ```

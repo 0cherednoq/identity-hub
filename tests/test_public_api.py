@@ -118,9 +118,7 @@ def test_import_merge_and_credential_validity_contract_is_public_and_documented(
     assert names <= set(identity_hub.__all__)
     assert OnExisting.MERGE == "merge"
     assert "merge_details" in ImportReport.__dataclass_fields__
-    assert {"active_credential", "verify_credential", "reject_credential"} <= set(
-        LoginContext.__dict__
-    )
+    assert {"active_credential", "verify_credential", "reject_credential"} <= set(LoginContext.__dict__)
     guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
     assert [name for name in sorted(names) if f"`{name}`" not in guide] == []
 
@@ -132,6 +130,14 @@ def test_link_filter_contract_is_public_and_documented() -> None:
     assert {"without_link", "not_target_of", "is_target_of"} <= set(fields)
     guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
     assert all(f"`{name}" in guide for name in ("without_link", "not_target_of", "is_target_of"))
+
+
+def test_optional_eazy_integration_is_importable_and_documented() -> None:
+    from identity_hub.integrations import eazy
+
+    assert set(eazy.__all__) == {"EazySession", "HubSessionStore"}
+    guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
+    assert all(f"`{name}" in guide for name in eazy.__all__)
 
 
 HUB_PUBLIC = {

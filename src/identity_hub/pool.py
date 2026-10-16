@@ -465,16 +465,6 @@ class PoolsMixin:
             live._revoked_elsewhere()
         return True
 
-    def pool(
-        self: Any,
-        service: Service[TCreds, TSession],
-        *,
-        name: str | None = None,
-    ) -> Pool[TCreds, TSession]:
-        """Короткий типизированный пул сервиса с настройками по умолчанию."""
-        pool: Pool[TCreds, TSession] = self._pool(name or service.name, service=service)
-        return pool
-
     def _pool(
         self: Any,
         name: str,

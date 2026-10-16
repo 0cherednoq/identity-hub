@@ -8,6 +8,10 @@
 
 ### Added
 
+- `await lease.session_revision(slot)` и опциональный
+  `identity_hub.integrations.eazy.HubSessionStore`: eazy_sdk хранит значение сессии и cookies в
+  зашифрованном слоте уже взятой аренды, с проверкой ревизии и fencing. Модель
+  `EazySession[T]` задаёт форму такого слота.
 - Конвертер `Cookies.dump/load.eazy()` и мост `BrowserSession.dump/load.eazy_state()` для
   `eazy_sdk.CookieState`, включая timezone-aware сроки и предупреждение о потере CHIPS
   `partition_key`.

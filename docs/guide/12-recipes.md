@@ -272,6 +272,42 @@ async with pool.lease(not_target_of=("registered_from", "privy")) as lease:
 повторите проверку перед внешним эффектом. Две эксклюзивные аренды не выдадут один исходный
 аккаунт одновременно.
 
+## eazy_sdk на хранилище хаба
+
+Схема слота хранит значение SDK и снимок cookies вместе:
+
+```python
+from identity_hub import Service
+from identity_hub.integrations.eazy import EazySession, HubSessionStore
+from eazy_sdk.auth.session import session_lifecycle
+
+EAZY_SERVICE: Service[Credentials, EazySession[SdkSession]] = Service(
+    "site", "Site",
+    credentials=Credentials,
+    session=EazySession[SdkSession],
+    authenticator=login_with_eazy,  # входом по-прежнему управляет hub.auth
+)
+
+async with space.pools.define("site-runtime", service=EAZY_SERVICE).lease() as lease:
+    store: HubSessionStore[SdkSession] = HubSessionStore(lease)
+    lifecycle = session_lifecycle(
+        SdkSession,
+        context_factory=make_context,
+        store=store,
+        # eazy создаст тот же SessionKey, что store.key("default")
+        identity=f"{lease.identity_id}:default",
+        name="site session",
+    )
+    session = await lifecycle.resolve()
+    await sdk_call(session.value, proxy=lease.proxy)
+```
+
+`HubSessionStore` не берёт и не освобождает аренду: её жизненный цикл остаётся у внешнего
+`async with`. `load/save/invalidate` читают и меняют зашифрованный слот под fencing этой аренды;
+ревизия eazy сверяется с `await lease.session_revision(slot)`. Вход выполняет объявленный у
+сервиса `authenticator`, внутри которого можно использовать eazy_sdk; store не создаёт второе
+durable-хранилище. HTTP-клиент ключуйте по прокси текущей аренды, а не только по аккаунту.
+
 ## Несколько клиентов в одной базе
 
 ```python

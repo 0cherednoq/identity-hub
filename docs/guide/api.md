@@ -94,6 +94,11 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 `credential`, `active_credential` и `session` также принимают `schema=` для именованных схем;
 рантайм сверяет её с декларацией сервиса.
 
+Опциональный модуль `identity_hub.integrations.eazy` экспортирует `EazySession[T]` и
+`HubSessionStore[T]`. Импорт модуля не требует eazy_sdk; пакет загружается только при создании
+`SessionKey` или вызове store. `await lease.session_revision(slot)` возвращает текущую ревизию
+сессии (`0` для пустого слота).
+
 Модуль `identity_hub.formats` и корневой импорт `identity_hub` экспортируют модели:
 
 - cookie и браузер: `Cookie`, `Cookies`, `SameSite`, `PartitionKey`, `BrowserSession`,

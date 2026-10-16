@@ -30,9 +30,7 @@ async def test_start_syncs_service_registry(
         "fake_exchange": ("Fake Exchange", None),
     }
     async with sessionmaker() as s:
-        read_rows = dict(
-            (await s.execute(select(hub.read.services.c.name, hub.read.services.c.url))).all()
-        )
+        read_rows = dict((await s.execute(select(hub.read.services.c.name, hub.read.services.c.url))).all())
     assert read_rows["fake_tg"] == "https://telegram.org"
     await hub.start()  # повторный старт — upsert
 
