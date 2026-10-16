@@ -74,6 +74,9 @@ jobs:
         env:
           # полный прогон на одной версии проверяет, что тесты вызывают каждый метод Store (F5.3b)
           IH_STORE_COVERAGE: ${{ matrix.python-version == '3.14' && '1' || '0' }}
+          # Изолировать крупные группы в отдельных pytest-процессах: teardown PostgreSQL не должен
+          # конкурировать с TRUNCATE следующей группы в одном долгоживущем event loop.
+          IH_TEST_SHARDS: "1"
       # check.sh начинает с автоисправления: непустой diff означает неотформатированный код.
       - run: git diff --exit-code
 

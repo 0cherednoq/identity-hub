@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import functools
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -52,6 +55,22 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    coverage_file = os.environ.get("IH_STORE_COVERAGE_FILE")
+    if coverage_file:
+        path = Path(coverage_file)
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            previous = {}
+        for backend, names in previous.items():
+            if backend in _CALLED:
+                _CALLED[backend].update(names)
+        path.write_text(
+            json.dumps({backend: sorted(names) for backend, names in _CALLED.items()}),
+            encoding="utf-8",
+        )
+        if os.environ.get("IH_STORE_COVERAGE_FINAL") != "1":
+            return
     missing = {
         backend: [name for name in required() if name not in _CALLED[backend]]
         for backend in selected_backends()
