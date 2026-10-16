@@ -5,6 +5,6 @@ cd "$(dirname "$0")/.."
 uv run ruff check --fix-only -q .
 uv run ruff format -q .
 uv run ruff check .
-uv run mypy src
+uv run mypy src tests/typing
 uv run lint-imports
 uv run pytest -m "not load" -q -rfE "$@"

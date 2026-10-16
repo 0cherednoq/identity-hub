@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, get_args
+from typing import Any, Generic, get_args
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
@@ -33,6 +33,8 @@ from identity_hub.protocols import (
     FileImporter,
     LoginContext,
     StandingProbe,
+    TCreds,
+    TSession,
     VerificationProbe,
     _FunctionAuthenticator,
     _MappingClassifier,
@@ -207,7 +209,7 @@ class OperationRule:
 
 
 @dataclass(frozen=True, eq=False)
-class Service:
+class Service(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unparameterized API
     """Декларация платформы (FR-1.2)."""
 
     name: str
@@ -215,8 +217,8 @@ class Service:
     url: str | None = None
     attributes: type[BaseModel] = EmptyModel
     profile: type[BaseModel] = EmptyModel
-    credentials: type[BaseModel] = EmptyModel
-    session: type[BaseModel] = EmptyModel
+    credentials: type[TCreds] = field(default=EmptyModel)  # type: ignore[assignment]
+    session: type[TSession] = field(default=EmptyModel)  # type: ignore[assignment]
     session_slots: Mapping[str, type[BaseModel]] = field(default_factory=dict)
     session_auth_cookies: frozenset[str] = frozenset()
     filterable_profile: frozenset[str] = frozenset()
@@ -228,7 +230,11 @@ class Service:
     tiers: tuple[VerificationTier, ...] = ()
     normalizers: Mapping[str, Normalizer] = field(default_factory=dict)
     # объект с `async def login(ctx)` или сама функция входа (R2-F27)
-    authenticator: Authenticator | Callable[[LoginContext], Awaitable[BaseModel]] | None = None
+    authenticator: (
+        Authenticator[TCreds, TSession]
+        | Callable[[LoginContext[TCreds, TSession]], Awaitable[TSession]]
+        | None
+    ) = None
     # предел одного вызова Authenticator.login: зависший вход не держит аккаунт в logging_in
     login_timeout: timedelta = timedelta(seconds=120)
     probes: AuthProbe | StandingProbe | VerificationProbe | None = None  # любое подмножество проб

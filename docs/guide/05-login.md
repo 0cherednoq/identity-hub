@@ -19,12 +19,14 @@ challenge, сохраняет сессию, пишет события.
 
 ```python
 from datetime import timedelta
-from identity_hub import LoginChallenge, LoginContext
+from identity_hub import LoginChallenge, LoginContext, LoginFailure
 
 
 class TgAuthenticator:
-    async def login(self, ctx: LoginContext):
-        creds = await ctx.credentials()
+    async def login(self, ctx: LoginContext[TgCredentials, TgSession]) -> TgSession:
+        creds = await ctx.active_credential()
+        if creds is None:
+            raise LoginFailure("credentials_missing", retryable=False)
         client = make_client(proxy=ctx.proxy_url)
 
         if ctx.challenge_answer is None:
@@ -49,7 +51,8 @@ TELEGRAM = Service(..., authenticator=TgAuthenticator())  # или authenticator
 ```
 
 `ctx` (`LoginContext`): `identity_id`, `external_ref`, `proxy_url`, `challenge_answer`,
-`challenge_context`, `await ctx.credentials()`, `await ctx.linked(role)` — связанный аккаунт
+`challenge_context`, `await ctx.active_credential()`, `await ctx.credentials()`,
+`await ctx.linked(role)` — связанный аккаунт
 (например, почта для кода восстановления), взятый в аренду на время входа.
 
 ## Процесс входа с challenge

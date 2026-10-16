@@ -14,7 +14,7 @@ import random
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, overload
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -47,6 +47,7 @@ from identity_hub.errors import (
 from identity_hub.events import EventDraft
 from identity_hub.formats.proxy import ProxyUrl
 from identity_hub.metrics import record_metric
+from identity_hub.protocols import TCreds, TSession
 from identity_hub.service import ProxyDownPolicy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import (
@@ -93,7 +94,7 @@ def _end_reason(reason: LeaseEndReason | str) -> LeaseEndReason:
         raise ValidationFailed(f"причина завершения аренды — одно из: {allowed}") from None
 
 
-class Lease:
+class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unparameterized API
     """Эксклюзивная аренда аккаунта.
 
     Внутри `async with pool.lease()` фоновая задача продлевает аренду каждые `heartbeat`
@@ -103,7 +104,11 @@ class Lease:
     """
 
     def __init__(
-        self, pool: Pool, row: LeaseRow, identity: IdentityRow, proxy: ProxyRow | None = None
+        self,
+        pool: Pool[TCreds, TSession],
+        row: LeaseRow,
+        identity: IdentityRow,
+        proxy: ProxyRow | None = None,
     ) -> None:
         self.pool = pool
         self.proxy_info = proxy
@@ -535,17 +540,39 @@ class Lease:
 
     # --------------------------------------------------------- секреты и сессии (FR-5.2, 5.3, 5.6)
 
-    async def credentials(self) -> BaseModel | None:
-        """Расшифрованная запись credentials `default` — только под арендой (FR-5.2, D-216)."""
-        return await self.credential()
+    @overload
+    async def credentials[M: BaseModel](self, *, schema: type[M]) -> M | None: ...
 
-    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+    @overload
+    async def credentials(self, *, schema: None = None) -> TCreds | None: ...
+
+    async def credentials(self, *, schema: type[BaseModel] | None = None) -> BaseModel | None:
+        """Расшифрованная запись credentials `default` — только под арендой (FR-5.2, D-216)."""
+        return await self.credential(schema=schema)
+
+    @overload
+    async def credential[M: BaseModel](
+        self, kind: str = "default", name: str = "default", *, schema: type[M]
+    ) -> M | None: ...
+
+    @overload
+    async def credential(
+        self, kind: str = "default", name: str = "default", *, schema: None = None
+    ) -> TCreds | None: ...
+
+    async def credential(
+        self,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        schema: type[BaseModel] | None = None,
+    ) -> BaseModel | None:
         """Запись credentials по виду и имени под полным fence (IMP-09, D-216).
 
         `None` — записи нет, она выключена, отозвана или её срок вышел.
         """
         self.check()
-        schema = self.pool.service.credential_schema(kind)
+        model_schema = self._credential_schema(kind, schema)
         async with self.pool.space._tx(own=True) as tx:
             await self._check_ownership(tx)
             found = await tx.get_credential(self.identity_id, kind, name)
@@ -557,7 +584,66 @@ class Lease:
         ):
             return None
         aad = credential_associated_data(self.identity_id, kind, name)
-        return self.pool.space.hub._open_stored_model(schema, found[0], aad)
+        return self.pool.space.hub._open_stored_model(model_schema, found[0], aad)
+
+    @overload
+    async def active_credential[M: BaseModel](
+        self, kind: str = "default", *, schema: type[M]
+    ) -> M | None: ...
+
+    @overload
+    async def active_credential(
+        self, kind: str = "default", *, schema: None = None
+    ) -> TCreds | None: ...
+
+    async def active_credential(
+        self, kind: str = "default", *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        """Первая по имени пригодная запись вида: active, не истекла и не отклонена."""
+        return await self._active_credential(kind, schema=schema, excluded=frozenset())
+
+    async def _active_credential(
+        self,
+        kind: str,
+        *,
+        schema: type[BaseModel] | None,
+        excluded: frozenset[str],
+    ) -> BaseModel | None:
+        self.check()
+        model_schema = self._credential_schema(kind, schema)
+        async with self.pool.space._tx(own=True) as tx:
+            await self._check_ownership(tx)
+            rows = await tx.list_credentials(self.identity_id)
+            now = await tx.now()
+            row = next(
+                (
+                    item
+                    for item in sorted(rows, key=lambda candidate: candidate.name)
+                    if item.kind == kind
+                    and item.name not in excluded
+                    and item.lifecycle == ACTIVE
+                    and not is_expired(item.lifecycle, item.expires_at, now)
+                    and item.last_rejected_at is None
+                ),
+                None,
+            )
+            found = (
+                await tx.get_credential(self.identity_id, row.kind, row.name)
+                if row is not None
+                else None
+            )
+        if row is None or found is None:
+            return None
+        aad = credential_associated_data(self.identity_id, row.kind, row.name)
+        return self.pool.space.hub._open_stored_model(model_schema, found[0], aad)
+
+    def _credential_schema(
+        self, kind: str, schema: type[BaseModel] | None
+    ) -> type[BaseModel]:
+        expected = self.pool.service.credential_schema(kind)
+        if schema is not None and schema is not expected:
+            raise ValidationFailed(f"schema credentials {kind!r} не совпадает со схемой сервиса")
+        return schema or expected
 
     async def active_credentials(self) -> dict[tuple[str, str], BaseModel]:
         """Все активные записи credentials с непрошедшим сроком: `(kind, name) → модель` (D-216)."""
@@ -570,6 +656,7 @@ class Lease:
                 row
                 for row in rows
                 if row.lifecycle == ACTIVE and not is_expired(row.lifecycle, row.expires_at, now)
+                and row.last_rejected_at is None
             ]
             payloads = [await tx.get_credential(self.identity_id, row.kind, row.name) for row in usable]
         result: dict[tuple[str, str], BaseModel] = {}
@@ -581,11 +668,28 @@ class Lease:
             result[(row.kind, row.name)] = self.pool.space.hub._open_stored_model(schema, found[0], aad)
         return result
 
-    async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
-        """Расшифрованная действующая сессия слота или None."""
-        return await self._stored_session(slot, valid_only=True)
+    @overload
+    async def session[M: BaseModel](self, slot: str = DEFAULT_SLOT, *, schema: type[M]) -> M | None: ...
 
-    async def _stored_session(self, slot: str, *, valid_only: bool) -> BaseModel | None:
+    @overload
+    async def session(self, slot: str = DEFAULT_SLOT, *, schema: None = None) -> TSession | None: ...
+
+    async def session(
+        self, slot: str = DEFAULT_SLOT, *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        """Расшифрованная действующая сессия слота или None."""
+        model_schema = self._session_schema(slot, schema)
+        return await self._stored_session(slot, valid_only=True, schema=model_schema)
+
+    def _session_schema(self, slot: str, schema: type[BaseModel] | None) -> type[BaseModel]:
+        expected = self.pool.service.session_schema(slot)
+        if schema is not None and schema is not expected:
+            raise ValidationFailed(f"schema session {slot!r} не совпадает со схемой сервиса")
+        return schema or expected
+
+    async def _stored_session(
+        self, slot: str, *, valid_only: bool, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
         """Сессия слота; `valid_only=False` — и признанная недействительной (для повторного входа)."""
         self.check()
         async with self.pool.space._tx(own=True) as tx:
@@ -594,7 +698,9 @@ class Lease:
         if found is None or (valid_only and found[1] != SessionStatus.VALID):
             return None
         aad = associated_data("ih_sessions", self.identity_id, slot)
-        return self.pool.space.hub._open_stored_model(self.pool.service.session_schema(slot), found[0], aad)
+        return self.pool.space.hub._open_stored_model(
+            schema or self.pool.service.session_schema(slot), found[0], aad
+        )
 
     async def save_session(
         self,
@@ -632,7 +738,7 @@ class Lease:
         """Открыть Playwright context с сессией/профилем/прокси и сохранить state при выходе."""
         from identity_hub.formats import BrowserFingerprint, BrowserSession
 
-        stored = await self.session()
+        stored: BaseModel | None = await self.session()
         if stored is None:
             stored = BrowserSession()
         if not isinstance(stored, BrowserSession):
@@ -670,7 +776,7 @@ class Lease:
         """Перейти на каждый host и добавить его cookie через WebDriver без зависимости Selenium."""
         from identity_hub.formats import BrowserSession, Cookies
 
-        stored = await self.session()
+        stored: BaseModel | None = await self.session()
         if stored is None:
             return
         if not isinstance(stored, BrowserSession):
@@ -898,11 +1004,11 @@ def _lost_error(reason: str | None) -> type[LeaseLost]:
 
 @contextlib.asynccontextmanager
 async def lease_scope(
-    pool: Pool,
+    pool: Pool[TCreds, TSession],
     on_lost: OnLost | None,
     on_yield_requested: OnYieldRequested | None = None,
     **kwargs: Any,
-) -> AsyncIterator[Lease]:
+) -> AsyncIterator[Lease[TCreds, TSession]]:
     """Тело `pool.lease()`: захват → heartbeat и контекст логов → освобождение с причиной."""
     lease = await acquire(pool, **kwargs)
     token = _current.set(lease.context)
@@ -946,7 +1052,7 @@ class _SkipCandidate(Exception):
         self.identity_id = identity_id
 
 
-async def _matching_ids(pool: Pool, predicate: Callable[[Any], bool]) -> list[UUID]:
+async def _matching_ids(pool: Pool[Any, Any], predicate: Callable[[Any], bool]) -> list[UUID]:
     """Id аккаунтов сервиса пула, для которых `predicate(identity)` истинен; читается постранично."""
     from identity_hub.api.identities import IdentityFilter
 
@@ -963,7 +1069,7 @@ async def _matching_ids(pool: Pool, predicate: Callable[[Any], bool]) -> list[UU
 
 
 async def acquire(
-    pool: Pool,
+    pool: Pool[TCreds, TSession],
     *,
     for_operation: str | None = None,
     tags: Iterable[str] = (),
@@ -983,7 +1089,7 @@ async def acquire(
     require_quota: bool = False,
     keep_free: int | None = None,
     priority: int | None = None,
-) -> Lease:
+) -> Lease[TCreds, TSession]:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
     `wait` — ждать освобождения подходящего аккаунта; по истечении — `LeaseUnavailable`.
@@ -1193,7 +1299,11 @@ async def acquire(
 
 
 async def _unavailable_reason(
-    pool: Pool, query: CandidateQuery, *, proxy_exhausted: bool, reserve_blocked: bool
+    pool: Pool[Any, Any],
+    query: CandidateQuery,
+    *,
+    proxy_exhausted: bool,
+    reserve_blocked: bool,
 ) -> tuple[LeaseUnavailableReason | None, float | None]:
     """Почему аренда не выдана и через сколько секунд повторить, если это известно.
 
@@ -1216,7 +1326,9 @@ async def _unavailable_reason(
     return (LeaseUnavailableReason.BUSY if busy else LeaseUnavailableReason.NO_CANDIDATES), None
 
 
-def _observe_acquisition(pool: Pool, started: float, wait_seconds: float, status: str) -> None:
+def _observe_acquisition(
+    pool: Pool[Any, Any], started: float, wait_seconds: float, status: str
+) -> None:
     elapsed = max(0.0, pool.space.hub.clock.monotonic() - started)
     record_metric(
         pool.space.hub.metrics,
@@ -1242,7 +1354,7 @@ def _observe_acquisition(pool: Pool, started: float, wait_seconds: float, status
 
 
 async def _resolve_proxy(
-    pool: Pool, tx: StoreTx, candidate: IdentityRow
+    pool: Pool[Any, Any], tx: StoreTx, candidate: IdentityRow
 ) -> tuple[ProxyRow | None, list[EventDraft]]:
     """Прокси аренды по политике сервиса/пула (FR-8.2, 8.3). В той же транзакции, что и захват."""
     policy = pool.proxy_policy
@@ -1278,7 +1390,7 @@ async def _resolve_proxy(
     return chosen, drafts
 
 
-async def _pool_exhausted(pool: Pool) -> None:
+async def _pool_exhausted(pool: Pool[Any, Any]) -> None:
     policy = pool.proxy_policy
     assert policy is not None
     hub = pool.space.hub
@@ -1304,7 +1416,9 @@ async def _pool_exhausted(pool: Pool) -> None:
         logger.warning("не удалось записать proxy.pool.exhausted", exc_info=True)
 
 
-def _lease_event(event_type: str, pool: Pool, row: LeaseRow, extra: Mapping[str, Any]) -> EventDraft:
+def _lease_event(
+    event_type: str, pool: Pool[Any, Any], row: LeaseRow, extra: Mapping[str, Any]
+) -> EventDraft:
     return EventDraft(
         event_type,
         actor=row.holder,

@@ -33,7 +33,15 @@ from identity_hub.errors import (
 )
 from identity_hub.events import EventDraft
 from identity_hub.operation import apply_fault_effects
-from identity_hub.protocols import Authenticator, Blame, Fault, LinkedIdentity, LoginChallenge, LoginFailure
+from identity_hub.protocols import (
+    Authenticator,
+    Blame,
+    Fault,
+    LinkedIdentity,
+    LoginChallenge,
+    LoginContext,
+    LoginFailure,
+)
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, ChallengeRow, ProviderClaim, StoreTx
@@ -89,14 +97,29 @@ class _LinkedIdentity:
     def external_ref(self) -> str:
         return self._lease.identity.external_ref
 
-    async def credentials(self) -> BaseModel | None:
-        return await self._lease.credentials()
+    async def credentials(
+        self, *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        return await self.credential(schema=schema)
 
-    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
-        return await self._lease.credential(kind, name)
+    async def credential(
+        self,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        schema: type[BaseModel] | None = None,
+    ) -> BaseModel | None:
+        return await self._lease.credential(kind, name, schema=schema)
 
-    async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
-        return await self._lease.session(slot)
+    async def active_credential(
+        self, kind: str = "default", *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        return await self._lease.active_credential(kind, schema=schema)
+
+    async def session(
+        self, slot: str = DEFAULT_SLOT, *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        return await self._lease.session(slot, schema=schema)
 
 
 class _LoginContext:
@@ -135,11 +158,27 @@ class _LoginContext:
     def challenge_context(self) -> Mapping[str, Any] | None:
         return self._context
 
-    async def credentials(self) -> BaseModel | None:
-        return await self._lease.credentials()
+    async def credentials(
+        self, *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        return await self.credential(schema=schema)
 
-    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
-        return await self._lease.credential(kind, name)
+    async def credential(
+        self,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        schema: type[BaseModel] | None = None,
+    ) -> BaseModel | None:
+        return await self._lease.credential(kind, name, schema=schema)
+
+    async def active_credential(
+        self, kind: str = "default", *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
+        rejected = frozenset(
+            mark.name for mark in self._credential_marks if mark.kind == kind and mark.rejected
+        )
+        return await self._lease._active_credential(kind, schema=schema, excluded=rejected)
 
     async def reject_credential(self, kind: str, *, name: str = "default", code: str) -> None:
         kind, name = self._lease.pool.service.credential_key(kind, name)
@@ -150,10 +189,13 @@ class _LoginContext:
         kind, name = self._lease.pool.service.credential_key(kind, name)
         self._credential_marks.append(_CredentialMark(kind, name, False))
 
-    async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
+    async def session(
+        self, slot: str = DEFAULT_SLOT, *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None:
         """Последняя сохранённая сессия слота, в том числе признанная недействительной: при повторном
         входе из неё берут параметры устройства и т.п. (R2-F27). Нет сессии — None."""
-        return await self._lease._stored_session(slot, valid_only=False)
+        model_schema = self._lease._session_schema(slot, schema)
+        return await self._lease._stored_session(slot, valid_only=False, schema=model_schema)
 
     async def linked(self, role: str) -> LinkedIdentity | None:
         """Связанный аккаунт по роли, взятый в аренду (FR-4.3). Нет связи — None."""
@@ -421,7 +463,9 @@ class LoginMixin(SpaceBase):
             try:
                 async with asyncio.timeout(svc.login_timeout.total_seconds()):
                     # функция входа приведена к объекту протокола в Service.__post_init__
-                    session = await cast(Authenticator, svc.authenticator).login(ctx)
+                    authenticator = cast(Authenticator[BaseModel, BaseModel], svc.authenticator)
+                    login_ctx = cast(LoginContext[BaseModel, BaseModel], ctx)
+                    session = await authenticator.login(login_ctx)
             except LoginChallenge as asked:
                 await self._open_challenge(
                     lease,

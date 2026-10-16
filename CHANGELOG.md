@@ -8,6 +8,10 @@
 
 ### Added
 
+- `Lease.active_credential()` и `LoginContext.active_credential()` выбирают первую по имени
+  пригодную запись credentials, исключая истёкшие и ранее отклонённые. `Service`, `Pool`,
+  `Lease`, `LoginContext` и `Authenticator` теперь сохраняют generic-типы схем credentials и
+  сессии; `schema=` даёт типизированный доступ к именованным видам и слотам с рантайм-проверкой.
 - Выборки по связям аккаунтов: `IdentityFilter` и аренда поддерживают `without_link`,
   `not_target_of=(role, from_service)` и `is_target_of=(role, from_service)`. Публичная
   PostgreSQL read-схема получила таблицу `hub.read.identity_links` без повышения версии.

@@ -44,6 +44,8 @@ def test_owner_requests_are_traced() -> None:
     assert "| Запрос владельца: событие импорта | S8.1 |" in table
     assert "| Запрос владельца: точечная валидность и накопление | S9.1, S9.2, S9.3, S9.4 |" in table
     assert "| Запрос владельца: выборки по связям | S10.1, S10.2 |" in table
+    assert "| Запрос владельца: адрес сервиса и выбор кредов | S11.1, S11.2 |" in table
+    assert "| Запрос владельца: интеграция eazy_sdk | S12.1, S12.2 |" in table
 
 
 def test_plan_tasks_match_progress() -> None:

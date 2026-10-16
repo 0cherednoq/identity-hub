@@ -11,12 +11,20 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, Protocol, overload, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
+from typing_extensions import TypeVar
 
 from identity_hub.errors import ValidationFailed
+
+TCreds = TypeVar("TCreds", bound=BaseModel, default=BaseModel)
+TSession = TypeVar("TSession", bound=BaseModel, default=BaseModel)
+TModel = TypeVar("TModel", bound=BaseModel)
+TCreds_co = TypeVar("TCreds_co", bound=BaseModel, default=BaseModel, covariant=True)
+TSession_co = TypeVar("TSession_co", bound=BaseModel, default=BaseModel, covariant=True)
+TCreds_contra = TypeVar("TCreds_contra", bound=BaseModel, default=BaseModel, contravariant=True)
 
 if TYPE_CHECKING:
     from identity_hub.importing import ImportRecord
@@ -55,16 +63,28 @@ class LinkedIdentity(Protocol):
     @property
     def external_ref(self) -> str: ...
 
-    async def credentials(self) -> BaseModel | None: ...
+    async def credentials(self, *, schema: type[BaseModel] | None = None) -> BaseModel | None: ...
 
-    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+    async def credential(
+        self,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        schema: type[BaseModel] | None = None,
+    ) -> BaseModel | None:
         """Запись credentials по виду и имени; выключенная, отозванная или истёкшая — `None` (D-216)."""
         ...
 
-    async def session(self, slot: str = "default") -> BaseModel | None: ...
+    async def active_credential(
+        self, kind: str = "default", *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None: ...
+
+    async def session(
+        self, slot: str = "default", *, schema: type[BaseModel] | None = None
+    ) -> BaseModel | None: ...
 
 
-class LoginContext(Protocol):
+class LoginContext(Protocol, Generic[TCreds_co, TSession_co]):
     """Контекст входа, передаётся `Authenticator.login`."""
 
     @property
@@ -89,10 +109,38 @@ class LoginContext(Protocol):
         """Контекст, сохранённый при `LoginChallenge` (phone_code_hash и т.п.)."""
         ...
 
-    async def credentials(self) -> BaseModel | None: ...
+    @overload
+    async def credentials(self, *, schema: None = None) -> TCreds_co | None: ...
 
-    async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
+    @overload
+    async def credentials(self, *, schema: type[TModel]) -> TModel | None: ...
+
+    @overload
+    async def credential(
+        self,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        schema: None = None,
+    ) -> TCreds_co | None: ...
+
+    @overload
+    async def credential(
+        self, kind: str = "default", name: str = "default", *, schema: type[TModel]
+    ) -> TModel | None:
         """Запись credentials по виду и имени; выключенная, отозванная или истёкшая — `None` (D-216)."""
+        ...
+
+    @overload
+    async def active_credential(
+        self, kind: str = "default", *, schema: None = None
+    ) -> TCreds_co | None: ...
+
+    @overload
+    async def active_credential(
+        self, kind: str = "default", *, schema: type[TModel]
+    ) -> TModel | None:
+        """Первая по имени пригодная запись вида или `None`."""
         ...
 
     async def reject_credential(self, kind: str, *, name: str = "default", code: str) -> None:
@@ -103,7 +151,13 @@ class LoginContext(Protocol):
         """Пометить конкретную пару успешно проверенной атомарно с итогом входа."""
         ...
 
-    async def session(self, slot: str = "default") -> BaseModel | None:
+    @overload
+    async def session(self, slot: str = "default", *, schema: None = None) -> TSession_co | None: ...
+
+    @overload
+    async def session(
+        self, slot: str = "default", *, schema: type[TModel]
+    ) -> TModel | None:
         """Последняя сохранённая сессия слота, в том числе недействительная (повторный вход), или None."""
         ...
 
@@ -170,10 +224,10 @@ class LoginFailure(Exception):
 
 
 @runtime_checkable
-class Authenticator(Protocol):
+class Authenticator(Protocol, Generic[TCreds_contra, TSession]):
     """Вход на платформе. Вместо объекта можно передать функцию `async def login(ctx)` (R2-F27)."""
 
-    async def login(self, ctx: LoginContext) -> BaseModel:
+    async def login(self, ctx: LoginContext[TCreds_contra, TSession]) -> TSession:
         """Выполнить вход и вернуть сессию по схеме `Service.session`; вопрос человеку — `LoginChallenge`."""
         ...
 
@@ -185,15 +239,17 @@ class SessionRefresher(Protocol):
     async def refresh(self, credentials: BaseModel | None, session: BaseModel) -> BaseModel | None: ...
 
 
-class _FunctionAuthenticator:
+class _FunctionAuthenticator(Generic[TCreds, TSession]):
     """`Service(authenticator=login_fn)`: функция входа в форме объекта с методом `login`."""
 
     __slots__ = ("_login",)
 
-    def __init__(self, login: Callable[[LoginContext], Awaitable[BaseModel]]) -> None:
+    def __init__(
+        self, login: Callable[[LoginContext[TCreds, TSession]], Awaitable[TSession]]
+    ) -> None:
         self._login = login
 
-    async def login(self, ctx: LoginContext) -> BaseModel:
+    async def login(self, ctx: LoginContext[TCreds, TSession]) -> TSession:
         return await self._login(ctx)
 
     def __repr__(self) -> str:

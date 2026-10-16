@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from identity_hub.domain.verification import effective_factors, required_factors
 from identity_hub.enums import AuthState, Availability, Lifecycle
@@ -61,7 +62,7 @@ class RuleFilter:
     required_factors: frozenset[str]
 
 
-def compile_rule(service: Service, kind: str) -> RuleFilter:
+def compile_rule(service: Service[Any, Any], kind: str) -> RuleFilter:
     rule = service.rule(kind)
     factors = required_factors(rule.verified, rule.tiers, service.tiers_by_name)
     return RuleFilter(standing=rule.standing, needs_auth=rule.needs_auth, required_factors=factors)

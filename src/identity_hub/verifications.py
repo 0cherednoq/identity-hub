@@ -149,7 +149,7 @@ async def apply_verification(
 class Verification:
     """Фактор верификации под арендой: `lease.verification("kyc_id")`."""
 
-    def __init__(self, lease: Lease, factor: str) -> None:
+    def __init__(self, lease: Lease[Any, Any], factor: str) -> None:
         self.lease = lease
         self.factor = factor
         self.spec = lease.pool.service.verification(factor)  # ValidationFailed для неизвестного

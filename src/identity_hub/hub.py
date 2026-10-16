@@ -9,7 +9,7 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, overload
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -65,7 +65,7 @@ from identity_hub.metrics import (
     RollupMetricsBuffer,
 )
 from identity_hub.pool import PoolsMixin
-from identity_hub.protocols import SecretsProvider
+from identity_hub.protocols import SecretsProvider, TCreds, TSession
 from identity_hub.provider_worker import ProviderOperationsWorker
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
 from identity_hub.read.admin_state import AdminStateMixin
@@ -171,7 +171,9 @@ class IdentityHub:
         self._fingerprints = FingerprintKeyring(secrets)  # ключи отпечатков, не KEK (IMP-04, D-207)
         self._heartbeats = HeartbeatBatcher(store)  # пакетный heartbeat аренд процесса (IMP-02, D-211)
         # живые аренды этого процесса по lease_id: отзыв будит их heartbeat сразу (D-213)
-        self._live_leases: weakref.WeakValueDictionary[UUID, Lease] = weakref.WeakValueDictionary()
+        self._live_leases: weakref.WeakValueDictionary[UUID, Lease[Any, Any]] = (
+            weakref.WeakValueDictionary()
+        )
         self.admin_base_url = admin_base_url.rstrip("/") if admin_base_url else None
         self.retention = retention or Retention()
         try:
@@ -269,7 +271,13 @@ class IdentityHub:
             raise ValidationFailed(f"сервис {service.name} уже зарегистрирован")
         self._services[service.name] = service
 
-    def service(self, name: str | Service) -> Service:
+    @overload
+    def service(self, name: Service[TCreds, TSession]) -> Service[TCreds, TSession]: ...
+
+    @overload
+    def service(self, name: str) -> Service: ...
+
+    def service(self, name: str | Service[Any, Any]) -> Service[Any, Any]:
         key = name.name if isinstance(name, Service) else name
         try:
             return self._services[key]

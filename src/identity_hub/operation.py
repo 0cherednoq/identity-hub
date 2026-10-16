@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from identity_hub._space import logger
 from identity_hub.domain.admissibility import IdentitySnapshot, evaluate
@@ -87,7 +87,9 @@ class Operation:
 
 
 @asynccontextmanager
-async def operation_scope(lease: Lease, kind: str, key: str | None = None) -> AsyncIterator[Operation]:
+async def operation_scope(
+    lease: Lease[Any, Any], kind: str, key: str | None = None
+) -> AsyncIterator[Operation]:
     started = lease.pool.space.hub.clock.monotonic()
     lease.check()
     space = lease.pool.space

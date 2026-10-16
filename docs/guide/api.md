@@ -86,8 +86,13 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 Публичные типы `OnExisting`, `ImportReport`, `LoginContext` и `LoginFailure` описывают этот
 контракт: `OnExisting.MERGE` включает накопительный импорт, а `ImportReport.merge_details`
 объясняет дедупликацию и сохранение активной сессии. Контекст предоставляет
-`verify_credential` и `reject_credential`; короткая форма —
+`active_credential`, `verify_credential` и `reject_credential`; короткая форма —
 `LoginFailure(code, credential=(kind, name))`.
+
+`Service[TCredentials, TSession]`, `Pool[...]`, `Lease[...]`, `LoginContext[...]` и
+`Authenticator[...]` сохраняют типы схем до адаптера и воркера. Методы `credentials`,
+`credential`, `active_credential` и `session` также принимают `schema=` для именованных схем;
+рантайм сверяет её с декларацией сервиса.
 
 Модуль `identity_hub.formats` и корневой импорт `identity_hub` экспортируют модели:
 

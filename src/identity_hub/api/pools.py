@@ -9,6 +9,7 @@ from uuid import UUID
 
 from identity_hub.api._base import Namespace
 from identity_hub.pool import Pool
+from identity_hub.protocols import TCreds, TSession
 from identity_hub.service import Pacing, ProxyPolicy, Service
 
 __all__ = ["Pools"]
@@ -23,7 +24,7 @@ class Pools(Namespace):
         self,
         name: str,
         *,
-        service: Service | str,
+        service: Service[TCreds, TSession] | str,
         tags: Iterable[str] = (),
         labels: Mapping[str, Any] | None = None,
         profile: Mapping[str, Any] | None = None,
@@ -41,7 +42,7 @@ class Pools(Namespace):
         reserve_strict: bool = False,
         priority: int = 0,
         yield_grace: timedelta | None = None,
-    ) -> Pool:
+    ) -> Pool[TCreds, TSession]:
         """Объявить пул: фильтры отбора и политики аренды. В БД не хранится, создаётся дёшево.
 
         `purpose` — назначение аренд пула по умолчанию: метка вида работы для истории и сводок.

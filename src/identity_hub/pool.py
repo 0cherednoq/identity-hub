@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic
 from uuid import UUID
 
 from identity_hub.domain.admissibility import compile_rule
@@ -19,6 +19,7 @@ from identity_hub.enums import Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
+from identity_hub.protocols import TCreds, TSession
 from identity_hub.service import LeaseMode, Pacing, ProxyDownPolicy, ProxyPolicy, Service
 from identity_hub.store.base import CandidateQuery, IdentityRow, LeaseOptions, QuotaCharge
 
@@ -110,12 +111,12 @@ class PoolCapacity:
 
 
 @dataclass
-class Pool:
+class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unparameterized API
     """Выборка аккаунтов сервиса по тегам и политикам для конкретного применения."""
 
     space: SpaceBase
     name: str
-    service: Service
+    service: Service[TCreds, TSession]
     tags: frozenset[str] = frozenset()
     labels: dict[str, Any] = field(default_factory=dict)
     profile: dict[str, Any] = field(default_factory=dict)
@@ -241,7 +242,7 @@ class Pool:
         require_quota: bool = False,
         keep_free: int | None = None,
         priority: int | None = None,
-    ) -> AbstractAsyncContextManager[Lease]:
+    ) -> AbstractAsyncContextManager[Lease[TCreds, TSession]]:
         """`async with pool.lease(for_operation=..., wait=...) as lease:` — захват, heartbeat, освобождение.
 
         `for_operation` отбирает только допустимые для операции identity; `tags`/`labels`/`profile`
@@ -299,7 +300,7 @@ class Pool:
         require_quota: bool = False,
         keep_free: int | None = None,
         priority: int | None = None,
-    ) -> Lease:
+    ) -> Lease[TCreds, TSession]:
         """Низкоуровневый захват без heartbeat; обычный путь — `async with pool.lease(...)`.
 
         `query` — готовый отбор кандидатов (служебные пулы входа и проб).
@@ -406,7 +407,7 @@ class Pool:
             return await tx.pick_candidate(query)
 
 
-def _check_profile_filter(service: Service, profile: Mapping[str, Any]) -> None:
+def _check_profile_filter(service: Service[Any, Any], profile: Mapping[str, Any]) -> None:
     unknown = set(profile) - service.filterable_profile
     if unknown:
         raise ValidationFailed(f"фильтр профиля: поля не объявлены filterable: {sorted(unknown)}")
@@ -464,11 +465,21 @@ class PoolsMixin:
             live._revoked_elsewhere()
         return True
 
+    def pool(
+        self: Any,
+        service: Service[TCreds, TSession],
+        *,
+        name: str | None = None,
+    ) -> Pool[TCreds, TSession]:
+        """Короткий типизированный пул сервиса с настройками по умолчанию."""
+        pool: Pool[TCreds, TSession] = self._pool(name or service.name, service=service)
+        return pool
+
     def _pool(
         self: Any,
         name: str,
         *,
-        service: Service | str,
+        service: Service[TCreds, TSession] | str,
         tags: Iterable[str] = (),
         labels: Mapping[str, Any] | None = None,
         profile: Mapping[str, Any] | None = None,
@@ -486,7 +497,7 @@ class PoolsMixin:
         reserve_strict: bool = False,
         priority: int = 0,
         yield_grace: timedelta | None = None,
-    ) -> Pool:
+    ) -> Pool[TCreds, TSession]:
         defaults = LeaseTiming()
         timing = LeaseTiming(
             ttl=ttl or defaults.ttl,

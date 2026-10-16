@@ -512,15 +512,42 @@ await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="
 Под арендой и в `Authenticator`/пробах запись берут по виду и имени (`D-216`):
 
 ```python
-key = await lease.credential("api_key", "trading")       # None: нет, выключена, отозвана, истекла
+key = await lease.credential("api_key", "trading")       # точечный доступ по имени
+working = await lease.active_credential("api_key")        # первая пригодная запись по имени
 everything = await lease.active_credentials()             # {("api_key", "trading"): ApiKey(...), ...}
-login = await ctx.credential("default")                   # то же, что ctx.credentials()
+login = await ctx.active_credential("default")            # первая пригодная для входа
 await ctx.reject_credential("default", name="old", code="wrong_password")
 await ctx.verify_credential("default", name="working")
 value = await space.secrets.reveal(
     identity_id, SecretRef.credential("api_key", "trading"), actor="admin", reason="проверка"
 )
 ```
+
+`credential(kind, name)` читает конкретную запись и сохраняет смысл точечного доступа.
+`active_credential(kind)` выбирает первую по `name` пригодную запись: активную, не истёкшую и
+без последней отметки `reject`. `active_credentials()` возвращает все записи с той же
+семантикой. Если записей нет или все непригодны, эти удобные аксессоры возвращают `None` или
+пустой словарь — это штатный результат; адаптер сам решает, можно ли войти без credentials.
+После `ctx.reject_credential(...)` следующий вызов `ctx.active_credential(...)` уже в той же
+попытке выберет другую запись.
+
+Основная схема выводится из generic-параметров сервиса:
+
+```python
+EXCHANGE: Service[Login, ExchangeSession] = Service(
+    "exchange", "Exchange", credentials=Login, session=ExchangeSession,
+)
+async with space.pool(EXCHANGE).lease() as lease:
+    creds = await lease.active_credential()  # Login | None
+    session = await lease.session()           # ExchangeSession | None
+```
+
+Для именованного вида или слота используйте запасной `schema=`:
+`await lease.credential("api_key", "trading", schema=ApiKey)`. Переданная схема должна в
+точности совпадать со схемой из `Service.credential_schema(kind)` или
+`Service.session_schema(slot)`, иначе будет `ValidationFailed`. Для сессий отдельного
+`active_session` нет: у каждого слота уже одна текущая пригодная сессия, доступная через
+`session(slot)`.
 
 `lease.credentials()` по-прежнему отдаёт запись `default`. Раскрытие пишет
 `identity.secret.revealed` с видом и именем записи, но без значения.

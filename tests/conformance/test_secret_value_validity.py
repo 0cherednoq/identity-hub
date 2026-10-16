@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 from tests.conftest import TEST_KEYS
-from tests.fixtures.services import FAKE_TG, TgSession
+from tests.fixtures.services import FAKE_TG, TgCredentials, TgSession
 
 from identity_hub import (
     AcceptPolicy,
@@ -20,6 +20,7 @@ from identity_hub import (
     LoginOutcome,
     SpaceHandle,
     StaticSecretsProvider,
+    ValidationFailed,
 )
 
 pytestmark = pytest.mark.conformance
@@ -167,9 +168,11 @@ async def _fingerprints_with_optional_session(
 
 class CandidateAuthenticator:
     async def login(self, ctx: Any) -> TgSession:
-        assert await ctx.credential("default", name="bad") is not None
+        bad = await ctx.active_credential("default")
+        assert bad is not None and bad.password.get_secret_value() == "bad"
         await ctx.reject_credential("default", name="bad", code="wrong_password")
-        assert await ctx.credential("default", name="good") is not None
+        good = await ctx.active_credential("default")
+        assert good is not None and good.password.get_secret_value() == "good"
         await ctx.verify_credential("default", name="good")
         return TgSession(auth_key=SecretStr("accepted"))
 
@@ -202,6 +205,22 @@ async def test_authenticator_marks_losing_and_winning_pairs_atomically(
     assert records["good"].last_verified_at is not None
     assert records["good"].last_rejected_at is None
     assert records["good"].reject_code is None
+
+    lease = await space.pools.define("validity-active", service=service).acquire()
+    try:
+        active = await lease.active_credential(schema=TgCredentials)
+        assert active is not None and active.password is not None
+        assert active.password.get_secret_value() == "good"
+        assert await lease.credentials(schema=TgCredentials) is None  # legacy default name remains exact
+        assert set(await lease.active_credentials()) == {("default", "good")}
+        assert await lease.credential("default", "bad") is not None  # точечный доступ сохранён
+        assert await lease.session(schema=TgSession) is not None
+        with pytest.raises(ValidationFailed):
+            await lease.active_credential(schema=TgSession)
+        with pytest.raises(ValidationFailed):
+            await lease.session(schema=TgCredentials)
+    finally:
+        await lease.release()
 
 
 class ShortcutAuthenticator:
