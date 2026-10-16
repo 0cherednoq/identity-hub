@@ -10,15 +10,11 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** S20.2 Финальная сверка и выпуск исправления
-- **Начата:** 2026-10-16
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [x] сводные targeted и typing проверки
-  - [x] PostgreSQL gate после D-323 migration 0037
-  - [x] полный scripts/check.sh (эквивалентный split-run)
-  - [ ] версия, changelog и release
-  - [ ] публичная установка из PyPI
-- **Заметки для следующей сессии:** S13.1/S13.2 и S17-S20 реализованы локально; полный split-gate — 2191 passed, 5 skipped, Ruff/mypy/import-lint green. Остались версия/release и проверка PyPI.
+  - [ ] —
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
@@ -61,9 +57,9 @@
 | S18.1 | `retryable` в карточке identity | — | done |  | issue 10, P1 |
 | S19.1 | `put_credential(reset_auth=...)` | — | done |  | issue 11, P1 |
 | S20.1 | Ревизия схемы в changelog и release-gate | — | done |  | issue 12, P1 |
-| S20.2 | Финальная сверка и выпуск исправления | S17.1, S17.2, S18.1, S19.1, S20.1 | in_progress |  | закрытие issues 09–12 |
+| S20.2 | Финальная сверка и выпуск исправления | S17.1, S17.2, S18.1, S19.1, S20.1 | done | `6243cd0` | `v1.0.0a4`, PyPI |
 
-**Итого:** 37 / 38 done
+**Итого:** 38 / 38 done
 
 ## Журнал сессий
 2026-10-15 · S0.1 · done · code во всех login.failed и legacy fallback rollup
@@ -104,3 +100,4 @@
 2026-10-16 · S13.1 · done · migration 0037, dual-format всех девяти наборов, doctor round-trip и защищённый downgrade; 39 targeted passed · дальше S13.2
 2026-10-16 · S13.2 · done · plaintext стал дефолтом, encrypted fixtures явные, guides/CLI/warning обновлены · дальше S20.2 full gate
 2026-10-16 · S20.2 · in_progress · полный эквивалент scripts/check.sh: 2191 passed, 5 skipped; Ruff, mypy 166 files и import-lint green · дальше version/release/PyPI
+2026-10-16 · S20.2 · done · `v1.0.0a4` опубликован GitHub Actions run 38863857356; PyPI clean install: version 1.0.0a4, schema 0037 · очередь закрыта
