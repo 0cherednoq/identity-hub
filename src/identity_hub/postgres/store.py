@@ -1496,7 +1496,9 @@ class PgTx(StoreTx):
             expires_at = min(expires_at, hold_deadline)
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140);
         # время захвата ставят обе — по нему идёт LRU-выборка (IMP-01, D-209)
-        leased_at = func.clock_timestamp()
+        # Одно значение для обеих колонок: два вхождения clock_timestamp() PostgreSQL
+        # вычисляет независимо и изредка разводит их на микросекунду.
+        leased_at = now
         values: dict[str, Any] = {
             "last_leased_at": leased_at,
             "pick_order_at": leased_at,
