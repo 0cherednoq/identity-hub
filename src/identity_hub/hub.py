@@ -127,7 +127,7 @@ class IdentityHub:
         self,
         sessionmaker: async_sessionmaker[AsyncSession] | None = None,
         secrets: SecretsProvider | None = None,
-        services: Iterable[Service] = (),
+        services: Iterable[Service[Any, Any]] = (),
         *,
         admin_base_url: str | None = None,
         retention: Retention | None = None,
@@ -223,7 +223,7 @@ class IdentityHub:
         # external_ref и labels (телефон, email) не уходят в события и вебхуки (D-152)
         self.redact_refs_in_events = redact_refs_in_events
         self.db_schema = db_schema
-        self._services: dict[str, Service] = {}
+        self._services: dict[str, Service[Any, Any]] = {}
         for service in services:
             self.register_service(service)
         self._spaces: dict[str, SpaceRef] = {}
@@ -264,7 +264,7 @@ class IdentityHub:
 
     # --------------------------------------------------------- сервисы
 
-    def register_service(self, service: Service) -> None:
+    def register_service(self, service: Service[Any, Any]) -> None:
         if service.name in self._services and self._services[service.name] is not service:
             raise ValidationFailed(f"сервис {service.name} уже зарегистрирован")
         self._services[service.name] = service
@@ -273,7 +273,7 @@ class IdentityHub:
     def service(self, name: Service[TCreds, TSession]) -> Service[TCreds, TSession]: ...
 
     @overload
-    def service(self, name: str) -> Service: ...
+    def service(self, name: str) -> Service[Any, Any]: ...
 
     def service(self, name: str | Service[Any, Any]) -> Service[Any, Any]:
         key = name.name if isinstance(name, Service) else name
@@ -301,7 +301,7 @@ class IdentityHub:
         return self._fingerprints.tag(value)
 
     @property
-    def services(self) -> tuple[Service, ...]:
+    def services(self) -> tuple[Service[Any, Any], ...]:
         return tuple(self._services.values())
 
     @property
