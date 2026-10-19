@@ -30,6 +30,8 @@ __all__ = [
 _BUILTIN_LABELS: dict[str, frozenset[str]] = {
     "identity_hub_delivery_queue": frozenset({"queue"}),
     "identity_hub_dispatcher_cursor_lag": frozenset({"consumer"}),
+    "identity_hub_dispatcher_failure_attempts": frozenset({"consumer"}),
+    "identity_hub_retention_held_events": frozenset({"consumer"}),
     "identity_hub_failures_total": frozenset({"space", "service", "scope", "reason"}),
     "identity_hub_lease_acquisition_seconds": frozenset({"space", "service", "pool", "status"}),
     "identity_hub_lease_duration_seconds": frozenset({"space", "service", "pool", "reason"}),

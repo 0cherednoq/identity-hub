@@ -23,6 +23,7 @@ __all__ = [
     "Blocker",
     "ChallengeAlreadyOpen",
     "ConcurrentModification",
+    "ConsumerCursorExpired",
     "DatabaseBusy",
     "IdempotencyConflict",
     "IdentityHubError",
@@ -355,6 +356,22 @@ class StorageError(IdentityHubError):
         super().__init__(f"ошибка хранилища (SQLSTATE {sqlstate or 'неизвестен'})")
 
 
+class ConsumerCursorExpired(IdentityHubError):
+    """Позиция durable-потребителя старше доступного горизонта журнала."""
+
+    code = "consumer_cursor_expired"
+    context_fields = ("consumer", "cursor", "oldest")
+
+    def __init__(self, consumer: str, cursor: str, oldest: str) -> None:
+        self.consumer = consumer
+        self.cursor = cursor
+        self.oldest = oldest
+        super().__init__(
+            f"курсор потребителя {consumer!r} истёк ({cursor} < {oldest}); "
+            "пересоберите проекцию и удалите строку курсора"
+        )
+
+
 class SchemaIncompatible(IdentityHubError):
     """Ревизия схемы БД не та, что ожидает библиотека (IMP-15). URL и SQL в сообщение не попадают."""
 
@@ -391,6 +408,7 @@ _HTTP_STATUS: dict[str, int] = {
     "space_mismatch": 409,
     "invalid_transition": 409,
     "concurrent_modification": 409,
+    "consumer_cursor_expired": 409,
     "revision_conflict": 409,
     "idempotency_conflict": 409,
     "operation_not_allowed": 409,

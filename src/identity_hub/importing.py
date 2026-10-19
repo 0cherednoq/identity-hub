@@ -44,11 +44,13 @@ __all__ = [
     "OnExisting",
 ]
 
-BatchHook = Callable[[Any, list[UUID]], Awaitable[None]]
-"""Хук пачки импорта `(session, created_ids)`.
+BatchHook = Callable[..., Awaitable[None]]
+"""Хук пачки импорта `(session, created_ids[, revisions])`.
 
 `on_batch` вызывается внутри транзакции пачки: `session` — её сессия, исключение откатывает
-пачку. `on_batch_committed` — после фиксации, в отдельной транзакции (FR-2.7).
+пачку. Новый трёхаргументный вариант получает `revisions: dict[UUID, int]` для всех созданных
+и обновлённых identity; двухаргументный контракт сохраняется. `on_batch_committed` — после
+фиксации, в отдельной транзакции (FR-2.7).
 """
 
 
@@ -89,6 +91,8 @@ class OnExisting(StrEnum):
 class ImportReport:
     created: list[UUID] = field(default_factory=list)
     updated: list[UUID] = field(default_factory=list)
+    created_revisions: dict[UUID, int] = field(default_factory=dict)
+    updated_revisions: dict[UUID, int] = field(default_factory=dict)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (external_ref, причина)
     failed: list[tuple[str, str]] = field(default_factory=list)
     hook_failed: list[list[UUID]] = field(default_factory=list)  # пачки, для которых хук упал — повторить
@@ -366,6 +370,7 @@ class ImportingMixin(SpaceBase):
         updated: list[UUID] = []
         skipped: list[tuple[str, str]] = []
         failed: list[tuple[str, str]] = []
+        revisions: dict[UUID, int] = {}
         try:
             async with self._tx(own=True) as tx:
                 refs = [(svc.name, p.prepared.row.unique_ref) for p in ready]
@@ -447,9 +452,17 @@ class ImportingMixin(SpaceBase):
                             },
                         ),
                     )
-                if on_batch is not None and created:
+                changed_ids = [*created, *updated]
+                if changed_ids:
+                    revisions = {row.id: row.revision for row in await tx.get_identities(changed_ids)}
+                if on_batch is not None and (created or (updated and _hook_accepts_revisions(on_batch))):
                     # хук приложения в транзакции пачки: его исключение откатывает пачку целиком
-                    await on_batch(getattr(tx, "session", None), list(created))
+                    await _call_batch_hook(
+                        on_batch,
+                        getattr(tx, "session", None),
+                        list(created),
+                        revisions,
+                    )
         except Exception as exc:
             # Текст чужого исключения в лог и отчёт не идёт: в нём бывают параметры SQL и секреты.
             # Сообщения ошибок библиотеки безопасны по контракту (S-8) и объясняют причину отказа.
@@ -460,6 +473,8 @@ class ImportingMixin(SpaceBase):
             return
         report.created.extend(created)
         report.updated.extend(updated)
+        report.created_revisions.update({identity_id: revisions[identity_id] for identity_id in created})
+        report.updated_revisions.update({identity_id: revisions[identity_id] for identity_id in updated})
         report.skipped.extend(skipped)
         report.failed.extend(failed)
         if hook is not None and created:
@@ -1015,11 +1030,33 @@ def _path_size(path: Path) -> int | None:
 def _merge(report: ImportReport, part: ImportReport) -> None:
     report.created.extend(part.created)
     report.updated.extend(part.updated)
+    report.created_revisions.update(part.created_revisions)
+    report.updated_revisions.update(part.updated_revisions)
     report.skipped.extend(part.skipped)
     report.failed.extend(part.failed)
     report.hook_failed.extend(part.hook_failed)
     report.merge_details.extend(part.merge_details)
     report.updated_refs.update(part.updated_refs)
+
+
+def _hook_accepts_revisions(hook: BatchHook) -> bool:
+    try:
+        inspect.signature(hook).bind(None, [], {})
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+async def _call_batch_hook(
+    hook: BatchHook,
+    session: Any,
+    created: list[UUID],
+    revisions: dict[UUID, int],
+) -> None:
+    if _hook_accepts_revisions(hook):
+        await hook(session, created, dict(revisions))
+    else:
+        await hook(session, created)
 
 
 def _updated_id(report: ImportReport, service: Service, record: ImportRecord) -> UUID | None:

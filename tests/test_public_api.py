@@ -28,7 +28,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_release_candidate_version_is_consistent() -> None:
-    assert identity_hub.__version__ == "1.0.0a4"
+    assert identity_hub.__version__ == "1.0.0a5"
     assert version("identity-hub") == identity_hub.__version__
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert metadata["project"]["version"] == identity_hub.__version__
@@ -119,9 +119,20 @@ def test_import_merge_and_credential_validity_contract_is_public_and_documented(
     assert CredentialCandidate("api_key", "trading", object()).key == ("api_key", "trading")
     assert OnExisting.MERGE == "merge"
     assert "merge_details" in ImportReport.__dataclass_fields__
+    assert {"created_revisions", "updated_revisions"} <= ImportReport.__dataclass_fields__.keys()
     assert {"active_credential", "verify_credential", "reject_credential"} <= set(LoginContext.__dict__)
     guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
     assert [name for name in sorted(names) if f"`{name}`" not in guide] == []
+
+
+def test_consumer_cursor_expired_is_public_and_documented() -> None:
+    from identity_hub import ConsumerCursorExpired
+
+    error = ConsumerCursorExpired("projection", "1:1", "2:2")
+    assert error.code == "consumer_cursor_expired"
+    assert error.context == {"consumer": "projection", "cursor": "1:1", "oldest": "2:2"}
+    guide = (ROOT / "docs" / "guide" / "10-events.md").read_text(encoding="utf-8")
+    assert "`ConsumerCursorExpired`" in guide
 
 
 def test_link_filter_contract_is_public_and_documented() -> None:
@@ -131,6 +142,43 @@ def test_link_filter_contract_is_public_and_documented() -> None:
     assert {"without_link", "not_target_of", "is_target_of"} <= set(fields)
     guide = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
     assert all(f"`{name}" in guide for name in ("without_link", "not_target_of", "is_target_of"))
+
+
+def test_eligible_capacity_contract_is_public_and_documented() -> None:
+    from identity_hub import EligibleCapacity, Pool
+
+    assert "EligibleCapacity" in identity_hub.__all__
+    assert set(EligibleCapacity.__dataclass_fields__) == {
+        "eligible",
+        "free",
+        "leased",
+        "reserved",
+        "allocatable",
+    }
+    assert hasattr(Pool, "eligible_count")
+
+    api = (ROOT / "docs" / "guide" / "api.md").read_text(encoding="utf-8")
+    leases = (ROOT / "docs" / "guide" / "07-leases.md").read_text(encoding="utf-8")
+    for name in ("EligibleCapacity", "eligible_count", "allocatable", "require_quota", "limit"):
+        assert f"`{name}" in api
+        assert f"`{name}" in leases
+    assert "SQLAlchemy `Select`" in api
+    assert "worker_accounts.c.identity_id" in leases
+
+
+def test_all_lease_unavailable_reasons_are_documented_with_defer_strategy() -> None:
+    from identity_hub import LeaseUnavailableReason
+
+    leases = (ROOT / "docs" / "guide" / "07-leases.md").read_text(encoding="utf-8")
+    handoff = (ROOT / "docs" / "resource-management-tallyho-handoff.md").read_text(encoding="utf-8")
+    for reason in LeaseUnavailableReason:
+        assert f"| `{reason.value}` |" in leases
+        assert f"| `{reason.value}` |" in handoff
+    assert "LeaseUnavailable.retry_after" in leases
+    assert "QuotaExhausted.retry_at" in leases
+    assert "Defer-стратегия" in leases
+    assert "IdentityCreate.service" in handoff
+    assert "service=SERVICE" in handoff
 
 
 def test_optional_eazy_integration_is_importable_and_documented() -> None:

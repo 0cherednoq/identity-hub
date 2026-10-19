@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from identity_hub import IdentityHub, SpaceHandle
+from identity_hub import IdentityHub, SpaceHandle, ValidationFailed
 from identity_hub.events import Event, EventDraft
 from identity_hub.read.events import EventFilters
 
@@ -81,6 +81,37 @@ async def test_poison_event_is_isolated_and_skipped(hub_under_test: IdentityHub,
     assert "secret-text" not in str(dict(skipped.data))
 
 
+async def test_block_policy_delivers_prefix_and_retries_poison_event(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    delivered: list[int] = []
+    failing = True
+
+    async def handler(events: list[Event]) -> None:
+        numbers = [event.data["n"] for event in events]
+        if 3 in numbers and failing:
+            raise RuntimeError("temporary")
+        delivered.extend(numbers)
+
+    hub_under_test.events.subscribe_batch(
+        "projection", handler, types={"identity.updated"}, failure_policy="block"
+    )
+    await _emit(space, [1, 2, 3, 4])
+
+    for _ in range(4):
+        await hub_under_test.dispatcher.run_once()
+
+    assert delivered == [1, 2]
+    assert hub_under_test.dispatcher.runtime["callbacks:projection"].retrying is True
+    assert await _skipped(space) == []
+
+    failing = False
+    await hub_under_test.dispatcher.run_once()
+
+    assert delivered == [1, 2, 3, 4]
+    assert hub_under_test.dispatcher.runtime["callbacks:projection"].retrying is False
+
+
 async def test_filters_by_space_and_service(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
     """C4.1: фильтры `space` и `service` — у пакетной и у обычной подписки."""
     other = hub_under_test.space(f"{space.slug}-other", create=True)
@@ -120,6 +151,8 @@ async def test_subscribe_batch_validates_arguments(hub_under_test: IdentityHub) 
 
     with pytest.raises(ValueError):
         hub_under_test.events.subscribe_batch("mirror", handler, max_attempts=0)
+    with pytest.raises(ValidationFailed, match="max_attempts"):
+        hub_under_test.events.subscribe_batch("mirror", handler, failure_policy="block", max_attempts=2)
     hub_under_test.events.subscribe_batch("mirror", handler)
     with pytest.raises(ValueError):
         hub_under_test.events.subscribe_batch("mirror", handler)

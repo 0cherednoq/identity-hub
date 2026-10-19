@@ -44,6 +44,7 @@ EXPECTED_CODES = {
     "ValidationFailed": "validation_error",
     "TransitionNotAllowed": "invalid_transition",
     "ConcurrentModification": "concurrent_modification",
+    "ConsumerCursorExpired": "consumer_cursor_expired",
     "RevisionConflict": "revision_conflict",
     "IdempotencyConflict": "idempotency_conflict",
     "OperationNotAllowed": "operation_not_allowed",

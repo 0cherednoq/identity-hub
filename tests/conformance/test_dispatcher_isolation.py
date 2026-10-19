@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from identity_hub import IdentityHub, SpaceHandle
+from identity_hub import IdentityHub, SpaceHandle, ValidationFailed
 from identity_hub.events import Event, EventDraft
 from identity_hub.read.events import EventFilters
 
@@ -82,6 +82,61 @@ async def test_max_attempts_is_configurable_and_counted_per_event(
 
     assert attempts == {1: 1, 2: 2, 3: 1, 4: 2, 5: 1}
     assert sorted(item.data["attempts"] for item in await _skipped(space)) == [2, 2]
+
+
+async def test_block_policy_keeps_cursor_at_poison_event_until_success(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    seen: list[int] = []
+    failing = True
+
+    async def callback(event: Event) -> None:
+        nonlocal failing
+        seen.append(event.data["n"])
+        if event.data["n"] == 2 and failing:
+            raise RuntimeError("temporary")
+
+    hub_under_test.events.subscribe(
+        "projection", callback, types={"identity.updated"}, failure_policy="block"
+    )
+    await _emit_numbered(space, 3)
+
+    for _ in range(6):
+        await hub_under_test.dispatcher.run_once()
+
+    assert seen == [1, 2, 2, 2, 2, 2, 2]
+    runtime = hub_under_test.dispatcher.runtime["callbacks:projection"]
+    assert runtime.retrying is True and runtime.stalled is True and runtime.failure_attempts == 6
+    process = next(
+        item
+        for item in (await hub_under_test.background_snapshot()).processes
+        if item.name == "callbacks:projection"
+    )
+    assert process.stalled is True and process.failure_attempts == 6 and process.lag_events == 2
+    assert await _skipped(space) == []
+
+    failing = False
+    await hub_under_test.dispatcher.run_once()
+
+    assert seen[-2:] == [2, 3]
+    runtime = hub_under_test.dispatcher.runtime["callbacks:projection"]
+    assert runtime.retrying is False and runtime.stalled is False and runtime.failure_attempts == 0
+    process = next(
+        item
+        for item in (await hub_under_test.background_snapshot()).processes
+        if item.name == "callbacks:projection"
+    )
+    assert process.stalled is False and process.failure_attempts == 0 and process.lag_events == 0
+
+
+def test_block_policy_rejects_attempt_limit_and_unknown_value(hub_under_test: IdentityHub) -> None:
+    async def callback(event: Event) -> None:
+        return None
+
+    with pytest.raises(ValidationFailed, match="max_attempts"):
+        hub_under_test.events.subscribe("projection", callback, failure_policy="block", max_attempts=2)
+    with pytest.raises(ValidationFailed, match="failure_policy"):
+        hub_under_test.events.subscribe("projection", callback, failure_policy="unknown")  # type: ignore[arg-type]
 
 
 async def test_skip_notice_is_not_delivered_back_to_subscribers(

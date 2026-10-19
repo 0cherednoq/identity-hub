@@ -48,6 +48,7 @@ from identity_hub.enums import (
 )
 from identity_hub.errors import (
     AlreadyExists,
+    ConsumerCursorExpired,
     IdempotencyConflict,
     LeaseOwnershipLost,
     LeaseUnavailable,
@@ -3515,6 +3516,20 @@ class MemoryStore(Store):
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         async with self._lock:
             self._state.services = {service.name: deepcopy(service) for service in services}
+            for identity_id, identity in self._state.identities.items():
+                service = self._state.services.get(identity.service)
+                if service is None:
+                    continue
+                factors = frozenset(identity.verified_factors)
+                rank = max(
+                    (
+                        index
+                        for index, required in enumerate(service.verification_tiers)
+                        if required <= factors
+                    ),
+                    default=None,
+                )
+                self._state.identities[identity_id] = replace(identity, verification_tier_rank=rank)
 
     async def ensure_space(
         self,
@@ -3560,9 +3575,16 @@ class MemoryStore(Store):
             return None
         async with consumer_lock:
             async with self._lock:
-                if start_now and consumer not in self._state.cursors:
+                created = consumer not in self._state.cursors
+                if start_now and created:
                     self._state.cursors[consumer] = max((e.id for e, _, _ in self._state.events), default=0)
                 cursor = self._state.cursors.get(consumer, 0)
+                oldest = next(
+                    (event for event, _, external in self._state.events if external or not external_only),
+                    None,
+                )
+                if not created and cursor != 0 and oldest is not None and cursor < oldest.id:
+                    raise ConsumerCursorExpired(consumer, str(cursor), str(oldest.id))
                 events = [
                     event
                     for event, _, external in self._state.events
@@ -4072,14 +4094,45 @@ class MemoryStore(Store):
                 cutoff = now - retention[retention_key]
                 if isinstance(collection, list):
                     old_count = len(collection)
+                    cursor_floor = min(self._state.cursors.values()) if self._state.cursors else None
+                    cursor_holders = (
+                        tuple(
+                            sorted(
+                                consumer
+                                for consumer, cursor in self._state.cursors.items()
+                                if cursor == cursor_floor
+                            )
+                        )
+                        if cursor_floor is not None
+                        else ()
+                    )
                     gone = (
-                        {item[0].event_id for item in collection if timestamp(item) < cutoff}
+                        {
+                            item[0].event_id
+                            for item in collection
+                            if timestamp(item) < cutoff
+                            and (cursor_floor is None or item[0].id < cursor_floor)
+                        }
                         if name == "events"
                         else set()
                     )
-                    collection[:] = [item for item in collection if timestamp(item) >= cutoff]
+                    collection[:] = [
+                        item
+                        for item in collection
+                        if timestamp(item) >= cutoff
+                        or (name == "events" and cursor_floor is not None and item[0].id >= cursor_floor)
+                    ]
                     result[name] = old_count - len(collection)
                     if name == "events":
+                        retained = sum(
+                            timestamp(item) < cutoff and item[0].id >= cursor_floor
+                            for item in collection
+                            if cursor_floor is not None
+                        )
+                        if retained:
+                            result["events_retained"] = retained
+                            for consumer in cursor_holders:
+                                result[f"events_held_by:{consumer}"] = retained
                         orphaned = [
                             delivery_id
                             for delivery_id, row in self._state.webhook_deliveries.items()
@@ -4179,10 +4232,25 @@ class MemoryStore(Store):
                 )
             return []
 
-    async def doctor(self, *, fix: bool) -> list[DoctorIssue]:
+    async def doctor(self, *, fix: bool, event_retention: timedelta | None = None) -> list[DoctorIssue]:
         async with self._lock:
             issues: list[DoctorIssue] = []
             spaces = {space.id: space.slug for space in self._state.spaces.values()}
+            oldest = self._state.events[0][0] if self._state.events else None
+            if oldest is not None:
+                horizon_warning_at = (
+                    self.clock.now() - event_retention * 0.9 if event_retention is not None else None
+                )
+                for consumer, cursor in sorted(self._state.cursors.items()):
+                    if cursor == 0 or cursor > oldest.id:
+                        continue
+                    if cursor < oldest.id:
+                        kind = "consumer_cursor_expired"
+                    elif horizon_warning_at is not None and oldest.occurred_at <= horizon_warning_at:
+                        kind = "consumer_cursor_at_retention_horizon"
+                    else:
+                        continue
+                    issues.append(DoctorIssue(kind, "-", consumer, f">={oldest.id}", str(cursor)))
             event_seq: dict[UUID, int] = defaultdict(int)
             event_revision: dict[UUID, int] = defaultdict(int)
             for event, _, _ in self._state.events:
@@ -4492,8 +4560,7 @@ class MemoryStore(Store):
             space_ids = {ref.id for ref in self._state.spaces.values() if space is None or ref.slug == space}
             counts = {
                 table: sum(
-                    isinstance(payload, PlaintextPayload)
-                    and self._secret_space_id(table, key) in space_ids
+                    isinstance(payload, PlaintextPayload) and self._secret_space_id(table, key) in space_ids
                     for key, payload in view.items()
                 )
                 for table, (view, _aad) in self._rotation_views().items()

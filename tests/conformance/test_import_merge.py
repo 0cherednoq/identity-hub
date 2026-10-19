@@ -38,6 +38,8 @@ async def test_merge_covers_credential_and_session_duplicate_matrix(space: Space
         actor="test",
     )
     assert result.updated == [first.id] and result.skipped == []
+    identity = await space.identities.get(first.id)
+    assert result.updated_revisions == {first.id: identity.revision}
     card = await space.secrets.describe(first.id)
     assert len(card.credential_records) == 1
     assert {session.slot for session in card.sessions} == {"default", "web"}

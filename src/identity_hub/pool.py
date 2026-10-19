@@ -33,7 +33,15 @@ if TYPE_CHECKING:
     from identity_hub._space import SpaceBase
     from identity_hub.lease import Lease, OnLost
 
-__all__ = ["DEFAULT_STANDING", "LeaseTiming", "Pool", "PoolCapacity", "PoolsMixin", "default_holder"]
+__all__ = [
+    "DEFAULT_STANDING",
+    "EligibleCapacity",
+    "LeaseTiming",
+    "Pool",
+    "PoolCapacity",
+    "PoolsMixin",
+    "default_holder",
+]
 
 DEFAULT_STANDING = frozenset({Standing.GOOD, Standing.LIMITED})
 
@@ -108,6 +116,17 @@ class PoolCapacity:
     free: int
     reserved: int
     available: int
+
+
+@dataclass(frozen=True, slots=True)
+class EligibleCapacity:
+    """Полная пригодная ёмкость пула, включая аккаунты под живой арендой."""
+
+    eligible: int
+    free: int
+    leased: int
+    reserved: int
+    allocatable: int
 
 
 @dataclass
@@ -362,6 +381,45 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
         reserved = min(free, effective)
         return PoolCapacity(free=free, reserved=reserved, available=free - reserved)
 
+    async def eligible_count(
+        self,
+        *,
+        for_operation: str | None = None,
+        among: Select[Any] | Iterable[UUID] | Callable[[Identity], bool] | None = None,
+        require_quota: bool = False,
+        limit: int = 1_000_000,
+    ) -> EligibleCapacity:
+        """Полная пригодная ёмкость: свободные плюс находящиеся под живой арендой.
+
+        Каждый внутренний счётчик ограничен ``limit``. Результат, равный или превышающий
+        ``limit``, следует считать насыщенным, а не точным размером всего парка.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValidationFailed("limit должен быть положительным целым числом")
+        if callable(among):
+            among = await _matching_ids(self, among)
+        query = self.candidate_query(
+            for_operation=for_operation,
+            among=among,
+            require_quota=require_quota,
+        )
+        async with self.space._tx(own=True) as tx:
+            return await self._eligible_capacity(tx, query, limit)
+
+    async def _eligible_capacity(self, tx: Any, query: CandidateQuery, limit: int) -> EligibleCapacity:
+        free = await tx.count_candidates(query, limit)
+        leased = await tx.count_live_candidates(query, limit)
+        eligible = free + leased
+        effective = await self._effective_reserve(tx, query, self.reserve)
+        reserved = min(eligible, effective)
+        return EligibleCapacity(
+            eligible=eligible,
+            free=free,
+            leased=leased,
+            reserved=reserved,
+            allocatable=eligible - reserved,
+        )
+
     async def _effective_reserve(self, tx: Any, query: CandidateQuery, reserve: int) -> int:
         if reserve == 0 or self.reserve_strict:
             return reserve
@@ -377,8 +435,25 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
             effective = await self._effective_reserve(tx, query, self.reserve)
             available = max(0, free - effective)
             state = "empty" if available == 0 else ("low" if available <= threshold else "ok")
-            if state != self._capacity_state:
-                if state != "ok":
+            previous_state = self._capacity_state
+            if state != previous_state:
+                if state == "ok":
+                    capacity = await self._eligible_capacity(tx, query, 1_000_000)
+                    await self.space._emit(
+                        tx,
+                        EventDraft(
+                            "pool.capacity.ok",
+                            actor=self.holder,
+                            service=self.service.name,
+                            data={
+                                "pool": self.name,
+                                "previous_state": previous_state,
+                                "eligible": capacity.eligible,
+                                "free": capacity.free,
+                            },
+                        ),
+                    )
+                else:
                     await self.space._emit(
                         tx,
                         EventDraft(
@@ -405,6 +480,22 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
         query = self.candidate_query(**filters)
         async with self.space._tx(own=True) as tx:
             return await tx.pick_candidate(query)
+
+
+async def _matching_ids(pool: Pool[Any, Any], predicate: Callable[[Identity], bool]) -> list[UUID]:
+    """Развернуть предикат ``among`` в id тем же способом для подсчёта и аренды."""
+    from identity_hub.api.identities import IdentityFilter
+
+    matched: list[UUID] = []
+    after: str | None = None
+    while True:
+        page = await pool.space.identities.list(  # type: ignore[attr-defined]
+            IdentityFilter(service=pool.service.name), limit=500, after=after
+        )
+        matched.extend(identity.id for identity in page.items if predicate(identity))
+        if page.next_cursor is None:
+            return matched
+        after = page.next_cursor
 
 
 def _check_profile_filter(service: Service[Any, Any], profile: Mapping[str, Any]) -> None:

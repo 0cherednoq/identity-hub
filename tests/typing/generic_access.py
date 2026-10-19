@@ -6,7 +6,7 @@ from typing import assert_type
 
 from pydantic import BaseModel
 
-from identity_hub import CredentialCandidate, LoginContext, Pool, Service, SpaceHandle
+from identity_hub import CredentialCandidate, IdentityCreate, LoginContext, Pool, Service, SpaceHandle
 
 
 class Credentials(BaseModel):
@@ -29,6 +29,10 @@ SERVICE = Service(
     credential_kinds={"totp": TotpSecret},
 )
 assert_type(SERVICE, Service[Credentials, Session])
+assert_type(
+    IdentityCreate(service=SERVICE, external_ref="typing-contract"),
+    IdentityCreate,
+)
 
 
 async def _lease_contract(space: SpaceHandle) -> None:

@@ -1009,6 +1009,17 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         self.pool.space.hub._live_leases.pop(self.lease_id, None)
         if outcome == "revoked":
             self._revoked_on_release = True
+        if self.pool._capacity_state != "ok":
+            try:
+                async with asyncio.timeout(RELEASE_TIMEOUT):
+                    await self.pool._check_capacity()
+            except Exception as exc:
+                # Сигнал восстановления best-effort: сбой подсчёта не отменяет уже записанный release.
+                logger.warning(
+                    "не удалось проверить ёмкость после освобождения аренды %s: %s",
+                    self.lease_id,
+                    describe_error(exc),
+                )
         hub = self.pool.space.hub
         record_metric(
             hub.metrics,
@@ -1102,22 +1113,6 @@ class _SkipCandidate(Exception):
         self.identity_id = identity_id
 
 
-async def _matching_ids(pool: Pool[Any, Any], predicate: Callable[[Any], bool]) -> list[UUID]:
-    """Id аккаунтов сервиса пула, для которых `predicate(identity)` истинен; читается постранично."""
-    from identity_hub.api.identities import IdentityFilter
-
-    matched: list[UUID] = []
-    after: str | None = None
-    while True:
-        page = await pool.space.identities.list(  # type: ignore[attr-defined]
-            IdentityFilter(service=pool.service.name), limit=500, after=after
-        )
-        matched.extend(identity.id for identity in page.items if predicate(identity))
-        if page.next_cursor is None:
-            return matched
-        after = page.next_cursor
-
-
 async def acquire(
     pool: Pool[TCreds, TSession],
     *,
@@ -1149,7 +1144,7 @@ async def acquire(
     """
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
-    from identity_hub.pool import check_reserve
+    from identity_hub.pool import _matching_ids, check_reserve
 
     reserve = pool.reserve if keep_free is None else check_reserve(keep_free)
     if reserve and pool.shared:

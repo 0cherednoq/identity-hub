@@ -11,9 +11,10 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from identity_hub.errors import AttemptsExhausted, ValidationFailed, VerificationRequirementsNotMet
-from identity_hub.hub import SpaceHandle
+from identity_hub.hub import IdentityHub, SpaceHandle
 from identity_hub.lease import Lease
 from identity_hub.postgres.models import EventRecord, IdentityRecord, RegionStateRecord, VerificationRecord
+from identity_hub.store.base import ServiceRow
 from tests.fixtures.api import register
 from tests.fixtures.services import KycEvidence
 
@@ -43,6 +44,12 @@ async def _verified(sm: async_sessionmaker[AsyncSession], identity_id: UUID) -> 
 
 async def test_full_kyc_cycle(space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
     identity_id, lease = await _exchange(space)
+    async with sessionmaker() as s:
+        assert (
+            await s.execute(
+                select(IdentityRecord.verification_tier_rank).where(IdentityRecord.id == identity_id)
+            )
+        ).scalar_one() is None
     kyc = lease.verification("kyc_id")
     with pytest.raises(VerificationRequirementsNotMet):
         await kyc.start()
@@ -52,6 +59,12 @@ async def test_full_kyc_cycle(space: SpaceHandle, sessionmaker: async_sessionmak
         await v.start()
         assert (await v.submit()).state == "verified"  # auto
     assert await _verified(sessionmaker, identity_id) == ["email", "phone"]
+    async with sessionmaker() as s:
+        assert (
+            await s.execute(
+                select(IdentityRecord.verification_tier_rank).where(IdentityRecord.id == identity_id)
+            )
+        ).scalar_one() == 0
 
     status = await kyc.start(KycEvidence(document_number=SecretStr("AB123456")))
     assert status.state == "pending"
@@ -67,6 +80,12 @@ async def test_full_kyc_cycle(space: SpaceHandle, sessionmaker: async_sessionmak
     approved = await kyc.approve()
     assert approved.state == "verified" and approved.expires_at is not None and approved.attempts == 1
     assert await _verified(sessionmaker, identity_id) == ["email", "kyc_id", "phone"]
+    async with sessionmaker() as s:
+        assert (
+            await s.execute(
+                select(IdentityRecord.verification_tier_rank).where(IdentityRecord.id == identity_id)
+            )
+        ).scalar_one() == 1
     assert (await space.verifications.status(identity_id, "kyc_id")).state == "verified"
 
     # withdraw требует уровень full — теперь выдаётся (FR-10.5: verified_factors используется выборкой)
@@ -96,6 +115,50 @@ async def test_full_kyc_cycle(space: SpaceHandle, sessionmaker: async_sessionmak
         ("identity.tier.reached", "basic", "email"),
         ("identity.tier.reached", "full", "kyc_id"),
     ]
+
+
+async def test_read_tier_rank_matches_account_item_and_resyncs_service_configuration(
+    hub: IdentityHub,
+    space: SpaceHandle,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    identity_id, lease = await _exchange(space)
+    for factor in ("email", "phone"):
+        verification = lease.verification(factor)
+        await verification.start()
+        await verification.submit()
+
+    ref = await space.ref()
+    async with sessionmaker() as session:
+        read_rank = (
+            await session.execute(
+                select(hub.read.identities.c.verification_tier_rank).where(
+                    hub.read.identities.c.space_id == ref.id,
+                    hub.read.identities.c.id == identity_id,
+                )
+            )
+        ).scalar_one()
+    item = next(item for item in (await space.admin.identity_page()).items if item.id == identity_id)
+    assert read_rank == item.verification_tier_rank == 0
+
+    service = hub.service("fake_exchange")
+    await hub._store.sync_services([ServiceRow(service.name, service.title, service.url, ())])
+    async with sessionmaker() as session:
+        assert (
+            await session.execute(
+                select(IdentityRecord.verification_tier_rank).where(IdentityRecord.id == identity_id)
+            )
+        ).scalar_one() is None
+
+    await hub._store.sync_services(
+        [ServiceRow(service.name, service.title, service.url, tuple(tier.factors for tier in service.tiers))]
+    )
+    async with sessionmaker() as session:
+        assert (
+            await session.execute(
+                select(IdentityRecord.verification_tier_rank).where(IdentityRecord.id == identity_id)
+            )
+        ).scalar_one() == 0
 
 
 async def test_reject_attempts_and_revocation(

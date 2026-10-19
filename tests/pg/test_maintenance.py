@@ -184,9 +184,10 @@ async def test_cleanup_removes_expired_windows_and_old_retained_rows(
             LeaseLogRecord,
             LeaseHistoryRecord,
             WebhookDeliveryRecord,
-            EventRecord,
         ):
             assert (await session.execute(select(func.count()).select_from(model))).scalar_one() == 0
+        # Минимальный durable-курсор сохраняет одно событие-якорь для проверки истечения.
+        assert (await session.execute(select(func.count()).select_from(EventRecord))).scalar_one() == 1
         assert (await session.execute(select(func.count()).select_from(ImportRunRecord))).scalar_one() == 1
         assert (
             await session.execute(select(func.count()).select_from(ProviderOperationRecord))

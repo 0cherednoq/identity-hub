@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+## [1.0.0a5] - 2026-10-19
+
+Пятый альфа-релиз добавляет безопасную внешнюю проекцию состояния и полный контракт ёмкости
+пулов для resource governor. Ревизия схемы — `0038`: перед обновлением примените
+`identity-hub migrate`.
+
+### Added
+
+- Документирован и проверен интеграционными тестами рецепт внешней read-модели:
+  durable-подписка до snapshot, keyset-проход по `hub.read`, revision-guarded UPSERT,
+  восстановление после остановки и rebuild после истечения курсора.
+- Публичная read-схема v5 содержит `verification_tier_rank`; `ImportReport` и новый вариант
+  `on_batch` отдают ревизии созданных и обновлённых identity. Миграция схемы — `0038`.
+- `Pool.eligible_count()` и `EligibleCapacity(eligible, free, leased, reserved, allocatable)`
+  дают resource governor полную пригодную ёмкость, включая identity под живой арендой.
+  Поддерживаются те же `among`, `for_operation` и `require_quota`, что при аренде. Изменений
+  схемы БД и интерфейса Store нет.
+- Событие `pool.capacity.ok` уровня INFO публикуется один раз при восстановлении пула из
+  `low`/`empty` в `ok`. Освобождение аренды запускает best-effort проверку немедленно;
+  периодический tick остаётся fallback для остальных способов восстановления.
+
+### Fixed
+
+- Строгий потребитель событий может выбрать `failure_policy="block"`: сбойное событие не
+  пропускается. Retention учитывает durable-курсоры, а утрата их горизонта завершается явной
+  ошибкой `ConsumerCursorExpired` и диагностируется через doctor.
+- `IdentityCreate(service=SERVICE)` теперь принимается mypy для конкретного generic-типа
+  `Service[Credentials, Session]`; строковое имя сервиса остаётся поддерживаемым.
+- Руководство по арендам покрывает все значения `LeaseUnavailableReason` и различает
+  относительный `LeaseUnavailable.retry_after` и абсолютный `QuotaExhausted.retry_at`.
+
 ## [1.0.0a4] - 2026-10-16
 
 Четвёртый альфа-релиз исправляет контракты server-admins и распространяет управляемый режим
