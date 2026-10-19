@@ -26,7 +26,7 @@ from identity_hub.postgres.models import IdentityHubBase
 __all__ = ["READ_SCHEMA_VERSION", "READ_TABLES", "ReadSchema"]
 
 # Меняется только при несовместимом изменении набора, имён или типов публичных колонок.
-READ_SCHEMA_VERSION = 4
+READ_SCHEMA_VERSION = 5
 
 # Публичное имя таблицы → (физическая таблица, {публичная колонка: физическая колонка}).
 READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
@@ -51,6 +51,7 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "availability_until": "availability_until",
             "requirements": "requirements",
             "verified_factors": "verified_factors",
+            "verification_tier_rank": "verification_tier_rank",
             "tags": "tags",
             "labels": "labels",
             "profile": "profile",

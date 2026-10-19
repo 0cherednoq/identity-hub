@@ -108,7 +108,7 @@ class Doctor:
         self.hub = hub
 
     async def check(self, *, fix: bool = False) -> list[DoctorIssue]:
-        return await self.hub._store.doctor(fix=fix)
+        return await self.hub._store.doctor(fix=fix, event_retention=self.hub.retention.events)
 
     async def inactive_keys(self) -> dict[str, dict[str, int]]:
         """Набор → `key_id` → число строк, зашифрованных не активным мастер-ключом.

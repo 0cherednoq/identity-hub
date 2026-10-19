@@ -368,6 +368,7 @@ class IdentityRecord(IdentityHubBase):
     # Кэш подтверждённых факторов для быстрой выборки аренды (verified_factors @> '{kyc_id}').
     # Поддерживается библиотекой при каждом переходе в ih_verifications.
     verified_factors: Mapped[list[str]] = mapped_column(ARRAY(String(64)), server_default=text("'{}'"))
+    verification_tier_rank: Mapped[int | None] = mapped_column(SmallInteger)
 
     # нефильтруемая часть профиля при Service.profile_encrypted (D-109, миграция 0002);
     # шифр или открытый profile_payload (D-323)
@@ -444,6 +445,7 @@ class IdentityRecord(IdentityHubBase):
         ),
         # keyset-пагинация списка в админке
         Index("ix_ih_identities_list", "space_id", "created_at", "id"),
+        Index("ix_ih_identities_space_id", "space_id", "id"),
         # ленивое снятие временных состояний
         Index(
             "ix_ih_identities_availability_until",
@@ -1176,6 +1178,8 @@ class EventCursorRecord(IdentityHubBase):
     last_tx_id: Mapped[str] = mapped_column(XID8, server_default=text("'0'::xid8"))
     last_id: Mapped[int] = mapped_column(BigInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_ih_event_cursors_position", "last_tx_id", "last_id"),)
 
 
 class StatsRollupRecord(IdentityHubBase):

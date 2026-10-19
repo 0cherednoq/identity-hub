@@ -31,7 +31,8 @@ pytestmark = pytest.mark.unit
 def test_catalog_covers_spec_and_region_events() -> None:
     # +proxy.secret.revealed (F1.6a), +proxy.checker.failed (F3.7a), +proxy.updated/deleted (F3.7b),
     # +proxy.disabled/enabled (C1.4a)
-    assert len([s for s in CATALOG.values() if s.external]) == 46
+    assert len([s for s in CATALOG.values() if s.external]) == 47
+    assert CATALOG["pool.capacity.ok"].severity is Severity.INFO
     assert CATALOG["proxy.disabled"].group == CATALOG["proxy.enabled"].group == "proxy"
     for spec in (LIFECYCLE, STANDING, AUTH, AVAILABILITY, PROXY_HEALTH, VERIFICATION):
         assert spec.event_type in CATALOG

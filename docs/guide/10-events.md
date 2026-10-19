@@ -74,7 +74,7 @@ flowchart LR
 | Вход | `identity.login.succeeded/failed`, `identity.challenge.opened/answered/expired` | Показать оператору, что нужен SMS-код |
 | Секреты | `identity.credentials.updated`, `session.updated`, `secret.revealed` | Аудит |
 | Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.pool.exhausted`, `proxy.checker.failed`, `proxy.disabled`, `proxy.enabled`, `proxy.updated`, `proxy.deleted`, `proxy.secret.revealed` | Мониторинг прокси, аудит |
-| Пулы | `pool.capacity.low/empty`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка аккаунтов, проблемы воркеров |
+| Пулы | `pool.capacity.low/empty/ok`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка и восстановление ёмкости, проблемы воркеров |
 
 События аренд и операций (`lease.*`, `operation.*`) и `dispatcher.event.skipped` — журнальные: они видны в
 `space.admin.event_page(filters=EventFilters(include_journal=True))`, но подписчикам и вебхукам не
@@ -141,6 +141,7 @@ flowchart LR
 | `operation.succeeded` | — |
 | `pool.capacity.empty` | `available`, `pool`, `threshold` |
 | `pool.capacity.low` | `available`, `pool`, `threshold` |
+| `pool.capacity.ok` | `eligible`, `free`, `pool`, `previous_state` |
 | `proxy.binding.changed` | `from_proxy_id`, `pool`, `reason`, `to_proxy_id` |
 | `proxy.checker.failed` | `pool`, `proxies`, `reason` |
 | `proxy.deleted` | `host`, `pool`, `port`, `proxy_id`, `unbound` |
@@ -210,6 +211,17 @@ hub.events.subscribe_batch("console", mirror, types={"identity.*"}, space=space)
   `attempts`, имя типа исключения), запись в логе уровня `ERROR` и счётчик
   `identity_hub_failures_total{scope="subscriber", reason="skipped"}`. Счётчик попыток живёт в
   памяти процесса: после перезапуска диспетчера отсчёт для текущего события начинается заново.
+- **Строгая проекция.** Для проекции, которой нельзя терять события, задайте
+  `failure_policy="block"` без `max_attempts`. Сбойное событие остаётся перед курсором до
+  успешной обработки; состояние видно как `stalled` и `failure_attempts` в
+  `hub.background_snapshot()`. Предупреждения в логе выдаются с затуханием.
+- **Retention и rebuild.** Очистка журнала не переходит минимальный durable-курсор и сохраняет
+  событие-якорь в его позиции. Если журнал был обрезан вручную или старой версией библиотеки,
+  диспетчер бросает публичную ошибку `ConsumerCursorExpired`, а `hub.doctor.check()` возвращает
+  `consumer_cursor_expired`. Остановите подписчик, очистите его внешнюю read-модель, удалите
+  строку этого потребителя из `ih_event_cursors`, затем запустите подписчик заново для rebuild
+  из сохранившегося журнала. Удаление строки — явный отказ от прежней позиции; не делайте его,
+  пока старая проекция используется.
 - **Изоляция.** Подписчики, вебхуки, уведомления и обслуживание не зависят друг от друга: сбой
   одного потребителя не останавливает остальных.
 - **Порядок и долгие транзакции.** Диспетчер читает события ниже горизонта самой старой
@@ -218,6 +230,68 @@ hub.events.subscribe_batch("console", mirror, types={"identity.*"}, space=space)
   (отчёт, `pg_dump`, забытый `BEGIN`), задерживает доставку **всех** событий до своего
   завершения. Следите за `identity_hub_dispatcher_cursor_lag` и ограничивайте длительность
   транзакций (`idle_in_transaction_session_timeout`).
+
+### Внешняя read-модель состояния
+
+Надёжная проекция строится в порядке **подписка → snapshot → поток**. Сначала зарегистрируйте
+потребителя с уникальным постоянным именем и `start="now"`, затем дайте диспетчеру один раз
+обработать подписку. Именно этот вызов создаёт durable-курсор до чтения первой страницы
+snapshot; простая регистрация обработчика курсор ещё не создаёт.
+
+```python
+async def apply_identity_events(events: list[Event]) -> None:
+    ids = {event.identity_id for event in events if event.identity_id is not None}
+    rows = await load_identity_rows_from_hub_read(ids)  # id, revision, нужные поля
+    async with app_db.transaction() as tx:
+        for row in rows:
+            await tx.execute(
+                """
+                INSERT INTO account_projection (identity_id, revision, standing, note)
+                VALUES (:id, :revision, :standing, :note)
+                ON CONFLICT (identity_id) DO UPDATE
+                SET revision = EXCLUDED.revision,
+                    standing = EXCLUDED.standing,
+                    note = EXCLUDED.note
+                WHERE EXCLUDED.revision > account_projection.revision
+                """,
+                row,
+            )
+        await tx.delete_missing(ids - {row["id"] for row in rows})
+
+hub.events.subscribe_batch(
+    "server-admins.identity-state.v1",
+    apply_identity_events,
+    types={"identity.*"},
+    space=space,
+    start="now",
+    failure_policy="block",
+)
+await hub.dispatcher.run_once()  # зафиксировать курсор до snapshot
+```
+
+После этого прочитайте `hub.read.identities` страницами. Используйте keyset-пагинацию
+`WHERE space_id = :space_id AND id > :last_id ORDER BY id LIMIT :page_size`, а не `OFFSET`.
+Миграция `0038` добавляет покрывающий этот проход индекс `(space_id, id)`. Каждую строку
+пишите тем же UPSERT с условием `EXCLUDED.revision > account_projection.revision`. Изменение,
+которое произошло во время snapshot, уже стоит после сохранённого курсора и будет повторно
+прочитано потоком; revision guard не даст более старой странице затереть новое состояние.
+
+Когда snapshot закончен, оставьте диспетчер запущенным. Обработчик получает идентификаторы из
+событий, но актуальные поля загружает пачкой из `hub.read`: payload события не является полным
+снимком состояния. Если identity из события уже нет в `hub.read.identities`, удалите её из
+проекции — так обрабатывается `identity.deleted`. Повторная и частично повторная доставка
+безопасна благодаря UPSERT по `revision`; для побочных эффектов дополнительно храните
+`event_id`.
+
+На перезапуске регистрируйте то же имя потребителя: существующий durable-курсор имеет
+приоритет над `start="now"`, и поток продолжится с прежней позиции. Периодически сверяйте
+количество строк и выборку `(id, revision)` с `hub.read`, чтобы обнаружить ошибку интеграции.
+Следите за `stalled`, `failure_attempts`, cursor lag и предупреждениями doctor.
+
+Если получен `ConsumerCursorExpired`, штатный restart уже невозможен. Остановите потребителя,
+очистите его проекцию, удалите только его строку из `ih_event_cursors`, снова зарегистрируйте
+его с `start="now"`, вызовите `run_once()`, повторите snapshot и лишь затем возобновите поток.
+До успешной сверки не переключайте читателей на пересобранную модель.
 
 ## Вебхуки
 

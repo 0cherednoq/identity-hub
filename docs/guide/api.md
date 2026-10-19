@@ -86,8 +86,11 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 `imports.run(..., accept=...)` или как `Service.default_accept`.
 Публичные типы `OnExisting`, `ImportReport`, `LoginContext`, `CredentialCandidate` и
 `LoginFailure` описывают этот
-контракт: `OnExisting.MERGE` включает накопительный импорт, а `ImportReport.merge_details`
-объясняет дедупликацию и сохранение активной сессии. Контекст предоставляет
+контракт: `OnExisting.MERGE` включает накопительный импорт, `ImportReport.merge_details`
+объясняет дедупликацию и сохранение активной сессии, а `created_revisions` и
+`updated_revisions` сопоставляют изменённые identity с их ревизией после импорта. Трёхаргументный
+`on_batch(session, created_ids, revisions)` получает те же ревизии внутри транзакции пачки;
+прежний двухаргументный хук совместим. Контекст предоставляет
 `active_credential`, `verify_credential` и `reject_credential`. `active_credential()` возвращает
 `CredentialCandidate(kind, name, value)`; короткая форма точечного отказа —
 `LoginFailure(code, credential=candidate.key)`.
@@ -170,6 +173,7 @@ JSON. Неизвестный ввод завершается `ValidationFailed`;
 | Типы событий и их поля `data` | [События](10-events.md) |
 | Коды ошибок `IdentityHubError.code`, `context`, `http_status()` и `exit_code()` | модуль `identity_hub.errors`, коды выхода — [CLI](../cli.md#диагностика-cli) |
 | Read-схема `hub.read` и её версия `READ_SCHEMA_VERSION` | [Интеграции](../integrations.md#read-схема-join-с-таблицами-приложения) |
+| Durable-подписчики, `failure_policy`, `ConsumerCursorExpired` и рецепт внешней проекции | [События](10-events.md#внешняя-read-модель-состояния) |
 | Формат шифртекста в БД (envelope AES-256-GCM, AAD) и ротация ключей | [Секреты](03-accounts.md#секреты), [`rotate-key`](../cli.md#rotate-key) |
 | Команды и коды выхода CLI `identity-hub` | [CLI](../cli.md) |
 | Совместимость кода и схемы БД (`SCHEMA_COMPATIBLE`) | [Обновление без простоя](../integrations.md#обновление-без-простоя) |
@@ -314,6 +318,35 @@ async with pool.lease(for_operation="send_message", wait=30) as lease:
         await client.send(...)
 await space.pools.revoke(identity_id, reason="зависший воркер", actor="admin")
 ```
+
+Метод `eligible_count` класса `Pool` возвращает полную пригодную ёмкость пула, включая аккаунты
+под живой арендой:
+
+```python
+capacity = await pool.eligible_count(
+    for_operation="send_message",
+    among=eligible_ids,
+    require_quota=True,
+    limit=1_000_000,
+)
+```
+
+| Поле `EligibleCapacity` | Значение |
+|---|---|
+| `eligible` | Все пригодные identity: `free + leased` |
+| `free` | Identity, которые можно арендовать сейчас |
+| `leased` | Пригодные identity под живой эксклюзивной арендой |
+| `reserved` | Часть полной ёмкости, удерживаемая `reserve` пула |
+| `allocatable` | Ёмкость для распределения внешним контуром: `eligible - reserved` |
+
+`among` принимает коллекцию UUID, SQLAlchemy `Select` или callable от `Identity`. Используйте
+одинаковый `among`, `for_operation` и `require_quota` при подсчёте и аренде. Callable сначала
+читает identity постранично и подходит только для небольших парков. PostgreSQL-интеграциям
+следует передавать SQL-подзапрос.
+
+`limit` ограничивает отдельно счётчики `free` и `leased`. Если любое значение достигло `limit`,
+результат насыщен и может быть меньше фактического размера парка. `require_quota=True` требует
+`for_operation`, иначе метод бросает `ValidationFailed`.
 
 Подробно — [Аренда](07-leases.md).
 

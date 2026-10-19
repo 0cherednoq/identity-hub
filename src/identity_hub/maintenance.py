@@ -220,4 +220,13 @@ class Maintenance:
             ),
             batch_size=self.schedule.cleanup_batch_size,
         )
+        for name, count in counts.items():
+            if name.startswith("events_held_by:"):
+                record_metric(
+                    self.hub.metrics,
+                    "gauge",
+                    "identity_hub_retention_held_events",
+                    count,
+                    consumer=name.removeprefix("events_held_by:"),
+                )
         return MaintenanceReport(Counter(counts))

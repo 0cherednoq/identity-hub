@@ -81,6 +81,7 @@ from identity_hub.enums import (
 from identity_hub.errors import (
     AlreadyExists,
     ConcurrentModification,
+    ConsumerCursorExpired,
     DatabaseBusy,
     IdempotencyConflict,
     IdentityHubError,
@@ -215,6 +216,8 @@ from identity_hub.store.base import (
 )
 
 __all__ = ["NOTIFY_CHANNEL", "PgStore", "PgTx"]
+
+_CURSOR_TX_END = 2**63 - 1
 
 IDENTITIES = cast(Table, IdentityRecord.__table__)
 IMPORT_RUNS = cast(Table, ImportRunRecord.__table__)
@@ -5095,7 +5098,7 @@ def _new_cursor(consumer: str, start_now: bool) -> dict[str, Any]:
     if not start_now:
         return {"consumer": consumer, "last_id": 0}
     horizon = text("((pg_snapshot_xmin(pg_current_snapshot())::text::bigint - 1)::text)::xid8")
-    return {"consumer": consumer, "last_tx_id": horizon, "last_id": 2**63 - 1}
+    return {"consumer": consumer, "last_tx_id": horizon, "last_id": _CURSOR_TX_END}
 
 
 def _proxy_row(row: Any) -> ProxyRow:
@@ -5328,6 +5331,20 @@ class PgStore(Store):
         )
         async with self._own() as session:
             await _execute(session, stmt, execution_options=self.options)
+            for service in services:
+                factors = IdentityRecord.verified_factors
+                ranked = [
+                    (factors.contains(list(required)), index)
+                    for index, required in reversed(tuple(enumerate(service.verification_tiers)))
+                ]
+                expression = case(*ranked, else_=None) if ranked else None
+                await _execute(
+                    session,
+                    update(IdentityRecord)
+                    .where(IdentityRecord.service == service.name)
+                    .values(verification_tier_rank=expression),
+                    execution_options=self.options,
+                )
 
     async def get_space(self, slug: str) -> SpaceRef | None:
         async with self.sessionmaker() as session:
@@ -5367,30 +5384,57 @@ class PgStore(Store):
     ) -> int | None:
         opts = self.options
         async with self._own() as session:
-            await _execute(
-                session,
-                insert(CURSORS).values(**_new_cursor(consumer, start_now)).on_conflict_do_nothing(),
-                execution_options=opts,
-            )
+            created = (
+                await _execute(
+                    session,
+                    insert(CURSORS)
+                    .values(**_new_cursor(consumer, start_now))
+                    .on_conflict_do_nothing()
+                    .returning(CURSORS.c.consumer),
+                    execution_options=opts,
+                )
+            ).scalar_one_or_none() is not None
         async with self._own() as session:
             locked = (
                 await _execute(
                     session,
-                    select(CURSORS.c.consumer)
+                    select(CURSORS.c.consumer, CURSORS.c.last_tx_id, CURSORS.c.last_id)
                     .where(CURSORS.c.consumer == consumer)
                     .with_for_update(skip_locked=True),
                     execution_options=opts,
                 )
-            ).scalar_one_or_none()
+            ).first()
             if locked is None:
                 return None  # пачку этого потребителя обрабатывает другой экземпляр (G-5.5)
+            e = EVENTS.c
+            oldest_conditions = [e.external.is_(True)] if external_only else []
+            oldest = (
+                await _execute(
+                    session,
+                    select(e.tx_id, e.id).where(*oldest_conditions).order_by(e.tx_id, e.id).limit(1),
+                    execution_options=opts,
+                )
+            ).first()
+            cursor_position = (int(str(locked.last_tx_id)), int(locked.last_id))
+            if (
+                not created
+                and cursor_position != (0, 0)
+                and cursor_position[1] != _CURSOR_TX_END
+                and oldest is not None
+            ):
+                oldest_position = (int(str(oldest.tx_id)), int(oldest.id))
+                if cursor_position < oldest_position:
+                    raise ConsumerCursorExpired(
+                        consumer,
+                        f"{cursor_position[0]}:{cursor_position[1]}",
+                        f"{oldest_position[0]}:{oldest_position[1]}",
+                    )
             cursor = (
                 select(CURSORS.c.last_tx_id, CURSORS.c.last_id)
                 .where(CURSORS.c.consumer == consumer)
                 .subquery()
             )
             horizon = func.pg_snapshot_xmin(func.pg_current_snapshot())
-            e = EVENTS.c
             conditions = [e.tx_id < horizon]
             if external_only:
                 conditions.append(e.external.is_(True))
@@ -6302,14 +6346,61 @@ class PgStore(Store):
                     )
             if "events" in names:
                 events = deliveries = 0
+                cursor_floor: tuple[str, int] | None = None
+                cursor_holders: tuple[str, ...] = ()
+                async with self.sessionmaker() as session:
+                    first_cursor = (
+                        await _execute(
+                            session,
+                            select(CURSORS.c.last_tx_id, CURSORS.c.last_id)
+                            .order_by(CURSORS.c.last_tx_id, CURSORS.c.last_id)
+                            .limit(1),
+                            execution_options=self.options,
+                        )
+                    ).first()
+                    if first_cursor is not None:
+                        cursor_floor = (str(first_cursor.last_tx_id), int(first_cursor.last_id))
+                        cursor_holders = tuple(
+                            (
+                                await _execute(
+                                    session,
+                                    select(CURSORS.c.consumer)
+                                    .where(
+                                        CURSORS.c.last_tx_id == sa_cast(literal(cursor_floor[0]), XID8()),
+                                        CURSORS.c.last_id == cursor_floor[1],
+                                    )
+                                    .order_by(CURSORS.c.consumer),
+                                    execution_options=self.options,
+                                )
+                            ).scalars()
+                        )
+                retained = 0
                 for space_id in spaces:
-                    removed = await self._delete_event_batches(
-                        [EVENTS.c.space_id == space_id, older(EVENTS.c.occurred_at, "events")], batch_size
-                    )
+                    conditions = [EVENTS.c.space_id == space_id, older(EVENTS.c.occurred_at, "events")]
+                    if cursor_floor is not None:
+                        floor = tuple_(sa_cast(literal(cursor_floor[0]), XID8()), cursor_floor[1])
+                        async with self.sessionmaker() as session:
+                            retained += int(
+                                (
+                                    await _execute(
+                                        session,
+                                        select(func.count())
+                                        .select_from(EVENTS)
+                                        .where(*conditions, tuple_(EVENTS.c.tx_id, EVENTS.c.id) >= floor),
+                                        execution_options=self.options,
+                                    )
+                                ).scalar_one()
+                            )
+                        conditions.append(tuple_(EVENTS.c.tx_id, EVENTS.c.id) < floor)
+                    removed = await self._delete_event_batches(conditions, batch_size)
                     events += removed[0]
                     deliveries += removed[1]
                 counts["events"] = events
                 counts["webhook_deliveries"] = counts.get("webhook_deliveries", 0) + deliveries
+                if retained:
+                    counts["events_retained"] = retained
+                    for consumer in cursor_holders:
+                        counts[f"events_held_by:{consumer}"] = retained
         return counts
 
     async def _quota_window_sizes(self) -> list[int]:
@@ -6468,7 +6559,7 @@ class PgStore(Store):
                 )
         return []
 
-    async def doctor(self, *, fix: bool) -> list[DoctorIssue]:
+    async def doctor(self, *, fix: bool, event_retention: timedelta | None = None) -> list[DoctorIssue]:
         issues: list[DoctorIssue] = []
         after: UUID | None = None
         while True:
@@ -6527,6 +6618,45 @@ class PgStore(Store):
                         session,
                         update(PROXIES).where(PROXIES.c.id == row["id"]).values(bound_count=row["expected"]),
                         execution_options=self.options,
+                    )
+            oldest = (
+                await _execute(
+                    session,
+                    select(EVENTS.c.tx_id, EVENTS.c.id, EVENTS.c.occurred_at)
+                    .order_by(EVENTS.c.tx_id, EVENTS.c.id)
+                    .limit(1),
+                    execution_options=self.options,
+                )
+            ).first()
+            if oldest is not None:
+                oldest_position = (int(str(oldest.tx_id)), int(oldest.id))
+                now = (
+                    await _execute(session, select(func.now()), execution_options=self.options)
+                ).scalar_one()
+                horizon_warning_at = now - event_retention * 0.9 if event_retention is not None else None
+                cursor_rows = await _execute(
+                    session,
+                    select(CURSORS.c.consumer, CURSORS.c.last_tx_id, CURSORS.c.last_id),
+                    execution_options=self.options,
+                )
+                for cursor in cursor_rows:
+                    position = (int(str(cursor.last_tx_id)), int(cursor.last_id))
+                    if position == (0, 0) or position > oldest_position:
+                        continue
+                    if position < oldest_position:
+                        kind = "consumer_cursor_expired"
+                    elif horizon_warning_at is not None and oldest.occurred_at <= horizon_warning_at:
+                        kind = "consumer_cursor_at_retention_horizon"
+                    else:
+                        continue
+                    issues.append(
+                        DoctorIssue(
+                            kind,
+                            "-",
+                            str(cursor.consumer),
+                            f">={oldest_position[0]}:{oldest_position[1]}",
+                            f"{position[0]}:{position[1]}",
+                        )
                     )
         return issues
 
@@ -6811,9 +6941,7 @@ class PgStore(Store):
         target, prefix, aad_of = self._rotation_specs()[table]
         c = target.c
         wanted = (
-            c[f"{prefix}ciphertext"].is_not(None)
-            if to == "plaintext"
-            else c[f"{prefix}payload"].is_not(None)
+            c[f"{prefix}ciphertext"].is_not(None) if to == "plaintext" else c[f"{prefix}payload"].is_not(None)
         )
         stmt = (
             select(target, SPACES.c.slug.label("_space_slug"))
@@ -6860,9 +6988,7 @@ class PgStore(Store):
                         nonce, ciphertext = envelope.seal_sibling(
                             payload, aad, row["answer_payload"].encode(), "answer"
                         )
-                        changes.update(
-                            answer_nonce=nonce, answer_ciphertext=ciphertext, answer_payload=None
-                        )
+                        changes.update(answer_nonce=nonce, answer_ciphertext=ciphertext, answer_payload=None)
                 await _execute(
                     session,
                     update(target)

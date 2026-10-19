@@ -118,3 +118,42 @@ async def test_both_hooks_work_together(
     )
 
     assert order == ["in", "after"]
+
+
+async def test_three_argument_hook_receives_created_and_updated_revisions(
+    space: SpaceHandle, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    seen: list[tuple[list[UUID], dict[UUID, int]]] = []
+
+    async def on_batch(session: AsyncSession, created: list[UUID], revisions: dict[UUID, int]) -> None:
+        rows = dict(
+            (
+                await session.execute(
+                    select(IdentityRecord.id, IdentityRecord.revision).where(IdentityRecord.id.in_(revisions))
+                )
+            ).all()
+        )
+        assert rows == revisions
+        seen.append((created, revisions))
+
+    first = await space.imports.run(
+        service="fake_tg",
+        records=[ImportRecord("+revision", sessions={"default": {"auth_key": "old"}})],
+        verify_sessions=True,
+        on_batch=on_batch,
+        actor="test",
+    )
+    identity_id = first.created[0]
+    assert first.created_revisions == {identity_id: 1}
+    assert seen == [([identity_id], {identity_id: 1})]
+
+    second = await space.imports.run(
+        service="fake_tg",
+        records=[ImportRecord("+revision", sessions={"default": {"auth_key": "new"}})],
+        on_existing="update_session",
+        on_batch=on_batch,
+        actor="test",
+    )
+    assert second.updated == [identity_id]
+    assert second.updated_revisions == {identity_id: 2}
+    assert seen[-1] == ([], {identity_id: 2})

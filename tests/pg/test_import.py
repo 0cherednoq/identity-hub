@@ -52,6 +52,8 @@ async def test_import_mixed_batch_and_repeat(
     ]
     report = await space.imports.run(service="fake_tg", records=records, batch_size=2, actor="test")
     assert len(report.created) == 2
+    assert report.created_revisions == {row_id: 1 for row_id in report.created}
+    assert report.updated_revisions == {}
     assert [ref for ref, _ in report.failed] == ["+3"]
     assert report.skipped == [("+1", "уже существует")]  # вторая пачка: +1 создан первой
     one = await _identity(sessionmaker, "+1")
@@ -66,6 +68,7 @@ async def test_import_mixed_batch_and_repeat(
 
     again = await space.imports.run(service="fake_tg", records=[rec("+1"), rec("+2")], actor="test")
     assert again.created == [] and [r for r, _ in again.skipped] == ["+1", "+2"]
+    assert again.created_revisions == again.updated_revisions == {}
     assert await _count(sessionmaker, IdentityRecord) == 2
 
 
@@ -87,12 +90,14 @@ async def test_verify_sessions_and_update_session(
     )
     assert len(report.updated) == 1
     identity = await _identity(sessionmaker, "+1")
+    assert report.updated_revisions == {identity.id: identity.revision}
     assert identity.auth_state == "authenticated"
     assert (await space.secrets.reveal(identity.id, "session", actor="t", reason="тест"))["auth_key"] == "new"
     failing = await space.imports.run(
         service="fake_tg", records=[rec("+1")], on_existing="fail", actor="test"
     )
     assert failing.failed == [("+1", "уже существует")]
+    assert failing.created_revisions == failing.updated_revisions == {}
 
 
 async def test_links_within_batch_and_across_services(

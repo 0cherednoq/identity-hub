@@ -85,9 +85,10 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
 
 - Каждая таблица содержит `space_id` — фильтруйте по `(await space.ref()).id`.
 - Имена колонок совпадают со словарём API: `identities.c.auth`, `identities.c.revision`,
-  `proxies.c.group`. `READ_SCHEMA_VERSION = 4`: с версии 2 `identities.c.revision` — ревизия
+  `proxies.c.group`. `READ_SCHEMA_VERSION = 5`: с версии 2 `identities.c.revision` — ревизия
   агрегата, а не номер события (`D-205`), у `events` появилась колонка `revision`. С версии 3 у `leases` и `lease_history` есть колонки `purpose` и `ref` — назначение аренды, с версии 4 — `hold_deadline`, потолок удержания. Секретов (`credentials`, сессии, логины прокси), `token` аренды, fencing и
-  fingerprint в схеме нет.
+  fingerprint в схеме нет. С версии 5 `identities.c.verification_tier_rank` содержит индекс
+  наивысшего достигнутого tier в порядке `Service.tiers` (`NULL`, если tier не достигнут).
 - Только чтение: изменения — через `space.*`.
 - **Связи.** `identity_links` содержит `identity_id`, `role`, `linked_identity_id`,
   `space_id`, `created_at`. Таблица предназначена в том числе для своих join/anti-join;

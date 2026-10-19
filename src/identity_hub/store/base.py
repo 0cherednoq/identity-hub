@@ -224,7 +224,7 @@ class ProviderClaim:
 class DoctorIssue:
     kind: str
     space: str
-    entity_id: UUID
+    entity_id: UUID | str
     expected: Any
     actual: Any
 
@@ -342,6 +342,7 @@ class ServiceRow:
     name: str
     title: str
     url: str | None = None
+    verification_tiers: tuple[frozenset[str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +381,7 @@ class IdentityRow:
     pick_order_at: datetime | None = None
     yield_reserved_priority: int | None = None
     yield_reserved_until: datetime | None = None
+    verification_tier_rank: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2318,7 +2320,7 @@ class Store(ABC):
     # --------------------------------------------------------- doctor / rotate-key (P9.2)
 
     @abstractmethod
-    async def doctor(self, *, fix: bool) -> list[DoctorIssue]: ...
+    async def doctor(self, *, fix: bool, event_retention: timedelta | None = None) -> list[DoctorIssue]: ...
 
     @abstractmethod
     async def rotate_key(

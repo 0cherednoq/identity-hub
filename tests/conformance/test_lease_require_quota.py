@@ -98,6 +98,7 @@ async def test_all_exhausted_reports_quota_and_retry_after(
     assert refused.value.reason is LeaseUnavailableReason.QUOTA
     now = hub_under_test.clock.now() if hasattr(hub_under_test.clock, "advance") else datetime.now(UTC)
     window_end = Quota(2, WINDOW).window_start(now) + WINDOW
+    assert refused.value.retry_after is not None
     assert refused.value.retry_after == pytest.approx((window_end - now).total_seconds(), abs=5)
     assert 0 < refused.value.retry_after <= WINDOW.total_seconds()
 
@@ -133,6 +134,32 @@ async def test_require_quota_needs_an_operation(hub_under_test: IdentityHub, spa
 
     lease = await pool.acquire()  # аккаунт не занят неудачной попыткой
     await lease.release()
+
+
+async def test_eligible_count_uses_the_same_operation_quota_filter(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    exhausted, free = await _space(hub_under_test, space, 2)
+    pool = space.pools.define("capacity", service="quota_tg", holder="w")
+    await _exhaust(pool, exhausted)
+
+    capacity = await pool.eligible_count(for_operation="send", require_quota=True)
+
+    assert capacity.eligible == capacity.free == 1
+    assert capacity.leased == 0
+    lease = await pool.acquire(for_operation="send", require_quota=True)
+    assert lease.identity_id == free
+    await lease.release()
+
+
+async def test_eligible_count_require_quota_needs_an_operation(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    await _space(hub_under_test, space, 1)
+    pool = space.pools.define("capacity", service="quota_tg", holder="w")
+
+    with pytest.raises(ValidationFailed):
+        await pool.eligible_count(require_quota=True)
 
 
 async def test_lease_scope_accepts_the_flag(hub_under_test: IdentityHub, space: SpaceHandle) -> None:

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.api import register
 
-from identity_hub import IdentityHub, Retention, SpaceHandle
+from identity_hub import ConsumerCursorExpired, IdentityHub, Retention, SpaceHandle
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import EncryptedPayload
-from identity_hub.events import EventDraft
+from identity_hub.events import Event, EventDraft
+from identity_hub.postgres.models import EventCursorRecord, EventRecord
 from identity_hub.rollups import BucketSize, RollupKey, RollupRow
 
 pytestmark = pytest.mark.conformance
@@ -123,9 +127,159 @@ async def test_deleted_events_take_their_deliveries(hub_under_test: IdentityHub,
 
     counts = await store.cleanup_maintenance(_retention(KEEP, events=OLD), frozenset({"events"}))
 
-    assert counts["events"] >= 2
-    assert counts["webhook_deliveries"] == 2
-    assert await space.webhooks.deliveries(endpoint.id) == []
+    assert counts["events"] >= 1
+    assert counts["webhook_deliveries"] == 1
+    assert len(await space.webhooks.deliveries(endpoint.id)) == 1  # событие-якорь курсора остаётся
+
+
+async def test_event_cleanup_stops_at_slowest_consumer_cursor(
+    hub_under_test: IdentityHub,
+    space: SpaceHandle,
+    backend_sessionmaker: async_sessionmaker[AsyncSession] | None,
+) -> None:
+    """SP-2: retention удаляет только уже пройденный всеми потребителями префикс журнала."""
+    for n in (1, 2, 3):
+        async with space._tx(own=True) as tx:
+            await space._emit(tx, EventDraft("identity.updated", actor="test", data={"n": n}))
+
+    seen: list[int] = []
+
+    async def first_only(events: list[Event]) -> int:
+        seen.append(events[0].data["n"])
+        return 1
+
+    store = hub_under_test._store
+    assert await store.process_events("projection", first_only, limit=100) == 1
+
+    counts = await store.cleanup_maintenance(_retention(KEEP, events=OLD), frozenset({"events"}))
+
+    assert counts["events"] == 0
+    assert counts["events_retained"] == 3
+    assert counts["events_held_by:projection"] == 3
+
+    # Удаление строки курсора — явный отказ от прежнего состояния потребителя. Новый курсор
+    # начинает с сохранившегося горизонта и всё ещё получает непройденные события.
+    if backend_sessionmaker is None:
+        store._state.cursors.pop("projection")  # type: ignore[attr-defined]
+    else:
+        async with backend_sessionmaker() as session, session.begin():
+            await session.execute(delete(EventCursorRecord).where(EventCursorRecord.consumer == "projection"))
+
+    received: list[int] = []
+
+    async def remainder(events: list[Event]) -> None:
+        received.extend(event.data["n"] for event in events)
+
+    assert await store.process_events("projection", remainder, limit=100) == 3
+    assert received == [1, 2, 3]
+
+    final = await store.cleanup_maintenance(_retention(KEEP, events=OLD), frozenset({"events"}))
+    assert final["events"] == 2 and final["events_retained"] == 1
+
+
+async def test_expired_consumer_cursor_is_explicit_and_rebuild_recovers(
+    hub_under_test: IdentityHub,
+    space: SpaceHandle,
+    backend_sessionmaker: async_sessionmaker[AsyncSession] | None,
+) -> None:
+    for n in (1, 2, 3):
+        async with space._tx(own=True) as tx:
+            await space._emit(tx, EventDraft("identity.updated", actor="test", data={"n": n}))
+
+    async def first_only(events: list[Event]) -> int:
+        return 1
+
+    store = hub_under_test._store
+    consumer = "callbacks:projection-expired"
+    assert await store.process_events(consumer, first_only, limit=100) == 1
+    assert [issue for issue in await hub_under_test.doctor.check() if issue.entity_id == consumer] == []
+
+    # На 90% срока retention doctor предупреждает до потери события-якоря.
+    if backend_sessionmaker is None:
+        first_id = store._state.cursors[consumer]  # type: ignore[attr-defined]
+        store._state.events[:] = [  # type: ignore[attr-defined]
+            (
+                replace(event, occurred_at=hub_under_test.clock.now() - timedelta(days=170)),
+                space_id,
+                external,
+            )
+            if event.id == first_id
+            else (event, space_id, external)
+            for event, space_id, external in store._state.events  # type: ignore[attr-defined]
+        ]
+    else:
+        async with backend_sessionmaker() as session, session.begin():
+            cursor_id = (
+                await session.execute(
+                    select(EventCursorRecord.last_id).where(EventCursorRecord.consumer == consumer)
+                )
+            ).scalar_one()
+            await session.execute(
+                update(EventRecord)
+                .where(EventRecord.id == cursor_id)
+                .values(occurred_at=text("now() - interval '170 days'"))
+            )
+    horizon = [issue for issue in await hub_under_test.doctor.check() if issue.entity_id == consumer]
+    assert [issue.kind for issue in horizon] == ["consumer_cursor_at_retention_horizon"]
+
+    if backend_sessionmaker is None:
+        store._state.events[:] = [  # type: ignore[attr-defined]
+            item
+            for item in store._state.events
+            if item[0].id != first_id  # type: ignore[attr-defined]
+        ]
+    else:
+        async with backend_sessionmaker() as session, session.begin():
+            cursor_id = (
+                await session.execute(
+                    select(EventCursorRecord.last_id).where(EventCursorRecord.consumer == consumer)
+                )
+            ).scalar_one()
+            await session.execute(delete(EventRecord).where(EventRecord.id == cursor_id))
+
+    expired = [issue for issue in await hub_under_test.doctor.check() if issue.entity_id == consumer]
+    assert [issue.kind for issue in expired] == ["consumer_cursor_expired"]
+
+    received: list[int] = []
+
+    async def callback(event: Event) -> None:
+        received.append(event.data["n"])
+
+    hub_under_test.events.subscribe(
+        "projection-expired", callback, types={"identity.updated"}, failure_policy="block"
+    )
+    with pytest.raises(ConsumerCursorExpired) as raised:
+        await hub_under_test.dispatcher.run_once()
+    assert raised.value.consumer == consumer
+    assert received == []
+
+    if backend_sessionmaker is None:
+        store._state.cursors.pop(consumer)  # type: ignore[attr-defined]
+    else:
+        async with backend_sessionmaker() as session, session.begin():
+            await session.execute(delete(EventCursorRecord).where(EventCursorRecord.consumer == consumer))
+
+    await hub_under_test.dispatcher.run_once()
+    assert received == [2, 3]
+
+
+async def test_start_now_cursor_accepts_the_first_later_transaction(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    received: list[int] = []
+
+    async def receive(events: list[Event]) -> None:
+        received.extend(event.data["n"] for event in events)
+
+    store = hub_under_test._store
+    consumer = "callbacks:start-now-after-horizon"
+    assert await store.process_events(consumer, receive, limit=100, start_now=True) == 0
+
+    async with space._tx(own=True) as tx:
+        await space._emit(tx, EventDraft("identity.updated", actor="test", data={"n": 1}))
+
+    assert await store.process_events(consumer, receive, limit=100, start_now=True) == 1
+    assert received == [1]
 
 
 async def test_cleanup_in_small_batches_removes_everything(

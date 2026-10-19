@@ -96,7 +96,14 @@ async def apply_verification(
         factors = sorted(verified_factors_after(identity.verified_factors, factor, new.state))
         tiers_after = achieved_tiers(factors, service.tiers)
         if factors != sorted(identity.verified_factors):
-            await tx.update_identity(identity_id, {"verified_factors": factors})
+            tier_rank = max(
+                (index for index, tier in enumerate(service.tiers) if tier.factors <= frozenset(factors)),
+                default=None,
+            )
+            await tx.update_identity(
+                identity_id,
+                {"verified_factors": factors, "verification_tier_rank": tier_rank},
+            )
         actor_name = (
             decision.region.state.changed_by
             if decision.region is not None and decision.region.state.changed_by

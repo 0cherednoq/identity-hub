@@ -19,10 +19,10 @@ import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from identity_hub._space import logger
-from identity_hub.errors import describe_error
+from identity_hub.errors import ConsumerCursorExpired, ValidationFailed, describe_error
 from identity_hub.events import Event, EventDraft, matches_any
 from identity_hub.metrics import record_metric
 from identity_hub.store.base import NOTIFY_CHANNEL
@@ -30,7 +30,7 @@ from identity_hub.store.base import NOTIFY_CHANNEL
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub, SpaceHandle
 
-__all__ = ["BatchCallback", "BatchHandler", "Consumer", "Dispatcher", "EventCallback"]
+__all__ = ["BatchCallback", "BatchHandler", "Consumer", "Dispatcher", "EventCallback", "FailurePolicy"]
 
 EventCallback = Callable[[Event], Awaitable[None]]
 BatchCallback = Callable[[list[Event]], Awaitable[None]]
@@ -39,6 +39,25 @@ BatchHandler = Callable[[list[Event]], Awaitable[int | None]]
 """Обработчик пачки. Может вернуть число обработанных событий с начала пачки (`None` — все)."""
 
 DEFAULT_MAX_ATTEMPTS = 5
+FailurePolicy = Literal["skip", "block"]
+
+
+def _attempt_limit(failure_policy: FailurePolicy, max_attempts: int | None) -> int | None:
+    if failure_policy not in ("skip", "block"):
+        raise ValidationFailed("failure_policy: skip или block")
+    if failure_policy == "block":
+        if max_attempts is not None:
+            raise ValidationFailed("max_attempts нельзя задавать при failure_policy='block'")
+        return None
+    limit = DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
+    if limit < 1:
+        raise ValueError("max_attempts должен быть положительным")
+    return limit
+
+
+def _log_blocked_attempt(attempt: int) -> bool:
+    """Не раздувать лог постоянно застрявшего потребителя: 1, 2, 4, 8, ..."""
+    return attempt & (attempt - 1) == 0
 
 
 @dataclass
@@ -54,6 +73,8 @@ class ConsumerRuntime:
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     retrying: bool = False
+    stalled: bool = False
+    failure_attempts: int = 0
 
 
 def _start_now(start: str) -> bool:
@@ -114,7 +135,8 @@ class Dispatcher:
         types: Iterable[str] | None = None,
         space: SpaceHandle | str | None = None,
         service: str | None = None,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        max_attempts: int | None = None,
+        failure_policy: FailurePolicy = "skip",
         start: str = "beginning",
     ) -> None:
         """Python-колбэк на события после коммита (FR-13.5); `types` — типы или маски (`pool.capacity.*`).
@@ -122,13 +144,14 @@ class Dispatcher:
         `space` и `service` оставляют события одного пространства и одного сервиса. Событие, на
         котором колбэк бросил исключение, приходит снова на следующем круге; события до него не
         повторяются. После `max_attempts` неудач подряд оно пропускается: в журнал пишется
-        `dispatcher.event.skipped`, подписчик получает следующие события.
+        `dispatcher.event.skipped`, подписчик получает следующие события. При
+        `failure_policy="block"` сбойное событие повторяется без лимита и курсор не двигается;
+        `max_attempts` в этом режиме задавать нельзя.
 
         `start="now"` — новый подписчик начинает с текущего момента, а не с начала хранимого
         журнала; у подписчика, который уже работал, параметр ничего не меняет.
         """
-        if max_attempts < 1:
-            raise ValueError("max_attempts должен быть положительным")
+        attempt_limit = _attempt_limit(failure_policy, max_attempts)
         start_now = _start_now(start)
         wanted = _event_filter(types, space, service)
         consumer = f"callbacks:{name}"
@@ -143,19 +166,26 @@ class Dispatcher:
                 except Exception as exc:
                     failed_id, count = self._failures.get(consumer, (event.id, 0))
                     count = count + 1 if failed_id == event.id else 1
-                    if count < max_attempts or not await self._skip(consumer, event, count, exc):
+                    retry = failure_policy == "block"
+                    if not retry:
+                        assert attempt_limit is not None
+                        retry = count < attempt_limit
+                    if retry or not await self._skip(consumer, event, count, exc):
                         self._failures[consumer] = (event.id, count)
                         self._stalled.add(consumer)
-                        logger.warning(
-                            "подписчик %s не обработал событие %s (%s), попытка %d из %d",
-                            name,
-                            event.event_id,
-                            describe_error(exc),
-                            count,
-                            max_attempts,
-                        )
+                        self._record_failure_attempt(consumer, event, count)
+                        if failure_policy == "skip" or _log_blocked_attempt(count):
+                            logger.warning(
+                                "подписчик %s не обработал событие %s (%s), попытка %d%s",
+                                name,
+                                event.event_id,
+                                describe_error(exc),
+                                count,
+                                f" из {attempt_limit}" if attempt_limit is not None else "",
+                            )
                         return index  # курсор встаёт перед сбойным событием
-                self._failures.pop(consumer, None)
+                if self._failures.pop(consumer, None) is not None:
+                    self._clear_failure_attempt(consumer, event)
             return len(events)
 
         self.add_consumer(consumer, handle, start_now=start_now)
@@ -168,7 +198,8 @@ class Dispatcher:
         types: Iterable[str] | None = None,
         space: SpaceHandle | str | None = None,
         service: str | None = None,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        max_attempts: int | None = None,
+        failure_policy: FailurePolicy = "skip",
         start: str = "beginning",
     ) -> None:
         """Подписка, которая отдаёт события пачкой: `handler(events)` в порядке журнала.
@@ -177,10 +208,10 @@ class Dispatcher:
         не останется одно событие: события до сбойного доставляются и не повторяются, сбойное
         приходит снова на следующем круге и после `max_attempts` неудач пропускается с записью
         `dispatcher.event.skipped`. Доставка at-least-once: при сбое пачки её части приходят
-        повторно, обработчик должен быть идемпотентным.
+        повторно, обработчик должен быть идемпотентным. При `failure_policy="block"` одиночное
+        сбойное событие не пропускается, а остаётся перед курсором до успешной обработки.
         """
-        if max_attempts < 1:
-            raise ValueError("max_attempts должен быть положительным")
+        attempt_limit = _attempt_limit(failure_policy, max_attempts)
         start_now = _start_now(start)
         wanted = _event_filter(types, space, service)
         consumer = f"callbacks:{name}"
@@ -197,22 +228,29 @@ class Dispatcher:
                 (event,) = chunk
                 failed_id, count = self._failures.get(consumer, (event.id, 0))
                 count = count + 1 if failed_id == event.id else 1
-                if count < max_attempts or not await self._skip(consumer, event, count, exc):
+                retry = failure_policy == "block"
+                if not retry:
+                    assert attempt_limit is not None
+                    retry = count < attempt_limit
+                if retry or not await self._skip(consumer, event, count, exc):
                     self._failures[consumer] = (event.id, count)
                     self._stalled.add(consumer)
-                    logger.warning(
-                        "подписчик %s не обработал событие %s (%s), попытка %d из %d",
-                        name,
-                        event.event_id,
-                        describe_error(exc),
-                        count,
-                        max_attempts,
-                    )
+                    self._record_failure_attempt(consumer, event, count)
+                    if failure_policy == "skip" or _log_blocked_attempt(count):
+                        logger.warning(
+                            "подписчик %s не обработал событие %s (%s), попытка %d%s",
+                            name,
+                            event.event_id,
+                            describe_error(exc),
+                            count,
+                            f" из {attempt_limit}" if attempt_limit is not None else "",
+                        )
                     return 0
-                self._failures.pop(consumer, None)
+                if self._failures.pop(consumer, None) is not None:
+                    self._clear_failure_attempt(consumer, event)
                 return 1
-            if len(chunk) == 1:
-                self._failures.pop(consumer, None)
+            if len(chunk) == 1 and self._failures.pop(consumer, None) is not None:
+                self._clear_failure_attempt(consumer, chunk[0])
             return len(chunk)
 
         async def handle(events: list[Event]) -> int:
@@ -226,6 +264,24 @@ class Dispatcher:
             return events.index(selected[done])  # курсор встаёт перед сбойным событием
 
         self.add_consumer(consumer, handle, start_now=start_now)
+
+    def _record_failure_attempt(self, consumer: str, event: Event, attempts: int) -> None:
+        record_metric(
+            self.hub.metrics,
+            "gauge",
+            "identity_hub_dispatcher_failure_attempts",
+            attempts,
+            consumer=consumer,
+        )
+
+    def _clear_failure_attempt(self, consumer: str, event: Event) -> None:
+        record_metric(
+            self.hub.metrics,
+            "gauge",
+            "identity_hub_dispatcher_failure_attempts",
+            0,
+            consumer=consumer,
+        )
 
     async def _skip(self, consumer: str, event: Event, attempts: int, exc: Exception) -> bool:
         """Записать пропуск события; `False` — запись не удалась, событие остаётся на повтор."""
@@ -294,12 +350,21 @@ class Dispatcher:
                     external_only=consumer.external_only,
                     start_now=consumer.start_now,
                 )
+            except ConsumerCursorExpired:
+                self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)
+                raise
             except Exception:
                 self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)
                 logger.exception("потребитель %s упал; пачка будет повторена", consumer.name)
                 continue
             if consumer.name in self._stalled:  # колбэк упал: событие придёт снова
-                self._runtime[consumer.name] = replace(self._runtime[consumer.name], retrying=True)
+                attempts = self._failures.get(consumer.name, (0, 0))[1]
+                self._runtime[consumer.name] = replace(
+                    self._runtime[consumer.name],
+                    retrying=True,
+                    stalled=True,
+                    failure_attempts=attempts,
+                )
             else:
                 self._runtime[consumer.name] = ConsumerRuntime(attempted_at, self.hub.clock.now(), False)
             total += handled or 0

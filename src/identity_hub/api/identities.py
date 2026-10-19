@@ -152,7 +152,7 @@ class IdentityCreate:
     `links` — роль → id существующей identity (в `create_many` — и создаваемой в той же пачке).
     """
 
-    service: str | Service
+    service: str | Service[Any, Any]
     external_ref: str
     id: UUID | None = None
     credentials: SchemaInput | None = field(default=None, repr=False)

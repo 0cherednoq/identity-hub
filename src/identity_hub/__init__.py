@@ -62,6 +62,7 @@ from identity_hub.errors import (
     Blocker,
     ChallengeAlreadyOpen,
     ConcurrentModification,
+    ConsumerCursorExpired,
     DatabaseBusy,
     IdempotencyConflict,
     IdentityHubError,
@@ -123,7 +124,7 @@ from identity_hub.logging import LeaseContextFilter, LeaseLogPolicy, structlog_p
 from identity_hub.maintenance import MaintenanceSchedule
 from identity_hub.metrics import Metric, MetricsHook, NullMetrics, RecordingMetrics
 from identity_hub.operation import Operation
-from identity_hub.pool import LeaseTiming, Pool, PoolCapacity
+from identity_hub.pool import EligibleCapacity, LeaseTiming, Pool, PoolCapacity
 from identity_hub.protocols import (
     Authenticator,
     AuthProbe,
@@ -161,7 +162,7 @@ from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
-__version__ = "1.0.0a4"
+__version__ = "1.0.0a5"
 
 __all__ = [
     "AcceptPolicy",
@@ -183,6 +184,7 @@ __all__ = [
     "ClientCertificate",
     "Clock",
     "ConcurrentModification",
+    "ConsumerCursorExpired",
     "Cookie",
     "Cookies",
     "CreateManyResult",
@@ -191,6 +193,7 @@ __all__ = [
     "DatabaseBusy",
     "DeliveryStatus",
     "DumpNamespace",
+    "EligibleCapacity",
     "EnvSecretsProvider",
     "ErrorClassifier",
     "Event",

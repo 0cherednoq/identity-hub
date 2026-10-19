@@ -28,6 +28,8 @@ class BackgroundProcess:
     next_attempt_at: datetime | None
     last_error: str | None
     runbook_hint: str
+    stalled: bool = False
+    failure_attempts: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +101,8 @@ async def background_snapshot(
                 next_attempt_at=metrics.delivery_next_attempt_at.get(consumer),
                 last_error=("Ошибка скрыта" if metrics.delivery_has_error.get(consumer) else None),
                 runbook_hint="Проверьте процесс dispatcher, соединение с БД и журнал событий.",
+                stalled=state.stalled,
+                failure_attempts=state.failure_attempts,
             )
         )
     intervals = {

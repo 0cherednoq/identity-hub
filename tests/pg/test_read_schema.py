@@ -46,7 +46,8 @@ EXPECTED_COLUMNS = {
         "id", "space_id", "service", "external_ref", "normalized_ref", "lifecycle", "standing",
         "standing_code",
         "standing_until", "auth", "availability", "availability_until", "requirements",
-        "verified_factors", "tags", "labels", "profile", "attributes", "note", "error_score",
+        "verified_factors", "verification_tier_rank", "tags", "labels", "profile", "attributes",
+        "note", "error_score",
         "revision", "created_at", "updated_at",
     },
     "leases": {
@@ -76,6 +77,32 @@ EXPECTED_COLUMNS = {
     "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at"},
     "identity_links": {"identity_id", "space_id", "role", "linked_identity_id", "created_at"},
 }  # fmt: skip
+
+IDENTITY_V4_TYPES = {
+    "id": "CHAR(32)",
+    "space_id": "CHAR(32)",
+    "service": "VARCHAR(64)",
+    "external_ref": "VARCHAR(256)",
+    "normalized_ref": "VARCHAR(256)",
+    "lifecycle": "VARCHAR(16)",
+    "standing": "VARCHAR(16)",
+    "standing_code": "VARCHAR(64)",
+    "standing_until": "DATETIME",
+    "auth": "VARCHAR(24)",
+    "availability": "VARCHAR(16)",
+    "availability_until": "DATETIME",
+    "requirements": "JSONB",
+    "verified_factors": "ARRAY",
+    "tags": "ARRAY",
+    "labels": "JSONB",
+    "profile": "JSONB",
+    "attributes": "JSONB",
+    "note": "TEXT",
+    "error_score": "FLOAT",
+    "revision": "BIGINT",
+    "created_at": "DATETIME",
+    "updated_at": "DATETIME",
+}
 
 
 def _farm_table(schema: str | None) -> Table:
@@ -263,12 +290,13 @@ async def test_identity_links_support_public_anti_join(hub: IdentityHub, db: Asy
 
 def test_column_allowlist_and_version() -> None:
     read = ReadSchema()
-    assert READ_SCHEMA_VERSION == 4 and read.version == READ_SCHEMA_VERSION
+    assert READ_SCHEMA_VERSION == 5 and read.version == READ_SCHEMA_VERSION
     assert set(READ_TABLES) == set(EXPECTED_COLUMNS)
     for name, expected in EXPECTED_COLUMNS.items():
         table = getattr(read, name)
         assert set(table.c.keys()) == expected, name
         assert not {column.name for column in table.c} & FORBIDDEN, name
+    assert {name: str(read.identities.c[name].type) for name in IDENTITY_V4_TYPES} == IDENTITY_V4_TYPES
 
 
 def test_sql_snapshot_has_no_secret_columns() -> None:
