@@ -1,9 +1,10 @@
 # Identity Hub — план доработок по запросам пульта
 
 Источник требований: [`../isue/ISSUES-identity-hub.md`](../isue/ISSUES-identity-hub.md) — пункты 1–9 и 13.
+Фаза `C8` — по запросу владельца (`D-326`), вне ишью.
 Прогресс: [`CONSOLE-PROGRESS.md`](CONSOLE-PROGRESS.md).
 Отклонённые и изменённые требования: [`CONSOLE-REJECTED.md`](CONSOLE-REJECTED.md).
-Решения: [`DECISIONS.md`](DECISIONS.md) (`D-224`).
+Решения: [`DECISIONS.md`](DECISIONS.md) (`D-224`, `D-326`).
 Протокол автономной работы: [`CLAUDE.md`](../../CLAUDE.md).
 
 Этот файл — спецификация задач `C<фаза>.<номер>`. Статусы ведутся только в
@@ -366,6 +367,74 @@ CHANGELOG в том же коммите). Дополнительно:
 
 ---
 
+## Фаза C8 — проверка credentials и сессий (`D-326`)
+
+Источник — запрос владельца, а не ишью пульта: аккаунты поступают с credentials и сессиями, парк
+нужно отбирать по признаку «ещё не проверены», проверять и записывать исход каждой проверки.
+Разбор кейса в `D-326`: механизмы отбора и проверки в библиотеке есть (`AcceptPolicy` +
+`hub.workers.acceptance`, `space.auth.login_many`, `space.sync.refresh_many`, `among=select(...)`),
+не хватает двух вещей — публичной пометки валидности вне входа и представления credentials и
+сессий в read-схеме.
+
+### C8.1 Пометка валидности credentials и сессий вне аренды
+
+- `space.secrets.verify_credential(identity_id, kind, name="default", *, actor,
+  expected_revision=None) -> Credential | None` и
+  `reject_credential(identity_id, kind, name="default", *, actor, code, disable=None,
+  expected_revision=None) -> Credential | None` поверх существующего
+  `StoreTx.mark_credential_validity`. `None` — записи `(kind, name)` нет (как у `credentials()`,
+  не исключение). `disable=None` — берётся `Service.disable_rejected_credentials`,
+  `True`/`False` — явное переопределение на один вызов.
+- `space.secrets.verify_session(identity_id, slot="default", *, actor) -> bool` и
+  `reject_session(identity_id, slot="default", *, actor, code) -> bool` поверх
+  `StoreTx.mark_session_validity`; `False` — текущей записи слота нет.
+- Одна транзакция на вызов: пометка (`last_verified_at` / `last_rejected_at` / `reject_code`,
+  `revision + 1`, `updated_at`) и событие аудита. Под `space.using(session)` — в транзакции
+  вызывающего (правило 1 раздела 0).
+- Событий новых типов нет (`D-326`): `verify` и `reject` — новые значения `action` у
+  `identity.credentials.updated` и `mode` у `identity.session.updated`; у `reject` в `data`
+  добавляется `code`. Таблица состава `data` в `docs/guide/10-events.md` дополняется в том же
+  коммите — её сверяет `tests/event_data_contract.py`.
+- `lifecycle` записи и регион `auth` аккаунта не меняются, кроме уже существующего перевода
+  отвергнутой записи в `disabled` при `Service.disable_rejected_credentials` (`D-326` п. в, г).
+- `code` проверяется как у `LoginFailure`: непустой, до 64 символов; при `reject_codes` сервиса —
+  из объявленного набора.
+- `MemoryStore` поддерживает те же четыре метода (`mark_*` в нём уже есть).
+- **DoD:** падающий тест первым; пометка и событие появляются одной фиксацией, откат приложения
+  убирает и то и другое (`pg`); повторный `verify` идемпотентен по смыслу (время обновляется,
+  `reject_code` снят); `reject` с `disable=True` переводит запись в `disabled`, а `revoked` не
+  поднимает; отметка не меняет `auth` аккаунта и не выводит его из выборки аренды; оба бэкенда;
+  методы попали в `docs/guide/03-accounts.md` и allowlist публичного API.
+
+### C8.2 Credentials и сессии в read-схеме и отбор непроверенных
+
+- `READ_TABLES["credentials"]` поверх `ih_credentials`: `id`, `identity_id`, `space_id`, `kind`,
+  `name`, `public_value`, `lifecycle`, `expires_at`, `last_verified_at`, `last_rejected_at`,
+  `reject_code`, `revision`, `created_at`, `updated_at`.
+- `READ_TABLES["sessions"]` поверх `ih_sessions`: `id`, `identity_id`, `space_id`, `slot`,
+  `status`, `expires_at`, `last_verified_at`, `last_rejected_at`, `reject_code`, `revision`,
+  `created_at`, `updated_at`, `revoked_at`.
+- Секретные и служебные колонки не попадают: `payload`, `key_id`, `wrapped_dek`, `nonce`,
+  `ciphertext`, `value_fingerprint`, `version`, `written_by_fencing`.
+- `READ_SCHEMA_VERSION` не повышается (`D-326` п. б, правило 6 раздела 0);
+  `ReadSchema.credentials` и `ReadSchema.sessions` — типизированные атрибуты.
+- `AccountSearchOptions`: `credential_unverified: bool | None` и
+  `session_unverified: bool | None`. `True` — есть `active` запись (для credentials — ещё и не
+  истёкшая по `expires_at`) с `last_verified_at IS NULL` и `last_rejected_at IS NULL`;
+  `False` — таких записей нет. Фильтр существующим `EXISTS` по образцу `open_challenge`, в
+  строке поиска ключа нет.
+- В `docs/guide` — короткий рецепт кейса: отбор непроверенных через `hub.read` + аренда
+  `pool.lease(for_operation=..., among=select(...))` (правило операции с `needs_auth=False`) +
+  запись исхода методами `C8.1`.
+- Ограничение `hub.read` на `MemoryStore` остаётся (`C3.5`): фильтры `AccountSearchOptions`
+  работают на обоих бэкендах, selectable — только PostgreSQL.
+- **DoD:** падающий тест первым; тест перечисляет колонки обеих проекций и падает при появлении
+  любой секретной (по образцу действующего теста read-схемы); `pool.lease(among=select(...))` по
+  новым таблицам выдаёт ожидаемый аккаунт (`pg`); фильтры покрыты на обоих бэкендах;
+  `READ_SCHEMA_VERSION` не изменился; `docs/guide/api.md` и `limitations.md` совпадают с кодом.
+
+---
+
 ## Фаза C7 — закрытие
 
 ### C7.1 Финальная сверка
@@ -385,6 +454,7 @@ CHANGELOG в том же коммите). Дополнительно:
 | Пункт ишью | Задачи плана |
 |---|---|
 | — (дефект, найден при сверке) | C0.1 |
+| — (запрос владельца, `D-326`) | C8.1, C8.2 |
 | 1. Пакетные операции с прокси | C0.2, C1.1, C1.2, C1.3, C1.4a, C1.4b |
 | 2. Привязки: чтение и отвязка | C1.5, C3.1 |
 | 3. Пакетные команды состояния | C0.2, C2.1, C2.2a, C2.2b |
