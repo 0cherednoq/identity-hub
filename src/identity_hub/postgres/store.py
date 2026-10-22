@@ -3298,6 +3298,36 @@ class PgTx(StoreTx):
                 .exists()
             )
             conditions.append(linked if flt.linked else ~linked)
+        if flt.credential_unverified is not None:
+            waiting = (
+                select(literal(1))
+                .where(
+                    CREDENTIALS.c.identity_id == i.id,
+                    CREDENTIALS.c.space_id == self.space.id,
+                    CREDENTIALS.c.lifecycle == "active",
+                    or_(
+                        CREDENTIALS.c.expires_at.is_(None),
+                        CREDENTIALS.c.expires_at > now,
+                    ),
+                    CREDENTIALS.c.last_verified_at.is_(None),
+                    CREDENTIALS.c.last_rejected_at.is_(None),
+                )
+                .exists()
+            )
+            conditions.append(waiting if flt.credential_unverified else ~waiting)
+        if flt.session_unverified is not None:
+            pending = (
+                select(literal(1))
+                .where(
+                    SESSIONS.c.identity_id == i.id,
+                    SESSIONS.c.space_id == self.space.id,
+                    SESSIONS.c.status != SessionStatus.REVOKED,
+                    SESSIONS.c.last_verified_at.is_(None),
+                    SESSIONS.c.last_rejected_at.is_(None),
+                )
+                .exists()
+            )
+            conditions.append(pending if flt.session_unverified else ~pending)
         if flt.without_link:
             outgoing = select(literal(1)).where(
                 LINKS.c.space_id == self.space.id,

@@ -237,9 +237,7 @@ class Secrets(Namespace):
         состояние `auth` аккаунта не меняются.
         """
         space = self._at(identity_id, expected_revision)
-        row = await space._mark_credential_validity(
-            identity_id, kind, name, rejected=False, actor=actor
-        )
+        row = await space._mark_credential_validity(identity_id, kind, name, rejected=False, actor=actor)
         return Credential.from_row(row, row.updated_at) if row is not None else None
 
     async def reject_credential(

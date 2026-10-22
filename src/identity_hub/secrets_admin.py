@@ -366,7 +366,7 @@ class CredentialsMixin(SpaceBase):
             row = await self._identity(tx, identity_id)
             service = self.hub.service(row.service)
             kind, name = service.credential_key(kind, name)
-            checked = validity_code(code) if rejected else None
+            checked = validity_code(code or "") if rejected else None
             turn_off = (
                 (service.disable_rejected_credentials if disable is None else bool(disable))
                 if rejected
@@ -439,12 +439,10 @@ class SessionRevokeMixin(SpaceBase):
         """
         if not slot or len(slot) > 64:
             raise ValidationFailed("session slot: от 1 до 64 символов")
-        checked = validity_code(code) if rejected else None
+        checked = validity_code(code or "") if rejected else None
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
-            if not await tx.mark_session_validity(
-                identity_id, slot, rejected=rejected, code=checked
-            ):
+            if not await tx.mark_session_validity(identity_id, slot, rejected=rejected, code=checked):
                 return False
             data: dict[str, Any] = {"slot": slot, "mode": "reject" if rejected else "verify"}
             if checked is not None:

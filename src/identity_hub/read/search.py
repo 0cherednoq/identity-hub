@@ -89,6 +89,9 @@ class AccountSearchOptions:
     tier: str | None = None
     proxy: str | None = None
     linked: bool | None = None
+    # ждут проверки: есть действующая запись credentials или сессия без исхода проверки (C8.2)
+    credential_unverified: bool | None = None
+    session_unverified: bool | None = None
     quota_kind: str | None = None
     created_from: datetime | None = None
     created_to: datetime | None = None
@@ -518,6 +521,8 @@ class SearchMixin(SpaceBase):
             sort_tiers=sort_tiers,
             proxy=options.proxy,
             linked=options.linked,
+            credential_unverified=options.credential_unverified,
+            session_unverified=options.session_unverified,
             without_link=q.without_link,
             not_target_of=q.not_target_of,
             is_target_of=q.is_target_of,

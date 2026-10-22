@@ -13,6 +13,11 @@
   (`last_verified_at`, `last_rejected_at`, `reject_code`). Жизненный цикл записи и состояние
   `auth` аккаунта не меняются; выключение отклонённой записи остаётся за
   `Service.disable_rejected_credentials` или явным `disable=`. Изменений схемы БД нет.
+- Read-схема содержит `credentials` и `sessions` — метаданные записей без секретов, для плоской
+  таблицы админки одним join и для отбора в `among=`. `READ_SCHEMA_VERSION` не изменился:
+  добавление таблиц совместимо.
+- `AccountSearchOptions(credential_unverified=..., session_unverified=...)` отбирает аккаунты, чьи
+  действующие credentials или сессии ещё не проверены. Работает на обоих бэкендах.
 
 ## [1.0.0a5] - 2026-10-19
 

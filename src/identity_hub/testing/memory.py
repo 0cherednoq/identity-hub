@@ -2074,6 +2074,27 @@ class MemoryTx(StoreTx):
         )
         if flt.has_override is not None and has_override != flt.has_override:
             return False
+        if flt.credential_unverified is not None:
+            waiting = any(
+                record.lifecycle == "active"
+                and (record.expires_at is None or record.expires_at > self._now)
+                and record.last_verified_at is None
+                and record.last_rejected_at is None
+                for (owner, _, _), (_, record) in self.state.credentials.items()
+                if owner == row.id
+            )
+            if waiting != flt.credential_unverified:
+                return False
+        if flt.session_unverified is not None:
+            pending = any(
+                record.identity_id == row.id
+                and record.status != SessionStatus.REVOKED
+                and record.last_verified_at is None
+                and record.last_rejected_at is None
+                for record in self.state.sessions.values()
+            )
+            if pending != flt.session_unverified:
+                return False
         if flt.requirement is not None and not any(
             isinstance(item, dict) and item.get("code") == flt.requirement for item in row.requirements
         ):

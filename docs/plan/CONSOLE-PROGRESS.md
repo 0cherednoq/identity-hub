@@ -11,15 +11,11 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** C8.2 Credentials и сессии в read-схеме и отбор непроверенных
-- **Начата:** 2026-10-23
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты: колонки проекций, among=select, фильтры на обоих бэкендах
-  - [ ] READ_TABLES: credentials и sessions, атрибуты ReadSchema
-  - [ ] AccountSearchOptions: credential_unverified и session_unverified
-  - [ ] фильтры в postgres/store и testing/memory
-  - [ ] документация: рецепт кейса, api.md, CHANGELOG
-- **Заметки для следующей сессии:** —
+  - [ ] —
+- **Заметки для следующей сессии:** Фаза C8 (D-326) закрыта: C8.1 и C8.2 done. Проверка: ruff, mypy, lint-imports зелёные; pytest -m "not load" — conformance 1038 passed + 1 skipped, tests/pg + tests/unit + tests/test_*.py 1216 passed + 4 skipped. Окружение: .venv создаётся uv sync --frozen --all-extras (без extras нет asyncpg и pg-тесты падают на импорте); Docker Desktop нужно поднять до прогона. Остаток работы — незакрытые задачи очереди I (37/46).
 
 ## Статус задач
 
@@ -49,9 +45,9 @@
 | C6.2 | Ключ, PgBouncer и быстрый старт | — | done |  | пункт 6 |
 | C7.1 | Финальная сверка | все задачи C0–C6 | done |  |  |
 | C8.1 | Пометка валидности credentials и сессий вне аренды | — | done |  | запрос владельца, `D-326` |
-| C8.2 | Credentials и сессии в read-схеме и отбор непроверенных | — | in_progress |  | запрос владельца, `D-326` |
+| C8.2 | Credentials и сессии в read-схеме и отбор непроверенных | — | done |  | запрос владельца, `D-326` |
 
-**Итого:** 24 / 25 done
+**Итого:** 25 / 25 done
 
 ## Журнал сессий
 
@@ -81,3 +77,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-12 · C2.2b · done · админка: ревизии пачки одним запросом, lifecycle ready/retired — activate_many и retire_many; теги и resync остаются циклом (пакетной правки тегов в этой ветке нет) · дальше C7.1
 2026-10-12 · C7.1 · done · тест трассировки очереди; полный check.sh зелёный (1805 passed), админка: backend 91, фронтенд 45, e2e 34 · очередь C закрыта
 2026-10-23 · C8.1 · done · verify/reject для credentials и сессий вне аренды: action verify|reject и mode verify|reject в существующих событиях, code в data; auth и lifecycle не трогаются; уточнение по reject_codes внесено в план · дальше C8.2
+2026-10-23 · C8.2 · done · credentials и sessions в read-схеме без секретов (версия 5 не менялась), фильтры credential_unverified и session_unverified на обоих бэкендах, рецепт отбора и аренды в integrations.md · очередь C закрыта

@@ -47,9 +47,7 @@ async def test_marks_roll_back_with_user_transaction(
         # пометка видна в транзакции приложения до её фиксации
         codes = (
             await user.execute(
-                select(CredentialsRecord.reject_code).where(
-                    CredentialsRecord.identity_id == identity.id
-                )
+                select(CredentialsRecord.reject_code).where(CredentialsRecord.identity_id == identity.id)
             )
         ).scalars()
         assert list(codes) == ["bad_password"]

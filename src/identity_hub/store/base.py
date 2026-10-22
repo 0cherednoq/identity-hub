@@ -910,6 +910,9 @@ class SearchFilter:
     sort_tiers: dict[str, tuple[frozenset[str], ...]] = field(default_factory=dict)
     proxy: str | None = None
     linked: bool | None = None
+    # ждут проверки: есть действующая запись без исхода проверки (C8.2)
+    credential_unverified: bool | None = None
+    session_unverified: bool | None = None
     without_link: frozenset[str] = frozenset()
     not_target_of: tuple[str, str | None] | None = None
     is_target_of: tuple[str, str | None] | None = None

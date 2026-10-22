@@ -38,9 +38,7 @@ async def _identity(hub: IdentityHub, space: SpaceHandle) -> UUID:
         ),
         actor="test",
     )
-    await space.secrets.put_credential(
-        created.id, "api_key", {"secret": "s"}, name="trading", actor="ops"
-    )
+    await space.secrets.put_credential(created.id, "api_key", {"secret": "s"}, name="trading", actor="ops")
     return created.id
 
 
@@ -77,9 +75,7 @@ async def test_verify_and_reject_credential_record_outcome(
     assert after.auth == before.auth == "authenticated"
 
 
-async def test_reject_credential_can_disable_record(
-    hub_under_test: IdentityHub, space: SpaceHandle
-) -> None:
+async def test_reject_credential_can_disable_record(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
     identity_id = await _identity(hub_under_test, space)
     rejected = await space.secrets.reject_credential(
         identity_id, "api_key", "trading", actor="ops", code="bad_password", disable=True
@@ -116,12 +112,12 @@ async def test_verify_and_reject_session(hub_under_test: IdentityHub, space: Spa
 
     assert await space.secrets.verify_session(identity_id, actor="ops")
     card = await space.secrets.describe(identity_id)
-    current = [s for s in card.sessions if s.status != "revoked"][0]
+    current = next(s for s in card.sessions if s.status != "revoked")
     assert current.last_verified_at is not None and current.reject_code is None
 
     assert await space.secrets.reject_session(identity_id, actor="ops", code="session_invalid")
     card = await space.secrets.describe(identity_id)
-    current = [s for s in card.sessions if s.status != "revoked"][0]
+    current = next(s for s in card.sessions if s.status != "revoked")
     assert current.reject_code == "session_invalid" and current.last_rejected_at is not None
     assert current.last_verified_at is None
 
@@ -137,16 +133,12 @@ async def test_marks_are_audited_in_existing_event_types(
 ) -> None:
     identity_id = await _identity(hub_under_test, space)
     await space.secrets.verify_credential(identity_id, "api_key", "trading", actor="ops")
-    await space.secrets.reject_credential(
-        identity_id, "api_key", "trading", actor="ops", code="bad_password"
-    )
+    await space.secrets.reject_credential(identity_id, "api_key", "trading", actor="ops", code="bad_password")
     await space.secrets.reject_session(identity_id, actor="ops", code="session_invalid")
 
     page = await space.admin.event_page(filters=EventFilters(identity_id=identity_id), limit=50)
     credential_actions = [
-        event.data.get("action")
-        for event in page.items
-        if event.type == "identity.credentials.updated"
+        event.data.get("action") for event in page.items if event.type == "identity.credentials.updated"
     ]
     session_modes = [
         event.data.get("mode") for event in page.items if event.type == "identity.session.updated"

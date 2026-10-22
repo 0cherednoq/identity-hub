@@ -7,8 +7,9 @@
 
 В схеме нет секретных и служебных колонок: шифротекстов, ключей и nonce, token аренды,
 fingerprint прокси, fencing, ключей идемпотентности, версий оптимистической блокировки и
-отложенных наблюдений. Публичные имена совпадают со словарём API: `identities.c.auth`,
-`identities.c.revision`, `proxies.c.group`.
+отложенных наблюдений. У `credentials` и `sessions` это значит: только метаданные записи — вид,
+имя, открытая часть, жизненный цикл, срок и исход последней проверки. Публичные имена совпадают
+со словарём API: `identities.c.auth`, `identities.c.revision`, `proxies.c.group`.
 
 Схема строится на конкретный хаб: при `IdentityHub(db_schema=...)` таблицы получают явную
 схему, поэтому собственные запросы приложения работают без `schema_translate_map` и не
@@ -177,6 +178,44 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "bound_at": "bound_at",
         },
     ),
+    # метаданные credentials и сессий без секретов: плоская таблица админки одним join (C8.2)
+    "credentials": (
+        "ih_credentials",
+        {
+            "id": "id",
+            "identity_id": "identity_id",
+            "space_id": "space_id",
+            "kind": "kind",
+            "name": "name",
+            "public_value": "public_value",
+            "lifecycle": "lifecycle",
+            "expires_at": "expires_at",
+            "last_verified_at": "last_verified_at",
+            "last_rejected_at": "last_rejected_at",
+            "reject_code": "reject_code",
+            "revision": "revision",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+        },
+    ),
+    "sessions": (
+        "ih_sessions",
+        {
+            "id": "id",
+            "identity_id": "identity_id",
+            "space_id": "space_id",
+            "slot": "slot",
+            "status": "status",
+            "expires_at": "expires_at",
+            "last_verified_at": "last_verified_at",
+            "last_rejected_at": "last_rejected_at",
+            "reject_code": "reject_code",
+            "revision": "revision",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+            "revoked_at": "revoked_at",
+        },
+    ),
     "identity_links": (
         "ih_identity_links",
         {
@@ -228,6 +267,8 @@ class ReadSchema:
         self.proxies: Table = built["proxies"]
         self.proxy_bindings: Table = built["proxy_bindings"]
         self.identity_links: Table = built["identity_links"]
+        self.credentials: Table = built["credentials"]
+        self.sessions: Table = built["sessions"]
 
     def __repr__(self) -> str:
         return f"ReadSchema(version={self.version}, db_schema={self.db_schema!r})"

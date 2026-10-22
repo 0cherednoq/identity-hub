@@ -63,7 +63,8 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 `hub.read` — публичная read-схема на SQLAlchemy Core (версия `hub.read.version`). Она даёт
 стабильные selectable без секретов и служебных полей: `identities`, `identity_links`, `leases`,
-`lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`. Физические таблицы библиотеки приватны и
+`lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`, `credentials`, `sessions`.
+Физические таблицы библиотеки приватны и
 могут меняться между версиями; read-схема меняется только с повышением версии.
 
 ```python
@@ -109,6 +110,57 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
   Число аккаунтов на прокси считать не нужно: оно уже есть в `proxies.c.bound_count`.
   Выключенные оператором прокси — `proxies.c.enabled` и `disabled_reason`, `disabled_by`,
   `disabled_at`.
+- **Credentials и сессии.** `credentials` (`id`, `identity_id`, `space_id`, `kind`, `name`,
+  `public_value`, `lifecycle`, `expires_at`, `last_verified_at`, `last_rejected_at`,
+  `reject_code`, `revision`, `created_at`, `updated_at`) и `sessions` (те же поля проверки плюс
+  `slot`, `status`, `revoked_at`) — только метаданные: ни секрета, ни шифротекста, ни
+  `value_fingerprint`, ни `written_by_fencing`. Их добавление совместимо и не меняет
+  `READ_SCHEMA_VERSION`. Плоская таблица для админки — одним join:
+
+  ```python
+  read = hub.read
+  stmt = (
+      select(
+          read.identities.c.external_ref, read.services.c.url,
+          read.identities.c.lifecycle, read.identities.c.auth,
+          read.credentials.c.kind, read.credentials.c.lifecycle.label("credential_status"),
+          read.credentials.c.last_verified_at, read.credentials.c.reject_code,
+          read.sessions.c.slot, read.sessions.c.status.label("session_status"),
+      )
+      .join(read.services, read.services.c.name == read.identities.c.service)
+      .join(read.credentials, read.credentials.c.identity_id == read.identities.c.id, isouter=True)
+      .join(read.sessions, read.sessions.c.identity_id == read.identities.c.id, isouter=True)
+      .where(read.identities.c.space_id == ref.id)
+  )
+  ```
+
+  Строка на аккаунт из такого join не получится: у аккаунта несколько записей credentials и
+  несколько слотов, поэтому либо агрегируйте в SQL (`count(*) FILTER (WHERE ...)`,
+  `max(last_verified_at)`), либо отдавайте детей вложенными массивами.
+- **Отбор непроверенных и проверка.** Аккаунты, чьи credentials или сессии ещё не проверены,
+  отбираются фильтрами `AccountSearchOptions(credential_unverified=True)` и
+  `session_unverified=True` либо своим подзапросом по read-схеме, который сразу годится в
+  `among=`:
+
+  ```python
+  unverified = (
+      select(read.credentials.c.identity_id)
+      .where(
+          read.credentials.c.space_id == ref.id,
+          read.credentials.c.lifecycle == "active",
+          read.credentials.c.last_verified_at.is_(None),
+          read.credentials.c.last_rejected_at.is_(None),
+      )
+  )
+  # правило операции объявлено с needs_auth=False: аккаунт в no_session тоже должен выдаваться
+  async with pool.lease(for_operation="verify", among=unverified) as lease:
+      ...                                                  # своя проверка
+      await space.secrets.verify_credential(lease.identity_id, "default", actor="checker")
+  ```
+
+  `among` только сужает выборку — порядок остаётся LRU по `pick_order_at`. Если проверка — это
+  вход, свой планировщик не нужен: есть `space.auth.login_many()` и очередь приёмки импорта
+  (`AcceptPolicy` + `hub.workers.acceptance`), которые пишут исход сами.
 - **Отдельная схема.** При `IdentityHub(db_schema="identity_hub")` read-таблицы получают эту
   схему явно, поэтому запросы приложения не требуют `schema_translate_map`. Если такой select
   передаётся в `among=`, библиотека выполняет его со своей картой `{None: db_schema}`: таблицы

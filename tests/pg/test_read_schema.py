@@ -76,6 +76,16 @@ EXPECTED_COLUMNS = {
     },
     "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at"},
     "identity_links": {"identity_id", "space_id", "role", "linked_identity_id", "created_at"},
+    # C8.2: метаданные записей без секретов — колонки перечислены и в tests/pg/test_read_schema_access.py
+    "credentials": {
+        "id", "identity_id", "space_id", "kind", "name", "public_value", "lifecycle", "expires_at",
+        "last_verified_at", "last_rejected_at", "reject_code", "revision", "created_at",
+        "updated_at",
+    },
+    "sessions": {
+        "id", "identity_id", "space_id", "slot", "status", "expires_at", "last_verified_at",
+        "last_rejected_at", "reject_code", "revision", "created_at", "updated_at", "revoked_at",
+    },
 }  # fmt: skip
 
 IDENTITY_V4_TYPES = {
