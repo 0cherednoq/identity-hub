@@ -80,11 +80,11 @@ async def test_failing_group_does_not_block_other_groups_in_run_due() -> None:
     calls = {"normalize": 0}
     original = hub.maintenance._normalize
 
-    async def broken() -> Any:
+    async def broken(batch: int) -> Any:
         calls["normalize"] += 1
         if calls["normalize"] == 1:
             raise RuntimeError("database hiccup")
-        return await original()
+        return await original(batch)
 
     hub.maintenance._normalize = broken  # type: ignore[method-assign]
 

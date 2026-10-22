@@ -19,6 +19,29 @@ flowchart LR
 не срабатывают. Запуск: `async with hub.dispatcher.running(): ...` внутри приложения или
 `identity-hub dispatcher` отдельным процессом ([CLI](../cli.md)).
 
+### Фоновые работы одним ядром
+
+Библиотека не запускает ни потоков, ни задач: ни импорт пакета, ни `IdentityHub(...)`, ни
+`hub.start()`. Цикл принадлежит вашему приложению, а ядро каждой фоновой работы — один проход
+`run_once(limit)` (`IMP-20`):
+
+```python
+for worker in hub.workers:                       # dispatch, maintenance, reconcile,
+    run = await worker.run_once(limit=100)       # provider_operations, acceptance
+    log.info("worker", extra=run.dump())         # worker, limit, processed, counts, truncated
+```
+
+- `limit` — бюджет одного прохода. Он ограничивает выборку на уровне SQL, а не после загрузки
+  строк, и делится между потребителями внутри работы. `run.truncated` означает, что бюджет
+  исчерпан и работа, скорее всего, осталась — вызовите `run_once` снова.
+- `limit=0` не обращается к базе и возвращает нули; отрицательный — `ValidationFailed`.
+- `WorkerRun` содержит только счётчики: ни id аккаунтов, ни секретов, ни текста чужих
+  исключений, поэтому его можно писать в логи и метрики как есть.
+- `hub.dispatcher.run()` / `running()` и команды `identity-hub dispatcher` и
+  `identity-hub maintenance` — циклы поверх тех же `run_once`: своего бизнес-кода у них нет.
+- Два процесса могут вызывать `run_once` одновременно: события, операции провайдера, приёмка и
+  сверка берутся claim-ом или курсором, поэтому одна единица работы не выполняется дважды.
+
 ## Событие
 
 `Event`: `event_id`, `type`, `severity` (`info` / `warning` / `critical`), `occurred_at`,

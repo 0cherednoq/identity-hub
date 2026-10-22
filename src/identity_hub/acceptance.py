@@ -13,7 +13,7 @@ from identity_hub.errors import LeaseUnavailable, ValidationFailed, describe_err
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub, SpaceHandle
 
-__all__ = ["AcceptPolicy", "AcceptanceWorker", "Workers"]
+__all__ = ["AcceptPolicy", "AcceptanceWorker"]
 
 logger = logging.getLogger(__name__)
 
@@ -192,10 +192,3 @@ class AcceptanceWorker:
     async def _finish(space: SpaceHandle, identity_id: UUID) -> None:
         async with space._tx(own=True) as tx:
             await tx.update_acceptance(identity_id, done=True)
-
-
-class Workers:
-    """Explicit long-running workers exposed by an :class:`IdentityHub`."""
-
-    def __init__(self, hub: IdentityHub) -> None:
-        self.acceptance = AcceptanceWorker(hub)

@@ -134,7 +134,7 @@ report = await space.imports.run(
     actor="operator",
 )
 # В отдельном broker/worker-процессе; maintenance вызывает тот же worker автоматически.
-processed = await hub.workers.acceptance.run_once(limit=20)
+run = await hub.workers.acceptance.run_once(limit=20)   # WorkerRun: processed, counts, truncated
 ```
 
 Политика хранится вместе с durable-отметкой партии. Успешный вход переводит аккаунт в `ready`,

@@ -18,6 +18,20 @@
   добавление таблиц совместимо.
 - `AccountSearchOptions(credential_unverified=..., session_unverified=...)` отбирает аккаунты, чьи
   действующие credentials или сессии ещё не проверены. Работает на обоих бэкендах.
+- `hub.workers` — единое ядро фоновых работ (`IMP-20`): `dispatch`, `maintenance`, `reconcile`,
+  `provider_operations` и `acceptance`, у каждой `run_once(limit) -> WorkerRun` (имя работы,
+  `limit`, `processed`, `counts`, `truncated`, `dump()` для логов и метрик). `limit` — бюджет
+  прохода, он ограничивает выборку на уровне SQL, `limit=0` не обращается к базе,
+  отрицательный — `ValidationFailed`. `Dispatcher.run_once(limit=None)` и
+  `Maintenance.run_due(limit=None)` принимают бюджет; `hub.dispatcher.run()`/`running()` и
+  команды CLI остаются циклами поверх `run_once`. Ни импорт пакета, ни создание хаба, ни
+  `hub.start()` не создают фоновых задач и потоков.
+
+### Changed
+
+- **Ломающее (`D-327`):** `hub.workers.acceptance.run_once(limit)` возвращает `WorkerRun`, а не
+  `int`. Прежнее число — `run.processed`; класс `AcceptanceWorker` остался движком и по-прежнему
+  возвращает `int`.
 
 ## [1.0.0a5] - 2026-10-19
 

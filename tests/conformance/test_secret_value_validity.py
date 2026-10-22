@@ -330,9 +330,9 @@ async def test_acceptance_retries_account_while_an_unrejected_pair_remains(
     )
     assert merged.updated == report.created
 
-    assert await hub_under_test.workers.acceptance.run_once() == 1
+    assert (await hub_under_test.workers.acceptance.run_once()).processed == 1
     assert authenticator.calls == 1
-    assert await hub_under_test.workers.acceptance.run_once() == 1
+    assert (await hub_under_test.workers.acceptance.run_once()).processed == 1
     assert authenticator.calls == 2
     identity = await space.identities.get(report.created[0])
     assert identity.auth == "authenticated"

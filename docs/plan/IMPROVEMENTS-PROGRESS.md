@@ -10,14 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I5.2 Единый hub.workers.run_once(limit)
-- **Начата:** 2026-10-23
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] D-327 и падающие тесты DoD: limit 0/1/N, пустая очередь, два воркера, сериализация, отсутствие фоновых задач
-  - [ ] модуль workers.py: WorkerRun и пять фасадов
-  - [ ] limit в Dispatcher.run_once и Maintenance.run_due
-  - [ ] перевод внутренних вызовов и CLI на фасады
-  - [ ] документация: IMP-20 в матрице, CHANGELOG, api-migration, guide
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -60,7 +56,7 @@
 | I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | done |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | done |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
-| I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | in_progress |  |  |
+| I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | done |  |  |
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2b, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
@@ -71,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 37 / 46 done
+**Итого:** 38 / 46 done
 
 ## Журнал сессий
 
@@ -112,3 +108,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-06 · I4.1 · done · машина состояний операций провайдера и RetryPolicy (domain/provider_operations), миграция 0024 (revision, claim по пространству), Store enqueue/claim (SKIP LOCKED)/apply (claim + fence, поздний ответ — False)/recover/cancel в PgStore и MemoryStore, at-least-once в интеграциях; D-220 · дальше I4.2
 2026-10-06 · I4.2 · done · вход через очередь операций: claim операции login коммитится до Authenticator, ctx.attempt_id = claim_id, итог (сессия replace / challenge / отказ) одной транзакцией с claim и fence, поздний ответ откатывается целиком; LoginReport.operations; Store claim по operation_ids; D-222 · дальше I4.3
 2026-10-15 · I4.3 · done · probes через provider operations, дедупликация и recovery worker · финальный gate зелёный
+2026-10-23 · I5.2 · done · hub.workers: пять фасадов run_once(limit) -> WorkerRun, limit как бюджет прохода на уровне SQL, CLI и dispatcher.run — циклы поверх run_once; ломающее: acceptance.run_once теперь WorkerRun (D-327); check.sh зелёный (2268 passed) · дальше I5.3

@@ -115,7 +115,7 @@ async def test_acceptance_worker_applies_success_retire_retry_and_nonretryable(
         for identity in [await space.identities.get(identity_id) for identity_id in report.created]
     }
 
-    assert await hub_under_test.workers.acceptance.run_once(limit=10) == 5
+    assert (await hub_under_test.workers.acceptance.run_once(limit=10)).processed == 5
     assert (await space.identities.get(by_ref["valid"])).lifecycle == "ready"
     assert (await space.identities.get(by_ref["bad"])).lifecycle == "retired"
     assert (await space.identities.get(by_ref["banned"])).lifecycle == "retired"
@@ -124,7 +124,7 @@ async def test_acceptance_worker_applies_success_retire_retry_and_nonretryable(
     assert challenged.lifecycle == "provisioning" and challenged.auth == "challenge"
     assert (await _pending(space))[by_ref["temporary"]][1] == 1
 
-    assert await hub_under_test.workers.acceptance.run_once(limit=10) == 1
+    assert (await hub_under_test.workers.acceptance.run_once(limit=10)).processed == 1
     assert (await space.identities.get(by_ref["temporary"])).lifecycle == "ready"
     assert not await _pending(space)
     events = await space.admin.event_page(
@@ -140,7 +140,7 @@ async def test_acceptance_worker_applies_success_retire_retry_and_nonretryable(
         accept=no_retire,
         actor="test",
     )
-    assert await hub_under_test.workers.acceptance.run_once(limit=10) == 1
+    assert (await hub_under_test.workers.acceptance.run_once(limit=10)).processed == 1
     calls = authenticator.calls["never-again"]
     await space.auth.login_many(service=service, limit=10)
     assert authenticator.calls["never-again"] == calls

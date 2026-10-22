@@ -199,7 +199,8 @@ def flaky_maintenance_factory() -> IdentityHub:
     hub = _new_hub()
     outcomes: list[Any] = [ConnectionError(f"db down {SECRET}"), ConnectionError("still down"), 0, _Stop()]
 
-    async def run_due() -> int:
+    # демон обслуживания — цикл поверх hub.workers.maintenance.run_once (IMP-20, D-327)
+    async def run_due(*, limit: int | None = None) -> int:
         _CALLS.append("run_due")
         outcome = outcomes.pop(0)
         if isinstance(outcome, BaseException):

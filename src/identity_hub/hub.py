@@ -17,7 +17,7 @@ import pydantic_core
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
-from identity_hub.acceptance import Workers
+from identity_hub.acceptance import AcceptanceWorker
 from identity_hub.admin_audit import AdminAuditMixin
 from identity_hub.api.admin import Admin
 from identity_hub.api.analytics import Analytics
@@ -88,6 +88,7 @@ from identity_hub.state import StateMixin
 from identity_hub.store.base import ServiceRow, SpaceRef, Store
 from identity_hub.sync import SyncMixin
 from identity_hub.verifications import RequirementsMixin, VerificationsMixin
+from identity_hub.workers import Workers
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -203,7 +204,8 @@ class IdentityHub:
         self.dispatcher.add_pump(self._notification_dispatcher.deliver_due)
         self._import_runner = ImportRunner(self)
         self._provider_worker = ProviderOperationsWorker(self)  # восстановление операций провайдера (D-223)
-        self.workers = Workers(self)
+        self._acceptance = AcceptanceWorker(self)  # движок приёмки импорта (D-317)
+        self.workers = Workers(self)  # фоновые работы: run_once(limit) (IMP-20, D-327)
         self.dispatcher.add_pump(self._import_runner.run_once)
         self.maintenance = Maintenance(self, maintenance)
         self.dispatcher.add_pump(self.maintenance.run_due)

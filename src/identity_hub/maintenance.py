@@ -64,13 +64,17 @@ class Maintenance:
         self.last_success_at[name] = self.hub.clock.now()
         return report
 
-    async def run_due(self) -> int:
-        """Запустить только задачи, чей монотонный интервал наступил; используется диспетчером."""
+    async def run_due(self, *, limit: int | None = None) -> int:
+        """Задачи, чей монотонный интервал наступил; `limit` ограничивает размер пачки шага.
+
+        `limit=None` — размер пачки из `MaintenanceSchedule` (прежнее поведение).
+        """
         now = self.hub.clock.monotonic()
+        batch = self.schedule.batch_size if limit is None else min(limit, self.schedule.batch_size)
         report = MaintenanceReport()
         groups = (
-            ("normalize", self.schedule.normalize_seconds, self._normalize),
-            ("leases", self.schedule.leases_seconds, self._leases),
+            ("normalize", self.schedule.normalize_seconds, lambda: self._normalize(batch)),
+            ("leases", self.schedule.leases_seconds, lambda: self._leases(batch)),
             ("hourly", self.schedule.cleanup_hourly_seconds, self._hourly),
             ("daily", self.schedule.cleanup_daily_seconds, self._daily),
         )
@@ -92,8 +96,8 @@ class Maintenance:
         """Принудительно выполнить все задачи один раз (`identity-hub maintenance --once`)."""
         report = MaintenanceReport()
         for name, task in (
-            ("normalize", self._normalize),
-            ("leases", self._leases),
+            ("normalize", lambda: self._normalize(self.schedule.batch_size)),
+            ("leases", lambda: self._leases(self.schedule.batch_size)),
             ("hourly", self._hourly),
             ("daily", self._daily),
         ):
@@ -105,11 +109,11 @@ class Maintenance:
         refs = await self.hub._store.maintenance_spaces()
         return [self.hub.space(ref.slug, ref.title, space_id=ref.id) for ref in refs]
 
-    async def _normalize(self) -> MaintenanceReport:
+    async def _normalize(self, batch: int) -> MaintenanceReport:
         report = MaintenanceReport()
         for space in await self._spaces():
             async with space._tx(own=True) as tx:
-                due = await tx.due_identity_timers(self.schedule.batch_size)
+                due = await tx.due_identity_timers(batch)
             for identity_id, region in due:
                 try:
                     decision = await space._expire(identity_id, region)
@@ -118,7 +122,6 @@ class Maintenance:
                     await self._skip(space, identity_id, f"таймер {region}", exc)
                     continue
                 report.add("region_timers", int(decision.changed))
-            batch = self.schedule.batch_size
             for name, expire in (
                 ("verifications", space.maintenance.expire_verifications),
                 ("challenges", space.maintenance.expire_challenges),
@@ -166,14 +169,14 @@ class Maintenance:
             reason=reason,
         )
 
-    async def _leases(self) -> MaintenanceReport:
+    async def _leases(self, batch: int) -> MaintenanceReport:
         report = MaintenanceReport()
         for space in await self._spaces():
             async with space._tx(own=True) as tx:
-                report.add("leases", await tx.expire_leases(self.schedule.batch_size))
+                report.add("leases", await tx.expire_leases(batch))
         # операции провайдера с истёкшим claim — без сетевого I/O (IMP-11, D-223)
-        report.add("provider_operations", await self.hub._provider_worker.run_once(self.schedule.batch_size))
-        report.add("acceptance", await self.hub.workers.acceptance.run_once(self.schedule.batch_size))
+        report.add("provider_operations", await self.hub._provider_worker.run_once(batch))
+        report.add("acceptance", await self.hub._acceptance.run_once(batch))
         return report
 
     def _retention(self) -> dict[str, timedelta]:

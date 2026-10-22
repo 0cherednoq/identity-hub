@@ -336,17 +336,26 @@ class Dispatcher:
 
     # --------------------------------------------------------- работа
 
-    async def run_once(self) -> int:
-        """Одна пачка на каждого потребителя; возвращает число обработанных событий."""
+    async def run_once(self, *, limit: int | None = None) -> int:
+        """Одна пачка на каждого потребителя; возвращает число обработанных событий.
+
+        `limit` — общий бюджет прохода (`IMP-20`, `D-327`): он делится между потребителями и
+        ограничивает выборку событий на уровне SQL, а не после загрузки. Исчерпан — проход
+        заканчивается, остальное уйдёт в следующий. `None` — пачка `batch_size` каждому, как прежде.
+        """
+        remaining = None if limit is None else limit
         total = 0
         for consumer in list(self._consumers.values()):
+            if remaining is not None and remaining <= 0:
+                break
+            batch = self.batch_size if remaining is None else min(remaining, self.batch_size)
             attempted_at = self.hub.clock.now()
             self._runtime[consumer.name] = replace(self._runtime[consumer.name], last_attempt_at=attempted_at)
             try:
                 handled = await self.hub._store.process_events(
                     consumer.name,
                     consumer.handler,
-                    limit=self.batch_size,
+                    limit=batch,
                     external_only=consumer.external_only,
                     start_now=consumer.start_now,
                 )
@@ -368,6 +377,10 @@ class Dispatcher:
             else:
                 self._runtime[consumer.name] = ConsumerRuntime(attempted_at, self.hub.clock.now(), False)
             total += handled or 0
+            if remaining is not None:
+                remaining -= handled or 0
+        if remaining is not None and remaining <= 0:
+            return total  # бюджет исчерпан: очереди доставки обработает следующий проход
         # pump-ы независимы и идут одновременно: медленная доставка вебхуков не задерживает
         # уведомления, импорт и обслуживание (R1-05)
         results = await asyncio.gather(*(pump() for pump in self._pumps), return_exceptions=True)

@@ -308,7 +308,14 @@ async def _run(hub: IdentityHub, args: argparse.Namespace) -> int:
             maintenance_report = await hub.maintenance.run_all()
             print(maintenance_report.total)
             return 0
-        await _daemon(hub, "maintenance", hub.maintenance.run_due, MAINTENANCE_INTERVAL)
+        # цикл поверх hub.workers.maintenance.run_once (IMP-20, D-327)
+        batch = hub.maintenance.schedule.batch_size
+        await _daemon(
+            hub,
+            "maintenance",
+            lambda: hub.workers.maintenance.run_once(limit=batch),
+            MAINTENANCE_INTERVAL,
+        )
     if args.command == "doctor":
         if args.doctor_command == "renormalize":
             return await _renormalize(hub, args)

@@ -70,9 +70,9 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `hub.list_spaces()`, `hub.spaces_matrix()`, `hub.service_catalog()`, `hub.background_snapshot()` | сводные read-модели по пространствам для админок |
 | `hub.read` | read-схема Core для join и `among=` |
 | `hub.events` | `subscribe(name, fn, types=..., space=..., service=...)` — подписчик по одному событию; `subscribe_batch(name, fn, ...)` — пачкой; см. [События](10-events.md) |
-| `hub.dispatcher` | фоновый цикл: `running()`, `run_once()`, `drain()` |
+| `hub.dispatcher` | фоновый цикл: `running()`, `run_once(limit=None)`, `drain()` |
 | `hub.maintenance` | обслуживание по расписанию: таймеры и retention |
-| `hub.workers.acceptance` | durable-приёмка импортированных аккаунтов: `run_once(limit)` |
+| `hub.workers` | фоновые работы одним ядром: `dispatch`, `maintenance`, `reconcile`, `provider_operations`, `acceptance` — у каждой `run_once(limit) -> WorkerRun` |
 | `hub.doctor` | диагностика и починка данных (`check`, `rotate_key`, `convert_secrets`, `plaintext_secrets`; CLI `identity-hub doctor`) |
 | `hub.equivalence_tag(value)` | HMAC-тег значения ключом отпечатков: сравнить чувствительные данные, не храня их (`D-208`) |
 | `hub.metrics` | хук метрик, заданный параметром `metrics` |

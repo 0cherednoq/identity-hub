@@ -224,8 +224,10 @@
   секретов, ни текста чужих исключений. (2) Ломающее изменение одного публичного метода:
   `hub.workers.acceptance.run_once()` возвращал `int`, теперь `WorkerRun` — старое число
   доступно как `.processed`. Прежний класс `AcceptanceWorker` остаётся движком и возвращает
-  `int`; фасад его оборачивает, поэтому другие пути не меняются. Запись в CHANGELOG и
-  `docs/api-migration.md` обязательна (правило 4 раздела 0). (3) `limit` соблюдается там, где
+  `int`; фасад его оборачивает, поэтому другие пути не меняются. Запись в
+  CHANGELOG обязательна (правило 4 раздела 0): отдельного
+  `docs/api-migration.md` больше нет — он удалён вместе с legacy-алиасами в `I8.10` (`D-202`),
+  поэтому migration guide этого изменения — раздел `Changed` в CHANGELOG. (3) `limit` соблюдается там, где
   строки отбираются SQL-ом: `process_events(limit)`, `stale_identities(want)`,
   `recover_provider_operations(limit)`, `list_acceptance(limit)`, `due_identity_timers(limit)`,
   `expire_leases(limit)`; загрузки «всё, потом отрезать» не вводится. `Dispatcher.run_once` и
