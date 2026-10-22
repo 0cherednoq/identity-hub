@@ -215,3 +215,26 @@
   (`operation.py`, `Blame.SESSION_INVALID`), иначе ручная отметка оператора тихо выводила бы аккаунт из
   выборки аренды. Порядок: `C8.1` и `C8.2` берутся раньше оставшихся задач очереди `I` — запрос свежий и
   закрывает конкретный продуктовый кейс; владелец может пересмотреть.
+
+- **D-327** (очередь `I`, задача `I5.2`): единое ядро фоновых работ (`IMP-20`). (1) Вводится
+  `identity_hub.workers` с типом `WorkerRun` (имя воркера, `limit`, `processed`, детализация
+  `counts`, признак `truncated`, `dump()` для логов и метрик) и пятью фасадами
+  `hub.workers.dispatch|maintenance|reconcile|provider_operations|acceptance`, у каждого —
+  `run_once(limit=...) -> WorkerRun`. Отчёт содержит только счётчики: ни id аккаунтов, ни
+  секретов, ни текста чужих исключений. (2) Ломающее изменение одного публичного метода:
+  `hub.workers.acceptance.run_once()` возвращал `int`, теперь `WorkerRun` — старое число
+  доступно как `.processed`. Прежний класс `AcceptanceWorker` остаётся движком и возвращает
+  `int`; фасад его оборачивает, поэтому другие пути не меняются. Запись в CHANGELOG и
+  `docs/api-migration.md` обязательна (правило 4 раздела 0). (3) `limit` соблюдается там, где
+  строки отбираются SQL-ом: `process_events(limit)`, `stale_identities(want)`,
+  `recover_provider_operations(limit)`, `list_acceptance(limit)`, `due_identity_timers(limit)`,
+  `expire_leases(limit)`; загрузки «всё, потом отрезать» не вводится. `Dispatcher.run_once` и
+  `Maintenance.run_due` получают необязательный `limit`, при `None` поведение прежнее
+  (`batch_size` диспетчера и `MaintenanceSchedule.batch_size`). (4) `limit=0` — отказ работать
+  без обращения к базе (`WorkerRun` с нулями), отрицательный — `ValidationFailed`. (5) Фоновые
+  задачи остаются за вызывающим: ни импорт пакета, ни `IdentityHub(...)`, ни `hub.start()` не
+  создают задач и потоков; `hub.dispatcher.run()`/`running()` и CLI остаются циклами поверх
+  `run_once`, а `HeartbeatBatcher` стартует лениво при первой аренде — это не фоновая работа
+  хаба, а обслуживание уже выданной аренды. (6) `reconcile` обходит пространства сам (как
+  `provider_operations` и `acceptance`): его фасад суммирует `space.sync.refresh_many` по
+  пространствам, а не требует выбранного пространства.

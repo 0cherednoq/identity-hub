@@ -10,10 +10,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I5.2 Единый hub.workers.run_once(limit)
+- **Начата:** 2026-10-23
 - **Шаги:**
-  - [ ] —
+  - [ ] D-327 и падающие тесты DoD: limit 0/1/N, пустая очередь, два воркера, сериализация, отсутствие фоновых задач
+  - [ ] модуль workers.py: WorkerRun и пять фасадов
+  - [ ] limit в Dispatcher.run_once и Maintenance.run_due
+  - [ ] перевод внутренних вызовов и CLI на фасады
+  - [ ] документация: IMP-20 в матрице, CHANGELOG, api-migration, guide
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -56,7 +60,7 @@
 | I4.2 | Login, refresh и challenge через provider operations | I3.3b, I4.1 | done |  |  |
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | done |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
-| I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | todo |  |  |
+| I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | in_progress |  |  |
 | I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2b, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
