@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,6 +21,7 @@ __all__ = [
     "CredentialInput",
     "check_transition",
     "is_expired",
+    "validity_code",
 ]
 
 
@@ -56,6 +58,19 @@ def check_transition(current: str, target: str) -> bool:
 def is_expired(lifecycle: str, expires_at: datetime | None, now: datetime) -> bool:
     """Срок считается по времени, не переходом (D-215)."""
     return lifecycle == ACTIVE and expires_at is not None and expires_at <= now
+
+
+_VALIDITY_CODE = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
+
+
+def validity_code(code: str) -> str:
+    """Код отказа ручной пометки (C8.1): формат как у `LoginFailure.code`."""
+    from identity_hub.errors import ValidationFailed
+
+    value = str(code)
+    if _VALIDITY_CODE.fullmatch(value) is None:
+        raise ValidationFailed("code должен соответствовать [a-z][a-z0-9_.-]{0,63}")
+    return value
 
 
 SESSION_MODES = frozenset({"in_place", "replace"})

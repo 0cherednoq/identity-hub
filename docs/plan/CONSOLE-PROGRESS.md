@@ -11,14 +11,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** C8.1 Пометка валидности credentials и сессий вне аренды
-- **Начата:** 2026-10-23
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] падающие тесты (unit + pg) на verify/reject кредов и сессий
-  - [ ] store: ничего (mark_* есть), secrets_admin: _mark_credential_validity/_mark_session_validity с событиями
-  - [ ] api/secrets: verify_credential, reject_credential, verify_session, reject_session
-  - [ ] события: action verify/reject, mode verify/reject, code в data; 10-events.md
-  - [ ] документация 03-accounts.md и api.md
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -48,10 +44,10 @@
 | C6.1 | Режим миграций при старте | — | done |  | пункт 6 |
 | C6.2 | Ключ, PgBouncer и быстрый старт | — | done |  | пункт 6 |
 | C7.1 | Финальная сверка | все задачи C0–C6 | done |  |  |
-| C8.1 | Пометка валидности credentials и сессий вне аренды | — | in_progress |  | запрос владельца, `D-326` |
+| C8.1 | Пометка валидности credentials и сессий вне аренды | — | done |  | запрос владельца, `D-326` |
 | C8.2 | Credentials и сессии в read-схеме и отбор непроверенных | — | todo |  | запрос владельца, `D-326` |
 
-**Итого:** 23 / 25 done
+**Итого:** 24 / 25 done
 
 ## Журнал сессий
 
@@ -80,3 +76,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-12 · C1.4b · done · админка: поля и фильтр enabled, команды disable и enable, признак и действия в интерфейсе; backend, фронтенд и e2e прокси зелёные · дальше C2.2b
 2026-10-12 · C2.2b · done · админка: ревизии пачки одним запросом, lifecycle ready/retired — activate_many и retire_many; теги и resync остаются циклом (пакетной правки тегов в этой ветке нет) · дальше C7.1
 2026-10-12 · C7.1 · done · тест трассировки очереди; полный check.sh зелёный (1805 passed), админка: backend 91, фронтенд 45, e2e 34 · очередь C закрыта
+2026-10-23 · C8.1 · done · verify/reject для credentials и сессий вне аренды: action verify|reject и mode verify|reject в существующих событиях, code в data; auth и lifecycle не трогаются; уточнение по reject_codes внесено в план · дальше C8.2

@@ -313,6 +313,8 @@ report.merge_details                  # что MERGE добавил или на�
 | Теги | `identities.add_tags(id, ["vip"])`, `remove_tags(id, [...])`, `set_tags(id, [...])` |
 | Заметка | `identities.set_note(id, "text")` |
 | Credentials | `secrets.replace_credentials(id, {...}, actor="admin")` |
+| Проверка credentials | `secrets.verify_credential(id, kind, name, actor="ops")`, `reject_credential(..., code="bad_password")` — исход проверки без смены жизненного цикла |
+| Проверка сессии | `secrets.verify_session(id, slot, actor="ops")`, `reject_session(..., code="session_invalid")` |
 | Сессия вне аренды | `secrets.replace_session(id, {...}, actor="admin", slot="default", mode="in_place")`; `mode="replace"` — новая запись, прежняя в истории; `secrets.revoke_session(id, slot, actor=...)` — отзыв без замены |
 | Сессия в аренде | `await lease.save_session(session)` |
 
@@ -513,6 +515,34 @@ await space.secrets.revoke_credential(identity_id, "api_key", "trading", actor="
 - `put_credential(..., reset_auth=True)` атомарно очищает прежние `auth.code` и
   `auth.retryable` в `no_session`/`session_invalid`, не отзывает сохранённую сессию. Значение по
   умолчанию `False` сохраняет прежний отказ.
+
+### Ручная проверка credentials и сессий
+
+Оператор проверил запись вручную или её проверила своя операция вне входа — исход записывается
+одной транзакцией вместе с событием аудита (`C8.1`):
+
+```python
+await space.secrets.verify_credential(identity_id, "api_key", "trading", actor="ops")
+await space.secrets.reject_credential(
+    identity_id, "api_key", "trading", actor="ops", code="bad_password", disable=True
+)
+await space.secrets.verify_session(identity_id, actor="ops")
+await space.secrets.reject_session(identity_id, actor="ops", code="session_invalid")
+```
+
+- `verify_*` ставит `last_verified_at` и снимает прошлый отказ; `reject_*` ставит
+  `last_rejected_at` и `reject_code`. Для credentials возвращается `Credential` (или `None`, если
+  записи `(kind, name)` нет), для сессий — `bool` (`False` — у слота нет не отозванной записи).
+- `code` — как `LoginFailure.code`: `[a-z][a-z0-9_.-]{0,63}`.
+- `disable=None` (по умолчанию) — выключать ли отклонённую запись, решает
+  `Service.disable_rejected_credentials`; `True`/`False` переопределяют это на один вызов.
+  Отозванную запись выключение не поднимает и не меняет.
+- **Жизненный цикл записи и состояние `auth` аккаунта пометка не меняет.** Перевод в
+  `session_invalid` остаётся за входом и классификатором ошибок операции: иначе ручная отметка
+  тихо выводила бы аккаунт из выборки аренды. Чтобы отозвать сессию — `revoke_session`.
+- Действия видны в журнале: `identity.credentials.updated` с `action` `verify`/`reject` и
+  `identity.session.updated` с `mode` `verify`/`reject`; у отказа в `data` есть `code`.
+- Те же пометки внутри входа делает адаптер: `ctx.verify_credential` / `ctx.reject_credential`.
 
 Под арендой и в `Authenticator`/пробах запись берут по виду и имени (`D-216`):
 

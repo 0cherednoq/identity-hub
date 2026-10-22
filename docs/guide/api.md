@@ -40,7 +40,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 |---|---|---|---|
 | `space.identities` | identity | `get`, `find`, `get_by_ref`, `card`, `search`, `list`, `count`, `create`, `ensure`, `create_many`, `update`, `update_many`, `replace_*`, `add_tags`, `remove_tags`, `set_tags`, `set_note`, `delete`, `activate`, `retire`, `set_lifecycle`, `restore_standing`, `ban`, `freeze`, `cool_down`, `observe`, `override`, `unpin` | [Аккаунты](03-accounts.md), [Состояния](04-states.md) |
 | `space.imports` | импорт | `run`, `run_files`, `stage`, `get`, `cancel` | [Аккаунты](03-accounts.md#импорт) |
-| `space.secrets` | credentials, сессии | `describe`, `reveal`, `replace_credentials`, `replace_session` | [Аккаунты](03-accounts.md#секреты) |
+| `space.secrets` | credentials, сессии | `describe`, `reveal`, `replace_credentials`, `replace_session`, `verify_credential`, `reject_credential`, `verify_session`, `reject_session` | [Аккаунты](03-accounts.md#секреты) |
 | `space.pools` | пул и аренда | `define` → `Pool.lease()` / `Pool.acquire()`; `revoke` | [Аренда](07-leases.md) |
 | `space.proxies` | прокси | `get`, `list`, `url`, `create`, `ensure`, `create_many`, `replace_credentials`, `move`, `delete`, `report_failure`, `report_success`, `recheck`, `recheck_group`, `recheck_due`, `override`, `rebind` | [Прокси](09-proxies.md) |
 | `space.auth` | вход | `login`, `login_many`, `answer_challenge` | [Вход](05-login.md) |

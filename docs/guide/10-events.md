@@ -108,7 +108,7 @@ flowchart LR
 | `identity.challenge.answered` | `challenge_id`, `kind` |
 | `identity.challenge.expired` | `challenge_id`, `kind` |
 | `identity.challenge.opened` | `challenge_id`, `expires_at`, `hint`, `kind` |
-| `identity.credentials.updated` | `action`, `fields`, `kind`, `name`, `reason` |
+| `identity.credentials.updated` | `action`, `code`, `fields`, `kind`, `name`, `reason` |
 | `identity.deleted` | `external_ref` |
 | `identity.imported` | `count`, `run_id`, `skipped`, `updated` |
 | `identity.lifecycle.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
@@ -120,7 +120,7 @@ flowchart LR
 | `identity.requirement.added` | `code`, `deadline`, `since` |
 | `identity.requirement.resolved` | `code`, `reason` |
 | `identity.secret.revealed` | `field`, `kind`, `name`, `reason` |
-| `identity.session.updated` | `expires_at`, `fields`, `mode`, `reason`, `replaced_id`, `session_id`, `session_revision`, `slot` |
+| `identity.session.updated` | `code`, `expires_at`, `fields`, `mode`, `reason`, `replaced_id`, `session_id`, `session_revision`, `slot` |
 | `identity.standing.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
 | `identity.state.drift` | `cause`, `key`, `observed`, `raw_status`, `region`, `source`, `state` |
 | `identity.state.overridden` | `actor`, `attempts`, `code`, `from`, `host`, `key`, `pinned_until`, `pool`, `port`, `reason`, `region`, `to` |

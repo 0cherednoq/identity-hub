@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `space.secrets.verify_credential` / `reject_credential` и `verify_session` / `reject_session`:
+  исход ручной проверки записывается вне входа одной транзакцией вместе с событием аудита
+  (`last_verified_at`, `last_rejected_at`, `reject_code`). Жизненный цикл записи и состояние
+  `auth` аккаунта не меняются; выключение отклонённой записи остаётся за
+  `Service.disable_rejected_credentials` или явным `disable=`. Изменений схемы БД нет.
+
 ## [1.0.0a5] - 2026-10-19
 
 Пятый альфа-релиз добавляет безопасную внешнюю проекцию состояния и полный контракт ёмкости

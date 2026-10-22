@@ -219,6 +219,86 @@ class Secrets(Namespace):
             identity_id, kind, name, REVOKED, actor=actor, reason=reason
         )
 
+    # ------------------------------------------------------- пометка валидности (C8.1, `D-326`)
+
+    async def verify_credential(
+        self,
+        identity_id: UUID,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> Credential | None:
+        """Отметить запись проверенной: `last_verified_at = now`, прошлый отказ снят.
+
+        Для оператора и для своей операции проверки вне входа: пометка и событие аудита — одной
+        транзакцией. `None` — записи `(kind, name)` у аккаунта нет. Жизненный цикл записи и
+        состояние `auth` аккаунта не меняются.
+        """
+        space = self._at(identity_id, expected_revision)
+        row = await space._mark_credential_validity(
+            identity_id, kind, name, rejected=False, actor=actor
+        )
+        return Credential.from_row(row, row.updated_at) if row is not None else None
+
+    async def reject_credential(
+        self,
+        identity_id: UUID,
+        kind: str = "default",
+        name: str = "default",
+        *,
+        actor: str,
+        code: str,
+        disable: bool | None = None,
+        expected_revision: int | None = None,
+    ) -> Credential | None:
+        """Отметить запись отклонённой: `last_rejected_at = now`, `reject_code = code`.
+
+        `code` — как `LoginFailure.code`: `[a-z][a-z0-9_.-]{0,63}`. `disable=None` — выключать ли
+        запись, решает `Service.disable_rejected_credentials`; `True`/`False` переопределяют это
+        на один вызов. Отозванную запись выключение не поднимает и не меняет. `None` — записи нет.
+        """
+        space = self._at(identity_id, expected_revision)
+        row = await space._mark_credential_validity(
+            identity_id, kind, name, rejected=True, actor=actor, code=code, disable=disable
+        )
+        return Credential.from_row(row, row.updated_at) if row is not None else None
+
+    async def verify_session(
+        self,
+        identity_id: UUID,
+        slot: str = "default",
+        *,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> bool:
+        """Отметить текущую запись слота проверенной; `False` — её нет.
+
+        Статус записи и состояние `auth` аккаунта не меняются.
+        """
+        return await self._at(identity_id, expected_revision)._mark_session_validity(
+            identity_id, slot, rejected=False, actor=actor
+        )
+
+    async def reject_session(
+        self,
+        identity_id: UUID,
+        slot: str = "default",
+        *,
+        actor: str,
+        code: str,
+        expected_revision: int | None = None,
+    ) -> bool:
+        """Отметить текущую запись слота отклонённой; `False` — её нет.
+
+        Пометка не отзывает запись и не переводит `auth` в `session_invalid`: это делает вход и
+        классификатор ошибок операции. Для конечного отзыва — `revoke_session`.
+        """
+        return await self._at(identity_id, expected_revision)._mark_session_validity(
+            identity_id, slot, rejected=True, actor=actor, code=code
+        )
+
     async def revoke_session(
         self,
         identity_id: UUID,

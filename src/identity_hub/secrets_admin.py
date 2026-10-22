@@ -23,6 +23,7 @@ from identity_hub.domain.credentials import (
     check_transition,
     session_event_data,
     session_mode,
+    validity_code,
 )
 from identity_hub.domain.data import validate_json_payload, validate_model
 from identity_hub.domain.idempotency import SECRETS_FAMILY, keyed_fingerprint, namespace
@@ -345,6 +346,48 @@ class CredentialsMixin(SpaceBase):
             await self._credential_event(tx, row, kind, name, action, actor, reason=reason)
             return True
 
+    async def _mark_credential_validity(
+        self,
+        identity_id: UUID,
+        kind: str,
+        name: str,
+        *,
+        rejected: bool,
+        actor: str,
+        code: str | None = None,
+        disable: bool | None = None,
+    ) -> CredentialRow | None:
+        """Отметить запись проверенной или отклонённой вне аренды (C8.1, `D-326`).
+
+        `None` — записи `(kind, name)` у аккаунта нет. Жизненный цикл меняется только
+        выключением отклонённой записи; регион `auth` аккаунта не затрагивается.
+        """
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            service = self.hub.service(row.service)
+            kind, name = service.credential_key(kind, name)
+            checked = validity_code(code) if rejected else None
+            turn_off = (
+                (service.disable_rejected_credentials if disable is None else bool(disable))
+                if rejected
+                else False
+            )
+            marked = await tx.mark_credential_validity(
+                identity_id, kind, name, rejected=rejected, code=checked, disable=turn_off
+            )
+            if marked is None:
+                return None
+            await self._credential_event(
+                tx,
+                row,
+                kind,
+                name,
+                "reject" if rejected else "verify",
+                actor,
+                code=checked,
+            )
+            return marked
+
     async def _credential_event(
         self,
         tx: StoreTx,
@@ -356,12 +399,15 @@ class CredentialsMixin(SpaceBase):
         *,
         fields: list[str] | None = None,
         reason: str | None = None,
+        code: str | None = None,
     ) -> None:
         data: dict[str, Any] = {"kind": kind, "name": name, "action": action}
         if fields is not None:
             data["fields"] = fields
         if reason is not None:
             data["reason"] = reason
+        if code is not None:
+            data["code"] = code
         await self._emit(
             tx,
             EventDraft(
@@ -376,6 +422,44 @@ class CredentialsMixin(SpaceBase):
 
 class SessionRevokeMixin(SpaceBase):
     """Конечный отзыв сессии слота без замены (IMP-10, D-219)."""
+
+    async def _mark_session_validity(
+        self,
+        identity_id: UUID,
+        slot: str,
+        *,
+        rejected: bool,
+        actor: str,
+        code: str | None = None,
+    ) -> bool:
+        """Отметить текущую запись слота проверенной или отклонённой (C8.1, `D-326`).
+
+        `False` — у слота нет не отозванной записи. Статус записи и регион `auth` не меняются:
+        связка «сессия недействительна → `auth`» остаётся за входом и классификатором ошибок.
+        """
+        if not slot or len(slot) > 64:
+            raise ValidationFailed("session slot: от 1 до 64 символов")
+        checked = validity_code(code) if rejected else None
+        async with self._tx() as tx:
+            row = await self._identity(tx, identity_id)
+            if not await tx.mark_session_validity(
+                identity_id, slot, rejected=rejected, code=checked
+            ):
+                return False
+            data: dict[str, Any] = {"slot": slot, "mode": "reject" if rejected else "verify"}
+            if checked is not None:
+                data["code"] = checked
+            await self._emit(
+                tx,
+                EventDraft(
+                    "identity.session.updated",
+                    actor=actor,
+                    service=row.service,
+                    identity_id=identity_id,
+                    data=data,
+                ),
+            )
+            return True
 
     async def _revoke_session(self, identity_id: UUID, slot: str, *, actor: str, reason: str | None) -> bool:
         async with self._tx() as tx:
