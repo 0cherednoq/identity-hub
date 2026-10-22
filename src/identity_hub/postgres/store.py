@@ -149,6 +149,7 @@ from identity_hub.store.base import (
     CredentialMetadataRow,
     CredentialRow,
     DataRow,
+    DeliveryEnqueue,
     DoctorIssue,
     EventReadFilter,
     EventReadRow,
@@ -3891,6 +3892,7 @@ class PgTx(StoreTx):
             "event_types": row.event_types,
             "filter": row.filter,
             "min_severity": row.min_severity,
+            "ordered": row.ordered,
             **_stored_payload_columns(row.secret),
         }
         stored = (
@@ -3935,20 +3937,24 @@ class PgTx(StoreTx):
         event_types: list[str],
         filter: dict[str, Any],
         min_severity: str,
+        ordered: bool | None = None,
     ) -> bool:
+        values: dict[str, Any] = {
+            "url": url,
+            "description": description,
+            "event_types": event_types,
+            "filter": filter,
+            "min_severity": min_severity,
+        }
+        if ordered is not None:
+            values["ordered"] = ordered
         result = await self.execute(
             update(WEBHOOK_ENDPOINTS)
             .where(
                 WEBHOOK_ENDPOINTS.c.id == endpoint_id,
                 WEBHOOK_ENDPOINTS.c.space_id == self.space.id,
             )
-            .values(
-                url=url,
-                description=description,
-                event_types=event_types,
-                filter=filter,
-                min_severity=min_severity,
-            )
+            .values(**values)
         )
         return bool(result.rowcount)  # type: ignore[attr-defined]
 
@@ -4052,12 +4058,30 @@ class PgTx(StoreTx):
                     e.disabled_reason,
                     e.failure_streak,
                     e.created_at,
+                    e.ordered,
                 )
                 .where(e.space_id == self.space.id)
                 .order_by(e.created_at.desc(), e.id.desc())
             )
         ).mappings()
         return [WebhookEndpointReadRow(**dict(row)) for row in rows]
+
+    async def blocked_webhook_deliveries(self) -> dict[UUID, int]:
+        d, ep = WEBHOOK_DELIVERIES.c, WEBHOOK_ENDPOINTS.c
+        rows = (
+            await self.execute(
+                select(d.endpoint_id, func.count().label("blocked"))
+                .select_from(WEBHOOK_DELIVERIES)
+                .join(WEBHOOK_ENDPOINTS, ep.id == d.endpoint_id)
+                .where(
+                    ep.space_id == self.space.id,
+                    d.status != DeliveryStatus.SUCCEEDED,
+                    _blocked_by_earlier_delivery(d, ep),
+                )
+                .group_by(d.endpoint_id)
+            )
+        ).all()
+        return {row.endpoint_id: int(row.blocked) for row in rows}
 
     async def webhook_delivery_read_page(
         self, *, limit: int, before: tuple[datetime, int] | None = None
@@ -5042,6 +5066,31 @@ def _event(row: Any) -> Event:
     )
 
 
+def _blocked_by_earlier_delivery(d: Any, ep: Any) -> Any:
+    """Условие head-of-line для `ordered`-получателя (`IMP-21`, `D-328`).
+
+    Доставка ждёт, если у того же endpoint для того же потока (`resource_key`) есть доставка с
+    меньшей парой `(resource_revision, id)` и статусом, отличным от `succeeded`. Блокируют и
+    `dead`, и `paused`: пропуск нарушил бы порядок молча. Неупорядоченные получатели и события
+    без потока (`resource_key IS NULL`) условие не затрагивает.
+    """
+    earlier = WEBHOOK_DELIVERIES.alias("earlier")
+    p = earlier.c
+    return and_(
+        ep.ordered.is_(True),
+        d.resource_key.is_not(None),
+        select(literal(1))
+        .where(
+            p.endpoint_id == d.endpoint_id,
+            p.resource_key == d.resource_key,
+            p.status != DeliveryStatus.SUCCEEDED,
+            p.id != d.id,
+            tuple_(p.resource_revision, p.id) < tuple_(d.resource_revision, d.id),
+        )
+        .exists(),
+    )
+
+
 def _webhook_endpoint_row(row: Any, space_slug: str) -> WebhookEndpointRow:
     return WebhookEndpointRow(
         id=row["id"],
@@ -5057,6 +5106,7 @@ def _webhook_endpoint_row(row: Any, space_slug: str) -> WebhookEndpointRow:
         failure_streak=row["failure_streak"],
         created_at=row["created_at"],
         secret=_stored_payload(row),
+        ordered=bool(row["ordered"]),
     )
 
 
@@ -5073,6 +5123,8 @@ def _webhook_delivery_row(row: Any) -> WebhookDeliveryRow:
         error=row["error"],
         created_at=row["created_at"],
         delivered_at=row["delivered_at"],
+        resource_key=row["resource_key"],
+        resource_revision=row["resource_revision"],
     )
 
 
@@ -5854,8 +5906,8 @@ class PgStore(Store):
             )
         return {row.id: dict(row.labels) for row in rows}
 
-    async def enqueue_webhook_deliveries(self, pairs: Sequence[tuple[UUID, UUID]]) -> int:
-        unique = set(pairs)
+    async def enqueue_webhook_deliveries(self, deliveries: Sequence[DeliveryEnqueue]) -> int:
+        unique = sorted(set(deliveries), key=lambda item: (item.endpoint_id.bytes, item.event_id.bytes))
         if not unique:
             return 0
         stmt = (
@@ -5863,12 +5915,14 @@ class PgStore(Store):
             .values(
                 [
                     {
-                        "endpoint_id": endpoint_id,
-                        "event_id": event_id,
+                        "endpoint_id": item.endpoint_id,
+                        "event_id": item.event_id,
                         "status": DeliveryStatus.PENDING,
                         "attempt": 0,
+                        "resource_key": item.resource_key,
+                        "resource_revision": item.resource_revision,
                     }
-                    for endpoint_id, event_id in unique
+                    for item in unique
                 ]
             )
             .on_conflict_do_nothing(constraint="uq_ih_webhook_deliveries_endpoint_event")
@@ -5892,6 +5946,8 @@ class PgStore(Store):
                             ep.enabled.is_(True),
                             # доставка без события не отправится никогда: её удалит retention
                             select(literal(1)).where(e.event_id == d.event_id).exists(),
+                            # ordered: ждём, пока прежняя ревизия того же аккаунта не доставлена
+                            ~_blocked_by_earlier_delivery(d, ep),
                         )
                         .order_by(d.next_attempt_at, d.id)
                         .limit(limit)

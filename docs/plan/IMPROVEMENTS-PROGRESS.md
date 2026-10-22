@@ -10,15 +10,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** I5.3 Опциональный ordered outbox
-- **Начата:** 2026-10-23
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] D-328 и падающие тесты: порядок, head-of-line, два endpoint, dead/manual retry, unordered без регрессии
-  - [ ] миграция 0039: ordered у endpoint, resource_key и resource_revision у доставок, индекс
-  - [ ] постановка доставок заполняет ключ ресурса и ревизию
-  - [ ] claim с условием порядка в PgStore и MemoryStore
-  - [ ] API: ordered в create/update и read-моделях, счётчик blocked
-  - [ ] документация: IMP-21 в матрице, guide, CHANGELOG
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -62,7 +57,7 @@
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | done |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | done |  |  |
-| I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | in_progress |  |  |
+| I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | done |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2b, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
 | I6.3 | Set-based import fast path | I1.4b, I3.2b | todo |  |  |
@@ -72,7 +67,7 @@
 | I7.1 | Migration guide и документация контрактов | I5.1, I5.2, I5.3, I6.4, I6.5, I8.10 | todo |  |  |
 | I7.2 | Финальный аудит и release candidate | I7.1 | todo |  |  |
 
-**Итого:** 38 / 46 done
+**Итого:** 39 / 46 done
 
 ## Журнал сессий
 
@@ -114,3 +109,4 @@ YYYY-MM-DD · ID · результат (done / partial / blocked) · что сд
 2026-10-06 · I4.2 · done · вход через очередь операций: claim операции login коммитится до Authenticator, ctx.attempt_id = claim_id, итог (сессия replace / challenge / отказ) одной транзакцией с claim и fence, поздний ответ откатывается целиком; LoginReport.operations; Store claim по operation_ids; D-222 · дальше I4.3
 2026-10-15 · I4.3 · done · probes через provider operations, дедупликация и recovery worker · финальный gate зелёный
 2026-10-23 · I5.2 · done · hub.workers: пять фасадов run_once(limit) -> WorkerRun, limit как бюджет прохода на уровне SQL, CLI и dispatcher.run — циклы поверх run_once; ломающее: acceptance.run_once теперь WorkerRun (D-327); check.sh зелёный (2268 passed) · дальше I5.3
+2026-10-23 · I5.3 · done · ordered-получатель вебхуков: миграция 0039 (ordered, resource_key, resource_revision, частичный индекс), claim ждёт предыдущую ревизию аккаунта на обоих бэкендах, head-of-line виден как blocked в сводке и снимается повтором/retention/выключением флага; check.sh зелёный (2282 passed) · дальше I6.1

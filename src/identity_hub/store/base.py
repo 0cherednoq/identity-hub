@@ -41,6 +41,7 @@ __all__ = [
     "ChallengeRow",
     "ChargeOutcome",
     "DataRow",
+    "DeliveryEnqueue",
     "DoctorIssue",
     "EventReadFilter",
     "EventReadRow",
@@ -1002,6 +1003,7 @@ class NewWebhookEndpoint:
     filter: dict[str, Any]
     min_severity: str
     secret: StoredPayload
+    ordered: bool = False  # порядок внутри потока аккаунта (IMP-21, D-328)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1019,6 +1021,21 @@ class WebhookEndpointRow:
     failure_streak: int
     created_at: datetime
     secret: StoredPayload
+    ordered: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryEnqueue:
+    """Доставка к постановке: получатель, событие и поток ресурса (`D-328`).
+
+    `resource_key` — аккаунт события, `resource_revision` — его ревизия; `None` означает, что
+    событие не входит в упорядоченный поток и порядок на него не распространяется.
+    """
+
+    endpoint_id: UUID
+    event_id: UUID
+    resource_key: str | None = None
+    resource_revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1034,6 +1051,8 @@ class WebhookDeliveryRow:
     error: str | None
     created_at: datetime
     delivered_at: datetime | None
+    resource_key: str | None = None
+    resource_revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1050,6 +1069,7 @@ class WebhookEndpointReadRow:
     disabled_reason: str | None
     failure_streak: int
     created_at: datetime
+    ordered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1895,6 +1915,7 @@ class StoreTx(ABC):
         event_types: list[str],
         filter: dict[str, Any],
         min_severity: str,
+        ordered: bool | None = None,
     ) -> bool: ...
 
     @abstractmethod
@@ -1912,6 +1933,11 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def webhook_endpoint_reads(self) -> list[WebhookEndpointReadRow]: ...
+
+    @abstractmethod
+    async def blocked_webhook_deliveries(self) -> dict[UUID, int]:
+        """Сколько доставок каждого `ordered`-получателя ждут предыдущую ревизию (`D-328`)."""
+        ...
 
     @abstractmethod
     async def webhook_delivery_read_page(
@@ -2235,7 +2261,7 @@ class Store(ABC):
     async def identity_labels(self, identity_ids: Sequence[UUID]) -> dict[UUID, dict[str, Any]]: ...
 
     @abstractmethod
-    async def enqueue_webhook_deliveries(self, pairs: Sequence[tuple[UUID, UUID]]) -> int: ...
+    async def enqueue_webhook_deliveries(self, deliveries: Sequence[DeliveryEnqueue]) -> int: ...
 
     @abstractmethod
     async def claim_webhook_deliveries(self, *, limit: int, claim_for: timedelta) -> list[WebhookAttempt]:

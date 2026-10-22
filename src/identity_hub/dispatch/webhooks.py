@@ -36,6 +36,7 @@ from identity_hub.enums import Severity
 from identity_hub.errors import NotFound, ValidationFailed, describe_error
 from identity_hub.events import Event, matches_any, severity_at_least, spec_of
 from identity_hub.store.base import (
+    DeliveryEnqueue,
     NewWebhookEndpoint,
     WebhookAttempt,
     WebhookDeliveryRow,
@@ -118,6 +119,8 @@ class WebhookEndpoint:
     disabled_reason: str | None
     failure_streak: int
     created_at: datetime
+    # доставки одного аккаунта идут по возрастанию ревизии (IMP-21, D-328)
+    ordered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +253,7 @@ def _endpoint(row: WebhookEndpointRow) -> WebhookEndpoint:
         enabled=row.enabled,
         disabled_reason=row.disabled_reason,
         failure_streak=row.failure_streak,
+        ordered=row.ordered,
         created_at=row.created_at,
     )
 
@@ -276,6 +280,7 @@ class Webhooks(Namespace):
         filter: Mapping[str, Any] | None = None,
         min_severity: Severity = Severity.INFO,
         description: str | None = None,
+        ordered: bool = False,
         id: UUID | None = None,
     ) -> WebhookEndpoint:
         url = validate_webhook_url(url, dev_hosts=self.space.hub.webhook_dev_hosts)
@@ -297,6 +302,7 @@ class Webhooks(Namespace):
                     _validated_filter(filter),
                     str(min_severity),
                     payload,
+                    ordered,
                 )
             )
         return _endpoint(row)
@@ -310,7 +316,9 @@ class Webhooks(Namespace):
         filter: Mapping[str, Any] | None = None,
         min_severity: Severity = Severity.INFO,
         description: str | None = None,
+        ordered: bool | None = None,
     ) -> None:
+        """Изменить получателя; `ordered=None` оставляет порядок доставок как есть (`D-328`)."""
         url = validate_webhook_url(url, dev_hosts=self.space.hub.webhook_dev_hosts)
         validate_json_payload(dict(filter or {}), "filter")
         async with self.space._tx() as tx:
@@ -321,6 +329,7 @@ class Webhooks(Namespace):
                 event_types=_validated_patterns(event_types),
                 filter=_validated_filter(filter),
                 min_severity=str(min_severity),
+                ordered=ordered,
             )
         if not changed:
             raise NotFound("webhook endpoint", endpoint_id)
@@ -437,8 +446,14 @@ class WebhookDispatcher:
         endpoints = await self.hub._store.enabled_webhook_endpoints()
         identity_ids = [event.identity_id for event in events if event.identity_id is not None]
         labels = await self.hub._store.identity_labels(identity_ids)
-        pairs = [
-            (endpoint.id, event.event_id)
+        # поток ресурса для ordered-доставки: аккаунт события и его ревизия (D-328)
+        queued = [
+            DeliveryEnqueue(
+                endpoint.id,
+                event.event_id,
+                str(event.identity_id) if event.identity_id is not None and event.revision else None,
+                event.revision if event.identity_id is not None else None,
+            )
             for event in events
             for endpoint in endpoints
             if _matches_endpoint(
@@ -447,7 +462,7 @@ class WebhookDispatcher:
                 labels.get(event.identity_id, {}) if event.identity_id is not None else {},
             )
         ]
-        await self.hub._store.enqueue_webhook_deliveries(pairs)
+        await self.hub._store.enqueue_webhook_deliveries(queued)
 
     async def deliver_due(self) -> int:
         """Доставить захваченную пачку: endpoint'ы — параллельно, внутри endpoint'а — по очереди.

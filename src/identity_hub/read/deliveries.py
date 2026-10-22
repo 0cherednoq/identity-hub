@@ -59,6 +59,9 @@ class WebhookEndpointItem:
     disabled_reason: str | None
     failure_streak: int
     created_at: datetime
+    ordered: bool = False  # порядок доставок внутри потока аккаунта (IMP-21, D-328)
+    # сколько доставок ждут предыдущую ревизию: head-of-line виден оператору (D-328)
+    blocked: int = 0
     actions_available: bool = False
     actions_unavailable_reason: str = _ACTIONS_REASON
 
@@ -191,6 +194,7 @@ class DeliveriesReadMixin(SpaceBase):
             channels = await tx.notification_channels()
             rules = await tx.notification_rules()
             endpoints = await tx.webhook_endpoint_reads()
+            blocked = await tx.blocked_webhook_deliveries()
             webhook_rows = await tx.webhook_delivery_read_page(limit=webhook_limit + 1, before=webhook_before)
             notification_rows = await tx.notification_delivery_read_page(
                 limit=notification_limit + 1, before=notification_before
@@ -264,6 +268,8 @@ class DeliveriesReadMixin(SpaceBase):
                     disabled_reason=_disabled_reason(row.disabled_reason),
                     failure_streak=row.failure_streak,
                     created_at=row.created_at,
+                    ordered=row.ordered,
+                    blocked=blocked.get(row.id, 0),
                 )
                 for row in endpoints
             ),

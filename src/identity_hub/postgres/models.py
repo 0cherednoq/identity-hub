@@ -1312,6 +1312,8 @@ class WebhookEndpointRecord(DualSecretPayloadMixin, IdentityHubBase):
     enabled: Mapped[bool] = mapped_column(default=True)
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     failure_streak: Mapped[int] = mapped_column(Integer, default=0)
+    # порядок доставок внутри потока одного аккаунта (IMP-21, D-328, миграция 0039)
+    ordered: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -1337,9 +1339,21 @@ class WebhookDeliveryRecord(IdentityHubBase):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # поток ресурса для ordered-доставки: аккаунт события и его ревизия (D-328); иначе NULL
+    resource_key: Mapped[str | None] = mapped_column(String(64))
+    resource_revision: Mapped[int | None] = mapped_column(BigInteger)
 
     __table_args__ = (
         UniqueConstraint("endpoint_id", "event_id", name="uq_ih_webhook_deliveries_endpoint_event"),
+        # выборка ordered: предыдущая незавершённая доставка того же потока
+        Index(
+            "ix_ih_webhook_deliveries_order",
+            "endpoint_id",
+            "resource_key",
+            "resource_revision",
+            "id",
+            postgresql_where=text("status <> 'succeeded' AND resource_key IS NOT NULL"),
+        ),
         _enum_check("status", DeliveryStatus),
         Index(
             "ix_ih_webhook_deliveries_due",

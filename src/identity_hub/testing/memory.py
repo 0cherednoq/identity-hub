@@ -73,6 +73,7 @@ from identity_hub.store.base import (
     CredentialMetadataRow,
     CredentialRow,
     DataRow,
+    DeliveryEnqueue,
     DoctorIssue,
     EventReadFilter,
     EventReadRow,
@@ -2702,6 +2703,7 @@ class MemoryTx(StoreTx):
             0,
             self._now,
             row.secret,
+            row.ordered,
         )
         self.state.webhook_endpoints[row.id] = endpoint
         return endpoint
@@ -2726,6 +2728,7 @@ class MemoryTx(StoreTx):
         event_types: list[str],
         filter: dict[str, Any],
         min_severity: str,
+        ordered: bool | None = None,
     ) -> bool:
         row = await self.get_webhook_endpoint(endpoint_id)
         if row is None:
@@ -2737,6 +2740,7 @@ class MemoryTx(StoreTx):
             event_types=list(event_types),
             filter=deepcopy(filter),
             min_severity=min_severity,
+            ordered=row.ordered if ordered is None else ordered,
         )
         return True
 
@@ -2796,6 +2800,16 @@ class MemoryTx(StoreTx):
         rows = [row for row in self.state.webhook_deliveries.values() if row.endpoint_id == endpoint_id]
         return sorted(rows, key=lambda row: row.id, reverse=True)[:limit]
 
+    async def blocked_webhook_deliveries(self) -> dict[UUID, int]:
+        counts: dict[UUID, int] = {}
+        for row in self.state.webhook_deliveries.values():
+            endpoint = self.state.webhook_endpoints.get(row.endpoint_id)
+            if endpoint is None or endpoint.space_id != self.space.id:
+                continue
+            if row.status != "succeeded" and self.store._blocked_by_earlier_delivery(row):
+                counts[row.endpoint_id] = counts.get(row.endpoint_id, 0) + 1
+        return counts
+
     async def webhook_endpoint_reads(self) -> list[WebhookEndpointReadRow]:
         return [
             WebhookEndpointReadRow(
@@ -2809,6 +2823,7 @@ class MemoryTx(StoreTx):
                 row.disabled_reason,
                 row.failure_streak,
                 row.created_at,
+                row.ordered,
             )
             for row in sorted(
                 self.state.webhook_endpoints.values(),
@@ -3789,22 +3804,50 @@ class MemoryStore(Store):
                 row.id: deepcopy(row.labels) for row in self._state.identities.values() if row.id in wanted
             }
 
-    async def enqueue_webhook_deliveries(self, pairs: Sequence[tuple[UUID, UUID]]) -> int:
+    async def enqueue_webhook_deliveries(self, deliveries: Sequence[DeliveryEnqueue]) -> int:
         async with self._lock:
             existing = {(row.endpoint_id, row.event_id) for row in self._state.webhook_deliveries.values()}
             inserted = 0
             now = self.clock.now()
-            for endpoint_id, event_id in pairs:
-                if (endpoint_id, event_id) in existing or endpoint_id not in self._state.webhook_endpoints:
+            for item in deliveries:
+                key = (item.endpoint_id, item.event_id)
+                if key in existing or item.endpoint_id not in self._state.webhook_endpoints:
                     continue
                 delivery_id = self._state.next_webhook_delivery_id
                 self._state.next_webhook_delivery_id += 1
                 self._state.webhook_deliveries[delivery_id] = WebhookDeliveryRow(
-                    delivery_id, endpoint_id, event_id, "pending", 0, now, None, None, None, now, None
+                    delivery_id,
+                    item.endpoint_id,
+                    item.event_id,
+                    "pending",
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    now,
+                    None,
+                    item.resource_key,
+                    item.resource_revision,
                 )
-                existing.add((endpoint_id, event_id))
+                existing.add(key)
                 inserted += 1
             return inserted
+
+    def _blocked_by_earlier_delivery(self, row: WebhookDeliveryRow) -> bool:
+        """Head-of-line для `ordered`-получателя (`IMP-21`, `D-328`); вызывается под `self._lock`."""
+        endpoint = self._state.webhook_endpoints.get(row.endpoint_id)
+        if endpoint is None or not endpoint.ordered or row.resource_key is None:
+            return False
+        order = (row.resource_revision, row.id)
+        return any(
+            other.endpoint_id == row.endpoint_id
+            and other.resource_key == row.resource_key
+            and other.status != "succeeded"
+            and other.id != row.id
+            and (other.resource_revision, other.id) < order
+            for other in self._state.webhook_deliveries.values()
+        )
 
     async def claim_webhook_deliveries(self, *, limit: int, claim_for: timedelta) -> list[WebhookAttempt]:
         async with self._lock:
@@ -3821,6 +3864,7 @@ class MemoryStore(Store):
                     and row.endpoint_id in endpoints
                     and endpoints[row.endpoint_id].enabled
                     and row.event_id in events
+                    and not self._blocked_by_earlier_delivery(row)
                 ],
                 key=lambda row: (row.next_attempt_at, row.id),
             )[:limit]
