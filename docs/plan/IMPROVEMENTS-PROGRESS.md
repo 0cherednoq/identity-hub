@@ -10,10 +10,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** I5.3 Опциональный ordered outbox
+- **Начата:** 2026-10-23
 - **Шаги:**
-  - [ ] —
+  - [ ] D-328 и падающие тесты: порядок, head-of-line, два endpoint, dead/manual retry, unordered без регрессии
+  - [ ] миграция 0039: ordered у endpoint, resource_key и resource_revision у доставок, индекс
+  - [ ] постановка доставок заполняет ключ ресурса и ревизию
+  - [ ] claim с условием порядка в PgStore и MemoryStore
+  - [ ] API: ordered в create/update и read-моделях, счётчик blocked
+  - [ ] документация: IMP-21 в матрице, guide, CHANGELOG
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -57,7 +62,7 @@
 | I4.3 | Probes, reconcile и recovery worker | I2.4, I4.1 | done |  |  |
 | I5.1 | Публичная read-схема SQLAlchemy Core | I0.4 | done |  |  |
 | I5.2 | Единый hub.workers.*.run_once(limit) | I4.3 | done |  |  |
-| I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | todo |  |  |
+| I5.3 | Опциональный ordered outbox | I1.2b, I5.2 | in_progress |  |  |
 | I6.1 | Fast path операции | I1.3, I2.2b, I2.4 | todo |  |  |
 | I6.2 | План поиска под общей нагрузкой | I1.1, I5.1 | todo |  |  |
 | I6.3 | Set-based import fast path | I1.4b, I3.2b | todo |  |  |
