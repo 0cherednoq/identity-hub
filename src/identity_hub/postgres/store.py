@@ -13,7 +13,7 @@ import contextlib
 import json
 import logging
 from collections import Counter, defaultdict
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
@@ -25,6 +25,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
+    Integer,
     MetaData,
     String,
     Table,
@@ -42,6 +43,8 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy import cast as sa_cast
+from sqlalchemy import column as sa_column
+from sqlalchemy import values as sa_values
 from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.dialects.postgresql import array as pg_array
@@ -169,12 +172,15 @@ from identity_hub.store.base import (
     LeaseStatsRow,
     LinkRow,
     MetricsSnapshot,
+    NewCredentialRow,
     NewIdentity,
+    NewIdentityRows,
     NewImportItem,
     NewImportRun,
     NewNotificationChannel,
     NewNotificationRule,
     NewProxy,
+    NewSessionRow,
     NewWebhookEndpoint,
     NotificationAttempt,
     NotificationChannelRow,
@@ -260,6 +266,21 @@ _FINISHABLE_DELIVERY = (*_OPEN_DELIVERY, DeliveryStatus.PAUSED)
 # Поля сортировки, у которых колонка объявлена NOT NULL: курсор по ним идёт кортежным
 # сравнением под индекс, без NULLS LAST (I6.2, R2-D09).
 NOT_NULL_SORTS = frozenset({"created_at", "error_score"})
+
+
+# Потолок параметров одного запроса у драйвера — 32767; пакетная вставка режется на части с
+# запасом: SQLAlchemy добавляет к строкам значения по умолчанию (I6.3).
+MAX_BIND_PARAMS = 8_000
+
+
+def _in_chunks(rows: list[dict[str, Any]]) -> Iterator[list[dict[str, Any]]]:
+    """Разбить строки для `INSERT ... VALUES` так, чтобы уложиться в лимит параметров."""
+    if not rows:
+        return
+    per_row = max(1, len(rows[0]))
+    size = max(1, MAX_BIND_PARAMS // per_row)
+    for start in range(0, len(rows), size):
+        yield rows[start : start + size]
 
 
 def _any_of(column: Any, values: Iterable[Any]) -> Any:
@@ -378,29 +399,16 @@ class PgTx(StoreTx):
     async def emit(self, drafts: Sequence[EventDraft]) -> list[UUID]:
         if not drafts:
             return []
+        counters = await self._bump_event_counters(drafts)
+        seen: dict[UUID, int] = {}
         rows: list[dict[str, Any]] = []
         for draft in drafts:
             sequence: int | None = None
             revision: int | None = None
-            if draft.identity_id is not None:
-                bump = draft.spec.aggregate and draft.identity_id not in self._revised
-                counters: Any = (
-                    await self.execute(
-                        update(IdentityRecord)
-                        .where(
-                            IdentityRecord.id == draft.identity_id, IdentityRecord.space_id == self.space.id
-                        )
-                        .values(
-                            event_seq=IdentityRecord.event_seq + 1,
-                            revision=IdentityRecord.revision + int(bump),
-                        )
-                        .returning(IdentityRecord.event_seq, IdentityRecord.revision)
-                    )
-                ).one_or_none()
-                if counters is not None:
-                    sequence, revision = int(counters[0]), int(counters[1])
-                    if bump:
-                        self._revised.add(draft.identity_id)
+            if draft.identity_id is not None and draft.identity_id in counters:
+                base, revision = counters[draft.identity_id]
+                seen[draft.identity_id] = seen.get(draft.identity_id, 0) + 1
+                sequence = base + seen[draft.identity_id]
             rows.append(
                 {
                     "event_id": new_id(),
@@ -418,7 +426,8 @@ class PgTx(StoreTx):
                     "external": draft.spec.external,
                 }
             )
-        await self.execute(insert(EventRecord).values(rows))
+        for chunk in _in_chunks(rows):  # длинная пачка не упирается в лимит параметров (I6.3)
+            await self.execute(insert(EventRecord).values(chunk))
         if any(r["external"] for r in rows):
             # доставляется слушателям при коммите; при откате — нет (FR-13.6)
             await _execute(
@@ -427,6 +436,47 @@ class PgTx(StoreTx):
                 {"channel": NOTIFY_CHANNEL, "payload": self.space.slug},
             )
         return [r["event_id"] for r in rows]
+
+    async def _bump_event_counters(self, drafts: Sequence[EventDraft]) -> dict[UUID, tuple[int, int | None]]:
+        """I6.3: счётчики событий и ревизии всей пачки одним запросом вместо запроса на событие.
+
+        Возвращает `identity_id → (номер до пачки, ревизия после)`. Ревизия поднимается не больше
+        одного раза на команду (`D-205`): все события одной команды несут одну ревизию.
+        """
+        counts: dict[UUID, int] = {}
+        bumps: dict[UUID, int] = {}
+        for draft in drafts:
+            if draft.identity_id is None:
+                continue
+            counts[draft.identity_id] = counts.get(draft.identity_id, 0) + 1
+            if draft.spec.aggregate and draft.identity_id not in self._revised:
+                bumps[draft.identity_id] = 1
+        if not counts:
+            return {}
+        wanted = sa_values(
+            sa_column("want_id", IDENTITIES.c.id.type),
+            sa_column("want_count", Integer),
+            sa_column("want_bump", Integer),
+            name="event_counters",
+        ).data([(identity_id, count, bumps.get(identity_id, 0)) for identity_id, count in counts.items()])
+        rows = (
+            await self.execute(
+                update(IDENTITIES)
+                .where(IDENTITIES.c.id == wanted.c.want_id, IDENTITIES.c.space_id == self.space.id)
+                .values(
+                    event_seq=IDENTITIES.c.event_seq + wanted.c.want_count,
+                    revision=IDENTITIES.c.revision + wanted.c.want_bump,
+                )
+                .returning(IDENTITIES.c.id, IDENTITIES.c.event_seq, IDENTITIES.c.revision)
+            )
+        ).mappings()
+        found: dict[UUID, tuple[int, int | None]] = {}
+        for row in rows:
+            identity_id = row["id"]
+            found[identity_id] = (int(row["event_seq"]) - counts[identity_id], int(row["revision"]))
+            if bumps.get(identity_id):
+                self._revised.add(identity_id)
+        return found
 
     # --------------------------------------------------------- аккаунт и регионы
 
@@ -568,6 +618,123 @@ class PgTx(StoreTx):
             )
         ).one_or_none()
         return (row.id, row.space_id) if row else None
+
+    async def insert_identities(self, rows: Sequence[NewIdentityRows]) -> list[UUID]:
+        """I6.3: пачка аккаунтов и их дочерние строки — несколько запросов на всю пачку."""
+        if not rows:
+            return []
+        inserted: set[UUID] = set()
+        identity_values = [self._identity_values(item.identity) for item in rows]
+        for chunk in _in_chunks(identity_values):
+            inserted.update(
+                (
+                    await self.execute(
+                        insert(IDENTITIES).values(chunk).on_conflict_do_nothing().returning(IDENTITIES.c.id)
+                    )
+                ).scalars()
+            )
+        if not inserted:
+            return []
+        accepted = [item for item in rows if item.identity.id in inserted]
+        credentials: list[dict[str, Any]] = []
+        sessions: list[dict[str, Any]] = []
+        regions: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        for item in accepted:
+            identity_id = item.identity.id
+            if item.credentials is not None:
+                credentials.append(
+                    self._credential_values(
+                        identity_id,
+                        NewCredentialRow(
+                            "default",
+                            "default",
+                            item.credentials,
+                            value_fingerprint=item.credential_fingerprint,
+                        ),
+                    )
+                )
+            credentials.extend(
+                self._credential_values(identity_id, record) for record in item.credential_records
+            )
+            sessions.extend(self._session_values(identity_id, record) for record in item.sessions)
+            for region, key, state in item.regions:
+                values = {f: getattr(state, f) for f in REGION_FIELDS}
+                values["change_source"] = str(state.change_source)
+                regions.append(
+                    {
+                        "identity_id": identity_id,
+                        "space_id": self.space.id,
+                        "region": region,
+                        "key": key,
+                        **values,
+                    }
+                )
+            links.extend(
+                {
+                    "identity_id": identity_id,
+                    "role": role,
+                    "space_id": self.space.id,
+                    "linked_identity_id": target,
+                }
+                for role, target in item.links
+            )
+        for table, batch in (
+            (CREDENTIALS, credentials),
+            (SESSIONS, sessions),
+            (REGION_STATES, regions),
+            (LINKS, links),
+        ):
+            for chunk in _in_chunks(batch):
+                await self.execute(insert(table).values(chunk).on_conflict_do_nothing())
+        return [item.identity.id for item in accepted]
+
+    def _identity_values(self, row: NewIdentity) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "id": row.id,
+            "space_id": self.space.id,
+            "service": row.service,
+            "external_ref": row.external_ref,
+            "normalized_ref": row.unique_ref,
+            "normalize_version": row.normalize_version,
+            "lifecycle": row.lifecycle,
+            "standing": row.standing,
+            "auth_state": row.auth_state,
+            "tags": row.tags,
+            "attributes": row.attributes,
+            "profile": row.profile,
+            "labels": row.labels,
+            "note": row.note,
+            "search_text": row.search_text,
+        }
+        if row.profile_secret is not None:
+            values |= _stored_payload_columns(row.profile_secret, "profile_")
+        return values
+
+    def _credential_values(self, identity_id: UUID, record: NewCredentialRow) -> dict[str, Any]:
+        return {
+            "id": new_id(),
+            "identity_id": identity_id,
+            "space_id": self.space.id,
+            "kind": record.kind,
+            "name": record.name,
+            "public_value": record.public_value,
+            "expires_at": record.expires_at,
+            "value_fingerprint": record.value_fingerprint,
+            **_stored_payload_columns(record.payload),
+        }
+
+    def _session_values(self, identity_id: UUID, record: NewSessionRow) -> dict[str, Any]:
+        return {
+            "id": new_id(),
+            "identity_id": identity_id,
+            "space_id": self.space.id,
+            "slot": record.slot,
+            "expires_at": record.expires_at,
+            "value_fingerprint": record.value_fingerprint,
+            "written_by_fencing": 0,
+            **_stored_payload_columns(record.payload),
+        }
 
     async def insert_identity(self, row: NewIdentity) -> bool:
         values: dict[str, Any] = {

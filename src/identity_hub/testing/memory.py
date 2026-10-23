@@ -94,6 +94,7 @@ from identity_hub.store.base import (
     LinkRow,
     MetricsSnapshot,
     NewIdentity,
+    NewIdentityRows,
     NewImportItem,
     NewImportRun,
     NewNotificationChannel,
@@ -499,6 +500,43 @@ class MemoryTx(StoreTx):
             if row.id == identity_id or (row.service == service and row.normalized_ref == normalized_ref):
                 return row.id, row.space_id
         return None
+
+    async def insert_identities(self, rows: Sequence[NewIdentityRows]) -> list[UUID]:
+        """I6.3: референс семантики — тот же результат, что у PostgreSQL, без имитации COPY."""
+        inserted: list[UUID] = []
+        for item in rows:
+            if not await self.insert_identity(item.identity):
+                continue
+            identity_id = item.identity.id
+            if item.credentials is not None:
+                await self.put_credentials(
+                    identity_id, item.credentials, value_fingerprint=item.credential_fingerprint
+                )
+            for record in item.credential_records:
+                await self.put_credential(
+                    identity_id,
+                    record.kind,
+                    record.name,
+                    record.payload,
+                    public_value=record.public_value,
+                    expires_at=record.expires_at,
+                    value_fingerprint=record.value_fingerprint,
+                )
+            for session in item.sessions:
+                await self.put_session(
+                    identity_id,
+                    session.slot,
+                    session.payload,
+                    fencing=0,
+                    expires_at=session.expires_at,
+                    value_fingerprint=session.value_fingerprint,
+                )
+            for region, key, state in item.regions:
+                await self.save_region(identity_id, region, key, None, state)
+            for role, target in item.links:
+                await self.insert_link(identity_id, role, target)
+            inserted.append(identity_id)
+        return inserted
 
     async def insert_identity(self, row: NewIdentity) -> bool:
         if await self.find_identity(row.id, row.service, row.unique_ref) is not None:

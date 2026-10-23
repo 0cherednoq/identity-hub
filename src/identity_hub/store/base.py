@@ -60,12 +60,15 @@ __all__ = [
     "LeaseStatsRow",
     "LinkRow",
     "MetricsSnapshot",
+    "NewCredentialRow",
     "NewIdentity",
+    "NewIdentityRows",
     "NewImportItem",
     "NewImportRun",
     "NewNotificationChannel",
     "NewNotificationRule",
     "NewProxy",
+    "NewSessionRow",
     "NewWebhookEndpoint",
     "NotificationAttempt",
     "NotificationChannelRow",
@@ -509,6 +512,45 @@ NO_LEASE_OPTIONS = LeaseOptions()
 PICK_DEMOTE_CHUNK = 1024
 
 RELEASE_OUTCOMES = frozenset({"released", "expired", "closed", "revoked"})
+
+
+@dataclass(frozen=True, slots=True)
+class NewCredentialRow:
+    """Запись credentials новой identity: секрет уже зашифрован (`I6.3`)."""
+
+    kind: str
+    name: str
+    payload: StoredPayload
+    public_value: dict[str, Any] | None = None
+    expires_at: datetime | None = None
+    value_fingerprint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NewSessionRow:
+    """Сессия слота новой identity: секрет уже зашифрован (`I6.3`)."""
+
+    slot: str
+    payload: StoredPayload
+    expires_at: datetime | None = None
+    value_fingerprint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NewIdentityRows:
+    """Новая identity со всеми дочерними строками — для пакетной вставки (`I6.3`, `PERF-1`).
+
+    Регионы и связи задаются готовыми значениями: вставка не читает состояние и не делает
+    запрос на строку.
+    """
+
+    identity: NewIdentity
+    credentials: StoredPayload | None = None
+    credential_fingerprint: str | None = None
+    credential_records: tuple[NewCredentialRow, ...] = ()
+    sessions: tuple[NewSessionRow, ...] = ()
+    regions: tuple[tuple[str, str, RegionState], ...] = ()
+    links: tuple[tuple[str, UUID], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1259,6 +1301,15 @@ class StoreTx(ABC):
         self, identity_id: UUID, service: str, normalized_ref: str
     ) -> tuple[UUID, UUID] | None:
         """(id, space_id) аккаунта по id или (service, normalized_ref) во всех пространствах (FR-2.2)."""
+
+    @abstractmethod
+    async def insert_identities(self, rows: Sequence[NewIdentityRows]) -> list[UUID]:
+        """Вставить несколько identity с дочерними строками одной серией SQL (`I6.3`).
+
+        Возвращает id вставленных в порядке входа; занятый id пропускается, его дочерние строки
+        не пишутся. Регионы, credentials, сессии и связи вставляются только вставленным.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     async def insert_identity(self, row: NewIdentity) -> bool:

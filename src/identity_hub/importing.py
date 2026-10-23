@@ -29,7 +29,15 @@ from identity_hub.enums import AuthState, ChangeSource, Lifecycle, SessionStatus
 from identity_hub.errors import IdentityHubError, ValidationFailed, describe_error
 from identity_hub.events import EventDraft
 from identity_hub.service import Service
-from identity_hub.store.base import UNREADABLE_IMPORT_ITEM, ImportItemResult, NewImportItem, NewImportRun
+from identity_hub.store.base import (
+    UNREADABLE_IMPORT_ITEM,
+    ImportItemResult,
+    NewCredentialRow,
+    NewIdentityRows,
+    NewImportItem,
+    NewImportRun,
+    NewSessionRow,
+)
 
 if TYPE_CHECKING:
     from identity_hub.hub import IdentityHub
@@ -384,6 +392,7 @@ class ImportingMixin(SpaceBase):
                     )
                 inserted: dict[str, UUID] = {}
                 to_link: list[_Prepared] = []
+                fresh: list[_Prepared] = []  # новые аккаунты пачки: вставляются вместе
                 unlinkable = await self._unresolved_links(tx, svc, ready, existing, by_id)
                 capacity: dict[str, list[int]] = {}  # отпечаток прокси → [ёмкость, занято]
                 for item in ready:
@@ -416,15 +425,26 @@ class ImportingMixin(SpaceBase):
                     if item.proxy is not None and not await self._proxy_has_room(tx, item.proxy, capacity):
                         failed.append((row.external_ref, "прокси: нет свободной ёмкости (max_identities)"))
                         continue
-                    if not await tx.insert_identity(row):
+                    if item.proxy is not None:
+                        # слот прокси занимается при отборе: иначе пачка разом пройдёт проверку
+                        capacity[item.proxy.fingerprint][1] += 1
+                    fresh.append(item)
+                # I6.3: аккаунты пачки и их дочерние строки вставляются одной серией SQL
+                now = await tx.now()
+                accepted = set(
+                    await tx.insert_identities([_identity_rows(item.prepared, now) for item in fresh])
+                )
+                for item in fresh:
+                    row = item.prepared.row
+                    if row.id not in accepted:
                         failed.append((row.external_ref, "id занят другим аккаунтом"))
+                        if item.proxy is not None:  # слот, занятый при отборе, возвращается
+                            capacity[item.proxy.fingerprint][1] -= 1
                         continue
-                    await self._write_children(tx, item.prepared, source=ChangeSource.IMPORT)  # type: ignore[attr-defined]
                     if item.proxy is not None:
                         proxy_id, _ = await tx.insert_proxy(item.proxy)
                         await tx.bind_proxy(row.id, proxy_id, None)
                         await tx.adjust_proxy_load(proxy_id, 1)
-                        capacity[item.proxy.fingerprint][1] += 1
                     for factor, state in item.record.verifications.items():
                         await self._initial_verification(tx, row.id, factor, state, actor)
                     inserted[row.unique_ref] = row.id
@@ -433,8 +453,16 @@ class ImportingMixin(SpaceBase):
                     if item.record.links:
                         to_link.append(item)
                 await self._import_links(tx, svc, to_link, inserted)
-                for item in created_items:
-                    await self._emit_registered(tx, svc, item.prepared, actor=actor)  # type: ignore[attr-defined]
+                if created_items:
+                    # события всей пачки одним вызовом: счётчики поднимаются одним запросом
+                    await self._emit(
+                        tx,
+                        *(
+                            draft
+                            for item in created_items
+                            for draft in _registered_drafts(svc, item.prepared, actor)
+                        ),
+                    )
                 if created and accept is not None:
                     await tx.enqueue_acceptance(created, accept.dump())
                 if created or updated:  # пачка из одних обновлений тоже видна в событиях (R2-F24)
@@ -1160,3 +1188,78 @@ async def _aiter(
     else:
         for record in records:
             yield record
+
+
+def _identity_rows(prepared: Any, now: datetime) -> NewIdentityRows:
+    """Собрать аккаунт и его дочерние строки для пакетной вставки (`I6.3`)."""
+    from identity_hub.domain.regions import RegionState
+    from identity_hub.state import DEFAULT_SLOT
+
+    return NewIdentityRows(
+        identity=prepared.row,
+        credentials=prepared.credentials,
+        credential_fingerprint=prepared.credential_fingerprint,
+        credential_records=tuple(
+            NewCredentialRow(
+                record.kind,
+                record.name,
+                record.payload,
+                public_value=record.public_value,
+                expires_at=record.expires_at,
+                value_fingerprint=record.value_fingerprint,
+            )
+            for record in prepared.credential_records
+        ),
+        sessions=tuple(
+            NewSessionRow(
+                slot,
+                payload,
+                expires_at=prepared.session_expirations.get(slot),
+                value_fingerprint=prepared.session_fingerprints.get(slot),
+            )
+            for slot, payload in prepared.sessions.items()
+        ),
+        regions=(
+            (
+                "standing",
+                "",
+                RegionState(state=prepared.row.standing, changed_at=now, change_source=ChangeSource.IMPORT),
+            ),
+            (
+                "auth",
+                DEFAULT_SLOT,
+                RegionState(state=prepared.row.auth_state, changed_at=now, change_source=ChangeSource.IMPORT),
+            ),
+        ),
+        links=tuple(prepared.links.items()),
+    )
+
+
+def _registered_drafts(svc: Any, prepared: Any, actor: str) -> list[EventDraft]:
+    """События регистрации аккаунта и его связей — те же, что у одиночного пути."""
+    return [
+        EventDraft(
+            "identity.registered",
+            actor=actor,
+            service=svc.name,
+            identity_id=prepared.row.id,
+            data={
+                "external_ref": prepared.row.external_ref,
+                "lifecycle": prepared.row.lifecycle,
+                "auth": prepared.row.auth_state,
+                "tags": prepared.row.tags,
+                "labels": prepared.row.labels,
+                "links": {role: str(target) for role, target in prepared.links.items()},
+            },
+        ),
+        *(
+            EventDraft(
+                "identity.linked",
+                actor=actor,
+                service=svc.name,
+                identity_id=prepared.row.id,
+                data={"role": role, "linked_identity_id": str(target)},
+            )
+            for role, target in prepared.links.items()
+        ),
+    ]
