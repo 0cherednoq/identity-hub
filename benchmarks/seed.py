@@ -63,4 +63,8 @@ async def seed_identities(
                 "event_seq",
             ),
         )
+    # I6.4: без статистики планировщик выбирает перебор вместо индекса выборки — замер меряет
+    # не библиотеку, а отсутствие ANALYZE
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("ANALYZE ih_identities")
     return ids
