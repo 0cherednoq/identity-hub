@@ -170,6 +170,8 @@ uv run python examples/telegram_service.py
   обслуживание, диагностика и ротация ключей.
 - [Интеграция](docs/integrations.md) — Alembic, отдельная схема PostgreSQL,
   PgBouncer, Dishka и жизненный цикл процессов.
+- [Переход с `1.0.0a1`](docs/upgrade.md) — preflight, миграция `0007 → 0039`,
+  изменения публичного API и границы откатов.
 - [Нагрузочные характеристики](docs/perf.md) — воспроизводимый стенд и
   известные ограничения производительности.
 - [Трассировка требований](docs/traceability.md) — каждый FR/G/T/S и его
