@@ -74,6 +74,7 @@ __all__ = [
     "NotificationEnqueue",
     "NotificationRuleRow",
     "NotificationTargetRow",
+    "OperationSnapshot",
     "OverviewRequirementRow",
     "OverviewServiceRow",
     "OverviewSnapshot",
@@ -508,6 +509,19 @@ NO_LEASE_OPTIONS = LeaseOptions()
 PICK_DEMOTE_CHUNK = 1024
 
 RELEASE_OUTCOMES = frozenset({"released", "expired", "closed", "revoked"})
+
+
+@dataclass(frozen=True, slots=True)
+class OperationSnapshot:
+    """Состояние аккаунта для входа в операцию, снятое одним запросом (`I6.1`, `PERF-1`).
+
+    Собирает то, что раньше читалось четырьмя: проверку fence, строку аккаунта, подтверждённые
+    факторы с истёкшим сроком и время базы.
+    """
+
+    identity: IdentityRow
+    expired_factors: tuple[str, ...]
+    now: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -1525,6 +1539,15 @@ class StoreTx(ABC):
         Эксклюзивная: строка `ih_leases` с теми же `lease_id` и `token`, `expires_at > now()` и
         `fencing_seq == fencing`; разделяемая — открытая история с теми же `lease_id` и `token`.
         `lock=True` держит строку identity (`FOR NO KEY UPDATE`) до конца транзакции.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def operation_snapshot(self, fence: LeaseFence) -> OperationSnapshot:
+        """Fence, аккаунт, истёкшие факторы и время базы одним round trip (`I6.1`).
+
+        Проверка та же, что у `check_fence(lock=True)`: несовпадение номера, чужая или истёкшая
+        аренда — `LeaseOwnershipLost`; аккаунта нет — `NotFound`.
         """
         raise NotImplementedError
 

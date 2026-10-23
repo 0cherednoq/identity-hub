@@ -183,6 +183,7 @@ from identity_hub.store.base import (
     NotificationEnqueue,
     NotificationRuleRow,
     NotificationTargetRow,
+    OperationSnapshot,
     OverviewRequirementRow,
     OverviewServiceRow,
     OverviewSnapshot,
@@ -1850,6 +1851,62 @@ class PgTx(StoreTx):
             fence.lease_id, "fence", identity_id=fence.identity_id, fencing=fence.fencing
         )
 
+    async def operation_snapshot(self, fence: LeaseFence) -> OperationSnapshot:
+        """I6.1: fence, аккаунт, истёкшие факторы и время базы одним запросом."""
+        i, rs = IDENTITIES.c, REGION_STATES.c
+        expired = (
+            select(func.array_agg(rs.key))
+            .where(
+                rs.identity_id == fence.identity_id,
+                rs.space_id == self.space.id,
+                rs.region == "verification",
+                rs.state == VerificationState.VERIFIED,
+                rs.until <= func.now(),
+            )
+            .scalar_subquery()
+        )
+        if fence.shared:
+            owner = select(literal(1)).where(
+                HISTORY.c.lease_id == fence.lease_id,
+                HISTORY.c.token == fence.token,
+                HISTORY.c.identity_id == fence.identity_id,
+                HISTORY.c.released_at.is_(None),
+            )
+        else:
+            owner = select(literal(1)).where(
+                LEASES.c.identity_id == fence.identity_id,
+                LEASES.c.lease_id == fence.lease_id,
+                LEASES.c.token == fence.token,
+                LEASES.c.expires_at > func.now(),
+            )
+        row = (
+            (
+                await self.execute(
+                    select(
+                        IDENTITIES,
+                        func.now().label("snapshot_now"),
+                        expired.label("expired_factors"),
+                        owner.exists().label("owns_lease"),
+                    )
+                    .where(i.id == fence.identity_id, i.space_id == self.space.id)
+                    .with_for_update(of=IDENTITIES, key_share=True)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise NotFound("identity", fence.identity_id)
+        if row["fencing_seq"] != fence.fencing or not row["owns_lease"]:
+            raise LeaseOwnershipLost(
+                fence.lease_id, "fence", identity_id=fence.identity_id, fencing=fence.fencing
+            )
+        return OperationSnapshot(
+            identity=IdentityRow(**{f: row[f] for f in IDENTITY_FIELDS}),
+            expired_factors=tuple(sorted(row["expired_factors"] or ())),
+            now=row["snapshot_now"],
+        )
+
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:
         stmt = select(IDENTITIES.c.fencing_seq).where(
             IDENTITIES.c.id == identity_id, IDENTITIES.c.space_id == self.space.id
@@ -1984,6 +2041,9 @@ class PgTx(StoreTx):
         *,
         idempotency: IdempotencyRequest | None = None,
     ) -> ChargeOutcome:
+        # I6.1: одна квота без ключа идемпотентности откатывать нечего — точка сохранения не нужна
+        if idempotency is None and len(charges) <= 1:
+            return await self._charge_single(identity_id, charges)
         savepoint = await self.session.begin_nested()
         try:
             claim: IdempotencyClaim | None = None
@@ -2034,6 +2094,51 @@ class PgTx(StoreTx):
             if savepoint.is_active:
                 await savepoint.rollback()
             raise
+
+    async def _charge_single(self, identity_id: UUID, charges: Sequence[QuotaCharge]) -> ChargeOutcome:
+        """Списать не больше одной квоты без точки сохранения (`I6.1`): откатывать нечего."""
+        if not charges:
+            return ChargeOutcome()
+        (charge,) = charges
+        window_start = func.date_bin(
+            timedelta(seconds=charge.window_seconds),
+            func.now(),
+            sa_cast(charge.origin, DateTime(timezone=True)),
+        )
+        upsert = (
+            insert(QUOTAS)
+            .values(
+                identity_id=identity_id,
+                kind=charge.kind,
+                window_seconds=charge.window_seconds,
+                window_start=window_start,
+                space_id=self.space.id,
+                used=1,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    QUOTAS.c.identity_id,
+                    QUOTAS.c.kind,
+                    QUOTAS.c.window_seconds,
+                    QUOTAS.c.window_start,
+                ],
+                set_={"used": QUOTAS.c.used + 1},
+                where=QUOTAS.c.used < charge.limit,
+            )
+            .returning(QUOTAS.c.used, QUOTAS.c.window_start)
+        )
+        row = (await self.execute(upsert)).one_or_none()
+        if row is None:  # окно исчерпано: списания не было, откатывать нечего
+            start = (await self.execute(select(window_start))).scalar_one()
+            return ChargeOutcome(
+                exhausted=QuotaWindow(charge.kind, charge.window_seconds, start, charge.limit)
+            )
+        reached = (
+            (QuotaWindow(charge.kind, charge.window_seconds, row.window_start, row.used),)
+            if row.used >= charge.limit
+            else ()
+        )
+        return ChargeOutcome(reached=reached)
 
     async def bump_pacing(self, identity_id: UUID, charge: QuotaCharge) -> bool:
         window_start = func.date_bin(

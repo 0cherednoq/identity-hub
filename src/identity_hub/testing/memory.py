@@ -107,6 +107,7 @@ from identity_hub.store.base import (
     NotificationEnqueue,
     NotificationRuleRow,
     NotificationTargetRow,
+    OperationSnapshot,
     OverviewRequirementRow,
     OverviewServiceRow,
     OverviewSnapshot,
@@ -1371,6 +1372,18 @@ class MemoryTx(StoreTx):
                     return
         raise LeaseOwnershipLost(
             fence.lease_id, "fence", identity_id=fence.identity_id, fencing=fence.fencing
+        )
+
+    async def operation_snapshot(self, fence: LeaseFence) -> OperationSnapshot:
+        """I6.1: тот же снимок, что у PostgreSQL, одним обращением к состоянию."""
+        await self.check_fence(fence)
+        identity = self._own(fence.identity_id)
+        if identity is None:
+            raise NotFound("identity", fence.identity_id)
+        return OperationSnapshot(
+            identity=identity,
+            expired_factors=tuple(await self.expired_factors(fence.identity_id)),
+            now=self._now,
         )
 
     async def current_fencing(self, identity_id: UUID, *, lock: bool = False) -> int | None:

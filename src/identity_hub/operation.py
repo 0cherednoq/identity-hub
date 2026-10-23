@@ -63,6 +63,7 @@ class Operation:
         duplicate: bool,
         paused_until: datetime | None,
         previous_outcome: OperationOutcome | None = None,
+        error_score: float = 0.0,
     ):
         self.lease = lease
         self.kind = kind
@@ -70,6 +71,8 @@ class Operation:
         self.duplicate = duplicate  # ключ уже использован: квота не списана (FR-7.5)
         self.paused_until = paused_until  # pacing отправил аккаунт отдыхать после этой операции
         self.previous_outcome = previous_outcome
+        # I6.1: затухать нечему — счётчик ошибок уже нулевой на входе операции
+        self._error_score = error_score
 
     async def cool_down(self, retry_after: timedelta | float) -> None:
         """Rate limit / flood-wait: availability → cooling до now + retry_after; только удлиняет (FR-7.4)."""
@@ -95,9 +98,10 @@ async def operation_scope(
     space = lease.pool.space
     service = lease.pool.service
     async with space._tx(own=True) as tx:
-        # R1-15: fence под блокировкой строки и с живой арендой, а не одно сравнение номера (D-212)
-        await tx.check_fence(lease.fence)
-        identity = await space._identity(tx, lease.identity_id)
+        # R1-15: fence под блокировкой строки и с живой арендой, а не одно сравнение номера (D-212).
+        # I6.1: проверка fence, аккаунт, истёкшие факторы и время базы — один round trip.
+        taken = await tx.operation_snapshot(lease.fence)
+        identity = taken.identity
         snapshot = IdentitySnapshot(
             lifecycle=identity.lifecycle,
             standing=identity.standing,
@@ -106,9 +110,9 @@ async def operation_scope(
             availability=identity.availability,
             availability_until=identity.availability_until,
             verified_factors=frozenset(identity.verified_factors),
-            expired_factors=frozenset(await tx.expired_factors(lease.identity_id)),
+            expired_factors=frozenset(taken.expired_factors),
         )
-        blockers = evaluate(service, kind, snapshot, await tx.now())
+        blockers = evaluate(service, kind, snapshot, taken.now)
         if blockers:
             for blocker in blockers:
                 record_metric(
@@ -133,7 +137,15 @@ async def operation_scope(
             lease_id=lease.lease_id,
             actor=lease.holder,
         )
-    op = Operation(lease, kind, key, result.duplicate, result.paused_until, _outcome(result.previous_outcome))
+    op = Operation(
+        lease,
+        kind,
+        key,
+        result.duplicate,
+        result.paused_until,
+        _outcome(result.previous_outcome),
+        identity.error_score,
+    )
     try:
         yield op
     except asyncio.CancelledError:
@@ -184,11 +196,21 @@ def _outcome(value: str | None) -> OperationOutcome | None:
 
 
 async def _record_success(lease: Lease, op: Operation) -> None:
+    """Учёт успеха: затухание счётчика ошибок и исход ключа идемпотентности.
+
+    I6.1: при нулевом счётчике ошибок на входе и без ключа записывать нечего — транзакция не
+    открывается. Если счётчик успел вырасти из параллельной операции, затухание применит
+    следующий успех: оно best-effort и к атомарности операции не относится (`D-329`).
+    """
+    key = op.key if not op.duplicate else None
+    if key is None and op._error_score <= 0:
+        return
     space = lease.pool.space
     async with space._tx(own=True) as tx:
-        await tx.decay_error_score(lease.identity_id, SUCCESS_DECAY)
-        if op.key is not None and not op.duplicate:
-            await tx.complete_idempotency_key(namespace(tx.space.id, OPERATION_FAMILY), op.key, "succeeded")
+        if op._error_score > 0:
+            await tx.decay_error_score(lease.identity_id, SUCCESS_DECAY)
+        if key is not None:
+            await tx.complete_idempotency_key(namespace(tx.space.id, OPERATION_FAMILY), key, "succeeded")
 
 
 def _observe_operation(lease: Lease, kind: str, started: float, status: str) -> None:
