@@ -1410,6 +1410,31 @@ class StoreTx(ABC):
         """(исходящие, входящие); `other_*` — данные противоположной стороны."""
 
     @abstractmethod
+    async def regions_for(self, ids: Sequence[UUID]) -> dict[UUID, list[tuple[str, str, RegionState]]]:
+        """Регионы нескольких аккаунтов одним запросом (`I6.2`, `R2-D08`)."""
+        ...
+
+    @abstractmethod
+    async def current_leases_for(self, ids: Sequence[UUID]) -> dict[UUID, LeaseRow]:
+        """Живые аренды нескольких аккаунтов одним запросом (`I6.2`)."""
+        ...
+
+    @abstractmethod
+    async def bindings_for(self, ids: Sequence[UUID]) -> dict[UUID, ProxyRow]:
+        """Привязанные прокси нескольких аккаунтов одним запросом (`I6.2`)."""
+        ...
+
+    @abstractmethod
+    async def last_lease_for(self, ids: Sequence[UUID]) -> dict[UUID, LeaseHistoryRow]:
+        """Последняя запись истории аренд каждого аккаунта одним запросом (`I6.2`)."""
+        ...
+
+    @abstractmethod
+    async def quota_usage_for(self, ids: Sequence[UUID]) -> dict[UUID, list[QuotaWindow]]:
+        """Действующие окна квот нескольких аккаунтов одним запросом (`I6.2`)."""
+        ...
+
+    @abstractmethod
     async def link_counts(self, ids: Sequence[UUID]) -> dict[UUID, tuple[int, int, list[str]]]:
         """id → (исходящих, входящих, роли исходящих) — одним запросом для страницы списка."""
 

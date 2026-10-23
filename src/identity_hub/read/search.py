@@ -360,14 +360,21 @@ class SearchMixin(SpaceBase):
                 count_limit=COUNT_LIMIT if count else None,
             )
             page_rows = rows[:limit]
-            link_counts = await tx.link_counts([row.id for row in page_rows])
+            page_ids = [row.id for row in page_rows]
+            # I6.2 (R2-D08): детали страницы читаются пачкой — число запросов не растёт со строками
+            link_counts = await tx.link_counts(page_ids)
+            regions_by_id = await tx.regions_for(page_ids)
+            leases_by_id = await tx.current_leases_for(page_ids)
+            proxies_by_id = await tx.bindings_for(page_ids)
+            history_by_id = await tx.last_lease_for(page_ids)
+            usage_by_id = await tx.quota_usage_for(page_ids) if options.quota_kind is not None else {}
             now = await tx.now()
             items: list[AccountListItem] = []
             for row in page_rows:
-                regions = await tx.list_regions(row.id)
-                lease = await tx.current_lease(row.id)
-                proxy = await tx.get_binding(row.id)
-                history = await tx.lease_history(row.id, limit=1, before=None)
+                regions = regions_by_id.get(row.id, [])
+                lease = leases_by_id.get(row.id)
+                proxy = proxies_by_id.get(row.id)
+                last_lease = history_by_id.get(row.id)
                 blockers = _account_blockers(row, now)
                 tier = _highest_tier(self.hub.service(row.service), frozenset(row.verified_factors))
                 tier_rank = next(
@@ -384,7 +391,7 @@ class SearchMixin(SpaceBase):
                 service = self.hub.service(row.service)
                 rule = service.operations.get(options.quota_kind) if options.quota_kind else None
                 if rule is not None:
-                    usage = await tx.quota_usage(row.id)
+                    usage = usage_by_id.get(row.id, [])
                     used_by_window = {
                         (item.kind, item.window_seconds, item.window_start): item.used for item in usage
                     }
@@ -445,7 +452,7 @@ class SearchMixin(SpaceBase):
                             state.pinned_until is not None and state.pinned_until > now
                             for _, _, state in regions
                         ),
-                        last_leased_at=history[0].acquired_at if history else None,
+                        last_leased_at=last_lease.acquired_at if last_lease is not None else None,
                         last_synced_at=max(synced_values, default=None),
                         error_score=row.error_score,
                         outgoing_links=outgoing,

@@ -2291,6 +2291,47 @@ class MemoryTx(StoreTx):
             if isinstance(identity_id, UUID) and self._own(identity_id):
                 self.state.lease_logs.append(deepcopy(row) | {"space_id": self.space.id})
 
+    async def regions_for(self, ids: Sequence[UUID]) -> dict[UUID, list[tuple[str, str, RegionState]]]:
+        """I6.2: тот же пакетный контракт, что у PostgreSQL."""
+        found: dict[UUID, list[tuple[str, str, RegionState]]] = {}
+        for identity_id in ids:
+            regions = await self.list_regions(identity_id)
+            if regions:
+                found[identity_id] = regions
+        return found
+
+    async def current_leases_for(self, ids: Sequence[UUID]) -> dict[UUID, LeaseRow]:
+        found: dict[UUID, LeaseRow] = {}
+        for identity_id in ids:
+            lease = await self.current_lease(identity_id)
+            if lease is not None:
+                found[identity_id] = lease
+        return found
+
+    async def bindings_for(self, ids: Sequence[UUID]) -> dict[UUID, ProxyRow]:
+        found: dict[UUID, ProxyRow] = {}
+        for identity_id in ids:
+            proxy = await self.get_binding(identity_id)
+            if proxy is not None:
+                found[identity_id] = proxy
+        return found
+
+    async def last_lease_for(self, ids: Sequence[UUID]) -> dict[UUID, LeaseHistoryRow]:
+        found: dict[UUID, LeaseHistoryRow] = {}
+        for identity_id in ids:
+            history = await self.lease_history(identity_id, limit=1, before=None)
+            if history:
+                found[identity_id] = history[0]
+        return found
+
+    async def quota_usage_for(self, ids: Sequence[UUID]) -> dict[UUID, list[QuotaWindow]]:
+        found: dict[UUID, list[QuotaWindow]] = {}
+        for identity_id in ids:
+            usage = await self.quota_usage(identity_id)
+            if usage:
+                found[identity_id] = usage
+        return found
+
     async def list_regions(self, identity_id: UUID) -> list[tuple[str, str, RegionState]]:
         if self._own(identity_id) is None:
             return []

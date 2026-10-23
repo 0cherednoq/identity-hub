@@ -257,6 +257,11 @@ _OPEN_DELIVERY = (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
 _FINISHABLE_DELIVERY = (*_OPEN_DELIVERY, DeliveryStatus.PAUSED)
 
 
+# Поля сортировки, у которых колонка объявлена NOT NULL: курсор по ним идёт кортежным
+# сравнением под индекс, без NULLS LAST (I6.2, R2-D09).
+NOT_NULL_SORTS = frozenset({"created_at", "error_score"})
+
+
 def _any_of(column: Any, values: Iterable[Any]) -> Any:
     """`column = ANY(:values)` одним параметром-массивом.
 
@@ -3521,9 +3526,16 @@ class PgTx(StoreTx):
         else:
             sort_expr = direct_sort[flt.sort_by]
         page = select(IDENTITIES).where(*conditions)
+        # I6.2 (R2-D09): по колонке NOT NULL курсор сравнивается кортежем, а NULLS LAST не
+        # добавляется — иначе планировщик не берёт индекс (space_id, created_at, id)
+        nullable_sort = flt.sort_by not in NOT_NULL_SORTS
         if after is not None:
             after_value, after_id = after
-            if after_value is None:
+            if not nullable_sort:
+                pair = tuple_(sort_expr, i.id)
+                boundary = tuple_(literal(after_value), literal(after_id))
+                page = page.where(pair < boundary if flt.sort_desc else pair > boundary)
+            elif after_value is None:
                 page = page.where(sort_expr.is_(None), i.id < after_id)
             else:
                 comparison = sort_expr < after_value if flt.sort_desc else sort_expr > after_value
@@ -3534,7 +3546,10 @@ class PgTx(StoreTx):
                         and_(sort_expr == after_value, i.id < after_id),
                     )
                 )
-        ordering = sort_expr.desc().nulls_last() if flt.sort_desc else sort_expr.asc().nulls_last()
+        if nullable_sort:
+            ordering = sort_expr.desc().nulls_last() if flt.sort_desc else sort_expr.asc().nulls_last()
+        else:
+            ordering = sort_expr.desc() if flt.sort_desc else sort_expr.asc()
         page = page.order_by(ordering, i.id.desc()).limit(limit)
         rows = [
             IdentityRow(**{f: r[f] for f in IDENTITY_FIELDS}) for r in (await self.execute(page)).mappings()
@@ -3552,6 +3567,101 @@ class PgTx(StoreTx):
             await self.execute(insert(LEASE_LOGS).values([{**r, "space_id": self.space.id} for r in rows]))
 
     # --------------------------------------------------------- read-модели
+
+    async def regions_for(self, ids: Sequence[UUID]) -> dict[UUID, list[tuple[str, str, RegionState]]]:
+        """I6.2: регионы страницы одним запросом вместо запроса на строку."""
+        if not ids:
+            return {}
+        rows = await self.execute(
+            select(REGION_STATES)
+            .where(
+                _any_of(REGION_STATES.c.identity_id, list(ids)),
+                REGION_STATES.c.space_id == self.space.id,
+            )
+            .order_by(REGION_STATES.c.identity_id, REGION_STATES.c.region, REGION_STATES.c.key)
+        )
+        found: dict[UUID, list[tuple[str, str, RegionState]]] = {}
+        for r in rows.mappings():
+            values = {f: r[f] for f in REGION_FIELDS}
+            values["change_source"] = ChangeSource(values["change_source"])
+            found.setdefault(r["identity_id"], []).append((r["region"], r["key"], RegionState(**values)))
+        return found
+
+    async def current_leases_for(self, ids: Sequence[UUID]) -> dict[UUID, LeaseRow]:
+        if not ids:
+            return {}
+        rows = await self.execute(
+            select(LEASES).where(
+                _any_of(LEASES.c.identity_id, list(ids)),
+                LEASES.c.space_id == self.space.id,
+                LEASES.c.expires_at > func.now(),
+            )
+        )
+        return {row["identity_id"]: _lease_row(row) for row in rows.mappings()}
+
+    async def bindings_for(self, ids: Sequence[UUID]) -> dict[UUID, ProxyRow]:
+        if not ids:
+            return {}
+        rows = await self.execute(
+            select(PROXIES, BINDINGS.c.identity_id.label("bound_identity_id"))
+            .join(BINDINGS, BINDINGS.c.proxy_id == PROXIES.c.id)
+            .where(
+                _any_of(BINDINGS.c.identity_id, list(ids)),
+                BINDINGS.c.space_id == self.space.id,
+            )
+        )
+        return {row["bound_identity_id"]: _proxy_row(row) for row in rows.mappings()}
+
+    async def last_lease_for(self, ids: Sequence[UUID]) -> dict[UUID, LeaseHistoryRow]:
+        if not ids:
+            return {}
+        ranked = (
+            select(
+                HISTORY,
+                func.row_number()
+                .over(
+                    partition_by=HISTORY.c.identity_id,
+                    order_by=HISTORY.c.acquired_at.desc(),
+                )
+                .label("rank"),
+            )
+            .where(
+                _any_of(HISTORY.c.identity_id, list(ids)),
+                HISTORY.c.space_id == self.space.id,
+            )
+            .subquery()
+        )
+        rows = await self.execute(select(ranked).where(ranked.c.rank == 1))
+        return {
+            r["identity_id"]: LeaseHistoryRow(**{f: r[f] for f in LEASE_HISTORY_FIELDS})
+            for r in rows.mappings()
+        }
+
+    async def quota_usage_for(self, ids: Sequence[UUID]) -> dict[UUID, list[QuotaWindow]]:
+        if not ids:
+            return {}
+        rows = await self.execute(
+            select(
+                QUOTAS.c.identity_id,
+                QUOTAS.c.kind,
+                QUOTAS.c.window_seconds,
+                QUOTAS.c.window_start,
+                QUOTAS.c.used,
+            )
+            .where(
+                _any_of(QUOTAS.c.identity_id, list(ids)),
+                QUOTAS.c.space_id == self.space.id,
+                QUOTAS.c.window_start + func.make_interval(0, 0, 0, 0, 0, 0, QUOTAS.c.window_seconds)
+                > func.now(),
+            )
+            .order_by(QUOTAS.c.identity_id, QUOTAS.c.kind, QUOTAS.c.window_seconds)
+        )
+        found: dict[UUID, list[QuotaWindow]] = {}
+        for r in rows:
+            found.setdefault(r.identity_id, []).append(
+                QuotaWindow(r.kind, r.window_seconds, r.window_start, r.used)
+            )
+        return found
 
     async def list_regions(self, identity_id: UUID) -> list[tuple[str, str, RegionState]]:
         rows = await self.execute(
