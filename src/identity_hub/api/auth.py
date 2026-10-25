@@ -19,14 +19,20 @@ class Auth(Namespace):
 
     __slots__ = ()
 
-    async def login(self, identity_id: UUID) -> LoginOutcome:
+    async def login(
+        self, identity_id: UUID, *, credential: tuple[str, str] | None = None
+    ) -> LoginOutcome:
         """Одна попытка входа для identity в `no_session` или `session_invalid`.
 
         Работает и для `provisioning` — так новый identity логинят до `identities.activate`.
         `CHALLENGED` — платформа ждёт ответа человека: challenge есть в
         `identities.card(id).open_challenge` и в событии `identity.challenge.opened`.
+
+        `credential=(kind, name)` — попросить проверить КОНКРЕТНУЮ запись credentials, а не «первую
+        пригодную». Аутентификатор читает её в `ctx.requested_credential` и берёт по имени через
+        `ctx.credential(kind, name)`. `None` — прежнее поведение (аутентификатор решает сам).
         """
-        return await self._space._run_login(identity_id)
+        return await self._space._run_login(identity_id, credential=credential)
 
     async def login_many(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
         """Войти в identity без сессии у сервисов с `Authenticator`; одна попытка на identity."""

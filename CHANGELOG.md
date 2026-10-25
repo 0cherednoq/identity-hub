@@ -8,6 +8,13 @@
 
 ### Added
 
+- `space.auth.login(identity_id, credential=(kind, name))` — проверить КОНКРЕТНУЮ запись credentials,
+  а не «первую пригодную» (`active_credential`). Целевая запись доступна аутентификатору как
+  `ctx.requested_credential`, читается по имени через `ctx.credential(kind, name)`; на отказе он
+  помечает именно её (`LoginFailure(credential=…)`). `None` (по умолчанию) — прежнее поведение.
+  Нужна для per-credential проверки: один аккаунт с несколькими паролями, плохой пароль не роняет
+  аккаунт. Изменений схемы БД нет.
+
 - `space.secrets.verify_credential` / `reject_credential` и `verify_session` / `reject_session`:
   исход ручной проверки записывается вне входа одной транзакцией вместе с событием аудита
   (`last_verified_at`, `last_rejected_at`, `reject_code`). Жизненный цикл записи и состояние

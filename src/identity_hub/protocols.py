@@ -111,6 +111,12 @@ class LoginContext(Protocol, Generic[TCreds_co, TSession_co]):
     def external_ref(self) -> str: ...
 
     @property
+    def requested_credential(self) -> tuple[str, str] | None:
+        """Запись credentials (kind, name), которую просили проверить (`auth.login(credential=…)`),
+        или `None` — аутентификатор выбирает сам (`active_credential`)."""
+        ...
+
+    @property
     def proxy_url(self) -> str | None: ...
 
     @property

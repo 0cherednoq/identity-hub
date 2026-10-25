@@ -128,11 +128,14 @@ class _LoginContext:
         lease: Lease,
         answer: str | None,
         context: Mapping[str, Any] | None,
+        *,
+        requested_credential: tuple[str, str] | None = None,
     ) -> None:
         self._space = space
         self._lease = lease
         self._answer = answer
         self._context = context
+        self._requested_credential = requested_credential
         self._linked: dict[str, Lease] = {}
         self._credential_marks: list[_CredentialMark] = []
         self.attempt_id: UUID | None = None  # claim_id операции: ключ идемпотентности для платформы
@@ -140,6 +143,12 @@ class _LoginContext:
     @property
     def identity_id(self) -> UUID:
         return self._lease.identity_id
+
+    @property
+    def requested_credential(self) -> tuple[str, str] | None:
+        """Запись credentials (kind, name), которую просили проверить (`auth.login(credential=…)`),
+        или `None` — аутентификатор выбирает сам (`active_credential`)."""
+        return self._requested_credential
 
     @property
     def external_ref(self) -> str:
@@ -240,7 +249,9 @@ _NO_RETRY = RetryPolicy(max_attempts=1)
 
 
 class LoginMixin(SpaceBase):
-    async def _run_login(self, identity_id: UUID) -> LoginOutcome:
+    async def _run_login(
+        self, identity_id: UUID, *, credential: tuple[str, str] | None = None
+    ) -> LoginOutcome:
         """Run one explicit login attempt for a selected identity."""
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
@@ -263,7 +274,9 @@ class LoginMixin(SpaceBase):
             among=[identity_id],
         )
         lease = await pool.acquire(query=query)  # занят — сразу LeaseUnavailable (R2-F21)
-        outcome, _error = await self._login(lease, service, None, None, None)
+        outcome, _error = await self._login(
+            lease, service, None, None, None, requested_credential=credential
+        )
         return outcome
 
     async def _run_logins(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
@@ -441,6 +454,8 @@ class LoginMixin(SpaceBase):
         answer: str | None,
         context: Mapping[str, Any] | None,
         operations: dict[UUID, UUID] | None = None,
+        *,
+        requested_credential: tuple[str, str] | None = None,
     ) -> tuple[LoginOutcome, str | None]:
         """Один вход под арендой `lease`; аренда и связанные аренды освобождаются здесь.
 
@@ -449,7 +464,7 @@ class LoginMixin(SpaceBase):
         аутентификатора — `no_session`, как и раньше.
         """
         assert svc.authenticator is not None
-        ctx = _LoginContext(self, lease, answer, context)
+        ctx = _LoginContext(self, lease, answer, context, requested_credential=requested_credential)
         initial = AuthState(lease.identity.auth_state)
         entered = False
         lease._start(None)  # heartbeat: вход с SMS-кодом легко длится дольше ttl − safety_margin
