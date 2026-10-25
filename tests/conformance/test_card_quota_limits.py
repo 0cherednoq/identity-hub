@@ -38,6 +38,10 @@ async def test_card_shows_limit_next_to_usage(space: SpaceHandle) -> None:
         ("send_message", DAY): (2, 100),
         ("read_channel", HOUR): (1, 100),
     }
+    idle = await register(space, service="fake_tg", external_ref="+2", lifecycle="ready")
+    async with space._tx(own=True) as tx:  # пакетное чтение страницы поиска (I6.2) — без окон нет и ключа
+        batch = await tx.quota_usage_for([reg.identity_id, idle.identity_id])
+        assert batch == {reg.identity_id: await tx.quota_usage(reg.identity_id)}
 
 
 async def test_limit_follows_service_rules(hub_under_test: IdentityHub, space: SpaceHandle) -> None:

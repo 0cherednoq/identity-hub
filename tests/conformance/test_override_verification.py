@@ -136,8 +136,12 @@ async def test_expired_factor_blocks_lease_and_operation_before_maintenance(
     await lease.release()
     held = await pool.acquire(for_operation="work")  # пока срок не вышел — допуск есть
     await held.release()
+    async with space._tx(own=True) as tx:
+        assert await tx.expired_factors(identity_id) == []
 
     await _pass_time(hub_under_test)
+    async with space._tx(own=True) as tx:  # PgStore считает срок в SQL быстрого пути — метод вызываем явно
+        assert await tx.expired_factors(identity_id) == ["kyc"]
 
     probe = await pool.acquire(for_operation="probe")  # аренда без требования фактора
     with pytest.raises(OperationNotAllowed) as exc:
