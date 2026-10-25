@@ -274,9 +274,7 @@ class LoginMixin(SpaceBase):
             among=[identity_id],
         )
         lease = await pool.acquire(query=query)  # занят — сразу LeaseUnavailable (R2-F21)
-        outcome, _error = await self._login(
-            lease, service, None, None, None, requested_credential=credential
-        )
+        outcome, _error = await self._login(lease, service, None, None, None, requested_credential=credential)
         return outcome
 
     async def _run_logins(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:

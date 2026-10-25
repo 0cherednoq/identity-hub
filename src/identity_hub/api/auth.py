@@ -19,9 +19,7 @@ class Auth(Namespace):
 
     __slots__ = ()
 
-    async def login(
-        self, identity_id: UUID, *, credential: tuple[str, str] | None = None
-    ) -> LoginOutcome:
+    async def login(self, identity_id: UUID, *, credential: tuple[str, str] | None = None) -> LoginOutcome:
         """Одна попытка входа для identity в `no_session` или `session_invalid`.
 
         Работает и для `provisioning` — так новый identity логинят до `identities.activate`.
