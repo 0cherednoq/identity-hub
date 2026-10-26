@@ -98,6 +98,39 @@ describe("secret controls", () => {
     expect(screen.queryByTestId("secret-value")).not.toBeInTheDocument();
   });
 
+  it("hides the value on blur fired right when it appears", async () => {
+    // blur из MutationObserver приходит до пассивных эффектов React: слушатель должен уже быть
+    const view = subject();
+    const observer = new MutationObserver(() => {
+      if (screen.queryByTestId("secret-value") !== null) {
+        observer.disconnect();
+        window.dispatchEvent(new window.Event("blur"));
+      }
+    });
+    observer.observe(view.container, { childList: true, subtree: true });
+    fireEvent.click(screen.getByRole("button", { name: "Показать" }));
+    const form = within(
+      screen.getByRole("region", { name: "Показать Credentials" }),
+    );
+    fireEvent.change(form.getByLabelText("Причина"), {
+      target: { value: "support request" },
+    });
+    fireEvent.change(form.getByLabelText("Пароль или текущий admin-токен"), {
+      target: { value: "admin-token" },
+    });
+    fireEvent.click(
+      form.getByLabelText("Я подтверждаю доступ к секретному значению"),
+    );
+    fireEvent.click(form.getByRole("button", { name: "Показать значение" }));
+
+    await waitFor(() => {
+      expect(revealAccountSecret).toHaveBeenCalledOnce();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    observer.disconnect();
+    expect(screen.queryByTestId("secret-value")).not.toBeInTheDocument();
+  });
+
   it("parses update JSON and never echoes the replacement", async () => {
     subject();
     fireEvent.click(screen.getByRole("button", { name: "Обновить" }));

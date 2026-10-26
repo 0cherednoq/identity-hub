@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 import type { SecretDescriptorResponse } from "@/shared/api/generated/types.gen";
 import {
@@ -45,7 +45,9 @@ export function SecretControls({
     setHideAfter(0);
   };
 
-  useEffect(() => {
+  // Слушатели вешаются в том же коммите, что и показ значения: с useEffect подписка
+  // запаздывала, и blur сразу после показа оставлял секрет на экране до таймера.
+  useLayoutEffect(() => {
     if (revealed === null || hideAfter <= 0) return;
     const hide = () => {
       setRevealed(null);
