@@ -78,6 +78,28 @@ async def _setup(
     return probe, created
 
 
+async def _setup_default(
+    hub: IdentityHub,
+    space: SpaceHandle,
+    name: str,
+    result: ProbeResult,
+) -> tuple[AuthProbe, Any]:
+    probe = AuthProbe(result)
+    service = Service(name, name, session=Session, probes=probe)
+    hub.register_service(service)
+    await hub.start()
+    created = await space.identities.create(
+        IdentityCreate(
+            service=name,
+            external_ref=f"{name}-1",
+            lifecycle="provisioning",
+            session={"token": "default-token"},
+        ),
+        actor="test",
+    )
+    return probe, created
+
+
 async def _current_session(space: SpaceHandle, identity_id: Any) -> Any:
     async with space._tx(own=True) as tx:
         return (await tx.session_history(identity_id, "cookie-1"))[-1]
@@ -142,6 +164,23 @@ async def test_verify_invalid_session_rejects_only_source_metadata(
     assert row.last_rejected_at is not None and row.reject_code == "session_invalid"
     assert (await space.identities.get(created.id)).auth == AuthState.NO_SESSION
     assert len(probe.calls) == 1
+
+
+async def test_verify_invalid_default_marks_global_auth_invalid(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup_default(
+        hub_under_test,
+        space,
+        "sf_verify_default_invalid",
+        ProbeResult(AuthState.SESSION_INVALID),
+    )
+
+    result = await space.auth.verify_session(created.id, actor="checker")
+
+    assert result.outcome is SessionVerificationOutcome.INVALID
+    assert (await space.identities.get(created.id)).auth == AuthState.SESSION_INVALID
+    assert probe.calls == [("default", Session(token="default-token"))]
 
 
 async def test_verify_technical_failure_is_retryable_without_metadata_change(
@@ -231,6 +270,26 @@ async def test_adopt_invalid_session_does_not_create_default_or_flip_auth(
     async with space._tx(own=True) as tx:
         assert await tx.session_history(created.id, "default") == []
     assert len(probe.calls) == 1
+
+
+async def test_adopt_invalid_default_marks_global_auth_invalid(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup_default(
+        hub_under_test,
+        space,
+        "sf_adopt_default_invalid",
+        ProbeResult(AuthState.SESSION_INVALID),
+    )
+
+    result = await space.auth.adopt_session(created.id, actor="checker", activate=True)
+
+    assert result.outcome is SessionAdoptionOutcome.INVALID
+    assert result.auth == AuthState.SESSION_INVALID
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.SESSION_INVALID
+    assert identity.lifecycle == "provisioning"
+    assert probe.calls == [("default", Session(token="default-token"))]
 
 
 async def test_adopt_technical_failure_has_no_partial_state(

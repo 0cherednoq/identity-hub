@@ -16,6 +16,7 @@ DOCUMENTS = (
     ROOT / "docs" / "integrations.md",
     ROOT / "docs" / "perf.md",
     ROOT / "docs" / "traceability.md",
+    ROOT / "docs" / "session-first-traceability.md",
     *GUIDE,
 )
 # Документы для пользователя на текущем API; старые имена допустимы только в CHANGELOG.

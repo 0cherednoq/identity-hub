@@ -32,7 +32,7 @@ class Auth(Namespace):
         actor: str,
         expected_revision: int | None = None,
     ) -> SessionVerificationResult:
-        """Сетевой verdict конкретного slot; меняет только validity metadata этой записи."""
+        """Сетевой verdict slot; обновляет validity metadata, invalid `default` также меняет auth."""
         return await self._at(identity_id, expected_revision)._verify_session(
             identity_id,
             slot,

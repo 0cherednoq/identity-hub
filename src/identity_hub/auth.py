@@ -344,7 +344,7 @@ class LoginMixin(SpaceBase):
         *,
         actor: str,
     ) -> SessionVerificationResult:
-        """Проверить ровно один session slot, не меняя глобальный auth или lifecycle."""
+        """Проверить slot без adoption; invalid `default` переводит глобальный auth в invalid."""
         if not isinstance(actor, str) or not actor.strip():
             raise ValidationFailed("actor должен быть непустой строкой")
         async with self._tx(own=True) as tx:
@@ -442,6 +442,21 @@ class LoginMixin(SpaceBase):
                             data={"slot": slot, "mode": "reject" if rejected else "verify"},
                         ),
                     )
+                    if rejected and slot == DEFAULT_SLOT:
+                        await apply_region_change(
+                            self,
+                            tx,
+                            identity_id,
+                            "auth",
+                            DEFAULT_SLOT,
+                            Command(
+                                AuthState.SESSION_INVALID,
+                                actor=actor,
+                                code="session_invalid",
+                                retryable=False,
+                            ),
+                            lease_id=lease.lease_id,
+                        )
                 await sync._apply_operation(
                     tx,
                     lease,
@@ -574,6 +589,22 @@ class LoginMixin(SpaceBase):
                     await tx.mark_session_validity(
                         identity_id, slot, rejected=True, code="session_invalid"
                     )
+                    if slot == DEFAULT_SLOT:
+                        await apply_region_change(
+                            self,
+                            tx,
+                            identity_id,
+                            "auth",
+                            DEFAULT_SLOT,
+                            Command(
+                                AuthState.SESSION_INVALID,
+                                actor=actor,
+                                code="session_invalid",
+                                retryable=False,
+                            ),
+                            lease_id=lease.lease_id,
+                        )
+                        final_auth = AuthState.SESSION_INVALID
                 elif outcome is SessionAdoptionOutcome.ADOPTED:
                     await tx.mark_session_validity(identity_id, slot, rejected=False)
                     if slot != DEFAULT_SLOT:

@@ -4,6 +4,27 @@
 Формат основан на Keep a Changelog; до первого стабильного релиза API может
 меняться без периода совместимости.
 
+## [Unreleased]
+
+### Added
+
+- `space.auth.verify_session(identity_id, slot, actor=..., expected_revision=...)` выполняет
+  сетевую проверку конкретного session-slot через `Service.probes.auth` и сохраняет validity
+  metadata, не раскрывая payload вызывающему коду.
+- `space.auth.adopt_session(..., activate=False)` одним provider call проверяет слот и атомарно
+  принимает его как канонический `default`: копирует payload, выставляет глобальный
+  `auth=authenticated` и при `activate=True` переводит `provisioning` в `ready`. Добавлены
+  `SessionVerificationOutcome/Result` и `SessionAdoptionOutcome/Result`.
+
+### Changed
+
+- Lifecycle стал частью `OperationRule`. Обычные операции по умолчанию разрешены только для
+  `ready`; автоматическое правило `probe` разрешает `provisioning` и `ready`, но не `retired`.
+- `ProbeContext.session_slot` называет проверяемый слот, а `session()` без аргумента читает его.
+  Явный `session("other")` сохраняет прежнюю возможность прочитать другой слот.
+- Невалидный non-default session-slot не меняет глобальный auth. Невалидный `default` переводит
+  auth в `session_invalid`; технический сбой проверки не меняет session/auth/lifecycle.
+
 ## [1.0.0a6] - 2026-10-25
 
 ### Added

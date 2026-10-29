@@ -43,7 +43,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `space.secrets` | credentials, сессии | `describe`, `reveal`, `replace_credentials`, `replace_session`, `verify_credential`, `reject_credential`, `verify_session`, `reject_session` | [Аккаунты](03-accounts.md#секреты) |
 | `space.pools` | пул и аренда | `define` → `Pool.lease()` / `Pool.acquire()`; `revoke` | [Аренда](07-leases.md) |
 | `space.proxies` | прокси | `get`, `list`, `url`, `create`, `ensure`, `create_many`, `replace_credentials`, `move`, `delete`, `report_failure`, `report_success`, `recheck`, `recheck_group`, `recheck_due`, `override`, `rebind` | [Прокси](09-proxies.md) |
-| `space.auth` | вход | `login`, `login_many`, `answer_challenge` | [Вход](05-login.md) |
+| `space.auth` | вход и сетевой verdict сессии | `verify_session`, `adopt_session`, `login`, `login_many`, `answer_challenge` | [Вход](05-login.md) |
 | `space.sync` | сверка с платформой | `refresh`, `refresh_many` | [Состояния](04-states.md#синхронизация-статусов-с-платформой) |
 | `space.verifications` | верификация | `status`, `review`, `requirements.add`, `requirements.resolve` | [Верификация](06-verification.md) |
 | `space.links` | связи identity | `add`, `remove`, `of`, `impact` | [Аккаунты](03-accounts.md#связи-между-аккаунтами) |
@@ -196,6 +196,7 @@ JSON. Неизвестный ввод завершается `ValidationFailed`;
 | `LeaseTiming.stats_flush` | 5 мин | как часто heartbeat пишет в историю время и счётчики операций |
 | `Service.login_timeout` | 2 мин | предел одного вызова `Authenticator.login` |
 | `Service.probe_timeout` | 1 мин | предел одного вызова пробы |
+| `OperationRule.lifecycles` | `{ready}` | lifecycle, в которых разрешена операция; автоматический `probe` использует `{provisioning, ready}` |
 | `LoginChallenge.expires_in` | 1 ч | срок вопроса платформы, если `expires_in` не задан |
 | `LoginFailure.code` | 1–64 символа | машинный код `[a-z][a-z0-9_.-]*`; рекомендуемые значения — `LoginFailureCode` |
 | `Service.disable_rejected_credentials` | `False` | переводить отклонённую адаптером пару в `disabled` |
@@ -388,6 +389,19 @@ await space.proxies.recheck_due(checker)
 ### Вход, верификация, связи, данные, секреты, импорт
 
 ```python
+verification = await space.auth.verify_session(
+    identity_id,
+    "cookie-1",
+    actor="operator",
+    expected_revision=identity.revision,
+)
+adoption = await space.auth.adopt_session(
+    identity_id,
+    "cookie-1",
+    actor="operator",
+    activate=True,
+    expected_revision=identity.revision,
+)
 outcome = await space.auth.login(identity_id)             # LoginOutcome.SUCCEEDED / CHALLENGED / FAILED
 await space.auth.answer_challenge(challenge_id, "12345", actor="operator")
 
@@ -399,3 +413,10 @@ record = await space.data.load(identity_id, "farm.warmup", Warmup)
 creds = await space.secrets.reveal(identity_id, SecretRef.CREDENTIALS, actor="admin", reason="...")
 report = await space.imports.run(service=TELEGRAM, records=records, actor="operator")
 ```
+
+`verify_session` возвращает `SessionVerificationResult`; его `outcome` — `VALID`, `INVALID`,
+`CHALLENGED` или `FAILED`. `adopt_session` возвращает `SessionAdoptionResult` с исходами
+`ADOPTED`, `INVALID`, `CHALLENGED`, `FAILED`, итоговыми `auth` и `lifecycle`. `retryable=True`
+отличает технический сбой от доказанной невалидности. Оба метода выполняют сетевой
+`Service.probes.auth`; одноимённые методы `space.secrets` сети не вызывают и вручную меняют
+только validity metadata.

@@ -11,17 +11,13 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF3.1 — публичный контракт и документация
-- **Начата:** 2026-10-29
-- **Репозиторий:** `identity-hub`
+- **Задача:** —
+- **Начата:** —
+- **Репозиторий:** —
 - **Шаги:**
-  - [ ] Обновить login/states/API/limitations для session-first контракта.
-  - [ ] Добавить copyable orchestration с exact credential fallback.
-  - [ ] Зафиксировать outcomes, lifecycle, canonical default, audit и concurrency.
-  - [ ] Обновить CHANGELOG, typing, public API и traceability tests.
-  - [ ] Проверить документацию и полный targeted gate.
-- **Проверки:** ожидаются после изменений
-- **Заметки для следующей сессии:** основной читатель — интегратор checker; how-to в login, reference в API/states, ограничения отдельно.
+  - [ ] —
+- **Проверки:** —
+- **Заметки для следующей сессии:** следующий этап `SF4.1` выполняется в checker; сначала сверить его AGENTS/CLAUDE и рабочее дерево.
 
 ## Статус задач
 
@@ -33,12 +29,12 @@
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | done |  | 39 targeted tests; Memory/PostgreSQL |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | done |  | 36 full; concurrency 16 × 3; mypy/ruff |
-| SF3.1 | Публичный контракт и документация | SF2.3 | in_progress |  | guides, CHANGELOG, typing, traceability |
+| SF3.1 | Публичный контракт и документация | SF2.3 | done |  | 43 docs/public + 67 conformance; mypy/ruff |
 | SF4.1 | Точечные проверки checker | SF3.1 | todo |  | отдельный commit в checker |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
-**Итого:** 6 / 10 done
+**Итого:** 7 / 10 done
 
 ## Журнал сессий
 
@@ -66,7 +62,8 @@ slot, а явный аргумент сохраняет чтение друго�
 
 2026-10-29 · SF2.1 · добавлены публичные DTO и `auth.verify_session`. Метод проверяет ровно один
 slot под lease/provider claim, выполняет один provider call вне DB-транзакции и применяет validity
-metadata с повторной проверкой fence и session revision; глобальный auth/lifecycle не меняются.
+metadata с повторной проверкой fence и session revision. Non-default не меняет глобальный auth;
+invalid `default` переводит его в `session_invalid`; lifecycle не меняется.
 Missing/invalid/technical outcomes покрыты на MemoryStore и PostgreSQL. Проверки: 39 passed,
 `mypy` 169 файлов и ruff зелёные; typing baseline остался красным только для будущего adoption.
 Дальше `SF2.2`.
@@ -85,3 +82,11 @@ late result не создаёт default и не меняет auth/lifecycle; п�
 coherent default последнего provider verdict. Secret-bearing текст отсутствует в result, log и
 event payload. Полная матрица: 36 passed; concurrency subset: 16 passed три раза подряд на
 MemoryStore/PostgreSQL; mypy 171 файл и ruff зелёные. Дальше `SF3.1`.
+
+2026-10-29 · SF3.1 · для интегратора добавлен session-first how-to с exact credential fallback,
+reference outcomes/lifecycle/canonical default, разграничение сетевых `auth.*` и ручных
+`secrets.*`, concurrency и audit semantics. Удалено устаревшее ограничение provisioning probe.
+Обновлены API guide, states, limitations, CHANGELOG, typing/public exports и отдельная матрица
+`session-first-traceability.md`. При сверке с D-334 исправлен invalid `default`: теперь обе
+сетевые операции атомарно ставят глобальный `session_invalid`. Проверки: 43 docs/public,
+67 conformance на MemoryStore/PostgreSQL, полный typing и ruff зелёные. Дальше `SF4.1`.

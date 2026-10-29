@@ -114,12 +114,19 @@ stateDiagram-v2
     session_invalid --> logging_in : auth.login()
     no_session --> authenticated : mark_authenticated() / register с сессией
     session_invalid --> authenticated : mark_authenticated()
+    no_session --> authenticated : auth.adopt_session(named slot)
+    authenticated --> session_invalid : invalid default slot
 ```
 
 - **Управляет:** процесс входа библиотеки ([вход](05-login.md)), ваш код через
   `lease.mark_authenticated()`, классификатор ошибок (`session_invalid`), пробы.
 - `session_invalid` — это не бан: standing не меняется, аккаунт просто нужно перелогинить.
-- Регион ведётся по слотам сессий; для отбора и допуска используется слот `default`.
+- Регион ведётся по слотам сессий; для отбора и допуска используется канонический слот `default`.
+  Невалидный именованный слот не меняет глобальный auth. Невалидный `default` переводит его в
+  `session_invalid`.
+- `auth.verify_session(id, slot)` сохраняет сетевой verdict слота без смены активной сессии.
+  `auth.adopt_session(id, slot)` при успехе атомарно копирует payload в `default` и выставляет
+  `authenticated`; `activate=True` в той же транзакции выполняет `provisioning → ready`.
 
 ## Availability — нагрузка прямо сейчас
 
@@ -350,8 +357,9 @@ async def reconcile_loop(space):
   процесса — новый вызов `refresh`/`refresh_many` и новое списание; recovery сам квоту не тратит.
 - Исходы по региону: `applied`, `unchanged`, `stale`, `unknown_status`, `pinned`, `sticky`,
   `awaiting_confirmation`, `not_probed`, `busy`.
-- `refresh_many` сверяет только аккаунты в `lifecycle=ready`: `provisioning` и `retired` в
-  очередь не попадают. Аккаунты на паузе, в охлаждении и карантине попадают в
+- Правило `probe` разрешает `provisioning` и `ready`, поэтому новый identity можно проверить до
+  активации. `retired` в очередь не попадает и требует явного восстановления с причиной.
+  Аккаунты на паузе, в охлаждении и карантине попадают в
   `report.skipped_unavailable` — проба для них не запускается и `limit` не расходуется.
 - Очередь идёт по времени последней попытки: кого ещё не пробовали — первыми. Попытка
   отмечается при любом исходе, поэтому аккаунт со стабильно падающей пробой не занимает начало

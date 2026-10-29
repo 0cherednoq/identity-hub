@@ -4,13 +4,93 @@
 cookie, OAuth-токен. Она хранится зашифрованной в слоте (по умолчанию `default`) по схеме
 `Service.session`. Регион `auth` показывает, есть ли рабочая сессия.
 
-Есть три способа получить сессию в систему:
+`default` — канонический активный слот. Только `auth/default` определяет глобальное состояние
+`Identity.auth` и допуск обычных операций. Именованные слоты (`cookie-1`, `mobile`, `api`) хранят
+кандидатов и могут проверяться независимо.
+
+Есть четыре способа получить сессию в систему:
 
 | Способ | Когда |
 |---|---|
 | Передать при `identities.create` / `imports.run` | Сессии уже есть (куплены, перенесены) |
+| `auth.adopt_session` | Нужно проверить именованный слот и принять его как канонический `default` |
 | `auth.login` + ваш `Authenticator` | Нужно логиниться программно, в том числе с SMS/2FA |
 | `lease.save_session` + `lease.mark_authenticated` | Вы логинитесь своим кодом под арендой |
+
+## Сначала проверить сессии, затем точные credentials
+
+Используйте `auth.adopt_session`, когда у identity есть один или несколько кандидатов сессии.
+Метод вызывает `Service.probes.auth` ровно один раз для выбранного слота. При успехе Identity Hub
+в одной транзакции:
+
+1. помечает исходный слот проверенным;
+2. копирует payload в `default`, не раскрывая его вызывающему коду;
+3. помечает `default` проверенным и выставляет `auth=authenticated`;
+4. при `activate=True` переводит `provisioning` в `ready`.
+
+```python
+from identity_hub import SessionAdoptionOutcome
+
+
+async def authenticate(identity_id, session_slots, password_name):
+    for slot in session_slots:
+        result = await space.auth.adopt_session(
+            identity_id,
+            slot,
+            actor="checker",
+            activate=True,
+        )
+        if result.outcome is SessionAdoptionOutcome.ADOPTED:
+            return "authenticated"
+        if result.outcome is SessionAdoptionOutcome.FAILED:
+            # Технический сбой не доказывает, что cookie мертва. Не переходите к паролю.
+            return "unknown" if result.retryable else "failed"
+        if result.outcome is SessionAdoptionOutcome.CHALLENGED:
+            return "challenge"
+
+    # Все кандидаты доказанно невалидны. Проверяем конкретную запись credentials.
+    login = await space.auth.login(
+        identity_id,
+        credential=("password", password_name),
+    )
+    return str(login)
+```
+
+`auth.verify_session` выполняет ту же сетевую проверку, но не принимает слот как `default`:
+
+```python
+from identity_hub import SessionVerificationOutcome
+
+result = await space.auth.verify_session(
+    identity_id,
+    "cookie-1",
+    actor="operator:anna",
+)
+if result.outcome is SessionVerificationOutcome.VALID:
+    print("cookie-1 жива, активная сессия не изменена")
+```
+
+### Исходы сетевой проверки
+
+| Исход | Значение | Изменение состояния |
+|---|---|---|
+| сессия действительна | `VALID` / `ADOPTED` | `verify_session` обновляет metadata; `adopt_session` также принимает `default` и auth |
+| сессия невалидна | `INVALID` | слот получает rejected metadata; для non-default глобальный auth не меняется, для `default` становится `session_invalid` |
+| платформа требует человека | `CHALLENGED` | сессия не принимается; приложение выбирает UI/политику challenge |
+| timeout или техническая ошибка | `FAILED` | `retryable=True`, session/auth/lifecycle не меняются |
+
+Локально отсутствующий, отозванный или истёкший слот возвращает `INVALID` без сетевого вызова.
+Сервис без `probes.auth` даёт `ValidationFailed`. Занятый identity даёт `LeaseUnavailable`.
+`retired` даёт `OperationNotAllowed` и не восстанавливается автоматически.
+
+Сеть выполняется без открытой DB-транзакции. Перед финальной записью Identity Hub повторно
+проверяет lease fence, provider claim, aggregate `expected_revision` и revision исходного слота.
+Если слот заменили во время запроса, метод бросает `ConcurrentModification`; поздний ответ ничего
+не меняет. Повтор adoption той же сессии не создаёт новую запись истории `default`.
+
+`space.secrets.verify_session` и `reject_session` — другие операции. Они вручную меняют только
+metadata без обращения к платформе. Используйте их, только если verdict уже получен доверенным
+внешним процессом.
 
 ## Authenticator
 
@@ -208,8 +288,9 @@ async with pool.lease(for_operation="probe", among=[identity_id]) as lease:
     await lease.mark_authenticated()          # auth → authenticated
 ```
 
-Так можно только для аккаунтов в `ready`. Для `provisioning` используйте `Authenticator` +
-`auth.login`, либо запишите сессию вне аренды и переведите `auth` вручную:
+Служебная операция `probe` разрешена для `provisioning` и `ready`, но не для `retired`. Если
+готовая сессия уже лежит в именованном слоте, предпочитайте `auth.adopt_session`: он проверяет,
+копирует в `default`, меняет auth и при необходимости активирует identity атомарно. Ручной путь:
 
 ```python
 await space.secrets.replace_session(identity_id, session, actor="onboarding")     # auth не меняет
