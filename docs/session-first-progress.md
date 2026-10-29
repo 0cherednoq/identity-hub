@@ -11,18 +11,13 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF2.2 — атомарный `auth.adopt_session`
-- **Начата:** 2026-10-29
-- **Репозиторий:** `identity-hub`
+- **Задача:** —
+- **Начата:** —
+- **Репозиторий:** —
 - **Шаги:**
-  - [ ] Выделить общий targeted-probe primitive без второго provider call.
-  - [ ] Подготовить sealed canonical `default` payload до финальной транзакции.
-  - [ ] Одной транзакцией применить source validity, default, auth и optional lifecycle.
-  - [ ] Реализовать публичный метод/typing и идемпотентность для source=`default`.
-  - [ ] Покрыть valid/invalid/technical/activate и rollback на обоих Store.
-  - [ ] Обновить checkpoint и закрыть targeted checks.
-- **Проверки:** ожидаются после реализации
-- **Заметки для следующей сессии:** не вызывать публичный `verify_session` из adoption: lease и проверенный payload должны жить в одной orchestration.
+  - [ ] —
+- **Проверки:** —
+- **Заметки для следующей сессии:** следующий доступный этап — `SF2.3`; PostgreSQL testcontainer на Windows запускать отдельно от параллельных CPU/IO checks.
 
 ## Статус задач
 
@@ -32,14 +27,14 @@
 | SF1.1 | Lifecycle в `OperationRule` | SF0.1 | done |  | 66 targeted tests; mypy src; ruff |
 | SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | done |  | named/default/cookie-only + typing |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | done |  | 39 targeted tests; Memory/PostgreSQL |
-| SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | in_progress |  | canonical default + auth + optional activate |
+| SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | todo |  | Memory/PostgreSQL, anti-flake x3 |
 | SF3.1 | Публичный контракт и документация | SF2.3 | todo |  | guides, CHANGELOG, typing, traceability |
 | SF4.1 | Точечные проверки checker | SF3.1 | todo |  | отдельный commit в checker |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
-**Итого:** 4 / 10 done
+**Итого:** 5 / 10 done
 
 ## Журнал сессий
 
@@ -71,3 +66,11 @@ metadata с повторной проверкой fence и session revision; г�
 Missing/invalid/technical outcomes покрыты на MemoryStore и PostgreSQL. Проверки: 39 passed,
 `mypy` 169 файлов и ruff зелёные; typing baseline остался красным только для будущего adoption.
 Дальше `SF2.2`.
+
+2026-10-29 · SF2.2 · добавлен общий targeted auth-probe primitive и публичный
+`auth.adopt_session`. Проверенный payload запечатывается до финальной транзакции; source validity,
+canonical `default`, глобальный auth, optional lifecycle и provider outcome применяются одним
+commit. Повтор не создаёт новую default history; source=`default` не заменяет себя. Инъекционный
+сбой после default write подтверждает полный rollback. Проверки: 10 Memory + 10 PostgreSQL,
+public contract, полный typing и ruff зелёные. PostgreSQL testcontainer дважды терял соединение
+при параллельном запуске, отдельный serial gate прошёл. Дальше `SF2.3`.

@@ -8,7 +8,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from identity_hub.api._base import Namespace
-from identity_hub.auth import LoginOutcome, LoginReport, SessionVerificationResult
+from identity_hub.auth import (
+    LoginOutcome,
+    LoginReport,
+    SessionAdoptionResult,
+    SessionVerificationResult,
+)
 from identity_hub.service import Service
 
 __all__ = ["Auth"]
@@ -32,6 +37,23 @@ class Auth(Namespace):
             identity_id,
             slot,
             actor=actor,
+        )
+
+    async def adopt_session(
+        self,
+        identity_id: UUID,
+        slot: str = "default",
+        *,
+        actor: str,
+        activate: bool = False,
+        expected_revision: int | None = None,
+    ) -> SessionAdoptionResult:
+        """Проверить slot и атомарно принять его как canonical `default`."""
+        return await self._at(identity_id, expected_revision)._adopt_session(
+            identity_id,
+            slot,
+            actor=actor,
+            activate=activate,
         )
 
     async def login(self, identity_id: UUID, *, credential: tuple[str, str] | None = None) -> LoginOutcome:

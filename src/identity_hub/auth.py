@@ -45,6 +45,7 @@ from identity_hub.protocols import (
     LoginChallenge,
     LoginContext,
     LoginFailure,
+    ProbeResult,
 )
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
@@ -132,6 +133,13 @@ class _CredentialMark:
     name: str
     rejected: bool
     code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionProbeCall:
+    claim: ProviderClaim
+    result: ProbeResult | None = None
+    error_code: str | None = None
 
 
 class _LinkedIdentity:
@@ -297,6 +305,38 @@ _NO_RETRY = RetryPolicy(max_attempts=1)
 
 
 class LoginMixin(SpaceBase):
+    async def _targeted_session_probe(
+        self,
+        lease: Lease,
+        service: Service,
+        slot: str,
+    ) -> _SessionProbeCall:
+        """Один auth probe выбранного slot под общими lease/provider-operation гарантиями."""
+        sync: Any = self
+        claim = await sync._claim_probe(lease, service, "probe:auth")
+        if claim is None:
+            raise LeaseUnavailable(
+                f"проверка session {lease.identity_id}/{slot} уже выполняется",
+                reason=LeaseUnavailableReason.BUSY,
+            )
+        probes = service.probes
+        method: Any = getattr(probes, "auth", None) if probes is not None else None
+        if method is None:  # до lease это уже проверяет preflight; защита внутреннего вызова
+            raise ValidationFailed(f"у сервиса {service.name} нет auth probe")
+        from identity_hub.sync import _ProbeContext
+
+        try:
+            async with lease.operation("probe"):
+                async with asyncio.timeout(service.probe_timeout.total_seconds()):
+                    result: ProbeResult | None = await method(_ProbeContext(lease, slot))
+        except (LeaseOwnershipLost, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            error_code = "probe_timeout" if isinstance(exc, TimeoutError) else safe_error_code(exc)
+            await sync._finish_probe(lease, claim, "failed", error_code=error_code)
+            return _SessionProbeCall(claim, error_code=error_code)
+        return _SessionProbeCall(claim, result=result)
+
     async def _verify_session(
         self,
         identity_id: UUID,
@@ -314,8 +354,7 @@ class LoginMixin(SpaceBase):
             if identity.lifecycle == Lifecycle.RETIRED:
                 raise OperationNotAllowed("verify_session", [Blocker("lifecycle", identity.lifecycle)])
             probes = service.probes
-            method: Any = getattr(probes, "auth", None) if probes is not None else None
-            if method is None:
+            if probes is None or getattr(probes, "auth", None) is None:
                 raise ValidationFailed(f"у сервиса {service.name} нет auth probe")
             _credentials, sessions = await tx.access_metadata(identity_id)
             now = await tx.now()
@@ -348,31 +387,18 @@ class LoginMixin(SpaceBase):
                     AuthState.SESSION_INVALID,
                     code="session_unavailable",
                 )
-            claim = await sync._claim_probe(lease, service, "probe:auth")
-            if claim is None:
-                raise LeaseUnavailable(
-                    f"проверка session {identity_id}/{slot} уже выполняется",
-                    reason=LeaseUnavailableReason.BUSY,
-                )
-            from identity_hub.sync import _ProbeContext
-
-            try:
-                async with lease.operation("probe"):
-                    async with asyncio.timeout(service.probe_timeout.total_seconds()):
-                        result = await method(_ProbeContext(lease, slot))
-            except (LeaseOwnershipLost, asyncio.CancelledError):
-                raise
-            except Exception as exc:
-                code = "probe_timeout" if isinstance(exc, TimeoutError) else safe_error_code(exc)
-                await sync._finish_probe(lease, claim, "failed", error_code=code)
+            call = await self._targeted_session_probe(lease, service, slot)
+            claim = call.claim
+            if call.error_code is not None:
                 return SessionVerificationResult(
                     identity_id,
                     slot,
                     SessionVerificationOutcome.FAILED,
                     current_auth,
-                    code=code,
+                    code=call.error_code,
                     retryable=True,
                 )
+            result = call.result
 
             try:
                 state = None if result is None or result.state is None else AuthState(result.state)
@@ -430,6 +456,197 @@ class LoginMixin(SpaceBase):
                 state or current_auth,
                 code=result_code,
                 retryable=outcome is SessionVerificationOutcome.FAILED,
+            )
+        finally:
+            await lease.release()
+
+    async def _adopt_session(
+        self,
+        identity_id: UUID,
+        slot: str,
+        *,
+        actor: str,
+        activate: bool,
+    ) -> SessionAdoptionResult:
+        """Проверить slot и атомарно сделать его canonical `default` с глобальным auth."""
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValidationFailed("actor должен быть непустой строкой")
+        async with self._tx(own=True) as tx:
+            identity = await self._identity(tx, identity_id)
+            service = self.hub.service(identity.service)
+            service.session_schema(slot)
+            if identity.lifecycle == Lifecycle.RETIRED:
+                raise OperationNotAllowed("adopt_session", [Blocker("lifecycle", identity.lifecycle)])
+            probes = service.probes
+            if probes is None or getattr(probes, "auth", None) is None:
+                raise ValidationFailed(f"у сервиса {service.name} нет auth probe")
+            _credentials, sessions = await tx.access_metadata(identity_id)
+            now = await tx.now()
+            metadata = next((item for item in sessions if item.slot == slot), None)
+            current_auth = AuthState(identity.auth_state)
+            current_lifecycle = Lifecycle(identity.lifecycle)
+        if (
+            metadata is None
+            or metadata.status != "active"
+            or (metadata.expires_at is not None and metadata.expires_at <= now)
+        ):
+            return SessionAdoptionResult(
+                identity_id,
+                slot,
+                DEFAULT_SLOT,
+                SessionAdoptionOutcome.INVALID,
+                current_auth,
+                current_lifecycle,
+                code="session_unavailable",
+            )
+
+        sync: Any = self
+        lease = await sync._probe_pool(service).acquire(
+            query=sync._probe_query(service, [identity_id]), wait=30
+        )
+        try:
+            source_revision = await lease.session_revision(slot)
+            source_session = await lease.session(slot)
+            if source_revision == 0 or source_session is None:
+                return SessionAdoptionResult(
+                    identity_id,
+                    slot,
+                    DEFAULT_SLOT,
+                    SessionAdoptionOutcome.INVALID,
+                    current_auth,
+                    current_lifecycle,
+                    code="session_unavailable",
+                )
+            call = await self._targeted_session_probe(lease, service, slot)
+            claim = call.claim
+            if call.error_code is not None:
+                return SessionAdoptionResult(
+                    identity_id,
+                    slot,
+                    DEFAULT_SLOT,
+                    SessionAdoptionOutcome.FAILED,
+                    current_auth,
+                    current_lifecycle,
+                    code=call.error_code,
+                    retryable=True,
+                )
+            result = call.result
+
+            try:
+                state = None if result is None or result.state is None else AuthState(result.state)
+            except ValueError:
+                state = None
+            result_code: str | None = None if result is None else result.code
+            if state is AuthState.AUTHENTICATED:
+                outcome = SessionAdoptionOutcome.ADOPTED
+            elif state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
+                outcome = SessionAdoptionOutcome.INVALID
+            elif state is AuthState.CHALLENGE:
+                outcome = SessionAdoptionOutcome.CHALLENGED
+            else:
+                outcome = SessionAdoptionOutcome.FAILED
+
+            default_payload: Any = None
+            default_expires_at: datetime | None = None
+            default_fingerprint: str | None = None
+            if outcome is SessionAdoptionOutcome.ADOPTED and slot != DEFAULT_SLOT:
+                default_payload, default_expires_at, default_fingerprint = (
+                    lease._seal_session_with_expiry(source_session, DEFAULT_SLOT)
+                )
+
+            final_auth = current_auth
+            final_lifecycle = current_lifecycle
+            async with self._tx(own=True) as tx:
+                await lease._check_fencing(tx)
+                actual_revision = await lease._session_revision(tx, slot)
+                if actual_revision != source_revision:
+                    raise ConcurrentModification(
+                        "session", f"{identity_id}/{slot}", source_revision, actual_revision
+                    )
+                await sync._apply_operation(
+                    tx,
+                    lease,
+                    claim,
+                    "succeeded",
+                    result={"outcome": str(outcome)},
+                )
+                if outcome is SessionAdoptionOutcome.INVALID:
+                    await tx.mark_session_validity(
+                        identity_id, slot, rejected=True, code="session_invalid"
+                    )
+                elif outcome is SessionAdoptionOutcome.ADOPTED:
+                    await tx.mark_session_validity(identity_id, slot, rejected=False)
+                    if slot != DEFAULT_SLOT:
+                        default_history = await tx.session_history(identity_id, DEFAULT_SLOT)
+                        current_default = next(
+                            (row for row in reversed(default_history) if row.status != "revoked"),
+                            None,
+                        )
+                        if (
+                            current_default is None
+                            or current_default.status != "active"
+                            or current_default.value_fingerprint != default_fingerprint
+                        ):
+                            await lease._write_session(
+                                tx,
+                                default_payload,
+                                DEFAULT_SLOT,
+                                mode="replace",
+                                expires_at=default_expires_at,
+                                value_fingerprint=default_fingerprint,
+                            )
+                        await tx.mark_session_validity(
+                            identity_id, DEFAULT_SLOT, rejected=False
+                        )
+                    await apply_region_change(
+                        self,
+                        tx,
+                        identity_id,
+                        "auth",
+                        DEFAULT_SLOT,
+                        Command(AuthState.AUTHENTICATED, actor=actor),
+                        lease_id=lease.lease_id,
+                    )
+                    final_auth = AuthState.AUTHENTICATED
+                    if activate:
+                        await apply_region_change(
+                            self,
+                            tx,
+                            identity_id,
+                            "lifecycle",
+                            "",
+                            Command(Lifecycle.READY, actor=actor),
+                            lease_id=lease.lease_id,
+                        )
+                        final_lifecycle = Lifecycle.READY
+                if outcome in {SessionAdoptionOutcome.INVALID, SessionAdoptionOutcome.ADOPTED}:
+                    await self._emit(
+                        tx,
+                        EventDraft(
+                            "identity.session.updated",
+                            actor=actor,
+                            service=service.name,
+                            identity_id=identity_id,
+                            lease_id=lease.lease_id,
+                            data={
+                                "slot": slot,
+                                "mode": (
+                                    "verify"
+                                    if outcome is SessionAdoptionOutcome.ADOPTED
+                                    else "reject"
+                                ),
+                            },
+                        ),
+                    )
+            return SessionAdoptionResult(
+                identity_id,
+                slot,
+                DEFAULT_SLOT,
+                outcome,
+                final_auth,
+                final_lifecycle,
+                code=result_code,
+                retryable=outcome is SessionAdoptionOutcome.FAILED,
             )
         finally:
             await lease.release()
