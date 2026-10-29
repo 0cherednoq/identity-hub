@@ -11,18 +11,13 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF2.3 — гонки, fencing и rollback
-- **Начата:** 2026-10-29
-- **Репозиторий:** `identity-hub`
+- **Задача:** —
+- **Начата:** —
+- **Репозиторий:** —
 - **Шаги:**
-  - [ ] Добавить детерминированную гонку replace source во время provider call.
-  - [ ] Проверить конкурирующие adoption, lease/claim loss и отмену late result.
-  - [ ] Проверить `expected_revision` до сети и на commit boundary.
-  - [ ] Проверить rollback и отсутствие secret-bearing diagnostics.
-  - [ ] Прогнать Memory/PostgreSQL concurrency matrix три раза.
-  - [ ] Обновить checkpoint и закрыть targeted checks.
-- **Проверки:** ожидаются после реализации
-- **Заметки для следующей сессии:** PostgreSQL testcontainer на Windows запускать serial; rollback baseline уже есть в SF2.2.
+  - [ ] —
+- **Проверки:** —
+- **Заметки для следующей сессии:** следующий доступный этап — `SF3.1`; для локального PostgreSQL надёжнее URL с `127.0.0.1`, а не `localhost`.
 
 ## Статус задач
 
@@ -33,13 +28,13 @@
 | SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | done |  | named/default/cookie-only + typing |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | done |  | 39 targeted tests; Memory/PostgreSQL |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
-| SF2.3 | Гонки, fencing и rollback | SF2.2 | in_progress |  | Memory/PostgreSQL, anti-flake x3 |
+| SF2.3 | Гонки, fencing и rollback | SF2.2 | done |  | 36 full; concurrency 16 × 3; mypy/ruff |
 | SF3.1 | Публичный контракт и документация | SF2.3 | todo |  | guides, CHANGELOG, typing, traceability |
 | SF4.1 | Точечные проверки checker | SF3.1 | todo |  | отдельный commit в checker |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
-**Итого:** 5 / 10 done
+**Итого:** 6 / 10 done
 
 ## Журнал сессий
 
@@ -79,3 +74,10 @@ commit. Повтор не создаёт новую default history; source=`def
 сбой после default write подтверждает полный rollback. Проверки: 10 Memory + 10 PostgreSQL,
 public contract, полный typing и ruff зелёные. PostgreSQL testcontainer дважды терял соединение
 при параллельном запуске, отдельный serial gate прошёл. Дальше `SF2.3`.
+
+2026-10-29 · SF2.3 · покрыты replacement source во время provider call, конкурентные adoption
+разных slots, stale/late expected revision, cancellation, expired claim и revoked lease. Ни один
+late result не создаёт default и не меняет auth/lifecycle; последовательные победители оставляют
+coherent default последнего provider verdict. Secret-bearing текст отсутствует в result, log и
+event payload. Полная матрица: 36 passed; concurrency subset: 16 passed три раза подряд на
+MemoryStore/PostgreSQL; mypy 171 файл и ruff зелёные. Дальше `SF3.1`.

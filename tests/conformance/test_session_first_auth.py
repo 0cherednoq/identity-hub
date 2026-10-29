@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -9,16 +12,24 @@ from pydantic import BaseModel
 
 from identity_hub import (
     AuthState,
+    ConcurrentModification,
     IdentityCreate,
     IdentityHub,
     Lease,
+    LeaseExpired,
+    LeaseLost,
+    LeaseOwnershipLost,
+    LeaseRevoked,
     ProbeContext,
     ProbeResult,
+    RevisionConflict,
     Service,
     SessionAdoptionOutcome,
     SessionVerificationOutcome,
     SpaceHandle,
+    StaleFencing,
 )
+from identity_hub.read.events import EventFilters
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.conformance]
 
@@ -31,10 +42,15 @@ class AuthProbe:
     def __init__(self, result: ProbeResult | BaseException) -> None:
         self.result = result
         self.calls: list[tuple[str, Session | None]] = []
+        self.entered = asyncio.Event()
+        self.release: asyncio.Event | None = None
 
     async def auth(self, ctx: ProbeContext) -> ProbeResult | None:
         value = await ctx.session()
         self.calls.append((ctx.session_slot, value if isinstance(value, Session) else None))
+        self.entered.set()
+        if self.release is not None:
+            await self.release.wait()
         if isinstance(self.result, BaseException):
             raise self.result
         return self.result
@@ -65,6 +81,28 @@ async def _setup(
 async def _current_session(space: SpaceHandle, identity_id: Any) -> Any:
     async with space._tx(own=True) as tx:
         return (await tx.session_history(identity_id, "cookie-1"))[-1]
+
+
+async def _expire_provider_claim(hub: IdentityHub, space: SpaceHandle, operation_id: Any) -> None:
+    from identity_hub.testing import MemoryStore
+
+    if isinstance(hub._store, MemoryStore):
+        row = hub._store._state.provider_operations[operation_id]
+        hub._store._state.provider_operations[operation_id] = replace(
+            row,
+            claim_expires_at=hub.clock.now() - timedelta(seconds=1),
+        )
+        return
+    from sqlalchemy import text
+
+    async with space._tx(own=True) as tx:
+        await tx.execute(  # type: ignore[attr-defined]
+            text(
+                "UPDATE ih_provider_operations SET claim_expires_at = now() - interval '1 second' "
+                "WHERE id = :id"
+            ),
+            {"id": operation_id},
+        )
 
 
 async def test_verify_named_session_marks_metadata_only(
@@ -300,3 +338,238 @@ async def test_adopt_final_transaction_rolls_back_as_a_unit(
     identity = await space.identities.get(created.id)
     assert identity.auth == AuthState.NO_SESSION and identity.lifecycle == "provisioning"
     assert len(probe.calls) == 1
+
+
+async def test_adopt_rejects_late_result_after_source_replacement(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_source_race",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    probe.release = asyncio.Event()
+    adoption = asyncio.create_task(
+        space.auth.adopt_session(created.id, "cookie-1", actor="checker", activate=True)
+    )
+    await probe.entered.wait()
+    await space.secrets.replace_session(
+        created.id,
+        {"token": "replacement-token"},
+        actor="concurrent-writer",
+        slot="cookie-1",
+    )
+    probe.release.set()
+
+    with pytest.raises(ConcurrentModification):
+        await adoption
+
+    source = await _current_session(space, created.id)
+    assert source.last_verified_at is None and source.last_rejected_at is None
+    async with space._tx(own=True) as tx:
+        assert await tx.session_history(created.id, "default") == []
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.NO_SESSION and identity.lifecycle == "provisioning"
+    assert len(probe.calls) == 1
+
+
+async def test_adopt_expected_revision_is_checked_before_provider(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_stale_revision",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    stale = created.revision
+    await space.identities.set_note(created.id, "changed", actor="writer")
+
+    with pytest.raises(RevisionConflict):
+        await space.auth.adopt_session(
+            created.id,
+            "cookie-1",
+            actor="checker",
+            expected_revision=stale,
+        )
+
+    assert probe.calls == []
+
+
+async def test_adopt_expected_revision_is_rechecked_after_provider(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_revision_race",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    probe.release = asyncio.Event()
+    adoption = asyncio.create_task(
+        space.auth.adopt_session(
+            created.id,
+            "cookie-1",
+            actor="checker",
+            activate=True,
+            expected_revision=created.revision,
+        )
+    )
+    await probe.entered.wait()
+    await space.identities.set_note(created.id, "changed", actor="writer")
+    probe.release.set()
+
+    with pytest.raises(RevisionConflict):
+        await adoption
+
+    async with space._tx(own=True) as tx:
+        assert await tx.session_history(created.id, "default") == []
+    assert (await space.identities.get(created.id)).auth == AuthState.NO_SESSION
+
+
+async def test_cancelled_adoption_does_not_apply_late_result(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_cancelled",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    probe.release = asyncio.Event()
+    adoption = asyncio.create_task(
+        space.auth.adopt_session(created.id, "cookie-1", actor="checker", activate=True)
+    )
+    await probe.entered.wait()
+    adoption.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await adoption
+
+    async with space._tx(own=True) as tx:
+        assert await tx.session_history(created.id, "default") == []
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.NO_SESSION and identity.lifecycle == "provisioning"
+
+
+async def test_provider_secret_text_is_not_exposed(
+    hub_under_test: IdentityHub,
+    space: SpaceHandle,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "TOKEN-SESSION-FIRST-LEAK"
+    _probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_redaction",
+        ConnectionError(f"provider failed with {secret}"),
+    )
+
+    result = await space.auth.adopt_session(created.id, "cookie-1", actor="checker")
+
+    assert result.outcome is SessionAdoptionOutcome.FAILED
+    events = await space.admin.event_page(
+        filters=EventFilters(identity_id=created.id, include_journal=True),
+        limit=100,
+    )
+    assert secret not in repr(result) and secret not in caplog.text
+    assert secret not in repr(events.items)
+
+
+async def test_expired_provider_claim_rejects_late_adoption(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_claim_expired",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    probe.release = asyncio.Event()
+    adoption = asyncio.create_task(
+        space.auth.adopt_session(created.id, "cookie-1", actor="checker", activate=True)
+    )
+    await probe.entered.wait()
+    async with space._tx(own=True) as tx:
+        (operation,) = await tx.list_provider_operations(
+            identity_id=created.id,
+            states=frozenset({"running"}),
+            limit=10,
+        )
+    await _expire_provider_claim(hub_under_test, space, operation.id)
+    assert await hub_under_test._provider_worker.run_once(limit=10) == 1
+    probe.release.set()
+
+    with pytest.raises((LeaseOwnershipLost, LeaseLost, LeaseRevoked, LeaseExpired, StaleFencing)):
+        await adoption
+
+    async with space._tx(own=True) as tx:
+        assert await tx.session_history(created.id, "default") == []
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.NO_SESSION and identity.lifecycle == "provisioning"
+
+
+async def test_revoked_lease_rejects_late_adoption(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_lease_revoked",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    probe.release = asyncio.Event()
+    adoption = asyncio.create_task(
+        space.auth.adopt_session(created.id, "cookie-1", actor="checker", activate=True)
+    )
+    await probe.entered.wait()
+    assert await space.pools.revoke(created.id, reason="race test", actor="test")
+    probe.release.set()
+
+    with pytest.raises((LeaseOwnershipLost, LeaseLost, LeaseRevoked, LeaseExpired, StaleFencing)):
+        await adoption
+
+    async with space._tx(own=True) as tx:
+        assert await tx.session_history(created.id, "default") == []
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.NO_SESSION and identity.lifecycle == "provisioning"
+
+
+async def test_concurrent_adoptions_leave_one_coherent_default(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_two_slots",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    await space.secrets.replace_session(
+        created.id,
+        {"token": "second-token"},
+        actor="test",
+        slot="cookie-2",
+    )
+
+    first, second = await asyncio.gather(
+        space.auth.adopt_session(created.id, "cookie-1", actor="worker-1"),
+        space.auth.adopt_session(created.id, "cookie-2", actor="worker-2"),
+    )
+
+    assert first.outcome is second.outcome is SessionAdoptionOutcome.ADOPTED
+    assert [slot for slot, _session in probe.calls] in [
+        ["cookie-1", "cookie-2"],
+        ["cookie-2", "cookie-1"],
+    ]
+    last_session = probe.calls[-1][1]
+    assert last_session is not None
+    revealed = await space.secrets.reveal(
+        created.id,
+        "session",
+        actor="test",
+        reason="assert coherent winner",
+    )
+    assert revealed["token"] == last_session.token
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.AUTHENTICATED
