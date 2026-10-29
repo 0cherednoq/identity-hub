@@ -11,13 +11,18 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** —
-- **Начата:** —
-- **Репозиторий:** —
+- **Задача:** SF2.1 — публичный `auth.verify_session`
+- **Начата:** 2026-10-29
+- **Репозиторий:** `identity-hub`
 - **Шаги:**
-  - [ ] —
-- **Проверки:** —
-- **Заметки для следующей сессии:** следующий доступный этап — `SF2.1`.
+  - [ ] Добавить публичные outcome/result DTO и метод namespace `Auth`.
+  - [ ] Реализовать preflight слота и lifecycle без provider call для локально невалидных случаев.
+  - [ ] Выполнить targeted auth probe один раз вне транзакции под lease/claim.
+  - [ ] Атомарно применить validity verdict с повторной проверкой fence и session revision.
+  - [ ] Покрыть valid/invalid/technical/missing и named/default semantics на обоих Store.
+  - [ ] Обновить typing/public exports и закрыть targeted checks.
+- **Проверки:** ожидаются после реализации
+- **Заметки для следующей сессии:** `verify_session` не меняет status сессии, lifecycle и глобальный auth; adoption — отдельный `SF2.2`.
 
 ## Статус задач
 
@@ -26,7 +31,7 @@
 | SF0.1 | Контракт и baseline | — | done |  | 55 старых тестов зелёные; новые контракты ожидаемо красные |
 | SF1.1 | Lifecycle в `OperationRule` | SF0.1 | done |  | 66 targeted tests; mypy src; ruff |
 | SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | done |  | named/default/cookie-only + typing |
-| SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | todo |  | один provider call, metadata verdict |
+| SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | in_progress |  | один provider call, metadata verdict |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | todo |  | canonical default + auth + optional activate |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | todo |  | Memory/PostgreSQL, anti-flake x3 |
 | SF3.1 | Публичный контракт и документация | SF2.3 | todo |  | guides, CHANGELOG, typing, traceability |
