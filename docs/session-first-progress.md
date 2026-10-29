@@ -11,13 +11,18 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** —
-- **Начата:** —
-- **Репозиторий:** —
+- **Задача:** SF2.3 — гонки, fencing и rollback
+- **Начата:** 2026-10-29
+- **Репозиторий:** `identity-hub`
 - **Шаги:**
-  - [ ] —
-- **Проверки:** —
-- **Заметки для следующей сессии:** следующий доступный этап — `SF2.3`; PostgreSQL testcontainer на Windows запускать отдельно от параллельных CPU/IO checks.
+  - [ ] Добавить детерминированную гонку replace source во время provider call.
+  - [ ] Проверить конкурирующие adoption, lease/claim loss и отмену late result.
+  - [ ] Проверить `expected_revision` до сети и на commit boundary.
+  - [ ] Проверить rollback и отсутствие secret-bearing diagnostics.
+  - [ ] Прогнать Memory/PostgreSQL concurrency matrix три раза.
+  - [ ] Обновить checkpoint и закрыть targeted checks.
+- **Проверки:** ожидаются после реализации
+- **Заметки для следующей сессии:** PostgreSQL testcontainer на Windows запускать serial; rollback baseline уже есть в SF2.2.
 
 ## Статус задач
 
@@ -28,7 +33,7 @@
 | SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | done |  | named/default/cookie-only + typing |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | done |  | 39 targeted tests; Memory/PostgreSQL |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
-| SF2.3 | Гонки, fencing и rollback | SF2.2 | todo |  | Memory/PostgreSQL, anti-flake x3 |
+| SF2.3 | Гонки, fencing и rollback | SF2.2 | in_progress |  | Memory/PostgreSQL, anti-flake x3 |
 | SF3.1 | Публичный контракт и документация | SF2.3 | todo |  | guides, CHANGELOG, typing, traceability |
 | SF4.1 | Точечные проверки checker | SF3.1 | todo |  | отдельный commit в checker |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
