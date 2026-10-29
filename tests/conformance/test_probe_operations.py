@@ -37,12 +37,18 @@ class GatedProbes:
         return None
 
 
-async def _setup(hub: IdentityHub, space: SpaceHandle, name: str) -> tuple[GatedProbes, UUID]:
+async def _setup(
+    hub: IdentityHub,
+    space: SpaceHandle,
+    name: str,
+    *,
+    lifecycle: str = "ready",
+) -> tuple[GatedProbes, UUID]:
     probes = GatedProbes()
     hub.register_service(replace(FAKE_TG, name=name, probes=probes))
     await hub.start()
     created = await space.identities.create(
-        IdentityCreate(service=name, external_ref=f"{name}-1", lifecycle="ready", session={"auth_key": "k"}),
+        IdentityCreate(service=name, external_ref=f"{name}-1", lifecycle=lifecycle, session={"auth_key": "k"}),
         actor="test",
     )
     return probes, created.id
@@ -66,6 +72,19 @@ async def test_probe_goes_through_operation_queue(hub_under_test: IdentityHub, s
         "probe:standing": "succeeded",
     }
     assert (await space.identities.get(identity_id)).standing == "limited"
+
+
+async def test_probe_runs_for_provisioning_identity(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probes, identity_id = await _setup(
+        hub_under_test, space, "pr_provisioning", lifecycle="provisioning"
+    )
+
+    outcomes = await space.sync.refresh(identity_id, ["auth"])
+
+    assert outcomes.outcomes == {"auth": "applied"}
+    assert probes.called.is_set()
 
 
 async def test_probe_failure_is_operation_outcome(hub_under_test: IdentityHub, space: SpaceHandle) -> None:

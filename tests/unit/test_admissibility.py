@@ -68,6 +68,15 @@ def test_probe_allowed_without_auth() -> None:
     assert evaluate(FAKE_TG, "probe", identity, NOW) == []
 
 
+def test_probe_lifecycle_policy_allows_provisioning_but_not_retired() -> None:
+    provisioning = replace(READY, lifecycle=Lifecycle.PROVISIONING)
+    retired = replace(READY, lifecycle=Lifecycle.RETIRED)
+
+    assert evaluate(FAKE_TG, "probe", provisioning, NOW) == []
+    assert codes(evaluate(FAKE_TG, "probe", retired, NOW)) == ["lifecycle"]
+    assert codes(evaluate(FAKE_TG, "read_channel", provisioning, NOW)) == ["lifecycle"]
+
+
 def test_verification_tiers_and_removed_factors() -> None:
     partial = replace(READY, verified_factors=frozenset({"email", "phone", "removed_factor"}))
     (blocker,) = evaluate(FAKE_EXCHANGE, "withdraw", partial, NOW)
@@ -92,3 +101,7 @@ def test_compile_rule() -> None:
     assert flt.required_factors == {"email", "phone", "kyc_id"}
     assert flt.needs_auth
     assert flt.standing == {Standing.GOOD, Standing.LIMITED}
+    assert flt.lifecycles == {Lifecycle.READY}
+
+    probe = compile_rule(FAKE_TG, "probe")
+    assert probe.lifecycles == {Lifecycle.PROVISIONING, Lifecycle.READY}

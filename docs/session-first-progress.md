@@ -11,23 +11,19 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF0.1 — контракт и baseline
-- **Начата:** 2026-10-29
-- **Репозиторий:** `identity-hub`
+- **Задача:** —
+- **Начата:** —
+- **Репозиторий:** —
 - **Шаги:**
-  - [ ] Сверить существующее покрытие lifecycle, session-slot и denormalized auth.
-  - [ ] Добавить регрессию: `probe` разрешён для `provisioning`, обычные операции — нет.
-  - [ ] Добавить контрактные тесты адресного slot и будущего публичного API.
-  - [ ] Запустить тесты до production-кода и зафиксировать ожидаемые падения.
-  - [ ] Обновить checkpoint и закрыть baseline зелёными проверками.
-- **Проверки:** ожидаются после добавления регрессий
-- **Заметки для следующей сессии:** начать с существующих unit/conformance fixtures; секреты в assertions не выводить.
+  - [ ] —
+- **Проверки:** —
+- **Заметки для следующей сессии:** следующий доступный этап — `SF1.1`.
 
 ## Статус задач
 
 | ID | Задача | Зависит от | Статус | Коммит | Примечание |
 |---|---|---|---|---|---|
-| SF0.1 | Контракт и baseline | — | in_progress |  | падающие регрессии до production-кода |
+| SF0.1 | Контракт и baseline | — | done |  | 55 старых тестов зелёные; новые контракты ожидаемо красные |
 | SF1.1 | Lifecycle в `OperationRule` | SF0.1 | todo |  | `probe`: provisioning + ready; retired запрещён |
 | SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | todo |  | default source-compatible |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | todo |  | один provider call, metadata verdict |
@@ -38,7 +34,7 @@
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
-**Итого:** 0 / 10 done
+**Итого:** 1 / 10 done
 
 ## Журнал сессий
 
@@ -47,3 +43,9 @@ native probe не принимает конкретный session-slot, а consu
 default и повторно проверять её ради глобального auth. Создана очередь `SF0`-`SF5`; зафиксированы
 canonical default, один provider call, атомарная финальная транзакция, явная активация и
 cross-repo migration. Реализация не начата. Дальше `SF0.1`.
+
+2026-10-29 · SF0.1 · добавлены исполняемые контракты lifecycle и будущего API. До production-кода:
+unit lifecycle — 2 ожидаемых падения, `sync.refresh` на provisioning — 2 ожидаемых падения
+(MemoryStore/PostgreSQL), public API — 1 ожидаемое падение, mypy — 4 ожидаемые ошибки символов;
+соседний baseline — 55 passed, 4 deselected. Существующий PostgreSQL-тест подтвердил, что только
+`auth/default` денормализует глобальный auth. Дальше `SF1.1`.
