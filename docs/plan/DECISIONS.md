@@ -349,3 +349,22 @@
   стенде, а `IMP-17` остаётся `partial` в матрице трассировки. Выбор версии RC и публикация —
   решение владельца, поэтому `I7.2` не меняет номер версии без его указания: задача ограничивается
   аудитом и отчётом.
+
+- **D-334** (очередь `SF`, по запросу владельца): session-first аутентификация по конкретному
+  session-slot. (1) `default` остаётся каноническим активным слотом и единственным источником
+  денормализованного `identity.auth`; `active_session_slot` не вводится. (2) Добавляются две
+  сетевые операции: `auth.verify_session(id, slot)` только проверяет выбранный слот и сохраняет
+  verdict, `auth.adopt_session(id, slot, activate=False)` переиспользует тот же внутренний probe,
+  на успехе копирует payload в `default`, помечает оба слота verified и выставляет
+  `auth/default=authenticated`; при `activate=True` в той же финальной транзакции выполняет
+  `provisioning -> ready`. (3) Provider вызывается ровно один раз; сеть находится вне DB-транзакции,
+  а локальный результат применяется одной транзакцией после проверки lease fence, provider claim
+  и неизменности revision/fingerprint исходного слота. (4) Invalid non-default не меняет глобальный
+  auth; invalid default переводит его в `session_invalid`; технический сбой состояние не меняет.
+  (5) Допустимые lifecycle становятся частью `OperationRule`: default `{ready}`, для `probe`
+  `{provisioning, ready}`; `retired` требует отдельного восстановления с причиной. (6)
+  `ProbeContext.session_slot` и `session(slot=None)` позволяют существующему `probes.auth` проверять
+  выбранный слот без consumer-side reveal. (7) Очередь живёт в `docs/session-first-plan.md` и
+  `docs/session-first-progress.md`; задачи `SF4.*` закрываются только с commit hash внешнего checker.
+  Строгая re-auth проверка конкретного password credential при уже живой session отложена до
+  отдельного контракта.
