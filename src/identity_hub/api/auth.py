@@ -8,7 +8,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from identity_hub.api._base import Namespace
-from identity_hub.auth import LoginOutcome, LoginReport
+from identity_hub.auth import LoginOutcome, LoginReport, SessionVerificationResult
 from identity_hub.service import Service
 
 __all__ = ["Auth"]
@@ -18,6 +18,21 @@ class Auth(Namespace):
     """Вход identity: `space.auth`."""
 
     __slots__ = ()
+
+    async def verify_session(
+        self,
+        identity_id: UUID,
+        slot: str = "default",
+        *,
+        actor: str,
+        expected_revision: int | None = None,
+    ) -> SessionVerificationResult:
+        """Сетевой verdict конкретного slot; меняет только validity metadata этой записи."""
+        return await self._at(identity_id, expected_revision)._verify_session(
+            identity_id,
+            slot,
+            actor=actor,
+        )
 
     async def login(self, identity_id: UUID, *, credential: tuple[str, str] | None = None) -> LoginOutcome:
         """Одна попытка входа для identity в `no_session` или `session_invalid`.

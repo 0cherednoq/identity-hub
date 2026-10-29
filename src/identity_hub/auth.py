@@ -25,9 +25,12 @@ from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState, LeaseUnavailableReason, Lifecycle, Standing
 from identity_hub.errors import (
+    Blocker,
+    ConcurrentModification,
     LeaseOwnershipLost,
     LeaseUnavailable,
     NotFound,
+    OperationNotAllowed,
     ValidationFailed,
     describe_error,
 )
@@ -51,7 +54,16 @@ if TYPE_CHECKING:
     from identity_hub.lease import Lease
     from identity_hub.pool import Pool
 
-__all__ = ["LOGIN_POOL", "LoginMixin", "LoginOutcome", "LoginReport"]
+__all__ = [
+    "LOGIN_POOL",
+    "LoginMixin",
+    "LoginOutcome",
+    "LoginReport",
+    "SessionAdoptionOutcome",
+    "SessionAdoptionResult",
+    "SessionVerificationOutcome",
+    "SessionVerificationResult",
+]
 
 LOGIN_POOL = "identity-hub:login"
 LOGIN_AUTH_STATES = frozenset({AuthState.NO_SESSION, AuthState.SESSION_INVALID})
@@ -67,6 +79,42 @@ class LoginOutcome(StrEnum):
     SUCCEEDED = "succeeded"
     CHALLENGED = "challenged"  # платформа ждёт ответа человека — см. `answer_challenge`
     FAILED = "failed"
+
+
+class SessionVerificationOutcome(StrEnum):
+    VALID = "valid"
+    INVALID = "invalid"
+    CHALLENGED = "challenged"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionVerificationResult:
+    identity_id: UUID
+    slot: str
+    outcome: SessionVerificationOutcome
+    state: AuthState
+    code: str | None = None
+    retryable: bool = False
+
+
+class SessionAdoptionOutcome(StrEnum):
+    ADOPTED = "adopted"
+    INVALID = "invalid"
+    CHALLENGED = "challenged"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionAdoptionResult:
+    identity_id: UUID
+    source_slot: str
+    active_slot: str
+    outcome: SessionAdoptionOutcome
+    auth: AuthState
+    lifecycle: Lifecycle
+    code: str | None = None
+    retryable: bool = False
 
 
 @dataclass
@@ -249,6 +297,143 @@ _NO_RETRY = RetryPolicy(max_attempts=1)
 
 
 class LoginMixin(SpaceBase):
+    async def _verify_session(
+        self,
+        identity_id: UUID,
+        slot: str,
+        *,
+        actor: str,
+    ) -> SessionVerificationResult:
+        """Проверить ровно один session slot, не меняя глобальный auth или lifecycle."""
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValidationFailed("actor должен быть непустой строкой")
+        async with self._tx(own=True) as tx:
+            identity = await self._identity(tx, identity_id)
+            service = self.hub.service(identity.service)
+            service.session_schema(slot)
+            if identity.lifecycle == Lifecycle.RETIRED:
+                raise OperationNotAllowed("verify_session", [Blocker("lifecycle", identity.lifecycle)])
+            probes = service.probes
+            method: Any = getattr(probes, "auth", None) if probes is not None else None
+            if method is None:
+                raise ValidationFailed(f"у сервиса {service.name} нет auth probe")
+            _credentials, sessions = await tx.access_metadata(identity_id)
+            now = await tx.now()
+            metadata = next((item for item in sessions if item.slot == slot), None)
+            current_auth = AuthState(identity.auth_state)
+        if (
+            metadata is None
+            or metadata.status != "active"
+            or (metadata.expires_at is not None and metadata.expires_at <= now)
+        ):
+            return SessionVerificationResult(
+                identity_id,
+                slot,
+                SessionVerificationOutcome.INVALID,
+                AuthState.SESSION_INVALID,
+                code="session_unavailable",
+            )
+
+        sync: Any = self
+        lease = await sync._probe_pool(service).acquire(
+            query=sync._probe_query(service, [identity_id]), wait=30
+        )
+        try:
+            source_revision = await lease.session_revision(slot)
+            if source_revision == 0:
+                return SessionVerificationResult(
+                    identity_id,
+                    slot,
+                    SessionVerificationOutcome.INVALID,
+                    AuthState.SESSION_INVALID,
+                    code="session_unavailable",
+                )
+            claim = await sync._claim_probe(lease, service, "probe:auth")
+            if claim is None:
+                raise LeaseUnavailable(
+                    f"проверка session {identity_id}/{slot} уже выполняется",
+                    reason=LeaseUnavailableReason.BUSY,
+                )
+            from identity_hub.sync import _ProbeContext
+
+            try:
+                async with lease.operation("probe"):
+                    async with asyncio.timeout(service.probe_timeout.total_seconds()):
+                        result = await method(_ProbeContext(lease, slot))
+            except (LeaseOwnershipLost, asyncio.CancelledError):
+                raise
+            except Exception as exc:
+                code = "probe_timeout" if isinstance(exc, TimeoutError) else safe_error_code(exc)
+                await sync._finish_probe(lease, claim, "failed", error_code=code)
+                return SessionVerificationResult(
+                    identity_id,
+                    slot,
+                    SessionVerificationOutcome.FAILED,
+                    current_auth,
+                    code=code,
+                    retryable=True,
+                )
+
+            try:
+                state = None if result is None or result.state is None else AuthState(result.state)
+            except ValueError:
+                state = None
+            if state is AuthState.AUTHENTICATED:
+                outcome = SessionVerificationOutcome.VALID
+            elif state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
+                outcome = SessionVerificationOutcome.INVALID
+            elif state is AuthState.CHALLENGE:
+                outcome = SessionVerificationOutcome.CHALLENGED
+            else:
+                outcome = SessionVerificationOutcome.FAILED
+            result_code: str | None = None if result is None else result.code
+            async with self._tx(own=True) as tx:
+                await lease._check_fencing(tx)
+                actual_revision = await lease._session_revision(tx, slot)
+                if actual_revision != source_revision:
+                    raise ConcurrentModification(
+                        "session", f"{identity_id}/{slot}", source_revision, actual_revision
+                    )
+                if outcome in {
+                    SessionVerificationOutcome.VALID,
+                    SessionVerificationOutcome.INVALID,
+                }:
+                    rejected = outcome is SessionVerificationOutcome.INVALID
+                    await tx.mark_session_validity(
+                        identity_id,
+                        slot,
+                        rejected=rejected,
+                        code="session_invalid" if rejected else None,
+                    )
+                    await self._emit(
+                        tx,
+                        EventDraft(
+                            "identity.session.updated",
+                            actor=actor,
+                            service=service.name,
+                            identity_id=identity_id,
+                            lease_id=lease.lease_id,
+                            data={"slot": slot, "mode": "reject" if rejected else "verify"},
+                        ),
+                    )
+                await sync._apply_operation(
+                    tx,
+                    lease,
+                    claim,
+                    "succeeded",
+                    result={"outcome": str(outcome)},
+                )
+            return SessionVerificationResult(
+                identity_id,
+                slot,
+                outcome,
+                state or current_auth,
+                code=result_code,
+                retryable=outcome is SessionVerificationOutcome.FAILED,
+            )
+        finally:
+            await lease.release()
+
     async def _run_login(
         self, identity_id: UUID, *, credential: tuple[str, str] | None = None
     ) -> LoginOutcome:

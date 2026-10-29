@@ -23,7 +23,14 @@ from identity_hub.api.proxies import (
 )
 from identity_hub.api.secrets import SecretRef
 from identity_hub.api.sync import RefreshResult
-from identity_hub.auth import LoginOutcome, LoginReport
+from identity_hub.auth import (
+    LoginOutcome,
+    LoginReport,
+    SessionAdoptionOutcome,
+    SessionAdoptionResult,
+    SessionVerificationOutcome,
+    SessionVerificationResult,
+)
 from identity_hub.clock import Clock, SystemClock
 from identity_hub.context import LeaseContext, current_lease
 from identity_hub.crypto import (
@@ -289,8 +296,12 @@ __all__ = [
     "SecretValue",
     "SecretsProvider",
     "Service",
+    "SessionAdoptionOutcome",
+    "SessionAdoptionResult",
     "SessionRefresher",
     "SessionStatus",
+    "SessionVerificationOutcome",
+    "SessionVerificationResult",
     "Severity",
     "SigningKey",
     "SpaceHandle",
