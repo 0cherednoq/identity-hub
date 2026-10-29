@@ -11,13 +11,17 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** —
-- **Начата:** —
-- **Репозиторий:** —
+- **Задача:** SF1.2 — адресный session-slot в `ProbeContext`
+- **Начата:** 2026-10-29
+- **Репозиторий:** `identity-hub`
 - **Шаги:**
-  - [ ] —
-- **Проверки:** —
-- **Заметки для следующей сессии:** следующий доступный этап — `SF1.2`.
+  - [ ] Добавить `ProbeContext.session_slot` и source-compatible `session(None)`.
+  - [ ] Передавать выбранный slot во внутренний probe context; sync сохраняет `default`.
+  - [ ] Добавить adapter-context тесты default, named slot и явного override.
+  - [ ] Проверить typing, unit и conformance regressions.
+  - [ ] Обновить checkpoint и закрыть задачу зелёными targeted checks.
+- **Проверки:** ожидаются после реализации
+- **Заметки для следующей сессии:** targeted public orchestration появится в `SF2.1`; здесь фиксируется безопасный adapter primitive.
 
 ## Статус задач
 
@@ -25,7 +29,7 @@
 |---|---|---|---|---|---|
 | SF0.1 | Контракт и baseline | — | done |  | 55 старых тестов зелёные; новые контракты ожидаемо красные |
 | SF1.1 | Lifecycle в `OperationRule` | SF0.1 | done |  | 66 targeted tests; mypy src; ruff |
-| SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | todo |  | default source-compatible |
+| SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | in_progress |  | default source-compatible |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | todo |  | один provider call, metadata verdict |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | todo |  | canonical default + auth + optional activate |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | todo |  | Memory/PostgreSQL, anti-flake x3 |
