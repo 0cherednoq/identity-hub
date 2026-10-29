@@ -37,7 +37,7 @@
 | SF3.1 | Публичный контракт и документация | SF2.3 | done |  | 43 docs/public + 67 conformance; mypy/ruff |
 | SF4.1 | Точечные проверки checker | SF3.1 | done | `a222b89` (checker) | 21 targeted + 115 full; ruff |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | done | `e533a5d` (checker), `1dd0feb` | 117 full; concurrent worker/provider call |
-| SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | done | `4c95b68` (checker), release commit | wheel/sdist и оба полных gate |
+| SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | done | `33fc300`, `4c95b68` (checker) | wheel/sdist и оба полных gate |
 
 **Итого:** 10 / 10 done
 
