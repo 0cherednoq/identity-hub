@@ -11,13 +11,18 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** —
-- **Начата:** —
-- **Репозиторий:** —
+- **Задача:** SF4.1 — точечные проверки checker
+- **Начата:** 2026-10-29
+- **Репозиторий:** `checker_account` + checkpoint в `identity-hub`
 - **Шаги:**
-  - [ ] —
-- **Проверки:** —
-- **Заметки для следующей сессии:** следующий этап `SF4.1` выполняется в checker; сначала сверить его AGENTS/CLAUDE и рабочее дерево.
+  - [ ] Зафиксировать текущие entry points и тесты ручного session workaround.
+  - [ ] Перевести exact session check на `auth.verify_session`.
+  - [ ] Перевести session-first login на `auth.adopt_session` с exact credential fallback.
+  - [ ] Удалить reveal/ручной promote/refresh workaround и broad auth exception.
+  - [ ] Проверить cookie-only, invalid fallback, retryable UNKNOWN и глобальный filter.
+  - [ ] Сохранить commit checker и записать hash в этот checkpoint.
+- **Проверки:** ожидаются после изменений
+- **Заметки для следующей сессии:** checker worktree чист; `.codegraph` и корневые AGENTS/CLAUDE отсутствуют.
 
 ## Статус задач
 
@@ -30,7 +35,7 @@
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | done |  | 36 full; concurrency 16 × 3; mypy/ruff |
 | SF3.1 | Публичный контракт и документация | SF2.3 | done |  | 43 docs/public + 67 conformance; mypy/ruff |
-| SF4.1 | Точечные проверки checker | SF3.1 | todo |  | отдельный commit в checker |
+| SF4.1 | Точечные проверки checker | SF3.1 | in_progress |  | отдельный commit в checker |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
