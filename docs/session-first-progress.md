@@ -11,19 +11,19 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF4.2 — batch parity `run_checks`
+- **Задача:** SF5.1 — cross-repo приёмка и выпуск
 - **Начата:** 2026-10-30
 - **Репозиторий:** `checker_account` + checkpoint в `identity-hub`
 - **Шаги:**
-  - [ ] Проследить все вызовы `run_checks` и контракт выбора batch-кандидатов.
-  - [ ] Направить batch через ту же `check_one` session-first orchestration.
-  - [ ] Сохранить `limit`, cross-process exclusivity и отсутствие ложного verdict для busy identity.
-  - [ ] Добавить provisioning cookie-only + wrong password batch test.
-  - [ ] Добавить конкурентный batch-workers test без двойного финального verdict.
-  - [ ] Прогнать полный checker suite и сохранить отдельный commit.
-- **Проверки:** ожидаются после изменений batch path
-- **Заметки для следующей сессии:** SF4.1 завершён в checker commit `a222b89`; весь checker suite
-  на editable Identity Hub: 115 passed; ruff зелёный. `.codegraph` и корневые AGENTS/CLAUDE отсутствуют.
+  - [ ] Выполнить полный gate Identity Hub и checker.
+  - [ ] Собрать wheel/sdist Identity Hub и проверить checker на установленном wheel.
+  - [ ] Повторить MemoryStore/PostgreSQL и ARMGS cookie-only/token+cookies acceptance.
+  - [ ] Проверить один provider call и отсутствие secret-bearing event/result/log полей.
+  - [ ] Обновить версию, release notes и dependency/lock checker.
+  - [ ] Закрыть исходную issue ссылками на тесты и commit hashes.
+- **Проверки:** ожидаются финальные gates и installed-artifact matrix
+- **Заметки для следующей сессии:** SF4.2 — checker `e533a5d`, IH stale-provider fence `1dd0feb`;
+  checker 117 passed на editable IH, IH session-first 42 passed Memory/PostgreSQL, mypy/ruff зелёные.
 
 ## Статус задач
 
@@ -37,10 +37,10 @@
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | done |  | 36 full; concurrency 16 × 3; mypy/ruff |
 | SF3.1 | Публичный контракт и документация | SF2.3 | done |  | 43 docs/public + 67 conformance; mypy/ruff |
 | SF4.1 | Точечные проверки checker | SF3.1 | done | `a222b89` (checker) | 21 targeted + 115 full; ruff |
-| SF4.2 | Batch parity `run_checks` | SF4.1 | in_progress |  | session-first во всех entry points или удаление legacy |
-| SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
+| SF4.2 | Batch parity `run_checks` | SF4.1 | done | `e533a5d` (checker), `1dd0feb` | 117 full; concurrent worker/provider call |
+| SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | in_progress |  | установленные артефакты, оба полных gate |
 
-**Итого:** 8 / 10 done
+**Итого:** 9 / 10 done
 
 ## Журнал сессий
 
@@ -104,3 +104,10 @@ verify/reject, `activate -> sync.refresh` и broad exception. INVALID перех
 FAILED даёт retryable UNKNOWN без password fallback, CHALLENGED сохраняется отдельно. Проверены
 cookie-only, точная адресация нескольких slots и немедленная видимость через глобальный auth:
 21 targeted, весь checker suite 115 passed, ruff зелёный. Checker commit `a222b89`. Дальше `SF4.2`.
+
+2026-10-30 · SF4.2 · `run_checks`, FlexiQ worker, interactor и `check-file` направлены через единый
+`check_one`: ограниченная страница provisioning/ready кандидатов, session-first до пароля и
+без ложного verdict для занятого/stale identity. Batch передаёт revision выбранной строки;
+session API повторно сверяет её после ожидания lease и до provider call, поэтому конкурентный
+worker не делает второй сетевой вызов. Добавлены cookie-only + wrong-password и concurrent batch
+тесты. Проверки: checker 117 passed, ruff; IH session-first 42 passed на Memory/PostgreSQL,+mypy/ruff. Коммиты: checker `e533a5d`, IH `1dd0feb`. Дальше `SF5.1`.
