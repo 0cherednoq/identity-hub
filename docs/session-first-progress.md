@@ -11,13 +11,17 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** —
-- **Начата:** —
-- **Репозиторий:** —
+- **Задача:** SF3.1 — публичный контракт и документация
+- **Начата:** 2026-10-29
+- **Репозиторий:** `identity-hub`
 - **Шаги:**
-  - [ ] —
-- **Проверки:** —
-- **Заметки для следующей сессии:** следующий доступный этап — `SF3.1`; для локального PostgreSQL надёжнее URL с `127.0.0.1`, а не `localhost`.
+  - [ ] Обновить login/states/API/limitations для session-first контракта.
+  - [ ] Добавить copyable orchestration с exact credential fallback.
+  - [ ] Зафиксировать outcomes, lifecycle, canonical default, audit и concurrency.
+  - [ ] Обновить CHANGELOG, typing, public API и traceability tests.
+  - [ ] Проверить документацию и полный targeted gate.
+- **Проверки:** ожидаются после изменений
+- **Заметки для следующей сессии:** основной читатель — интегратор checker; how-to в login, reference в API/states, ограничения отдельно.
 
 ## Статус задач
 
@@ -29,7 +33,7 @@
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | done |  | 39 targeted tests; Memory/PostgreSQL |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | done |  | 36 full; concurrency 16 × 3; mypy/ruff |
-| SF3.1 | Публичный контракт и документация | SF2.3 | todo |  | guides, CHANGELOG, typing, traceability |
+| SF3.1 | Публичный контракт и документация | SF2.3 | in_progress |  | guides, CHANGELOG, typing, traceability |
 | SF4.1 | Точечные проверки checker | SF3.1 | todo |  | отдельный commit в checker |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
