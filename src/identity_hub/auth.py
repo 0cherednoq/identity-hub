@@ -378,6 +378,10 @@ class LoginMixin(SpaceBase):
             query=sync._probe_query(service, [identity_id]), wait=30
         )
         try:
+            # Ожидавший lease конкурент мог изменить агрегат до нашего захвата. Повторяем
+            # expected_revision до provider call, чтобы stale batch не делал лишний сетевой вызов.
+            async with self._tx(own=True):
+                pass
             source_revision = await lease.session_revision(slot)
             if source_revision == 0:
                 return SessionVerificationResult(
@@ -520,6 +524,10 @@ class LoginMixin(SpaceBase):
             query=sync._probe_query(service, [identity_id]), wait=30
         )
         try:
+            # То же optimistic предусловие, что в финальной транзакции, но до сети: второй
+            # ожидавший worker получает RevisionConflict без повторной проверки provider-а.
+            async with self._tx(own=True):
+                pass
             source_revision = await lease.session_revision(slot)
             source_session = await lease.session(slot)
             if source_revision == 0 or source_session is None:

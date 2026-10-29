@@ -632,3 +632,38 @@ async def test_concurrent_adoptions_leave_one_coherent_default(
     assert revealed["token"] == last_session.token
     identity = await space.identities.get(created.id)
     assert identity.auth == AuthState.AUTHENTICATED
+
+
+async def test_waiting_adoption_rechecks_expected_revision_before_provider(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup(
+        hub_under_test,
+        space,
+        "sf_adopt_same_revision",
+        ProbeResult(AuthState.AUTHENTICATED),
+    )
+    probe.release = asyncio.Event()
+    first = asyncio.create_task(
+        space.auth.adopt_session(
+            created.id,
+            "cookie-1",
+            actor="worker-1",
+            expected_revision=created.revision,
+        )
+    )
+    await probe.entered.wait()
+    second = asyncio.create_task(
+        space.auth.adopt_session(
+            created.id,
+            "cookie-1",
+            actor="worker-2",
+            expected_revision=created.revision,
+        )
+    )
+    probe.release.set()
+
+    assert (await first).outcome is SessionAdoptionOutcome.ADOPTED
+    with pytest.raises(RevisionConflict):
+        await second
+    assert len(probe.calls) == 1
