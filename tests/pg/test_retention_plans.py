@@ -72,6 +72,8 @@ SEED = [
     f"""INSERT INTO ih_events (event_id, type, severity, space_id, actor, external)
         SELECT gen_random_uuid(), 'identity.updated', 'info', :space, 'a', true
         FROM generate_series(1, {N}) g""",
+    f"""INSERT INTO ih_event_cursors (consumer, last_id)
+        SELECT 'perf-' || g, g FROM generate_series(1, {N}) g""",
     """INSERT INTO ih_webhook_deliveries (endpoint_id, event_id, status, attempt)
         SELECT (SELECT id FROM ih_webhook_endpoints), event_id, 'succeeded', 1 FROM ih_events""",
     """INSERT INTO ih_notification_channels (id, space_id, kind, title, config, enabled, key_id, wrapped_dek,
@@ -96,6 +98,7 @@ SEED = [
         SELECT :space, '', 'm', now() - g * interval '1 hour', s, 1
         FROM generate_series(1, {N // 2}) g, (VALUES ('1h'), ('1m')) v(s)""",
     "ANALYZE ih_identities, ih_quota_usage, ih_operation_keys, ih_lease_logs, ih_lease_history, ih_events",
+    "ANALYZE ih_event_cursors",
     "ANALYZE ih_webhook_deliveries, ih_notifications, ih_import_runs, ih_provider_operations",
     "ANALYZE ih_stats_metric_batches, ih_challenges, ih_stats_rollup",
 ]

@@ -11,19 +11,18 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF5.1 — cross-repo приёмка и выпуск
-- **Начата:** 2026-10-30
+- **Задача:** очередь завершена
+- **Завершена:** 2026-10-30
 - **Репозиторий:** `checker_account` + checkpoint в `identity-hub`
 - **Шаги:**
-  - [ ] Выполнить полный gate Identity Hub и checker.
-  - [ ] Собрать wheel/sdist Identity Hub и проверить checker на установленном wheel.
-  - [ ] Повторить MemoryStore/PostgreSQL и ARMGS cookie-only/token+cookies acceptance.
-  - [ ] Проверить один provider call и отсутствие secret-bearing event/result/log полей.
-  - [ ] Обновить версию, release notes и dependency/lock checker.
-  - [ ] Закрыть исходную issue ссылками на тесты и commit hashes.
-- **Проверки:** ожидаются финальные gates и installed-artifact matrix
-- **Заметки для следующей сессии:** SF4.2 — checker `e533a5d`, IH stale-provider fence `1dd0feb`;
-  checker 117 passed на editable IH, IH session-first 42 passed Memory/PostgreSQL, mypy/ruff зелёные.
+  - [x] Выполнить полный gate Identity Hub и checker.
+  - [x] Собрать wheel/sdist Identity Hub и проверить checker на установленном wheel.
+  - [x] Повторить MemoryStore/PostgreSQL и ARMGS cookie-only/token+cookies acceptance.
+  - [x] Проверить один provider call и отсутствие secret-bearing event/result/log полей.
+  - [x] Обновить версию, release notes и dependency/lock checker.
+  - [x] Закрыть исходную issue ссылками на тесты и commit hashes.
+- **Проверки:** Identity Hub 2354 passed / 5 skipped, checker wheel 117 passed, package/typing/ruff/imports зелёные
+- **Заметки:** release candidate `1.0.0a7`; публикация во внешний registry намеренно не выполнялась.
 
 ## Статус задач
 
@@ -38,9 +37,9 @@
 | SF3.1 | Публичный контракт и документация | SF2.3 | done |  | 43 docs/public + 67 conformance; mypy/ruff |
 | SF4.1 | Точечные проверки checker | SF3.1 | done | `a222b89` (checker) | 21 targeted + 115 full; ruff |
 | SF4.2 | Batch parity `run_checks` | SF4.1 | done | `e533a5d` (checker), `1dd0feb` | 117 full; concurrent worker/provider call |
-| SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | in_progress |  | установленные артефакты, оба полных gate |
+| SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | done | `4c95b68` (checker), release commit | wheel/sdist и оба полных gate |
 
-**Итого:** 9 / 10 done
+**Итого:** 10 / 10 done
 
 ## Журнал сессий
 
@@ -110,4 +109,14 @@ cookie-only, точная адресация нескольких slots и не�
 без ложного verdict для занятого/stale identity. Batch передаёт revision выбранной строки;
 session API повторно сверяет её после ожидания lease и до provider call, поэтому конкурентный
 worker не делает второй сетевой вызов. Добавлены cookie-only + wrong-password и concurrent batch
-тесты. Проверки: checker 117 passed, ruff; IH session-first 42 passed на Memory/PostgreSQL,+mypy/ruff. Коммиты: checker `e533a5d`, IH `1dd0feb`. Дальше `SF5.1`.
+тесты. Проверки: checker 117 passed, ruff; IH session-first 42 passed на Memory/PostgreSQL,
+mypy/ruff. Коммиты: checker `e533a5d`, IH `1dd0feb`. Дальше `SF5.1`.
+
+2026-10-30 · SF5.1 · версия поднята до `1.0.0a7`, release metadata согласована со schema `0039`,
+wheel и sdist собраны и проверены в чистом окружении (импорт не из checkout, CLI, examples,
+`py.typed`, migrations, состав sdist). Checker установлен с собранным wheel: 117 passed, ruff;
+проверены ARMGS cookie-only и token+cookies. Полный Windows gate Identity Hub выполнен shards:
+677 + 433 + 356 + 888 = 2354 passed, 5 skipped; ruff, mypy и import-linter зелёные. Для
+стабильности perf-плана `ih_event_cursors` получил репрезентативный seed перед EXPLAIN; production
+код не менялся. Checker dependency/lock обновлены на `1.0.0a7` в `4c95b68`. Исходная issue
+закрыта трассировкой и commit hashes. Очередь завершена.

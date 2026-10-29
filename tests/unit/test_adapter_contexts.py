@@ -101,9 +101,7 @@ async def test_probe_context_targets_named_session_slot() -> None:
         (
             "cookie-1",
             BrowserSession(
-                cookies=Cookies(
-                    [Cookie(name="sid", value="cookie-value", domain="example.test")]
-                )
+                cookies=Cookies([Cookie(name="sid", value="cookie-value", domain="example.test")])
             ),
             Sess(auth_key="default-key"),
         )

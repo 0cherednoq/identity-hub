@@ -19,6 +19,7 @@
 | SF-R10 | Истёкший provider claim отклоняет поздний verdict | `tests/conformance/test_session_first_auth.py::test_expired_provider_claim_rejects_late_adoption` |
 | SF-R11 | Отозванная lease отклоняет поздний verdict | `tests/conformance/test_session_first_auth.py::test_revoked_lease_rejects_late_adoption` |
 | SF-R12 | Конкурентные adoption оставляют default, соответствующий одному provider verdict | `tests/conformance/test_session_first_auth.py::test_concurrent_adoptions_leave_one_coherent_default` |
+| SF-R13 | Ожидавший worker сверяет revision до provider call и не делает второй запрос | `tests/conformance/test_session_first_auth.py::test_waiting_adoption_rechecks_expected_revision_before_provider` |
 
 Все conformance nodes выполняются на `MemoryStore` и PostgreSQL. Статический публичный контракт
 закреплён в `tests/typing/session_first.py`, а корневые exports и методы namespace — в

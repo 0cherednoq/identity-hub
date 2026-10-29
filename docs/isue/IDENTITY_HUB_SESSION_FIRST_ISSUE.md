@@ -178,14 +178,14 @@ if identity.lifecycle not in allowed:
 
 ## Критерии приёмки
 
-- [ ] Для `provisioning`-аккаунта c сессией в слоте `cookie-1` один вызов проверяет вход и при
+- [x] Для `provisioning`-аккаунта c сессией в слоте `cookie-1` один вызов проверяет вход и при
       успехе атомарно копирует её в канонический `default`, выставляет `auth=AUTHENTICATED`
       (и опц. `ready`) без второй сетевой проверки.
-- [ ] Cookie-only сессия (`value is None`) проверяется так же (для входа достаточно cookie).
-- [ ] После успеха аккаунт виден в `IdentityFilter(auth="authenticated")` (списки/счётчики).
-- [ ] Невалидный non-default слот: глобальный `auth` не тронут, слот помечен rejected,
+- [x] Cookie-only сессия (`value is None`) проверяется так же (для входа достаточно cookie).
+- [x] После успеха аккаунт виден в `IdentityFilter(auth="authenticated")` (списки/счётчики).
+- [x] Невалидный non-default слот: глобальный `auth` не тронут, слот помечен rejected,
       потребитель уходит на вход по кредам.
-- [ ] Потребитель может удалить обход `_session_login` (прямой `verify_armgs_session`, промоут в
+- [x] Потребитель может удалить обход `_session_login` (прямой `verify_armgs_session`, промоут в
       `default`, best-effort `refresh` ради auth) без потери поведения.
 
 ## Связанные заметки
@@ -198,5 +198,8 @@ limitations.md, ADR-006/007) — возможно, verify-до-ready созна�
 ## План реализации
 
 - Спецификация очереди: [`../session-first-plan.md`](../session-first-plan.md).
+- Итоговая трассировка: [`../session-first-traceability.md`](../session-first-traceability.md).
+- Реализация Identity Hub: `0dab06f`, защита stale provider call: `1dd0feb`.
+- Миграция checker: точечный путь `a222b89`, batch parity `e533a5d`, dependency `4c95b68`.
 - Сохраняемый checkpoint и статусы: [`../session-first-progress.md`](../session-first-progress.md).
 - Архитектурное решение: `D-334` в [`../plan/DECISIONS.md`](../plan/DECISIONS.md).

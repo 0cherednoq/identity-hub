@@ -569,9 +569,7 @@ async def test_expired_provider_claim_rejects_late_adoption(
     assert identity.auth == AuthState.NO_SESSION and identity.lifecycle == "provisioning"
 
 
-async def test_revoked_lease_rejects_late_adoption(
-    hub_under_test: IdentityHub, space: SpaceHandle
-) -> None:
+async def test_revoked_lease_rejects_late_adoption(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
     probe, created = await _setup(
         hub_under_test,
         space,

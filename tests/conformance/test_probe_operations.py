@@ -79,12 +79,8 @@ async def test_probe_goes_through_operation_queue(hub_under_test: IdentityHub, s
     assert (await space.identities.get(identity_id)).standing == "limited"
 
 
-async def test_probe_runs_for_provisioning_identity(
-    hub_under_test: IdentityHub, space: SpaceHandle
-) -> None:
-    probes, identity_id = await _setup(
-        hub_under_test, space, "pr_provisioning", lifecycle="provisioning"
-    )
+async def test_probe_runs_for_provisioning_identity(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    probes, identity_id = await _setup(hub_under_test, space, "pr_provisioning", lifecycle="provisioning")
 
     outcomes = await space.sync.refresh(identity_id, ["auth"])
 

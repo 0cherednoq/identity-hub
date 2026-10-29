@@ -573,8 +573,8 @@ class LoginMixin(SpaceBase):
             default_expires_at: datetime | None = None
             default_fingerprint: str | None = None
             if outcome is SessionAdoptionOutcome.ADOPTED and slot != DEFAULT_SLOT:
-                default_payload, default_expires_at, default_fingerprint = (
-                    lease._seal_session_with_expiry(source_session, DEFAULT_SLOT)
+                default_payload, default_expires_at, default_fingerprint = lease._seal_session_with_expiry(
+                    source_session, DEFAULT_SLOT
                 )
 
             final_auth = current_auth
@@ -594,9 +594,7 @@ class LoginMixin(SpaceBase):
                     result={"outcome": str(outcome)},
                 )
                 if outcome is SessionAdoptionOutcome.INVALID:
-                    await tx.mark_session_validity(
-                        identity_id, slot, rejected=True, code="session_invalid"
-                    )
+                    await tx.mark_session_validity(identity_id, slot, rejected=True, code="session_invalid")
                     if slot == DEFAULT_SLOT:
                         await apply_region_change(
                             self,
@@ -634,9 +632,7 @@ class LoginMixin(SpaceBase):
                                 expires_at=default_expires_at,
                                 value_fingerprint=default_fingerprint,
                             )
-                        await tx.mark_session_validity(
-                            identity_id, DEFAULT_SLOT, rejected=False
-                        )
+                        await tx.mark_session_validity(identity_id, DEFAULT_SLOT, rejected=False)
                     await apply_region_change(
                         self,
                         tx,
@@ -669,11 +665,7 @@ class LoginMixin(SpaceBase):
                             lease_id=lease.lease_id,
                             data={
                                 "slot": slot,
-                                "mode": (
-                                    "verify"
-                                    if outcome is SessionAdoptionOutcome.ADOPTED
-                                    else "reject"
-                                ),
+                                "mode": ("verify" if outcome is SessionAdoptionOutcome.ADOPTED else "reject"),
                             },
                         ),
                     )

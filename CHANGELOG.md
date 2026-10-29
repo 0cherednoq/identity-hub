@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+## [1.0.0a7] - 2026-10-30
+
+Седьмой альфа-релиз добавляет атомарную session-first аутентификацию конкретного session-slot.
+Ревизия схемы — `0039`; миграций относительно `1.0.0a6` нет.
+
 ### Added
 
 - `space.auth.verify_session(identity_id, slot, actor=..., expected_revision=...)` выполняет
@@ -24,6 +29,8 @@
   Явный `session("other")` сохраняет прежнюю возможность прочитать другой слот.
 - Невалидный non-default session-slot не меняет глобальный auth. Невалидный `default` переводит
   auth в `session_invalid`; технический сбой проверки не меняет session/auth/lifecycle.
+- Ожидавший lease вызов с `expected_revision` повторно проверяет ревизию до provider call:
+  конкурентный stale worker завершается без второго сетевого запроса и без verdict.
 
 ## [1.0.0a6] - 2026-10-25
 

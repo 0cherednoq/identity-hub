@@ -14,7 +14,7 @@ ROW = re.compile(r"^\| (SF-R\d{2}) \| [^|]+ \| `([^`:]+\.py)::(test_[^`]+)` \|$"
 def test_session_first_requirements_are_unique_and_complete() -> None:
     rows = ROW.findall(MATRIX.read_text(encoding="utf-8"))
     counts = Counter(requirement for requirement, _path, _test in rows)
-    assert set(counts) == {f"SF-R{number:02d}" for number in range(1, 13)}
+    assert set(counts) == {f"SF-R{number:02d}" for number in range(1, 14)}
     assert all(count == 1 for count in counts.values())
 
 
