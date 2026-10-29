@@ -11,17 +11,13 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF1.2 — адресный session-slot в `ProbeContext`
-- **Начата:** 2026-10-29
-- **Репозиторий:** `identity-hub`
+- **Задача:** —
+- **Начата:** —
+- **Репозиторий:** —
 - **Шаги:**
-  - [ ] Добавить `ProbeContext.session_slot` и source-compatible `session(None)`.
-  - [ ] Передавать выбранный slot во внутренний probe context; sync сохраняет `default`.
-  - [ ] Добавить adapter-context тесты default, named slot и явного override.
-  - [ ] Проверить typing, unit и conformance regressions.
-  - [ ] Обновить checkpoint и закрыть задачу зелёными targeted checks.
-- **Проверки:** ожидаются после реализации
-- **Заметки для следующей сессии:** targeted public orchestration появится в `SF2.1`; здесь фиксируется безопасный adapter primitive.
+  - [ ] —
+- **Проверки:** —
+- **Заметки для следующей сессии:** следующий доступный этап — `SF2.1`.
 
 ## Статус задач
 
@@ -29,7 +25,7 @@
 |---|---|---|---|---|---|
 | SF0.1 | Контракт и baseline | — | done |  | 55 старых тестов зелёные; новые контракты ожидаемо красные |
 | SF1.1 | Lifecycle в `OperationRule` | SF0.1 | done |  | 66 targeted tests; mypy src; ruff |
-| SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | in_progress |  | default source-compatible |
+| SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | done |  | named/default/cookie-only + typing |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | todo |  | один provider call, metadata verdict |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | todo |  | canonical default + auth + optional activate |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | todo |  | Memory/PostgreSQL, anti-flake x3 |
@@ -38,7 +34,7 @@
 | SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
-**Итого:** 2 / 10 done
+**Итого:** 3 / 10 done
 
 ## Журнал сессий
 
@@ -58,3 +54,8 @@ unit lifecycle — 2 ожидаемых падения, `sync.refresh` на prov
 gate используют одну политику. Автоматический `probe` разрешает `provisioning` и `ready`, но не
 `retired`; обычные операции сохраняют default `{ready}`. Проверки: 66 passed на unit + conformance
 (MemoryStore/PostgreSQL), `mypy src` и targeted `ruff` зелёные. Дальше `SF1.2`.
+
+2026-10-29 · SF1.2 · `ProbeContext` получил read-only `session_slot`; `session()` читает выбранный
+slot, а явный аргумент сохраняет чтение другого слота. Внутренняя проба принимает targeted slot,
+обычный sync остаётся на `default`. Проверены named slot, явный default и cookie-only
+`BrowserSession`: 49 targeted tests, mypy 169 файлов и ruff зелёные. Дальше `SF2.1`.

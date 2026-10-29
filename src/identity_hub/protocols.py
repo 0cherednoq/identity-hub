@@ -302,13 +302,20 @@ class ProbeContext(Protocol):
     @property
     def proxy_url(self) -> str | None: ...
 
+    @property
+    def session_slot(self) -> str:
+        """Слот, выбранный вызывающей операцией для этой пробы."""
+        ...
+
     async def credentials(self) -> BaseModel | None: ...
 
     async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
         """Запись credentials по виду и имени; выключенная, отозванная или истёкшая — `None` (D-216)."""
         ...
 
-    async def session(self, slot: str = "default") -> BaseModel | None: ...
+    async def session(self, slot: str | None = None) -> BaseModel | None:
+        """Сессия выбранного слота; явный `slot` позволяет прочитать другой."""
+        ...
 
 
 class AuthProbe(Protocol):

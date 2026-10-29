@@ -11,6 +11,9 @@ import pytest
 from pydantic import BaseModel
 
 from identity_hub import (
+    BrowserSession,
+    Cookie,
+    Cookies,
     IdentityHub,
     ImportRecord,
     LoginContext,
@@ -62,6 +65,49 @@ async def test_probe_context_has_external_ref() -> None:
     await space.sync.refresh(identity_id, ["auth"])
 
     assert seen == ["+79990001122"]
+
+
+async def test_probe_context_targets_named_session_slot() -> None:
+    seen: list[tuple[str, BaseModel | None, BaseModel | None]] = []
+
+    class AuthOnly:
+        async def auth(self, ctx: ProbeContext) -> ProbeResult | None:
+            seen.append((ctx.session_slot, await ctx.session(), await ctx.session("default")))
+            return ProbeResult("authenticated")
+
+    space, svc = await _hub(
+        probes=AuthOnly(),
+        session_slots={"cookie-1": BrowserSession},
+    )
+    identity_id = await make_identity(space, service=svc, session={"auth_key": "default-key"})
+    await space.secrets.replace_session(
+        identity_id,
+        Cookies([Cookie(name="sid", value="cookie-value", domain="example.test")]),
+        actor="test",
+        slot="cookie-1",
+    )
+    lease = await space._probe_pool(svc).acquire(query=space._probe_query(svc, [identity_id]))
+    try:
+        await space._probe(
+            lease,
+            svc,
+            [("auth", "cookie-1")],
+            session_slot="cookie-1",
+        )
+    finally:
+        await lease.release()
+
+    assert seen == [
+        (
+            "cookie-1",
+            BrowserSession(
+                cookies=Cookies(
+                    [Cookie(name="sid", value="cookie-value", domain="example.test")]
+                )
+            ),
+            Sess(auth_key="default-key"),
+        )
+    ]
 
 
 async def test_login_context_reads_previous_session() -> None:

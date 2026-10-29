@@ -6,7 +6,15 @@ from typing import assert_type
 
 from pydantic import BaseModel
 
-from identity_hub import CredentialCandidate, IdentityCreate, LoginContext, Pool, Service, SpaceHandle
+from identity_hub import (
+    CredentialCandidate,
+    IdentityCreate,
+    LoginContext,
+    Pool,
+    ProbeContext,
+    Service,
+    SpaceHandle,
+)
 
 
 class Credentials(BaseModel):
@@ -54,6 +62,12 @@ async def _login_contract(ctx: LoginContext[Credentials, Session]) -> Session:
     assert_type(await ctx.session(), Session | None)
     assert_type(await ctx.credential("totp", schema=TotpSecret), TotpSecret | None)
     return Session(token="ok")
+
+
+async def _probe_contract(ctx: ProbeContext) -> None:
+    assert_type(ctx.session_slot, str)
+    assert_type(await ctx.session(), BaseModel | None)
+    assert_type(await ctx.session("cookie-1"), BaseModel | None)
 
 
 UNTYPED = Service("untyped-contract", "Untyped contract")

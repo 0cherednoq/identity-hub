@@ -55,8 +55,9 @@ class ReconcileReport:
 
 
 class _ProbeContext:
-    def __init__(self, lease: Lease) -> None:
+    def __init__(self, lease: Lease, session_slot: str = DEFAULT_SLOT) -> None:
         self._lease = lease
+        self._session_slot = session_slot
 
     @property
     def identity_id(self) -> UUID:
@@ -70,14 +71,18 @@ class _ProbeContext:
     def proxy_url(self) -> str | None:
         return self._lease._proxy_url()
 
+    @property
+    def session_slot(self) -> str:
+        return self._session_slot
+
     async def credentials(self) -> BaseModel | None:
         return await self._lease.credentials()
 
     async def credential(self, kind: str = "default", name: str = "default") -> BaseModel | None:
         return await self._lease.credential(kind, name)
 
-    async def session(self, slot: str = DEFAULT_SLOT) -> BaseModel | None:
-        return await self._lease.session(slot)
+    async def session(self, slot: str | None = None) -> BaseModel | None:
+        return await self._lease.session(self._session_slot if slot is None else slot)
 
 
 def _parse_regions(service: Service, regions: Iterable[str]) -> list[tuple[str, str]]:
@@ -201,11 +206,18 @@ class SyncMixin(SpaceBase):
             lifecycles=rule.lifecycles,
         )
 
-    async def _probe(self, lease: Lease, service: Service, targets: list[tuple[str, str]]) -> dict[str, str]:
+    async def _probe(
+        self,
+        lease: Lease,
+        service: Service,
+        targets: list[tuple[str, str]],
+        *,
+        session_slot: str = DEFAULT_SLOT,
+    ) -> dict[str, str]:
         probes = service.probes
         if probes is None:
             raise ValidationFailed(f"у сервиса {service.name} нет Probes")
-        ctx = _ProbeContext(lease)
+        ctx = _ProbeContext(lease, session_slot)
         results: dict[str, str] = {}
         # квота пробы списывается здесь, один раз на сверку аккаунта — до первой пробы (D-223)
         async with lease.operation(PROBE_OPERATION):
