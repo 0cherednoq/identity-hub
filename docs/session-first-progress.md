@@ -11,20 +11,24 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** —
-- **Начата:** —
-- **Репозиторий:** —
+- **Задача:** SF1.1 — lifecycle в `OperationRule`
+- **Начата:** 2026-10-29
+- **Репозиторий:** `identity-hub`
 - **Шаги:**
-  - [ ] —
-- **Проверки:** —
-- **Заметки для следующей сессии:** следующий доступный этап — `SF1.1`.
+  - [ ] Добавить и валидировать `OperationRule.lifecycles` с default `{ready}`.
+  - [ ] Провести lifecycle через `RuleFilter`, `evaluate` и candidate query.
+  - [ ] Задать probe policy `{provisioning, ready}` без ослабления обычных операций.
+  - [ ] Проверить MemoryStore/PostgreSQL и unit-регрессии.
+  - [ ] Обновить checkpoint и закрыть задачу зелёными targeted checks.
+- **Проверки:** ожидаются после реализации
+- **Заметки для следующей сессии:** красные тесты `SF0.1` уже воспроизводят execution gate на обоих Store.
 
 ## Статус задач
 
 | ID | Задача | Зависит от | Статус | Коммит | Примечание |
 |---|---|---|---|---|---|
 | SF0.1 | Контракт и baseline | — | done |  | 55 старых тестов зелёные; новые контракты ожидаемо красные |
-| SF1.1 | Lifecycle в `OperationRule` | SF0.1 | todo |  | `probe`: provisioning + ready; retired запрещён |
+| SF1.1 | Lifecycle в `OperationRule` | SF0.1 | in_progress |  | `probe`: provisioning + ready; retired запрещён |
 | SF1.2 | Адресный session-slot в `ProbeContext` | SF0.1 | todo |  | default source-compatible |
 | SF2.1 | Публичный `auth.verify_session` | SF1.1, SF1.2 | todo |  | один provider call, metadata verdict |
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | todo |  | canonical default + auth + optional activate |
