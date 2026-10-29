@@ -48,7 +48,12 @@ async def _setup(
     hub.register_service(replace(FAKE_TG, name=name, probes=probes))
     await hub.start()
     created = await space.identities.create(
-        IdentityCreate(service=name, external_ref=f"{name}-1", lifecycle=lifecycle, session={"auth_key": "k"}),
+        IdentityCreate(
+            service=name,
+            external_ref=f"{name}-1",
+            lifecycle=lifecycle,
+            session={"auth_key": "k"},
+        ),
         actor="test",
     )
     return probes, created.id
@@ -83,7 +88,7 @@ async def test_probe_runs_for_provisioning_identity(
 
     outcomes = await space.sync.refresh(identity_id, ["auth"])
 
-    assert outcomes.outcomes == {"auth": "applied"}
+    assert outcomes.outcomes == {"auth": "unchanged"}
     assert probes.called.is_set()
 
 

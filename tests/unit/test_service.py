@@ -104,6 +104,8 @@ def test_quota_windows_follow_date_bin() -> None:
         lambda: Quota(1, timedelta(hours=1), origin=datetime(2026, 1, 1)),
         lambda: Pacing(Quota(1, timedelta(hours=1)), (10, 5)),
         lambda: OperationRule(standing=frozenset({"weird"})),
+        lambda: OperationRule(lifecycles=frozenset({"unknown"})),
+        lambda: OperationRule(lifecycles=frozenset()),
         lambda: OperationRule(quotas=(Quota(1, timedelta(hours=1)), Quota(2, timedelta(hours=1)))),
     ],
 )

@@ -23,7 +23,7 @@ from identity_hub.acceptance import AcceptPolicy
 from identity_hub.domain.region_specs import REGIONS
 from identity_hub.domain.regions import Normalizer, RegionSpec
 from identity_hub.domain.verification import VERIFICATION, VerificationSpec, VerificationTier
-from identity_hub.enums import Standing
+from identity_hub.enums import Lifecycle, Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.protocols import (
     Authenticator,
@@ -195,6 +195,7 @@ class OperationRule:
     """Когда операция допустима и сколько её можно (ТЗ §3.9)."""
 
     standing: frozenset[str] = frozenset({Standing.GOOD, Standing.LIMITED})
+    lifecycles: frozenset[str] = frozenset({Lifecycle.READY})
     needs_auth: bool = True
     verified: frozenset[str] = frozenset()
     tiers: frozenset[str] = frozenset()
@@ -204,6 +205,11 @@ class OperationRule:
         unknown = set(self.standing) - set(Standing)
         if unknown:
             raise ValueError(f"неизвестные значения standing: {sorted(unknown)}")
+        unknown_lifecycles = set(self.lifecycles) - set(Lifecycle)
+        if unknown_lifecycles:
+            raise ValueError(f"неизвестные значения lifecycle: {sorted(unknown_lifecycles)}")
+        if not self.lifecycles:
+            raise ValueError("правило операции должно разрешать хотя бы один lifecycle")
         windows = [q.window_seconds for q in self.quotas]
         if len(windows) != len(set(windows)):
             raise ValueError("у вида операции не может быть двух квот с одинаковым окном")
@@ -313,7 +319,11 @@ class Service(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unp
         if PROBE_OPERATION not in self.operations:
             ops = {
                 **self.operations,
-                PROBE_OPERATION: OperationRule(needs_auth=False, standing=frozenset(Standing)),
+                PROBE_OPERATION: OperationRule(
+                    needs_auth=False,
+                    standing=frozenset(Standing),
+                    lifecycles=frozenset({Lifecycle.PROVISIONING, Lifecycle.READY}),
+                ),
             }
             object.__setattr__(self, "operations", ops)
 

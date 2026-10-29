@@ -15,7 +15,7 @@ from uuid import UUID
 from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.data import normalize_tag, validate_labels
 from identity_hub.domain.redaction import sanitize_text
-from identity_hub.enums import Standing
+from identity_hub.enums import Lifecycle, Standing
 from identity_hub.errors import ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
@@ -202,7 +202,10 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
         quotas: tuple[QuotaCharge, ...] = ()
         if for_operation is not None:
             rule = compile_rule(self.service, for_operation)
-            standing, needs_auth, factors = rule.standing, rule.needs_auth, rule.required_factors
+            standing = rule.standing
+            lifecycles = rule.lifecycles
+            needs_auth = rule.needs_auth
+            factors = rule.required_factors
             if require_quota:
                 quotas = tuple(
                     QuotaCharge(for_operation, quota.window_seconds, quota.origin, quota.limit)
@@ -211,7 +214,10 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
         elif require_quota:
             raise ValidationFailed("require_quota задаётся вместе с for_operation")
         else:
-            standing, needs_auth, factors = DEFAULT_STANDING, True, frozenset[str]()
+            standing = DEFAULT_STANDING
+            lifecycles = frozenset({Lifecycle.READY})
+            needs_auth = True
+            factors = frozenset[str]()
         merged_labels = {**self.labels, **validate_labels(labels or {})}
         merged_profile = {**self.profile, **(profile or {})}
         _check_profile_filter(self.service, merged_profile)
@@ -219,6 +225,7 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
             service=self.service.name,
             standing=frozenset(standing),
             needs_auth=needs_auth,
+            lifecycles=lifecycles,
             required_factors=frozenset(factors),
             tags=self.tags | frozenset(normalize_tag(tag) for tag in tags),
             labels=merged_labels or None,

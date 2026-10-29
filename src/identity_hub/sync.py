@@ -16,10 +16,10 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from identity_hub._space import SpaceBase, logger
-from identity_hub.auth import ALL_LIFECYCLES
+from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.provider_operations import safe_error_code
 from identity_hub.domain.regions import Observation, Outcome
-from identity_hub.enums import Availability, ChangeSource, Standing
+from identity_hub.enums import Availability, ChangeSource
 from identity_hub.errors import (
     AlreadyExists,
     LeaseOwnershipLost,
@@ -191,12 +191,14 @@ class SyncMixin(SpaceBase):
 
     @staticmethod
     def _probe_query(service: Service, among: list[UUID]) -> CandidateQuery:
+        rule = compile_rule(service, PROBE_OPERATION)
         return CandidateQuery(
             service=service.name,
-            standing=frozenset(Standing),
-            needs_auth=False,
+            standing=rule.standing,
+            needs_auth=rule.needs_auth,
+            required_factors=rule.required_factors,
             among=among,
-            lifecycles=ALL_LIFECYCLES,
+            lifecycles=rule.lifecycles,
         )
 
     async def _probe(self, lease: Lease, service: Service, targets: list[tuple[str, str]]) -> dict[str, str]:

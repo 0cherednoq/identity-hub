@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from identity_hub.domain.verification import effective_factors, required_factors
-from identity_hub.enums import AuthState, Availability, Lifecycle
+from identity_hub.enums import AuthState, Availability
 from identity_hub.errors import Blocker
 from identity_hub.service import Quota, Service
 
@@ -58,6 +58,7 @@ class RuleFilter:
     """Правило операции в форме фильтра выборки (без квот — они списываются атомарно при операции)."""
 
     standing: frozenset[str]
+    lifecycles: frozenset[str]
     needs_auth: bool
     required_factors: frozenset[str]
 
@@ -65,7 +66,12 @@ class RuleFilter:
 def compile_rule(service: Service[Any, Any], kind: str) -> RuleFilter:
     rule = service.rule(kind)
     factors = required_factors(rule.verified, rule.tiers, service.tiers_by_name)
-    return RuleFilter(standing=rule.standing, needs_auth=rule.needs_auth, required_factors=factors)
+    return RuleFilter(
+        standing=rule.standing,
+        lifecycles=rule.lifecycles,
+        needs_auth=rule.needs_auth,
+        required_factors=factors,
+    )
 
 
 def evaluate(
@@ -80,7 +86,7 @@ def evaluate(
     flt = compile_rule(service, kind)
     blockers: list[Blocker] = []
 
-    if identity.lifecycle != Lifecycle.READY:
+    if identity.lifecycle not in flt.lifecycles:
         blockers.append(Blocker("lifecycle", identity.lifecycle))
     if identity.standing not in flt.standing:
         detail = (
