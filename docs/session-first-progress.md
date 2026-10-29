@@ -11,18 +11,19 @@
 
 <!-- Это checkpoint после обрыва сессии. Одновременно активна не более чем одна задача. -->
 
-- **Задача:** SF4.1 — точечные проверки checker
-- **Начата:** 2026-10-29
+- **Задача:** SF4.2 — batch parity `run_checks`
+- **Начата:** 2026-10-30
 - **Репозиторий:** `checker_account` + checkpoint в `identity-hub`
 - **Шаги:**
-  - [ ] Зафиксировать текущие entry points и тесты ручного session workaround.
-  - [ ] Перевести exact session check на `auth.verify_session`.
-  - [ ] Перевести session-first login на `auth.adopt_session` с exact credential fallback.
-  - [ ] Удалить reveal/ручной promote/refresh workaround и broad auth exception.
-  - [ ] Проверить cookie-only, invalid fallback, retryable UNKNOWN и глобальный filter.
-  - [ ] Сохранить commit checker и записать hash в этот checkpoint.
-- **Проверки:** ожидаются после изменений
-- **Заметки для следующей сессии:** checker worktree чист; `.codegraph` и корневые AGENTS/CLAUDE отсутствуют.
+  - [ ] Проследить все вызовы `run_checks` и контракт выбора batch-кандидатов.
+  - [ ] Направить batch через ту же `check_one` session-first orchestration.
+  - [ ] Сохранить `limit`, cross-process exclusivity и отсутствие ложного verdict для busy identity.
+  - [ ] Добавить provisioning cookie-only + wrong password batch test.
+  - [ ] Добавить конкурентный batch-workers test без двойного финального verdict.
+  - [ ] Прогнать полный checker suite и сохранить отдельный commit.
+- **Проверки:** ожидаются после изменений batch path
+- **Заметки для следующей сессии:** SF4.1 завершён в checker commit `a222b89`; весь checker suite
+  на editable Identity Hub: 115 passed; ruff зелёный. `.codegraph` и корневые AGENTS/CLAUDE отсутствуют.
 
 ## Статус задач
 
@@ -35,11 +36,11 @@
 | SF2.2 | Атомарный `auth.adopt_session` | SF2.1 | done |  | 10 Memory + 10 PostgreSQL; rollback/typing/ruff |
 | SF2.3 | Гонки, fencing и rollback | SF2.2 | done |  | 36 full; concurrency 16 × 3; mypy/ruff |
 | SF3.1 | Публичный контракт и документация | SF2.3 | done |  | 43 docs/public + 67 conformance; mypy/ruff |
-| SF4.1 | Точечные проверки checker | SF3.1 | in_progress |  | отдельный commit в checker |
-| SF4.2 | Batch parity `run_checks` | SF4.1 | todo |  | session-first во всех entry points или удаление legacy |
+| SF4.1 | Точечные проверки checker | SF3.1 | done | `a222b89` (checker) | 21 targeted + 115 full; ruff |
+| SF4.2 | Batch parity `run_checks` | SF4.1 | in_progress |  | session-first во всех entry points или удаление legacy |
 | SF5.1 | Cross-repo приёмка и выпуск | SF3.1, SF4.2 | todo |  | установленные артефакты, оба полных gate |
 
-**Итого:** 7 / 10 done
+**Итого:** 8 / 10 done
 
 ## Журнал сессий
 
@@ -95,3 +96,11 @@ reference outcomes/lifecycle/canonical default, разграничение се�
 `session-first-traceability.md`. При сверке с D-334 исправлен invalid `default`: теперь обе
 сетевые операции атомарно ставят глобальный `session_invalid`. Проверки: 43 docs/public,
 67 conformance на MemoryStore/PostgreSQL, полный typing и ruff зелёные. Дальше `SF4.1`.
+
+2026-10-30 · SF4.1 · ручная exact-slot проверка переведена на `auth.verify_session`, а account
+session-first — на последовательный `auth.adopt_session(..., activate=True)`. Удалены раскрытие
+session в store, прямой `verify_armgs_session`, ручное копирование в `default`, отдельные
+verify/reject, `activate -> sync.refresh` и broad exception. INVALID переходит к точному паролю,
+FAILED даёт retryable UNKNOWN без password fallback, CHALLENGED сохраняется отдельно. Проверены
+cookie-only, точная адресация нескольких slots и немедленная видимость через глобальный auth:
+21 targeted, весь checker suite 115 passed, ruff зелёный. Checker commit `a222b89`. Дальше `SF4.2`.
