@@ -13,11 +13,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** AR3.2 auth.revalidate(): шаг credential без logging_in
+- **Начата:** 2026-11-01
 - **Шаги:**
-  - [ ] —
-- **Заметки для следующей сессии:** —
+  - [ ] Красные тесты: успех, rejected+active, blockers, LoginFailure, технический сбой, challenge, banned/retired, секреты
+  - [ ] Флаг observe у _set_auth и _open_challenge (login не меняется)
+  - [ ] _revalidate_credential и подключение к _revalidate (параметр credential)
+  - [ ] Документация и CHANGELOG, typing
+  - [ ] scripts/check.sh зелёный, закрыть задачу
+- **Заметки для следующей сессии:** Дизайн: отдельный _revalidate_credential в revalidation.py на примитивах _claim_login/_LoginContext/_set_auth(observe=True)/_open_challenge(observe=True); _login не трогаем; технический сбой -> _finish_probe(failed) без смены auth; LoginFailure как в login (код/retryable/fault); успех автопомечает запрошенный credential verified; CredentialVerdict.INCONCLUSIVE для отказа не по credential
 
 ## Статус задач
 
@@ -29,7 +33,7 @@
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | done |  | L2, модель без поведения |
 | AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | done |  | L2; E2 |
 | AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | done |  | L3 |
-| AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | todo |  | L3 |
+| AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | in_progress |  | L3 |
 | AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | todo |  | L3 |
 | AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | todo |  | закрытие |
 
