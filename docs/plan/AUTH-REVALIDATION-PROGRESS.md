@@ -13,11 +13,14 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** AR1.2 Recovery: outcome_unknown и метрика
+- **Начата:** 2026-11-01
 - **Шаги:**
-  - [ ] —
-- **Заметки для следующей сессии:** —
+  - [ ] Красные тесты: probe и login после claim_expired, WorkerRun.counts
+  - [ ] memory и PostgreSQL recover_provider_operations: result outcome=unknown
+  - [ ] Документация и CHANGELOG
+  - [ ] scripts/check.sh зелёный, закрыть задачу
+- **Заметки для следующей сессии:** recover_provider_operations (memory.py ~3450, postgres/store.py ~5213) ставит error_code claim_expired без result; воркер provider_worker.py уже считает recovered
 
 ## Статус задач
 
@@ -25,7 +28,7 @@
 |---|---|---|---|---|---|
 | AR0.1 | Вердикт провайдера как `Observation`, защита `challenge` | — | done |  | L0; дефект, E1/E3/E6 |
 | AR1.1 | Сетка `projection_failed`: операция не остаётся `running` | AR0.1 | done |  | L1 |
-| AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | todo |  | L1; E5 |
+| AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | in_progress |  | L1; E5 |
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | todo |  | L2, модель без поведения |
 | AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | todo |  | L2; E2 |
 | AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | todo |  | L3 |
