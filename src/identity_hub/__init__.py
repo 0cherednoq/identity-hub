@@ -40,6 +40,7 @@ from identity_hub.crypto import (
     StaticSecretsProvider,
     generate_key,
 )
+from identity_hub.diagnostics import BlockerKind, DiagnosticPolicy
 from identity_hub.dispatch.notifications import (
     TelegramRateLimited,
     TelegramRejected,
@@ -184,6 +185,7 @@ __all__ = [
     "BatchResult",
     "Blame",
     "Blocker",
+    "BlockerKind",
     "BrowserFingerprint",
     "BrowserSession",
     "ChallengeAlreadyOpen",
@@ -199,6 +201,7 @@ __all__ = [
     "CredentialInput",
     "DatabaseBusy",
     "DeliveryStatus",
+    "DiagnosticPolicy",
     "DumpNamespace",
     "EligibleCapacity",
     "EnvSecretsProvider",

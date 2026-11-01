@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `DiagnosticPolicy` и `Service(diagnostics=...)`: сервис объявляет, какие `lifecycle`, `availability` и
+  `standing` допускают явную диагностическую проверку аккаунта (по умолчанию `retired`, пауза и охлаждение
+  допущены, карантин и `deleted` нет). Словарь кодов отказа — `BlockerKind`. Поведение существующих
+  операций не меняется (D-335).
+
 ### Fixed
 
 - Вердикт провайдера в `auth.verify_session`/`auth.adopt_session` применяется как `Observation`, а не

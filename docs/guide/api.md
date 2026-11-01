@@ -82,6 +82,14 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 
 ## Стандартные модели форматов
 
+Диагностический допуск объявляется сервисом: `Service(diagnostics=DiagnosticPolicy(...))`.
+`DiagnosticPolicy` называет `lifecycles`, `availability` и `standing`, при которых явную проверку
+конкретного аккаунта можно выполнять. По умолчанию это `provisioning`, `ready`, `retired`;
+`available`, `paused`, `cooling`; любой `standing`, кроме `deleted`. Карантин и `deleted`
+допускаются только если сервис перечислил их явно. `policy.blockers(...)` возвращает отказы как
+`Blocker(code, detail)`; коды описывает `BlockerKind`. Политика не влияет на обычные операции,
+`sync.refresh` и фоновую сверку (D-335).
+
 Политика приёмки импорта экспортируется как `AcceptPolicy`; её задают в
 `imports.run(..., accept=...)` или как `Service.default_accept`.
 Публичные типы `OnExisting`, `ImportReport`, `LoginContext`, `CredentialCandidate` и

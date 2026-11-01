@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict
 
 from identity_hub.acceptance import AcceptPolicy
+from identity_hub.diagnostics import DEFAULT_DIAGNOSTIC_POLICY, DiagnosticPolicy
 from identity_hub.domain.region_specs import REGIONS
 from identity_hub.domain.regions import Normalizer, RegionSpec
 from identity_hub.domain.verification import VERIFICATION, VerificationSpec, VerificationTier
@@ -263,6 +264,12 @@ class Service(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unp
     default_accept: AcceptPolicy | None = None
     # Отклонённая адаптером пара сразу выключается из ручного выбора (D-319).
     disable_rejected_credentials: bool = False
+    # Допуск явной диагностики (auth.revalidate); None — политика по умолчанию (D-335).
+    diagnostics: DiagnosticPolicy | None = None
+
+    def diagnostic_policy(self) -> DiagnosticPolicy:
+        """Политика диагностического допуска сервиса или политика по умолчанию."""
+        return self.diagnostics if self.diagnostics is not None else DEFAULT_DIAGNOSTIC_POLICY
 
     def session_schema(self, slot: str) -> type[BaseModel]:
         """Схема конкретного слота; необъявленный слот использует прежнюю общую `session`."""
@@ -421,6 +428,8 @@ class Service(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unp
             errors.append("session_auth_cookies: имена cookie должны быть непустыми строками")
         if self.default_accept is not None and not isinstance(self.default_accept, AcceptPolicy):
             errors.append("default_accept: нужен AcceptPolicy")
+        if self.diagnostics is not None and not isinstance(self.diagnostics, DiagnosticPolicy):
+            errors.append("diagnostics: нужен DiagnosticPolicy")
         if not isinstance(self.disable_rejected_credentials, bool):
             errors.append("disable_rejected_credentials: нужен bool")
         for code, state in self.standing_codes.items():
