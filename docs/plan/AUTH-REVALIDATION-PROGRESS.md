@@ -13,10 +13,13 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** AR2.1 DiagnosticPolicy и типизированные Blocker
+- **Начата:** 2026-11-01
 - **Шаги:**
-  - [ ] —
+  - [ ] Красные тесты: валидация, defaults, quarantined/deleted только явно, Service.diagnostics
+  - [ ] Модуль diagnostics.py, поле Service.diagnostics, экспорт
+  - [ ] Typing-тест, docs/guide/api.md, CHANGELOG
+  - [ ] scripts/check.sh зелёный, закрыть задачу
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -26,7 +29,7 @@
 | AR0.1 | Вердикт провайдера как `Observation`, защита `challenge` | — | done |  | L0; дефект, E1/E3/E6 |
 | AR1.1 | Сетка `projection_failed`: операция не остаётся `running` | AR0.1 | done |  | L1 |
 | AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | done |  | L1; E5 |
-| AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | todo |  | L2, модель без поведения |
+| AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | in_progress |  | L2, модель без поведения |
 | AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | todo |  | L2; E2 |
 | AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | todo |  | L3 |
 | AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | todo |  | L3 |
