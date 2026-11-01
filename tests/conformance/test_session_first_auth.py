@@ -20,6 +20,7 @@ from identity_hub import (
     LeaseLost,
     LeaseOwnershipLost,
     LeaseRevoked,
+    Override,
     ProbeContext,
     ProbeResult,
     RevisionConflict,
@@ -289,6 +290,29 @@ async def test_adopt_invalid_default_marks_global_auth_invalid(
     identity = await space.identities.get(created.id)
     assert identity.auth == AuthState.SESSION_INVALID
     assert identity.lifecycle == "provisioning"
+    assert probe.calls == [("default", Session(token="default-token"))]
+
+
+async def test_adopt_invalid_uploaded_default_from_no_session_is_terminal(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    probe, created = await _setup_default(
+        hub_under_test,
+        space,
+        "sf_adopt_uploaded_default_invalid",
+        ProbeResult(AuthState.SESSION_INVALID),
+    )
+    await space.identities.override(
+        created.id,
+        Override("auth", "", AuthState.NO_SESSION, reason="uploaded session", actor="test"),
+    )
+
+    result = await space.auth.adopt_session(created.id, actor="checker", activate=True)
+
+    assert result.outcome is SessionAdoptionOutcome.INVALID
+    assert result.auth == AuthState.SESSION_INVALID
+    identity = await space.identities.get(created.id)
+    assert identity.auth == AuthState.SESSION_INVALID
     assert probe.calls == [("default", Session(token="default-token"))]
 
 

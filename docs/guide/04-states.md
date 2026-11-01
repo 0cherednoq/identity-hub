@@ -118,6 +118,13 @@ stateDiagram-v2
     authenticated --> session_invalid : invalid default slot
 ```
 
+Вердикт провайдера (проба, `verify_session`, `adopt_session`) — внешний факт и применяется как
+наблюдение, а не как команда: он не отвергается графом переходов и не откатывает запись результата
+операции. Поэтому `session_invalid` фиксируется из `no_session`, `authenticated` и `session_invalid`.
+Интерактивный вход (`logging_in`, `challenge`) наблюдение не затирает: исход региона `sticky`,
+записывается `identity.state.drift`. Закрыть такой вход снаружи может только наблюдение
+`authenticated`. Команды (`login`, `answer_challenge`, таймеры) этим правилом не ограничены.
+
 - **Управляет:** процесс входа библиотеки ([вход](05-login.md)), ваш код через
   `lease.mark_authenticated()`, классификатор ошибок (`session_invalid`), пробы.
 - `session_invalid` — это не бан: standing не меняется, аккаунт просто нужно перелогинить.

@@ -462,3 +462,52 @@ def test_invariants_under_random_changes(spec: RegionSpec, data: st.DataObject) 
         if cur.state in spec.sticky and isinstance(change, Observation):
             assert new.state == cur.state or new.state in spec.sticky_exits
         cur = new
+
+
+# ------------------------------------------------ AR0.1: наблюдение и интерактивный вход (D-335)
+
+
+@pytest.mark.parametrize("current", [AuthState.CHALLENGE, AuthState.LOGGING_IN])
+@pytest.mark.parametrize("observed", [AuthState.SESSION_INVALID, AuthState.NO_SESSION])
+def test_auth_observation_does_not_leave_interactive_login(current: AuthState, observed: AuthState) -> None:
+    decision = apply(AUTH, at(current), Observation(observed, sec(1)), sec(1))
+    assert decision.outcome is Outcome.STICKY
+    assert decision.state.state == current
+    assert decision.events[0].type == "identity.state.drift"
+
+
+@pytest.mark.parametrize("current", [AuthState.CHALLENGE, AuthState.LOGGING_IN])
+def test_authenticated_observation_closes_interactive_login(current: AuthState) -> None:
+    decision = apply(AUTH, at(current), Observation(AuthState.AUTHENTICATED, sec(1)), sec(1))
+    assert decision.outcome is Outcome.APPLIED
+    assert decision.state.state == AuthState.AUTHENTICATED
+
+
+@pytest.mark.parametrize(
+    "current", [AuthState.NO_SESSION, AuthState.AUTHENTICATED, AuthState.SESSION_INVALID]
+)
+def test_session_invalid_observation_applies_from_non_interactive_states(current: AuthState) -> None:
+    decision = apply(AUTH, at(current), Observation(AuthState.SESSION_INVALID, sec(1)), sec(1))
+    assert decision.state.state == AuthState.SESSION_INVALID
+
+
+@pytest.mark.parametrize("current", [AuthState.CHALLENGE, AuthState.LOGGING_IN])
+def test_commands_still_leave_interactive_login(current: AuthState) -> None:
+    decision = apply(AUTH, at(current), Command(AuthState.AUTHENTICATED, actor="login"), sec(1))
+    assert decision.state.state == AuthState.AUTHENTICATED
+
+
+def test_graph_has_no_edge_for_external_fact_no_session_to_session_invalid() -> None:
+    assert not AUTH.can_command(AuthState.NO_SESSION, AuthState.SESSION_INVALID)
+
+
+def test_observation_retryable_is_stored_on_region() -> None:
+    obs = Observation(AuthState.SESSION_INVALID, sec(1), code="session_invalid", retryable=False)
+    decision = apply(AUTH, at(AuthState.AUTHENTICATED), obs, sec(1))
+    assert decision.state.retryable is False
+    assert (
+        apply(
+            AUTH, at(AuthState.AUTHENTICATED), Observation(AuthState.SESSION_INVALID, sec(1)), sec(1)
+        ).state.retryable
+        is None
+    )

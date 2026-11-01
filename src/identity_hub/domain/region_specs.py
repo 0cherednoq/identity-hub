@@ -84,6 +84,10 @@ AUTH = RegionSpec(
         AuthState.SESSION_INVALID: _fs(AuthState.LOGGING_IN, AuthState.AUTHENTICATED, AuthState.NO_SESSION),
     },
     severity={AuthState.SESSION_INVALID: Severity.WARNING, AuthState.CHALLENGE: Severity.WARNING},
+    # AR0.1, D-335: внешний факт (вердикт пробы) не затирает интерактивный вход; закрыть его снаружи
+    # может только `authenticated`. Команды (login, таймеры) sticky не затрагивает.
+    sticky=_fs(AuthState.CHALLENGE, AuthState.LOGGING_IN),
+    sticky_exits=_fs(AuthState.AUTHENTICATED),
 )
 
 # §3.4 — внутреннее планирование, не синхронизируется; временные состояния снимает таймер

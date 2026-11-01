@@ -79,6 +79,8 @@ class Observation:
     code: str | None = None
     until: datetime | None = None
     actor: str = "platform"
+    retryable: bool | None = None
+    """Повторяем ли отказ; `None` — не сообщается (поле региона не меняется при подтверждении)."""
 
     def __post_init__(self) -> None:
         if self.source not in OBSERVATION_SOURCES:
@@ -336,7 +338,12 @@ def _apply_observation(
         return RegionDecision(Outcome.PINNED, cur, synced, events)
     if same:
         # подтверждение текущего состояния сбрасывает ожидание выхода (FR-9.4: «подряд»)
-        new = replace(synced, pending_observation=None, until=obs.until or cur.until)
+        new = replace(
+            synced,
+            pending_observation=None,
+            until=obs.until or cur.until,
+            retryable=cur.retryable if obs.retryable is None else obs.retryable,
+        )
         return RegionDecision(Outcome.UNCHANGED, cur, new)
     if cur.state in spec.sticky and target != cur.state and target not in spec.sticky_exits:
         return RegionDecision(
@@ -356,7 +363,7 @@ def _apply_observation(
         changed_by=obs.actor,
         change_reason=None,
         pending_observation=None,
-        retryable=None,
+        retryable=obs.retryable,
     )
     return RegionDecision(Outcome.APPLIED, cur, new, _changed_events(spec, cur, new, key))
 

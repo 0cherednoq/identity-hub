@@ -13,23 +13,17 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** AR0.1 Вердикт провайдера как Observation, защита challenge
-- **Начата:** 2026-11-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Красные тесты: матрица auth x метод, проба поверх challenge, unit автомата, pin
-  - [ ] verify_session и adopt_session: Command -> Observation
-  - [ ] AUTH.sticky/sticky_exits, убрать переход хотфикса из графа
-  - [ ] retryable: проверить потребителей и решить
-  - [ ] Проверить остальные пути apply_region_change/Observation в src
-  - [ ] Документация 04-states и CHANGELOG
-  - [ ] scripts/check.sh зелёный, закрыть задачу
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
 
 | ID | Задача | Зависит от | Статус | Коммит | Примечание |
 |---|---|---|---|---|---|
-| AR0.1 | Вердикт провайдера как `Observation`, защита `challenge` | — | in_progress |  | L0; дефект, E1/E3/E6 |
+| AR0.1 | Вердикт провайдера как `Observation`, защита `challenge` | — | done |  | L0; дефект, E1/E3/E6 |
 | AR1.1 | Сетка `projection_failed`: операция не остаётся `running` | AR0.1 | todo |  | L1 |
 | AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | todo |  | L1; E5 |
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | todo |  | L2, модель без поведения |
@@ -39,6 +33,7 @@
 | AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | todo |  | L3 |
 | AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | todo |  | закрытие |
 
-**Итого:** 0 / 9 done
+**Итого:** 1 / 9 done
 
 ## Журнал сессий
+2026-11-01 · AR0.1 · done · вердикт провайдера как Observation, sticky для challenge/logging_in, Observation.retryable; check.sh 2401 passed · дальше AR1.1

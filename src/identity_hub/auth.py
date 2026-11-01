@@ -22,8 +22,8 @@ from identity_hub._space import SpaceBase, logger
 from identity_hub.crypto import PlaintextPayload, associated_data
 from identity_hub.domain.provider_operations import RetryPolicy, safe_error_code
 from identity_hub.domain.redaction import sanitize_text
-from identity_hub.domain.regions import Command
-from identity_hub.enums import AuthState, LeaseUnavailableReason, Lifecycle, Standing
+from identity_hub.domain.regions import Command, Observation
+from identity_hub.enums import AuthState, ChangeSource, LeaseUnavailableReason, Lifecycle, Standing
 from identity_hub.errors import (
     Blocker,
     ConcurrentModification,
@@ -453,10 +453,13 @@ class LoginMixin(SpaceBase):
                             identity_id,
                             "auth",
                             DEFAULT_SLOT,
-                            Command(
+                            # AR0.1, D-335: вердикт провайдера — внешний факт, а не наша команда
+                            Observation(
                                 AuthState.SESSION_INVALID,
-                                actor=actor,
+                                observed_at=await tx.now(),
+                                source=ChangeSource.PROBE,
                                 code="session_invalid",
+                                actor=actor,
                                 retryable=False,
                             ),
                             lease_id=lease.lease_id,
@@ -602,10 +605,13 @@ class LoginMixin(SpaceBase):
                             identity_id,
                             "auth",
                             DEFAULT_SLOT,
-                            Command(
+                            # AR0.1, D-335: вердикт провайдера — внешний факт, а не наша команда
+                            Observation(
                                 AuthState.SESSION_INVALID,
-                                actor=actor,
+                                observed_at=await tx.now(),
+                                source=ChangeSource.PROBE,
                                 code="session_invalid",
+                                actor=actor,
                                 retryable=False,
                             ),
                             lease_id=lease.lease_id,

@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Вердикт провайдера в `auth.verify_session`/`auth.adopt_session` применяется как `Observation`, а не
+  как `Command`. Раньше `TransitionNotAllowed` (например, `challenge → session_invalid`) откатывал
+  запись результата операции после вызова провайдера: `probe:auth` оставалась `running`, повтор получал
+  `LeaseUnavailable`. Граф `auth` под внешние факты не расширяется (D-335).
+- Наблюдение (проба, `verify_session`) больше не затирает `challenge` и `logging_in`: исход региона
+  `sticky`, событие `identity.state.drift`. `Observation` получил необязательное поле `retryable`.
+
 ## [1.0.0a7] - 2026-10-30
 
 Седьмой альфа-релиз добавляет атомарную session-first аутентификацию конкретного session-slot.
