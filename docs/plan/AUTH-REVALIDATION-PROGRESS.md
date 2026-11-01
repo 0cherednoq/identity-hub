@@ -13,11 +13,15 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** AR3.1 auth.revalidate(): каркас, шаг сессии, структурный результат
+- **Начата:** 2026-11-01
 - **Шаги:**
-  - [ ] —
-- **Заметки для следующей сессии:** —
+  - [ ] Красные тесты: verdict-ы, допуск banned/retired, blocked, missing, challenge, standing, busy, секреты
+  - [ ] Модуль revalidation.py: AuthRevalidationResult, перечисления, RevalidationMixin
+  - [ ] Auth.revalidate, hub.py миксин, экспорты, публичный API и typing-тесты
+  - [ ] Документация guide, CHANGELOG
+  - [ ] scripts/check.sh зелёный, закрыть задачу
+- **Заметки для следующей сессии:** План: diagnostic lease -> _targeted_session_probe(DEFAULT) -> проекция Observation(auth) valid/invalid + mark_session_validity; interactive login (challenge/logging_in) не затирается и не закрывается; опционально standing probe; BUSY -> status in_progress; request_id валидируется, идемпотентность в AR3.3
 
 ## Статус задач
 
@@ -28,7 +32,7 @@
 | AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | done |  | L1; E5 |
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | done |  | L2, модель без поведения |
 | AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | done |  | L2; E2 |
-| AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | todo |  | L3 |
+| AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | in_progress |  | L3 |
 | AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | todo |  | L3 |
 | AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | todo |  | L3 |
 | AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | todo |  | закрытие |
