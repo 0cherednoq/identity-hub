@@ -310,10 +310,11 @@ class LoginMixin(SpaceBase):
         lease: Lease,
         service: Service,
         slot: str,
+        request_key: str | None = None,
     ) -> _SessionProbeCall:
         """Один auth probe выбранного slot под общими lease/provider-operation гарантиями."""
         sync: Any = self
-        claim = await sync._claim_probe(lease, service, "probe:auth")
+        claim = await sync._claim_probe(lease, service, "probe:auth", request_key)
         if claim is None:
             raise LeaseUnavailable(
                 f"проверка session {lease.identity_id}/{slot} уже выполняется",
@@ -1076,12 +1077,14 @@ class LoginMixin(SpaceBase):
                 describe_error(exc),
             )
 
-    async def _claim_login(self, lease: Lease, svc: Service) -> ProviderClaim:
+    async def _claim_login(self, lease: Lease, svc: Service, request_key: str | None = None) -> ProviderClaim:
         """Поставить и взять операцию login одной короткой транзакцией — до вызова адаптера (D-222)."""
         claim_for = svc.login_timeout + timedelta(minutes=1)
         async with self._tx(own=True) as tx:
             await lease._check_fencing(tx)
-            operation = await tx.enqueue_provider_operation(lease.identity_id, "login")
+            operation = await tx.enqueue_provider_operation(
+                lease.identity_id, "login", request_key=request_key
+            )
             (claim,) = await tx.claim_provider_operations(
                 lease.holder, limit=1, claim_for=claim_for, operation_ids=[operation.id]
             )
@@ -1135,7 +1138,8 @@ class LoginMixin(SpaceBase):
             self._tx(own=True) as tx,
         ):
             await lease._check_fencing(tx)
-            await self._apply_login(tx, lease, claim, outcome, result=result, error_code=error_code)
+            if not observe:
+                await self._apply_login(tx, lease, claim, outcome, result=result, error_code=error_code)
             if fault is not None:
                 await apply_fault_effects(lease, tx, fault)
             if session is not None:
@@ -1173,6 +1177,9 @@ class LoginMixin(SpaceBase):
             decision = await apply_region_change(
                 self, tx, lease.identity_id, "auth", DEFAULT_SLOT, change, lease_id=lease.lease_id
             )
+            if observe:  # в result операции попадает исход auth (AR3.3: повтор запроса читает его)
+                stored = None if result is None else {**result, "applied": {"auth": str(decision.outcome)}}
+                await self._apply_login(tx, lease, claim, outcome, result=stored, error_code=error_code)
             if event is not None:
                 await self._emit(
                     tx,
@@ -1196,6 +1203,7 @@ class LoginMixin(SpaceBase):
         previous: ChallengeRow | None = None,
         credential_marks: list[_CredentialMark] | None = None,
         observe: bool = False,
+        result_extra: Mapping[str, Any] | None = None,
     ) -> tuple[UUID, str]:
         """Открыть challenge; `(id вопроса, исход региона auth)`. `observe` — перепроверка без logging_in."""
         challenge_id = new_id()
@@ -1210,7 +1218,8 @@ class LoginMixin(SpaceBase):
         ):
             await lease._check_fencing(tx)
             # попытка входа завершилась вопросом платформы: операция succeeded, исход — challenged
-            await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})
+            if not observe:
+                await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})
             await self._apply_credential_marks(tx, lease, credential_marks or [])
             if previous is not None:
                 await tx.resolve_challenge(previous.id)
@@ -1235,6 +1244,14 @@ class LoginMixin(SpaceBase):
             decision = await apply_region_change(
                 self, tx, lease.identity_id, "auth", DEFAULT_SLOT, asked_change, lease_id=lease.lease_id
             )
+            if observe:
+                stored = {
+                    "outcome": "challenged",
+                    "challenge_id": str(challenge_id),
+                    "applied": {"auth": str(decision.outcome)},
+                    **(result_extra or {}),
+                }
+                await self._apply_login(tx, lease, claim, "succeeded", result=stored)
             await self._emit(
                 tx,
                 EventDraft(

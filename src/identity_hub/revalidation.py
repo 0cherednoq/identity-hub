@@ -24,6 +24,7 @@ from identity_hub.errors import (
     AlreadyExists,
     Blocker,
     ConcurrentModification,
+    IdempotencyConflict,
     LeaseOwnershipLost,
     LeaseUnavailable,
     OperationNotAllowed,
@@ -120,6 +121,10 @@ class RevalidationMixin(SpaceBase):
             key = service.credential_key(*credential)
             if service.authenticator is None:
                 raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
+        label = f"{key[0]}/{key[1]}" if key is not None else None
+        prior = await self._revalidation_prior(identity_id, service, request_id, label)
+        if prior.final is not None:  # повтор логического запроса: провайдер не вызывается
+            return prior.final
         sync: Any = self
         try:
             lease = await sync._diagnostic_lease(identity_id, actor=actor, reason=reason)
@@ -132,18 +137,51 @@ class RevalidationMixin(SpaceBase):
                 raise
             return _in_progress(identity_id)
         try:
-            result = await self._revalidate_session(lease, service, actor)
+            result = prior.session or await self._revalidate_session(lease, service, actor, request_id, label)
             if (
                 key is not None
                 and result.status is RevalidationStatus.COMPLETED
                 and result.session_verdict in {SessionVerdict.INVALID, SessionVerdict.MISSING}
             ):
-                result = await self._revalidate_credential(lease, service, actor, key, result)
+                result = await self._revalidate_credential(lease, service, actor, key, result, request_id)
             return result
         finally:
             await lease.release()
 
-    async def _revalidate_session(self, lease: Any, service: Any, actor: str) -> AuthRevalidationResult:
+    async def _revalidation_prior(
+        self, identity_id: UUID, service: Any, request_id: str, label: str | None
+    ) -> _Prior:
+        """Операции этого `request_id` (AR3.3): что уже сделано и что можно вернуть без провайдера."""
+        async with self._tx(own=True) as tx:
+            session_op = await tx.get_request_operation(identity_id, "probe:auth", f"{request_id}:session")
+            credential_op = await tx.get_request_operation(identity_id, "login", f"{request_id}:credential")
+            standing_op = await tx.get_request_operation(
+                identity_id, "probe:standing", f"{request_id}:standing"
+            )
+        for operation in (session_op, credential_op):
+            if (
+                operation is not None
+                and operation.state == "succeeded"
+                and operation.result.get("credential") != label
+            ):
+                raise IdempotencyConflict("auth.revalidate")  # тот же request_id, другие параметры
+        live = (session_op, credential_op)
+        if any(operation is not None and operation.state != "succeeded" for operation in live):
+            return _Prior(final=_in_progress(identity_id))
+        session_result: AuthRevalidationResult | None = None
+        if session_op is not None:
+            session_result = _replay_session(identity_id, service, session_op, standing_op)
+        if credential_op is not None:
+            return _Prior(final=_replay_credential(identity_id, session_result, credential_op))
+        if session_result is None:
+            return _Prior()
+        if label is not None and session_result.session_verdict is SessionVerdict.INVALID:
+            return _Prior(session=session_result)  # сессия проверена, шаг credential ещё не выполнен
+        return _Prior(final=session_result)
+
+    async def _revalidate_session(
+        self, lease: Any, service: Any, actor: str, request_id: str, label: str | None
+    ) -> AuthRevalidationResult:
         """Шаг сессии: один вызов auth probe default-слота и проекция вердикта наблюдением."""
         sync: Any = self
         identity_id: UUID = lease.identity_id
@@ -161,7 +199,9 @@ class RevalidationMixin(SpaceBase):
             )
         source_revision = await lease.session_revision(DEFAULT_SLOT)
         try:
-            call = await self._targeted_session_probe(lease, service, DEFAULT_SLOT)  # type: ignore[attr-defined]
+            call = await sync._targeted_session_probe(
+                lease, service, DEFAULT_SLOT, request_key=f"{request_id}:session"
+            )
         except LeaseUnavailable as exc:
             if exc.reason is not LeaseUnavailableReason.BUSY:
                 raise
@@ -237,7 +277,13 @@ class RevalidationMixin(SpaceBase):
                         lease_id=lease.lease_id,
                     )
                     applied["auth"] = str(decision.outcome)
-            await sync._apply_operation(tx, lease, claim, "succeeded", result={"outcome": str(verdict)})
+            stored = {"outcome": str(verdict), "applied": dict(applied), "credential": label}
+            if verdict is SessionVerdict.FAILED:  # неопознанный ответ: повтор с тем же request_id допустим
+                await sync._apply_operation(
+                    tx, lease, claim, "failed", result=stored, error_code="unrecognized_state"
+                )
+            else:
+                await sync._apply_operation(tx, lease, claim, "succeeded", result=stored)
         if verdict is SessionVerdict.FAILED:
             return AuthRevalidationResult(
                 identity_id,
@@ -248,7 +294,7 @@ class RevalidationMixin(SpaceBase):
             )
         if service.probes is not None and getattr(service.probes, "standing", None) is not None:
             try:
-                outcomes = await sync._probe(lease, service, [("standing", "")])
+                outcomes = await sync._probe(lease, service, [("standing", "")], request_id=request_id)
             except LeaseOwnershipLost:
                 raise
             except Exception as exc:
@@ -273,11 +319,13 @@ class RevalidationMixin(SpaceBase):
         actor: str,
         key: tuple[str, str],
         base: AuthRevalidationResult,
+        request_id: str,
     ) -> AuthRevalidationResult:
         """Шаг credential: вызов аутентификатора без `logging_in`, итог применяется наблюдением (D-335)."""
         sync: Any = self
         identity_id: UUID = lease.identity_id
         kind, name = key
+        label = f"{kind}/{name}"
         async with self._tx(own=True) as tx:
             open_challenge = await tx.open_challenge_of(identity_id)
             found = await tx.get_credential(identity_id, kind, name)
@@ -306,7 +354,7 @@ class RevalidationMixin(SpaceBase):
         lease._start(None)  # вход бывает долгим: аренда продлевается
         try:
             try:
-                claim = await sync._claim_login(lease, service)
+                claim = await sync._claim_login(lease, service, f"{request_id}:credential")
             except AlreadyExists:
                 return replace(
                     base,
@@ -321,7 +369,12 @@ class RevalidationMixin(SpaceBase):
                     session = await service.authenticator.login(ctx)
             except LoginChallenge as asked:
                 challenge_id, outcome = await sync._open_challenge(
-                    lease, asked, claim=claim, credential_marks=ctx._credential_marks, observe=True
+                    lease,
+                    asked,
+                    claim=claim,
+                    credential_marks=ctx._credential_marks,
+                    observe=True,
+                    result_extra={"credential": label, "credential_verdict": "challenge"},
                 )
                 applied["auth"] = outcome
                 return replace(
@@ -345,15 +398,22 @@ class RevalidationMixin(SpaceBase):
                     if fault is not None and fault.blame is Blame.SESSION_INVALID
                     else AuthState.NO_SESSION
                 )
+                verdict_value = "rejected" if failure.credential is not None else "inconclusive"
                 applied["auth"] = await sync._set_auth(
                     lease,
                     target,
                     "identity.login.failed",
                     {"error": "LoginFailure", "code": failure.code, "retryable": failure.retryable},
                     claim=claim,
-                    outcome="failed",
-                    result={"outcome": "failed", "retryable": failure.retryable},
-                    error_code=failure.code,
+                    # провайдер ответил определённо: операция успешна, повтор получит этот ответ (AR3.3)
+                    outcome="succeeded",
+                    result={
+                        "outcome": "rejected" if failure.credential is not None else "inconclusive",
+                        "credential": label,
+                        "credential_verdict": verdict_value,
+                        "code": failure.code,
+                        "retryable": failure.retryable,
+                    },
                     auth_code=failure.code,
                     auth_retryable=failure.retryable,
                     fault=fault,
@@ -397,7 +457,7 @@ class RevalidationMixin(SpaceBase):
                 {},
                 claim=claim,
                 outcome="succeeded",
-                result={"outcome": "succeeded"},
+                result={"outcome": "succeeded", "credential": label, "credential_verdict": "valid"},
                 session=payload,
                 session_expires_at=session_expires_at,
                 session_fingerprint=session_fingerprint,
@@ -412,6 +472,56 @@ class RevalidationMixin(SpaceBase):
             )
         finally:
             await ctx.close()
+
+
+@dataclass(frozen=True, slots=True)
+class _Prior:
+    """Что известно о логическом запросе: готовый ответ (`final`) или результат шага сессии."""
+
+    final: AuthRevalidationResult | None = None
+    session: AuthRevalidationResult | None = None
+
+
+def _applied(result: dict[str, Any]) -> dict[str, str]:
+    return {str(key): str(value) for key, value in (result.get("applied") or {}).items()}
+
+
+def _replay_session(
+    identity_id: UUID, service: Any, session_op: Any, standing_op: Any
+) -> AuthRevalidationResult:
+    result = session_op.result
+    applied = _applied(result)
+    if service.probes is not None and getattr(service.probes, "standing", None) is not None:
+        if standing_op is None:
+            applied["standing"] = "failed"  # проба standing не завершилась: повтор её не перезапускает
+        elif standing_op.result.get("outcome") not in {None, "not_probed"}:
+            applied["standing"] = str(standing_op.result["outcome"])
+    return AuthRevalidationResult(
+        identity_id,
+        RevalidationStatus.COMPLETED,
+        session_verdict=SessionVerdict(result.get("outcome", "failed")),
+        applied=applied,
+        operation_ids=(session_op.id,),
+    )
+
+
+def _replay_credential(
+    identity_id: UUID, session_result: AuthRevalidationResult | None, credential_op: Any
+) -> AuthRevalidationResult:
+    base = session_result or AuthRevalidationResult(
+        identity_id, RevalidationStatus.COMPLETED, session_verdict=SessionVerdict.MISSING
+    )
+    result = credential_op.result
+    challenge = result.get("challenge_id")
+    return replace(
+        base,
+        credential_verdict=CredentialVerdict(result.get("credential_verdict", "not_checked")),
+        applied={**base.applied, **_applied(result)},
+        operation_ids=(*base.operation_ids, credential_op.id),
+        retryable=bool(result.get("retryable", False)),
+        challenge_id=UUID(challenge) if challenge else None,
+        code=result.get("code"),
+    )
 
 
 def _in_progress(identity_id: UUID) -> AuthRevalidationResult:

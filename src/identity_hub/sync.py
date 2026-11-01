@@ -222,6 +222,7 @@ class SyncMixin(SpaceBase):
         targets: list[tuple[str, str]],
         *,
         session_slot: str = DEFAULT_SLOT,
+        request_id: str | None = None,
     ) -> dict[str, str]:
         probes = service.probes
         if probes is None:
@@ -236,7 +237,12 @@ class SyncMixin(SpaceBase):
                 if method is None:
                     results[label] = "not_probed"
                     continue
-                claim = await self._claim_probe(lease, service, f"probe:{label}")
+                request_key = (
+                    f"{request_id}:{region}"
+                    if request_id is not None and region in ("auth", "standing")
+                    else None
+                )
+                claim = await self._claim_probe(lease, service, f"probe:{label}", request_key)
                 if claim is None:
                     results[label] = "busy"  # живая операция того же вида — у другой сверки
                     continue
@@ -256,13 +262,20 @@ class SyncMixin(SpaceBase):
                 results[label] = await self._apply_probe(lease, service, region, key, result, claim)
         return results
 
-    async def _claim_probe(self, lease: Lease, service: Service, kind: str) -> ProviderClaim | None:
-        """Операция пробы: claim коммитится до вызова; живая операция того же вида — None (D-223)."""
+    async def _claim_probe(
+        self, lease: Lease, service: Service, kind: str, request_key: str | None = None
+    ) -> ProviderClaim | None:
+        """Операция пробы: claim коммитится до вызова; живая операция того же вида — None (D-223).
+
+        `request_key` (AR3.3): повтор того же логического запроса, пока операция жива или завершена
+        успешно, тоже даёт None."""
         claim_for = service.probe_timeout + timedelta(minutes=1)
         try:
             async with self._tx(own=True) as tx:
                 await lease._check_ownership(tx)
-                operation = await tx.enqueue_provider_operation(lease.identity_id, kind)
+                operation = await tx.enqueue_provider_operation(
+                    lease.identity_id, kind, request_key=request_key
+                )
                 (claim,) = await tx.claim_provider_operations(
                     lease.holder, limit=1, claim_for=claim_for, operation_ids=[operation.id]
                 )

@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+Ревизия схемы — `0040`: перед обновлением примените миграцию (`SCHEMA_COMPATIBLE = {"0040"}`).
+
 ### Added
 
 - `DiagnosticPolicy` и `Service(diagnostics=...)`: сервис объявляет, какие `lifecycle`, `availability` и
@@ -21,6 +23,12 @@
   пишет сессию и помечает запись проверенной; отказ помечает именно её; технический сбой не меняет `auth`;
   активный challenge возвращается без вызова провайдера; `disabled`/`revoked`/истёкшая/отсутствующая запись —
   `blocked` с типизированным `Blocker`. Новый вердикт `CredentialVerdict.INCONCLUSIVE` (D-335).
+- Идемпотентность `auth.revalidate` по `request_id` (миграция `0040`, колонка `request_key` у операций
+  провайдера): повтор завершённого запроса возвращает сохранённый результат без вызова провайдера, живая
+  операция даёт `in_progress`, тот же `request_id` с другим `credential` — `IdempotencyConflict`, новый
+  `request_id` — новая попытка. Технический сбой и `claim_expired` повтор с тем же `request_id` не блокируют;
+  определённый отказ провайдера (`credentials_rejected`) теперь завершает операцию входа ревалидации как
+  `succeeded` с вердиктом в `result` (D-335).
 - Внутренний диагностический допуск (`space._diagnostic_lease`, публичный вход — `auth.revalidate`):
   обходит допуск нагрузки только для операции `probe` по `DiagnosticPolicy` сервиса, не меняет
   `lifecycle`/`availability`/`standing`, сохраняет fencing, TTL, квоты и эксклюзивность аренды. Отказ —

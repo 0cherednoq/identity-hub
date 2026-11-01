@@ -5073,6 +5073,7 @@ class PgTx(StoreTx):
         *,
         available_at: datetime | None = None,
         deadline_at: datetime | None = None,
+        request_key: str | None = None,
     ) -> ProviderOperationRow:
         values: dict[str, Any] = {
             "id": new_id(),
@@ -5080,26 +5081,45 @@ class PgTx(StoreTx):
             "identity_id": identity_id,
             "kind": kind,
             "deadline_at": deadline_at,
+            "request_key": request_key,
         }
         if available_at is not None:
             values["available_at"] = available_at
         p = PROVIDER_OPERATIONS.c
-        operation_id = (
-            await self.execute(
-                insert(PROVIDER_OPERATIONS)
-                .values(**values)
-                .on_conflict_do_nothing(
-                    index_elements=[p.identity_id, p.kind],
-                    index_where=text("state IN ('pending', 'running')"),
-                )
-                .returning(p.id)
+        insertion = insert(PROVIDER_OPERATIONS).values(**values)
+        if request_key is None:
+            insertion = insertion.on_conflict_do_nothing(
+                index_elements=[p.identity_id, p.kind],
+                index_where=text("state IN ('pending', 'running')"),
             )
-        ).scalar_one_or_none()
+        else:  # конфликт и по живой операции вида, и по ключу запроса (0040)
+            insertion = insertion.on_conflict_do_nothing()
+        operation_id = (await self.execute(insertion.returning(p.id))).scalar_one_or_none()
         if operation_id is None:
             raise AlreadyExists("provider_operation", f"{identity_id}/{kind}")
         (row,) = [
             r for r in await self.list_provider_operations(identity_id=identity_id) if r.id == operation_id
         ]
+        return row
+
+    async def get_request_operation(
+        self, identity_id: UUID, kind: str, request_key: str
+    ) -> ProviderOperationRow | None:
+        p = PROVIDER_OPERATIONS.c
+        found = (
+            await self.execute(
+                select(p.id).where(
+                    p.space_id == self.space.id,
+                    p.identity_id == identity_id,
+                    p.kind == kind,
+                    p.request_key == request_key,
+                    p.state.in_(["pending", "running", "succeeded"]),
+                )
+            )
+        ).scalar_one_or_none()
+        if found is None:
+            return None
+        (row,) = [r for r in await self.list_provider_operations(identity_id=identity_id) if r.id == found]
         return row
 
     async def claim_provider_operations(
@@ -5300,6 +5320,7 @@ class PgTx(StoreTx):
                 updated_at=row.updated_at,
                 finished_at=row.finished_at,
                 revision=row.revision,
+                request_key=row.request_key,
             )
             for row in rows
         ]

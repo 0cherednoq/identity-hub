@@ -3330,9 +3330,18 @@ class MemoryTx(StoreTx):
         *,
         available_at: datetime | None = None,
         deadline_at: datetime | None = None,
+        request_key: str | None = None,
     ) -> ProviderOperationRow:
         if self._own(identity_id) is None:
             raise NotFound("identity", identity_id)
+        if request_key is not None and any(
+            op.identity_id == identity_id
+            and op.kind == kind
+            and op.request_key == request_key
+            and op.state in ("pending", "running", "succeeded")
+            for op in self.state.provider_operations.values()
+        ):
+            raise AlreadyExists("provider_operation", f"{identity_id}/{kind}")
         if any(
             op.identity_id == identity_id and op.kind == kind and op.state in ("pending", "running")
             for op in self.state.provider_operations.values()
@@ -3357,9 +3366,24 @@ class MemoryTx(StoreTx):
             self._now,
             None,
             1,
+            request_key,
         )
         self.state.provider_operations[row.id] = row
         return deepcopy(row)
+
+    async def get_request_operation(
+        self, identity_id: UUID, kind: str, request_key: str
+    ) -> ProviderOperationRow | None:
+        for op in self.state.provider_operations.values():
+            if (
+                op.space_id == self.space.id
+                and op.identity_id == identity_id
+                and op.kind == kind
+                and op.request_key == request_key
+                and op.state in ("pending", "running", "succeeded")
+            ):
+                return deepcopy(op)
+        return None
 
     async def claim_provider_operations(
         self,

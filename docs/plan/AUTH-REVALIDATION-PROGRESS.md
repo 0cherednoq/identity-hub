@@ -13,15 +13,11 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** AR3.3 request_id: идемпотентность и конкурентность
-- **Начата:** 2026-11-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Красные тесты: хранилище request_key и revalidate (replay, конфликт параметров, новая попытка, сбой, claim_expired, live)
-  - [ ] Миграция 0040, модель, ProviderOperationRow.request_key, enqueue/get в обоих хранилищах
-  - [ ] Ключи шагов в revalidate и replay сохранённого результата
-  - [ ] Документация, CHANGELOG, SCHEMA_HEAD, upgrade
-  - [ ] scripts/check.sh зелёный, закрыть задачу
-- **Заметки для следующей сессии:** Дизайн: partial unique (identity_id, kind, request_key) WHERE request_key NOT NULL AND state IN (pending,running,succeeded); failed не блокирует повтор; LoginFailure в revalidate терминализуется succeeded с result outcome=rejected|inconclusive; SCHEMA_COMPATIBLE={0040}; replay читает result шагов; конфликт credential -> IdempotencyConflict
+  - [ ] —
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
@@ -34,10 +30,10 @@
 | AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | done |  | L2; E2 |
 | AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | done |  | L3 |
 | AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | done |  | L3 |
-| AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | in_progress |  | L3 |
+| AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | done |  | L3 |
 | AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | todo |  | закрытие |
 
-**Итого:** 7 / 9 done
+**Итого:** 8 / 9 done
 
 ## Журнал сессий
 2026-11-01 · AR0.1 · done · вердикт провайдера как Observation, sticky для challenge/logging_in, Observation.retryable; check.sh 2401 passed · дальше AR1.1
@@ -47,3 +43,4 @@
 2026-11-01 · AR2.2 · done · диагностический допуск: Lease.diagnostic, гейт только для probe, _diagnostic_lease, событие identity.diagnostic.started; check.sh 2468 passed · дальше AR3.1
 2026-11-01 · AR3.1 · done · auth.revalidate(): допуск, шаг сессии, проба standing, структурный результат; check.sh 2512 passed · дальше AR3.2
 2026-11-01 · AR3.2 · done · revalidate(credential=): шаг credential без logging_in, observe-флаг у _set_auth/_open_challenge; check.sh 2548 passed · дальше AR3.3
+2026-11-01 · AR3.3 · done · request_key (миграция 0040), replay по request_id, IdempotencyConflict, retry после сбоя/claim_expired; check.sh 2578 passed · дальше AR4.1

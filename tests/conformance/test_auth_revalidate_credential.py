@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -52,10 +53,15 @@ class Authenticator:
         self.mode = mode
         self.calls = 0
         self.requested: list[tuple[str, str] | None] = []
+        self.entered = asyncio.Event()
+        self.gate: asyncio.Event | None = None
 
     async def login(self, ctx: Any) -> TgSession:
         self.calls += 1
         self.requested.append(ctx.requested_credential)
+        self.entered.set()
+        if self.gate is not None:
+            await self.gate.wait()
         if self.mode == "reject":
             raise LoginFailure("credentials_rejected", retryable=False, credential=ctx.requested_credential)
         if self.mode == "banned":

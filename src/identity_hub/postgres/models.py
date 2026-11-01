@@ -1011,6 +1011,7 @@ class ProviderOperationRecord(IdentityHubBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))  # 0024, D-220
+    request_key: Mapped[str | None] = mapped_column(String(160))  # 0040, AR3.3
 
     __table_args__ = (
         _identity_fk(),
@@ -1033,6 +1034,15 @@ class ProviderOperationRecord(IdentityHubBase):
             "kind",
             unique=True,
             postgresql_where=text("state IN ('pending', 'running')"),
+        ),
+        # один логический запрос (аккаунт, вид, ключ) - одна живая или успешная операция (0040, AR3.3)
+        Index(
+            "uq_ih_provider_operations_request",
+            "identity_id",
+            "kind",
+            "request_key",
+            unique=True,
+            postgresql_where=text("request_key IS NOT NULL AND state IN ('pending', 'running', 'succeeded')"),
         ),
         Index(
             "ix_ih_provider_operations_stale",

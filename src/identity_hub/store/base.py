@@ -206,6 +206,8 @@ class ProviderOperationRow:
     updated_at: datetime
     finished_at: datetime | None
     revision: int = 1  # каждое изменение записи + 1 (D-220)
+    # ключ логического запроса (AR3.3, D-335): `<request_id>:<шаг>`; None - операция без ключа
+    request_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2146,12 +2148,21 @@ class StoreTx(ABC):
         *,
         available_at: datetime | None = None,
         deadline_at: datetime | None = None,
+        request_key: str | None = None,
     ) -> ProviderOperationRow:
         """Поставить операцию в очередь: `pending`, `attempt = 0`, `revision = 1` (D-220).
 
         Живая (`pending`/`running`) операция того же вида у аккаунта уже есть — `AlreadyExists` (D-223).
+        С `request_key` повтор того же ключа (аккаунт, вид) тоже `AlreadyExists`, пока есть живая или
+        успешно завершённая операция с ним: `failed`/`cancelled` повтор не блокируют (AR3.3).
         """
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_request_operation(
+        self, identity_id: UUID, kind: str, request_key: str
+    ) -> ProviderOperationRow | None:
+        """Операция с ключом запроса в состоянии `pending`/`running`/`succeeded`; иначе `None` (AR3.3)."""
 
     @abstractmethod
     async def claim_provider_operations(
