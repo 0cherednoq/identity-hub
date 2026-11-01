@@ -13,22 +13,23 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** —
-- **Начата:** —
+- **Задача:** AR0.1 Вердикт провайдера как Observation, защита challenge
+- **Начата:** 2026-11-01
 - **Шаги:**
-  - [ ] —
-- **Заметки для следующей сессии:** Очередь только создана, ни одной задачи не начато. Первый шаг сессии:
-  закоммитить файлы очереди (`plan: add AR queue (D-335)`): `docs/plan/AUTH-REVALIDATION-*`,
-  `docs/plan/auth_revalidation_progress_tool.py`, правки `CLAUDE.md` и `DECISIONS.md`,
-  `docs/isue/auth-revalidation-*`. Незакоммиченные `src/identity_hub/domain/region_specs.py` и
-  `tests/conformance/test_session_first_auth.py` — хотфикс владельца (`no_session → session_invalid`),
-  это стартовая точка `AR0.1`: в коммит плана их **не** включать (`git add` только перечисленных файлов).
+  - [ ] Красные тесты: матрица auth x метод, проба поверх challenge, unit автомата, pin
+  - [ ] verify_session и adopt_session: Command -> Observation
+  - [ ] AUTH.sticky/sticky_exits, убрать переход хотфикса из графа
+  - [ ] retryable: проверить потребителей и решить
+  - [ ] Проверить остальные пути apply_region_change/Observation в src
+  - [ ] Документация 04-states и CHANGELOG
+  - [ ] scripts/check.sh зелёный, закрыть задачу
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
 | ID | Задача | Зависит от | Статус | Коммит | Примечание |
 |---|---|---|---|---|---|
-| AR0.1 | Вердикт провайдера как `Observation`, защита `challenge` | — | todo |  | L0; дефект, E1/E3/E6 |
+| AR0.1 | Вердикт провайдера как `Observation`, защита `challenge` | — | in_progress |  | L0; дефект, E1/E3/E6 |
 | AR1.1 | Сетка `projection_failed`: операция не остаётся `running` | AR0.1 | todo |  | L1 |
 | AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | todo |  | L1; E5 |
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | todo |  | L2, модель без поведения |
