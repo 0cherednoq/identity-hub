@@ -13,14 +13,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** AR4.1 Документация, traceability и финальная сверка
-- **Начата:** 2026-11-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Руководство: раздел перепроверки в 05-login.md, мёртвый confirm_leaving в 04-states.md
-  - [ ] Памятка потребителю (docs/upgrade.md) и статус исходного RFC
-  - [ ] Матрица трассировки docs/auth-revalidation-traceability.md и тест
-  - [ ] Полный check.sh и anti-flake конкурентных тестов x3
-  - [ ] Закрыть очередь AR
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -35,9 +31,9 @@
 | AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | done |  | L3 |
 | AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | done |  | L3 |
 | AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | done |  | L3 |
-| AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | in_progress |  | закрытие |
+| AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | done |  | закрытие |
 
-**Итого:** 8 / 9 done
+**Итого:** 9 / 9 done
 
 ## Журнал сессий
 2026-11-01 · AR0.1 · done · вердикт провайдера как Observation, sticky для challenge/logging_in, Observation.retryable; check.sh 2401 passed · дальше AR1.1
@@ -48,3 +44,4 @@
 2026-11-01 · AR3.1 · done · auth.revalidate(): допуск, шаг сессии, проба standing, структурный результат; check.sh 2512 passed · дальше AR3.2
 2026-11-01 · AR3.2 · done · revalidate(credential=): шаг credential без logging_in, observe-флаг у _set_auth/_open_challenge; check.sh 2548 passed · дальше AR3.3
 2026-11-01 · AR3.3 · done · request_key (миграция 0040), replay по request_id, IdempotencyConflict, retry после сбоя/claim_expired; check.sh 2578 passed · дальше AR4.1
+2026-11-02 · AR4.1 · done · руководство, памятка, матрица AR-R01..R23 и тест; anti-flake 3x196 passed, check.sh 2580 passed · очередь AR закрыта

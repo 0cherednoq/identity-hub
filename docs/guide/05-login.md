@@ -92,6 +92,72 @@ if result.outcome is SessionVerificationOutcome.VALID:
 metadata без обращения к платформе. Используйте их, только если verdict уже получен доверенным
 внешним процессом.
 
+## Перепроверка аккаунта: `auth.revalidate`
+
+Когда оператор просит проверить конкретный аккаунт заново, не нужно предварительно снимать бан,
+активировать `retired` или помечать credential проверенным: такие обходы утверждают больше, чем
+нужно, и при техническом сбое стирают последнее достоверное состояние. `auth.revalidate` проверяет
+аккаунт из любого допустимого состояния и ничего не меняет до ответа провайдера.
+
+```python
+result = await space.auth.revalidate(
+    identity_id,
+    actor="checker",
+    reason="operator requested recheck",
+    request_id=f"checker:{run_id}:{identity_id}",
+    credential=("default", "default"),  # необязательно: резервная проверка точной записи
+)
+```
+
+Порядок: допуск по `Service.diagnostics` → проверка сессии `default` (один вызов `probes.auth`) →
+если сессии нет или она невалидна и указан `credential` — вызов `Authenticator` с этой записью.
+Состояние `auth` не переводится в `logging_in`, `lifecycle`, `availability` и `standing` командой не
+меняются: `retired` остаётся `retired`, `banned` остаётся `banned`.
+
+| Поле результата | Смысл |
+|---|---|
+| `status` | `completed`; `blocked` (допуск или credential не позволяют, провайдер не вызывался); `in_progress` (аккаунт или операция заняты); `failed` (технический сбой, состояние не менялось, `retryable=True`) |
+| `session_verdict` | `valid`, `invalid`, `missing` (пригодной сессии нет, провайдер не вызывался), `challenge`, `failed` |
+| `credential_verdict` | `valid`, `rejected` (отказ именно этой записи), `challenge`, `blocked`, `inconclusive` (отказ не из-за credential, например бан), `failed` |
+| `applied` | исход машины состояний по региону: `applied`, `unchanged`, `sticky`, `pinned`, … |
+| `blockers` | типизированные причины: `lifecycle`, `availability`, `standing`, `credential_*`, `busy`, `not_found` |
+| `operation_ids`, `challenge_id`, `code`, `retryable` | операции провайдера, активный challenge, безопасный код, повторяемость |
+
+Что важно читать в `applied`: вердикт провайдера применяется как наблюдение, поэтому библиотека может
+его **не применить**. `applied["standing"] == "sticky"` значит «провайдер сообщил `good`, но `banned`
+сохранён»: разбан по наблюдению ручной. `applied["auth"] == "sticky"` значит, что у аккаунта идёт
+интерактивный вход (`challenge`/`logging_in`) и проверка его не затёрла и не закрыла.
+
+**Допуск.** По умолчанию диагностика разрешена для `provisioning`, `ready`, `retired`, для `available`,
+`paused`, `cooling` и любого `standing`, кроме `deleted`. Карантин и `deleted` сервис разрешает явно:
+
+```python
+from identity_hub import Availability, DiagnosticPolicy, Service, Standing
+
+service = Service(
+    "my_platform",
+    "My platform",
+    diagnostics=DiagnosticPolicy(availability=frozenset(Availability), standing=frozenset(Standing)),
+)
+```
+
+Политика действует только на `auth.revalidate` и не меняет ни обычные операции, ни `sync.refresh`, ни
+`refresh_many`: фоновая сверка `retired`-аккаунты по-прежнему не трогает.
+
+**Credential.** Перепроверяется активная запись, в том числе ранее отвергнутая. `disabled`, `revoked`,
+истёкшая или отсутствующая запись дают `status=blocked` без вызова провайдера; автоматически их не
+включают. Активный `challenge` возвращается в `challenge_id` и не перезапускается.
+
+**Повтор.** `request_id` — ключ логической проверки. Повтор завершённого запроса возвращает сохранённый
+результат без вызова провайдера (пока операции не очищены по сроку хранения), живая операция даёт
+`status=in_progress`, тот же `request_id` с другим `credential` — `IdempotencyConflict`, технический сбой
+и `claim_expired` повтор с тем же `request_id` не блокируют. Это не exactly-once у провайдера: после
+падения между ответом и коммитом исход неизвестен (`result.outcome = unknown`), поэтому запускайте
+`workers.provider_operations.run_once()` раз в минуту.
+
+Итоговые статусы приложения (`alive`, `dead`, `bad_credentials`) считает само приложение по этому
+результату; библиотека их не знает.
+
 ## Authenticator
 
 Вы реализуете вход, библиотека ведёт процесс: берёт аккаунт в аренду, меняет `auth`, хранит

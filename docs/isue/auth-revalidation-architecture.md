@@ -1,6 +1,6 @@
 # Identity Hub: безопасная перепроверка аккаунта из любого состояния
 
-Статус: proposal  
+Статус: принято частично; решение — [`auth-revalidation-review.md`](auth-revalidation-review.md), очередь `AR` (`D-335`), выполнена  
 Дата проверки: 2026-11-01  
 Целевая аудитория: мейнтейнеры Identity Hub и интеграторы `checker_account`  
 Тип документа: архитектурный issue / RFC  

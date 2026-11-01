@@ -101,3 +101,22 @@ identity-hub migrate                       # или --database-url для пря
 4. Один проход каждой фоновой работы: `for worker in hub.workers: await worker.run_once(limit=1)`.
 5. Производительность проверяется отдельно и только на изолированном стенде: бюджеты и
    критерий пригодности стенда — в [perf.md](perf.md) и решении `D-332`.
+
+## 6. Памятка потребителю: перепроверка вместо обходов (`D-335`)
+
+Приложение, которое перед повторной проверкой снимало ограничения Identity Hub, может заменить обходы
+вызовом `space.auth.revalidate(...)` ([руководство](guide/05-login.md#перепроверка-аккаунта-authrevalidate)).
+
+| Обход | Нужен ли после `revalidate` |
+|---|---|
+| `identities.restore_standing()` перед пробой | не нужен и раньше: проба допускает любой `standing` |
+| `identities.activate()` для `retired` | не нужен: `DiagnosticPolicy` допускает `retired`, `lifecycle` остаётся `retired` |
+| `secrets.verify_credential()` перед входом | не нужен: активная отвергнутая запись перепроверяется |
+| `secrets.enable_credential()` | нужен только для `disabled`; `revoked` и истёкшую запись включить нельзя |
+| Воркер `workers.provider_operations.run_once()` | остаётся обязательным: восстанавливает зависшие операции и помечает неизвестный исход |
+
+Что изменилось в наблюдаемом поведении: вердикт `session_invalid` из `verify_session`/`adopt_session`
+больше не падает с `TransitionNotAllowed` и не оставляет операцию `running`; проба не затирает
+`challenge`; `Observation` получил поле `retryable`; в БД появилась колонка `request_key` (ревизия `0040`).
+Разбан по наблюдению по-прежнему ручной: читайте `applied["standing"]` и событие `identity.state.drift`.
+
