@@ -3467,6 +3467,7 @@ class MemoryTx(StoreTx):
                 row,
                 state=state,
                 error_code="claim_expired",
+                result={**row.result, "outcome": "unknown"},  # ответ провайдера потерян (AR1.2)
                 claim_expires_at=None,
                 available_at=available_at or row.available_at,
                 finished_at=self._now if state in TERMINAL_OPERATIONS else None,

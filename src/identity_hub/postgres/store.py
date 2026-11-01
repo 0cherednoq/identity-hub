@@ -5214,7 +5214,7 @@ class PgTx(StoreTx):
         p = PROVIDER_OPERATIONS.c
         rows = list(
             await self.execute(
-                select(p.id, p.attempt, p.deadline_at)
+                select(p.id, p.attempt, p.deadline_at, p.result)
                 .where(p.space_id == self.space.id, p.state == "running", p.claim_expires_at <= func.now())
                 .order_by(p.claim_expires_at)
                 .limit(limit)
@@ -5229,6 +5229,7 @@ class PgTx(StoreTx):
             values: dict[str, Any] = {
                 "state": state,
                 "error_code": "claim_expired",
+                "result": {**row.result, "outcome": "unknown"},  # ответ провайдера потерян (AR1.2)
                 "claim_expires_at": None,
                 "updated_at": func.now(),
                 "revision": p.revision + 1,

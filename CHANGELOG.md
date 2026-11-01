@@ -12,6 +12,8 @@
   как `Command`. Раньше `TransitionNotAllowed` (например, `challenge → session_invalid`) откатывал
   запись результата операции после вызова провайдера: `probe:auth` оставалась `running`, повтор получал
   `LeaseUnavailable`. Граф `auth` под внешние факты не расширяется (D-335).
+- Операция провайдера, восстановленная после истечения claim, получает в `result` `{"outcome": "unknown"}`
+  (ответ провайдера потерян, исход неизвестен); `error_code` по-прежнему `claim_expired` (D-335).
 - Отказ проекции результата (проба, `verify_session`, `adopt_session`, `login`, открытие challenge) больше
   не оставляет провайдерную операцию в `running`: она становится `failed/projection_failed` с безопасным
   вердиктом в `result`, повтор не получает `LeaseUnavailable` (D-335).
