@@ -91,7 +91,9 @@ async def _probe_identity(
     hub.register_service(Service(name, name, session=Session, probes=probe))
     await hub.start()
     created = await space.identities.create(
-        IdentityCreate(service=name, external_ref=f"{name}-1", lifecycle="provisioning", session={"token": SECRET}),
+        IdentityCreate(
+            service=name, external_ref=f"{name}-1", lifecycle="provisioning", session={"token": SECRET}
+        ),
         actor="test",
     )
     return probe, created.id
@@ -112,7 +114,9 @@ async def test_targeted_session_check_projection_failure_terminalizes_operation(
     probe, identity_id = await _probe_identity(
         hub_under_test, space, f"pf_{method}", AuthState.SESSION_INVALID
     )
-    monkeypatch.setattr(auth_module, "apply_region_change", _fail_when(lambda *_: True, auth_module.apply_region_change))
+    monkeypatch.setattr(
+        auth_module, "apply_region_change", _fail_when(lambda *_: True, auth_module.apply_region_change)
+    )
 
     with pytest.raises(TransitionNotAllowed):
         await getattr(space.auth, method)(identity_id, actor="checker")
@@ -130,7 +134,9 @@ async def test_probe_projection_failure_terminalizes_operation(
     hub_under_test: IdentityHub, space: SpaceHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     probe, identity_id = await _probe_identity(hub_under_test, space, "pf_probe", AuthState.SESSION_INVALID)
-    monkeypatch.setattr(sync_module, "apply_region_change", _fail_when(lambda *_: True, sync_module.apply_region_change))
+    monkeypatch.setattr(
+        sync_module, "apply_region_change", _fail_when(lambda *_: True, sync_module.apply_region_change)
+    )
 
     with pytest.raises(TransitionNotAllowed):
         await space.sync.refresh(identity_id, regions=("auth",))

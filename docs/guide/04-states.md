@@ -360,6 +360,12 @@ async def reconcile_loop(space):
   наблюдение — одной транзакцией. Параллельная живая проба того же региона возвращает `busy`;
   поздний ответ после истечения claim не меняет состояние. `maintenance.run_due()` переводит
   зависшие операции в `failed` с кодом `claim_expired`, не выполняя сетевой вызов повторно.
+- Если итог операции не удалось применить к состоянию identity (исключение проекции, например
+  `TransitionNotAllowed` или `ConcurrentModification`), операция не остаётся в `running`: отдельной
+  короткой транзакцией она становится `failed` с кодом `projection_failed`, а в `result` лежит
+  безопасный вердикт (`outcome`, `projection: failed`, `cause` — имя класса исключения, без секретов).
+  Исключение пробрасывается вызывающему коду прежним. То же относится к `auth.verify_session`,
+  `auth.adopt_session`, `auth.login` и открытию challenge.
 - Квота `probe` списывается один раз перед серией регионов одного аккаунта. Повтор после падения
   процесса — новый вызов `refresh`/`refresh_many` и новое списание; recovery сам квоту не тратит.
 - Исходы по региону: `applied`, `unchanged`, `stale`, `unknown_status`, `pinned`, `sticky`,

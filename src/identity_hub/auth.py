@@ -417,7 +417,10 @@ class LoginMixin(SpaceBase):
             else:
                 outcome = SessionVerificationOutcome.FAILED
             result_code: str | None = None if result is None else result.code
-            async with self._tx(own=True) as tx:
+            async with (
+                sync._projection_guard(lease, claim, str(outcome)),
+                self._tx(own=True) as tx,
+            ):
                 await lease._check_fencing(tx)
                 actual_revision = await lease._session_revision(tx, slot)
                 if actual_revision != source_revision:
@@ -582,7 +585,10 @@ class LoginMixin(SpaceBase):
 
             final_auth = current_auth
             final_lifecycle = current_lifecycle
-            async with self._tx(own=True) as tx:
+            async with (
+                sync._projection_guard(lease, claim, str(outcome)),
+                self._tx(own=True) as tx,
+            ):
                 await lease._check_fencing(tx)
                 actual_revision = await lease._session_revision(tx, slot)
                 if actual_revision != source_revision:
@@ -1122,7 +1128,11 @@ class LoginMixin(SpaceBase):
         previous: ChallengeRow | None = None,
         credential_marks: list[_CredentialMark] | None = None,
     ) -> None:
-        async with self._tx(own=True) as tx:
+        sync: Any = self
+        async with (
+            sync._projection_guard(lease, claim, outcome),
+            self._tx(own=True) as tx,
+        ):
             await lease._check_fencing(tx)
             await self._apply_login(tx, lease, claim, outcome, result=result, error_code=error_code)
             if fault is not None:
@@ -1183,7 +1193,11 @@ class LoginMixin(SpaceBase):
         context = asked.context if asked.context is not None else {}
         payload = self.hub._seal_stored_model(context, aad)
         hint = sanitize_text(asked.hint) or ""  # уходит во внешнее событие и очередь человека
-        async with self._tx(own=True) as tx:
+        sync: Any = self
+        async with (
+            sync._projection_guard(lease, claim, "challenged"),
+            self._tx(own=True) as tx,
+        ):
             await lease._check_fencing(tx)
             # попытка входа завершилась вопросом платформы: операция succeeded, исход — challenged
             await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})

@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
@@ -38,7 +39,10 @@ if TYPE_CHECKING:
     from identity_hub.lease import Lease
     from identity_hub.pool import Pool
 
-__all__ = ["SYNC_POOL", "ReconcileReport", "SyncMixin"]
+PROJECTION_FAILED = "projection_failed"
+"""Код операции, итог которой не удалось применить к состоянию identity (AR1.1)."""
+
+__all__ = ["PROJECTION_FAILED", "SYNC_POOL", "ReconcileReport", "SyncMixin"]
 
 SYNC_POOL = "identity-hub:sync"
 REFRESH_ROUNDS = 5
@@ -279,6 +283,43 @@ class SyncMixin(SpaceBase):
                 lease.lease_id, "late", identity_id=lease.identity_id, fencing=lease.fencing
             )
 
+    @asynccontextmanager
+    async def _projection_guard(
+        self, lease: Lease, claim: ProviderClaim | None, verdict: str
+    ) -> AsyncIterator[None]:
+        """Отказ проекции не оставляет операцию в `running` (AR1.1, D-335).
+
+        Оборачивает транзакцию, в которой итог операции и проекция на identity пишутся вместе. При
+        исключении транзакция уже откатилась, claim остаётся действующим, поэтому операция
+        терминализуется отдельной короткой транзакцией: `failed/projection_failed` с безопасным
+        вердиктом в `result`. Исключение пробрасывается прежним; сбой самой терминализации его не
+        подменяет.
+        """
+        try:
+            yield
+        except Exception as exc:
+            if claim is not None:
+                await self._fail_projection(lease, claim, verdict, exc)
+            raise
+
+    async def _fail_projection(
+        self, lease: Lease, claim: ProviderClaim, verdict: str, cause: Exception
+    ) -> None:
+        try:
+            async with self._tx(own=True) as tx:
+                await tx.apply_provider_operation(
+                    claim,
+                    "failed",
+                    result={"outcome": verdict, "projection": "failed", "cause": safe_error_code(cause)},
+                    error_code=PROJECTION_FAILED,
+                    fence=lease.fence,
+                    policy=NO_RETRY,
+                )
+        except Exception:
+            logger.warning(
+                "не удалось терминализовать операцию аккаунта %s после отказа проекции", lease.identity_id
+            )
+
     async def _finish_probe(
         self,
         lease: Lease,
@@ -308,7 +349,10 @@ class SyncMixin(SpaceBase):
                 )
                 return flow.reconcile(status, observation, now)
 
-            async with self._tx(own=True) as tx:
+            async with (
+                self._projection_guard(lease, claim, str(result.state)),
+                self._tx(own=True) as tx,
+            ):
                 await lease._check_fencing(tx)
                 verification_decision = await apply_verification(
                     self,
@@ -331,7 +375,10 @@ class SyncMixin(SpaceBase):
         if region == "standing" and state is None and result.code is not None:
             state = service.standing_for_code(result.code)  # коды платформы объявляет сервис (§3.2)
         # итог операции и наблюдение — одна транзакция с проверкой claim и lease fence (D-223)
-        async with self._tx(own=True) as tx:
+        async with (
+            self._projection_guard(lease, claim, str(state)),
+            self._tx(own=True) as tx,
+        ):
             observed_at = result.observed_at or await tx.now()
             region_decision = await apply_region_change(
                 self,
