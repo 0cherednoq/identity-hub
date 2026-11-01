@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from identity_hub._space import logger
 from identity_hub.context import LeaseContext, _current
 from identity_hub.crypto import associated_data, credential_associated_data
+from identity_hub.diagnostics import DiagnosticPolicy
 from identity_hub.domain.credentials import ACTIVE, is_expired, session_event_data, session_mode
 from identity_hub.domain.data import validate_model
 from identity_hub.domain.idempotency import LEASE_FAMILY, fingerprint, namespace
@@ -133,6 +134,8 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         self._cancelled_by_us = False
         self._released = False
         self._on_lost_fired = False
+        # диагностическая аренда (D-335): гейт пробы использует политику сервиса, а не правило нагрузки
+        self.diagnostic: DiagnosticPolicy | None = None
         self._renew_lock = asyncio.Lock()
         self._throttle_state = dict(row.throttle_state)
         self._throttle_locks: dict[str, asyncio.Lock] = {}

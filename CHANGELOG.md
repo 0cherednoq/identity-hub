@@ -13,6 +13,12 @@
   допущены, карантин и `deleted` нет). Словарь кодов отказа — `BlockerKind`. Поведение существующих
   операций не меняется (D-335).
 
+- Внутренний диагностический допуск (`space._diagnostic_lease`, публичный вход — `auth.revalidate`):
+  обходит допуск нагрузки только для операции `probe` по `DiagnosticPolicy` сервиса, не меняет
+  `lifecycle`/`availability`/`standing`, сохраняет fencing, TTL, квоты и эксклюзивность аренды. Отказ —
+  `OperationNotAllowed` с типизированными `Blocker`. Новое событие `identity.diagnostic.started`
+  (`reason`). `CandidateQuery.availability` задаёт точное множество допустимых availability (D-335).
+
 ### Fixed
 
 - Вердикт провайдера в `auth.verify_session`/`auth.adopt_session` применяется как `Observation`, а не

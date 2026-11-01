@@ -94,7 +94,7 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 |---|---|---|
 | Аккаунт | `identity.registered`, `imported`, `updated`, `deleted`, `lifecycle.changed` | Синхронизация с вашей CRM |
 | Состояния | `identity.standing.changed`, `auth.changed`, `availability.changed`, `verification.changed`, `tier.reached/lost`, `state.overridden`, `state.drift` | Реакция на баны, разлогины, карантин |
-| Вход | `identity.login.succeeded/failed`, `identity.challenge.opened/answered/expired` | Показать оператору, что нужен SMS-код |
+| Вход | `identity.login.succeeded/failed`, `identity.challenge.opened/answered/expired`, `identity.diagnostic.started` | Показать оператору, что нужен SMS-код |
 | Секреты | `identity.credentials.updated`, `session.updated`, `secret.revealed` | Аудит |
 | Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.pool.exhausted`, `proxy.checker.failed`, `proxy.disabled`, `proxy.enabled`, `proxy.updated`, `proxy.deleted`, `proxy.secret.revealed` | Мониторинг прокси, аудит |
 | Пулы | `pool.capacity.low/empty/ok`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка и восстановление ёмкости, проблемы воркеров |
@@ -137,6 +137,7 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 | `identity.lifecycle.changed` | `actor`, `code`, `from`, `key`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
 | `identity.linked` | `linked_identity_id`, `reason`, `role` |
 | `identity.login.failed` | `code`, `error`, `retryable` |
+| `identity.diagnostic.started` | `reason` |
 | `identity.login.succeeded` | — |
 | `identity.quota.exhausted` | `kind`, `limit`, `resets_at`, `window_seconds`, `window_start` |
 | `identity.registered` | `auth`, `external_ref`, `labels`, `lifecycle`, `links`, `tags` |

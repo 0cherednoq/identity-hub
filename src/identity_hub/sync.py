@@ -19,15 +19,20 @@ from pydantic import BaseModel
 from identity_hub._space import SpaceBase, logger
 from identity_hub.domain.admissibility import compile_rule
 from identity_hub.domain.provider_operations import safe_error_code
+from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Observation, Outcome
 from identity_hub.enums import Availability, ChangeSource
 from identity_hub.errors import (
     AlreadyExists,
+    Blocker,
     LeaseOwnershipLost,
     LeaseUnavailable,
+    NotFound,
+    OperationNotAllowed,
     ValidationFailed,
     describe_error,
 )
+from identity_hub.events import EventDraft
 from identity_hub.protocols import ProbeResult
 from identity_hub.provider_worker import NO_RETRY
 from identity_hub.service import PROBE_OPERATION, Service
@@ -282,6 +287,59 @@ class SyncMixin(SpaceBase):
             raise LeaseOwnershipLost(
                 lease.lease_id, "late", identity_id=lease.identity_id, fencing=lease.fencing
             )
+
+    async def _diagnostic_lease(self, identity_id: UUID, *, actor: str, reason: str) -> Lease:
+        """Аренда для явной диагностики конкретного аккаунта (AR2.2, D-335).
+
+        Обходит допуск нагрузки (lifecycle, availability, standing) по `DiagnosticPolicy` сервиса и
+        только для операции `probe`: lease хранит политику, гейт `lease.operation()` применяет её вместо
+        правила нагрузки. Сохраняются fencing, TTL, квоты и эксклюзивность аренды; состояние аккаунта не
+        меняется. Отказ — `OperationNotAllowed` с типизированными `Blocker`, занятый аккаунт —
+        `LeaseUnavailable(BUSY)`.
+        """
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValidationFailed("diagnostic: actor обязателен")
+        text = sanitize_text(reason) if isinstance(reason, str) else None
+        if not text or not text.strip():
+            raise ValidationFailed("diagnostic: reason обязателен")
+        async with self._tx(own=True) as tx:
+            try:
+                identity = await self._identity(tx, identity_id)
+            except NotFound:
+                raise OperationNotAllowed("diagnostic", [Blocker("not_found", str(identity_id))]) from None
+        service = self.hub.service(identity.service)
+        policy = service.diagnostic_policy()
+        blockers = policy.blockers(identity.lifecycle, identity.availability, identity.standing)
+        if blockers:
+            raise OperationNotAllowed("diagnostic", list(blockers))
+        query = CandidateQuery(
+            service=service.name,
+            standing=policy.standing,
+            needs_auth=False,
+            among=[identity_id],
+            lifecycles=policy.lifecycles,
+            availability=policy.availability,
+        )
+        lease = await self._probe_pool(service).acquire(query=query)
+        lease.diagnostic = policy
+        try:
+            async with self._tx(own=True) as tx:
+                await lease._check_fencing(tx)
+                await self._emit(
+                    tx,
+                    EventDraft(
+                        "identity.diagnostic.started",
+                        actor=actor,
+                        service=service.name,
+                        identity_id=identity_id,
+                        lease_id=lease.lease_id,
+                        data={"reason": text},
+                    ),
+                )
+        except BaseException:
+            await lease.release()
+            raise
+        return lease
 
     @asynccontextmanager
     async def _projection_guard(

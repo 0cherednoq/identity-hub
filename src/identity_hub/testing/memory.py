@@ -973,7 +973,10 @@ class MemoryTx(StoreTx):
         elif query.needs_auth and row.auth_state != "authenticated":
             return False
         # истёкший `until` лениво снимается только у paused/cooling; карантин снимает команда (R2-P11)
-        if row.availability != "available" and not (
+        if query.availability is not None:
+            if row.availability not in query.availability:  # диагностика: точное множество (D-335)
+                return False
+        elif row.availability != "available" and not (
             row.availability in AVAILABILITY.on_expire
             and row.availability_until
             and row.availability_until <= now

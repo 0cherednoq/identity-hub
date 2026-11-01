@@ -1367,7 +1367,9 @@ class PgTx(StoreTx):
             i.service == query.service,
             i.lifecycle.in_(sorted(query.lifecycles)),
             i.standing.in_(sorted(query.standing)),
-            or_(
+            i.availability.in_(sorted(query.availability))
+            if query.availability is not None
+            else or_(
                 i.availability == Availability.AVAILABLE,
                 and_(
                     i.availability.in_([Availability.PAUSED, Availability.COOLING]),

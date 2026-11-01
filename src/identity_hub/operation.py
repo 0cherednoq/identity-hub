@@ -30,6 +30,7 @@ from identity_hub.events import EventDraft
 from identity_hub.metrics import record_metric
 from identity_hub.protocols import Blame, ErrorClassifier, Fault
 from identity_hub.quotas import charge
+from identity_hub.service import PROBE_OPERATION
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import StoreTx
 
@@ -112,7 +113,13 @@ async def operation_scope(
             verified_factors=frozenset(identity.verified_factors),
             expired_factors=frozenset(taken.expired_factors),
         )
-        blockers = evaluate(service, kind, snapshot, taken.now)
+        if lease.diagnostic is not None and kind == PROBE_OPERATION:
+            # AR2.2, D-335: явная диагностика обходит допуск нагрузки только для пробы
+            blockers = list(
+                lease.diagnostic.blockers(snapshot.lifecycle, snapshot.availability, snapshot.standing)
+            )
+        else:
+            blockers = evaluate(service, kind, snapshot, taken.now)
         if blockers:
             for blocker in blockers:
                 record_metric(

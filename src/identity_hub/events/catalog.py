@@ -67,6 +67,7 @@ def _specs() -> dict[str, EventSpec]:
             ("identity.challenge.opened", Severity.WARNING),
             ("identity.challenge.answered", Severity.INFO),
             ("identity.challenge.expired", Severity.WARNING),
+            ("identity.diagnostic.started", Severity.INFO),
         ],
         "secrets": [
             ("identity.credentials.updated", Severity.INFO),

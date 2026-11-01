@@ -13,14 +13,10 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** AR2.2 Диагностический допуск: выбор кандидата и гейт внутри lease
-- **Начата:** 2026-11-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Красные тесты: матрица допуска, обычные пути неизменны, busy, actor/reason, событие
-  - [ ] CandidateQuery.availability в обоих хранилищах
-  - [ ] Lease.diagnostic и гейт operation_scope только для probe
-  - [ ] space._diagnostic_lease, событие identity.diagnostic.started, docs 10-events
-  - [ ] CHANGELOG, scripts/check.sh зелёный, закрыть задачу
+  - [ ] —
 - **Заметки для следующей сессии:** —
 
 ## Статус задач
@@ -31,16 +27,17 @@
 | AR1.1 | Сетка `projection_failed`: операция не остаётся `running` | AR0.1 | done |  | L1 |
 | AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | done |  | L1; E5 |
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | done |  | L2, модель без поведения |
-| AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | in_progress |  | L2; E2 |
+| AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | done |  | L2; E2 |
 | AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | todo |  | L3 |
 | AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | todo |  | L3 |
 | AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | todo |  | L3 |
 | AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | todo |  | закрытие |
 
-**Итого:** 4 / 9 done
+**Итого:** 5 / 9 done
 
 ## Журнал сессий
 2026-11-01 · AR0.1 · done · вердикт провайдера как Observation, sticky для challenge/logging_in, Observation.retryable; check.sh 2401 passed · дальше AR1.1
 2026-11-01 · AR1.1 · done · _projection_guard: отказ проекции терминализует операцию failed/projection_failed (verify/adopt/probe/login/challenge); check.sh 2411 passed · дальше AR1.2
 2026-11-01 · AR1.2 · done · recovery помечает операцию result outcome=unknown на обоих хранилищах; check.sh 2417 passed · дальше AR2.1
 2026-11-01 · AR2.1 · done · DiagnosticPolicy, Service.diagnostics, BlockerKind (коды errors.Blocker); check.sh 2430 passed · дальше AR2.2
+2026-11-01 · AR2.2 · done · диагностический допуск: Lease.diagnostic, гейт только для probe, _diagnostic_lease, событие identity.diagnostic.started; check.sh 2468 passed · дальше AR3.1

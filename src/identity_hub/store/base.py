@@ -455,6 +455,8 @@ class CandidateQuery:
     # sticky-пул: аккаунт, привязанный к выключенному прокси, недоступен при любой политике (D-224)
     proxy_enabled: bool = False
     lifecycles: frozenset[str] = frozenset({"ready"})
+    # задано — точное множество availability (диагностика, D-335); None — доступен или истёк until
+    availability: frozenset[str] | None = None
     auth_states: frozenset[str] | None = None  # задано — вместо needs_auth (выборка для входа, FR-5.4)
     # окна квот операции: аккаунт с исчерпанным текущим окном не выдаётся (require_quota, N1.3)
     quotas: tuple[QuotaCharge, ...] = ()
