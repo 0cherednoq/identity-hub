@@ -1,0 +1,196 @@
+"""ВРЕМЕННЫЕ эксперименты для RFC (не коммитить): печатают матрицы фактического поведения."""
+
+from __future__ import annotations
+
+import json
+from datetime import timedelta
+from typing import Any
+
+import pytest
+from pydantic import BaseModel
+
+from identity_hub import (
+    AuthState,
+    IdentityCreate,
+    IdentityHub,
+    Override,
+    ProbeContext,
+    ProbeResult,
+    Service,
+    SpaceHandle,
+)
+from identity_hub.enums import Standing
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.conformance]
+
+
+class Session(BaseModel):
+    token: str
+
+
+class Probe:
+    def __init__(self, auth: ProbeResult | None, standing: ProbeResult | None = None) -> None:
+        self.auth_result = auth
+        self.standing_result = standing
+        self.calls = 0
+
+    async def auth(self, ctx: ProbeContext) -> ProbeResult | None:
+        self.calls += 1
+        return self.auth_result
+
+    async def standing(self, ctx: ProbeContext) -> ProbeResult | None:
+        self.calls += 1
+        return self.standing_result
+
+
+async def _mk(hub: IdentityHub, space: SpaceHandle, name: str, probe: Probe) -> Any:
+    hub.register_service(Service(name, name, session=Session, probes=probe))
+    await hub.start()
+    return await space.identities.create(
+        IdentityCreate(
+            service=name,
+            external_ref=f"{name}-1",
+            lifecycle="provisioning",
+            session={"token": "t"},
+        ),
+        actor="t",
+    )
+
+
+async def _ops(hub: IdentityHub, identity_id: Any) -> list[str]:
+    store = hub._store
+    if hasattr(store, "_state"):
+        rows = [r for r in store._state.provider_operations.values() if r.identity_id == identity_id]
+    else:
+        from sqlalchemy import text
+
+        async with hub._store.sessionmaker() as s:  # type: ignore[attr-defined]
+            res = await s.execute(
+                text("SELECT kind, state, error_code FROM ih_provider_operations WHERE identity_id = :i"),
+                {"i": identity_id},
+            )
+            return [f"{k}:{st}/{e}" for k, st, e in res.all()]
+    return [f"{r.kind}:{r.state}/{r.error_code}" for r in rows]
+
+
+AUTH_STATES = [
+    AuthState.NO_SESSION,
+    AuthState.AUTHENTICATED,
+    AuthState.SESSION_INVALID,
+    AuthState.CHALLENGE,
+    AuthState.LOGGING_IN,
+]
+
+
+@pytest.mark.parametrize("method", ["verify_session", "adopt_session"])
+async def test_exp_auth_matrix_session_invalid(
+    hub_under_test: IdentityHub, space: SpaceHandle, method: str
+) -> None:
+    """Вердикт провайдера 'session_invalid' (default slot) из каждого auth-состояния."""
+    out: dict[str, str] = {}
+    for i, st in enumerate(AUTH_STATES):
+        probe = Probe(ProbeResult(AuthState.SESSION_INVALID))
+        ident = await _mk(hub_under_test, space, f"exp_{method}_{i}", probe)
+        initial = (await space.identities.get(ident.id)).auth
+        if initial != st:
+            await space.identities.override(
+                ident.id, Override("auth", "", st, reason="exp", actor="t")
+            )
+        try:
+            res = await getattr(space.auth, method)(ident.id, actor="checker")
+            after = (await space.identities.get(ident.id)).auth
+            out[st.value] = f"OK outcome={res.outcome} auth_after={after} ops={await _ops(hub_under_test, ident.id)}"
+        except Exception as exc:  # noqa: BLE001
+            after = (await space.identities.get(ident.id)).auth
+            out[st.value] = (
+                f"RAISED {type(exc).__name__}: {str(exc)[:70]} auth_after={after} "
+                f"ops={await _ops(hub_under_test, ident.id)} calls={probe.calls}"
+            )
+    print(f"\nEXP[{method}] " + json.dumps(out, ensure_ascii=False, indent=1))
+
+
+async def test_exp_refresh_admission_matrix(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    """sync.refresh: какие lifecycle/availability/standing пускают пробу."""
+    out: dict[str, str] = {}
+    cases = ["ready", "retired", "cooling", "banned", "deleted", "retired+banned"]
+    for i, case in enumerate(cases):
+        probe = Probe(ProbeResult(AuthState.AUTHENTICATED), ProbeResult(Standing.GOOD))
+        ident = await _mk(hub_under_test, space, f"exp_ref_{i}", probe)
+        await space.identities.activate(ident.id, actor="t")
+        if "retired" in case:
+            await space.identities.retire(ident.id, actor="t", reason="x")
+        if case == "cooling":
+            await space.identities.cool_down(ident.id, for_=timedelta(hours=1), actor="t")
+        if "banned" in case:
+            await space.identities.ban(ident.id, reason="x", actor="t")
+        if case == "deleted":
+            await space.identities.override(
+                ident.id, Override("standing", "", Standing.DELETED, reason="x", actor="t")
+            )
+        try:
+            r = await space.sync.refresh(ident.id)
+            idn = await space.identities.get(ident.id)
+            out[case] = f"OK {r.outcomes} calls={probe.calls} standing_after={idn.standing}"
+        except Exception as exc:  # noqa: BLE001
+            out[case] = f"RAISED {type(exc).__name__}: {str(exc)[:90]} calls={probe.calls}"
+    print("\nEXP[refresh_admission] " + json.dumps(out, ensure_ascii=False, indent=1))
+
+
+async def test_exp_challenge_overwritten_by_probe(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    """Probe=Observation поверх активного challenge/logging_in: затирает ли?"""
+    out: dict[str, str] = {}
+    for i, st in enumerate([AuthState.CHALLENGE, AuthState.LOGGING_IN]):
+        probe = Probe(ProbeResult(AuthState.SESSION_INVALID))
+        ident = await _mk(hub_under_test, space, f"exp_chal_{i}", probe)
+        await space.identities.override(ident.id, Override("auth", "", st, reason="exp", actor="t"))
+        try:
+            r = await space.sync.refresh(ident.id, regions=("auth",))
+            out[st.value] = f"OK {r.outcomes} auth_after={(await space.identities.get(ident.id)).auth}"
+        except Exception as exc:  # noqa: BLE001
+            out[st.value] = f"RAISED {type(exc).__name__}: {str(exc)[:90]}"
+    print("\nEXP[probe_over_challenge] " + json.dumps(out, ensure_ascii=False, indent=1))
+
+
+async def test_exp_banned_good_observation_sequence(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    """banned + 3 подряд наблюдения good: что с confirm_leaving?"""
+    probe = Probe(None, ProbeResult(Standing.GOOD))
+    ident = await _mk(hub_under_test, space, "exp_ban_seq", probe)
+    await space.identities.activate(ident.id, actor="t")
+    await space.identities.ban(ident.id, reason="x", actor="t")
+    seq = []
+    for _ in range(3):
+        r = await space.sync.refresh(ident.id, regions=("standing",))
+        seq.append((r.outcomes, str((await space.identities.get(ident.id)).standing)))
+    print("\nEXP[banned_good_seq] " + json.dumps(seq, ensure_ascii=False))
+
+
+async def test_exp_stuck_running_then_retry_and_recovery(hub_under_test: IdentityHub, space: SpaceHandle) -> None:
+    """Воспроизведение инцидента: challenge->session_invalid оставляет running; повтор; recovery."""
+    out: dict[str, Any] = {}
+    probe = Probe(ProbeResult(AuthState.SESSION_INVALID))
+    ident = await _mk(hub_under_test, space, "exp_stuck", probe)
+    await space.identities.override(ident.id, Override("auth", "", AuthState.CHALLENGE, reason="e", actor="t"))
+    try:
+        await space.auth.verify_session(ident.id, actor="checker")
+    except Exception as exc:  # noqa: BLE001
+        out["first"] = type(exc).__name__
+    out["ops_after_first"] = await _ops(hub_under_test, ident.id)
+    try:
+        await space.auth.verify_session(ident.id, actor="checker")
+        out["second"] = "OK"
+    except Exception as exc:  # noqa: BLE001
+        out["second"] = f"{type(exc).__name__}: {str(exc)[:80]}"
+    out["provider_calls"] = probe.calls
+    from tests.conformance.test_session_first_auth import _expire_provider_claim
+
+    store = hub_under_test._store
+    if hasattr(store, "_state"):
+        for oid in list(store._state.provider_operations):
+            await _expire_provider_claim(hub_under_test, space, oid)
+    try:
+        n = await hub_under_test.workers.provider_operations.run_once()
+        out["recovery_run_once"] = str(n)
+    except Exception as exc:  # noqa: BLE001
+        out["recovery_run_once"] = f"{type(exc).__name__}: {str(exc)[:80]}"
+    out["ops_after_recovery"] = await _ops(hub_under_test, ident.id)
+    print("\nEXP[stuck_retry] " + json.dumps(out, ensure_ascii=False, indent=1))

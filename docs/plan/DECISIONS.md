@@ -368,3 +368,25 @@
   `docs/session-first-progress.md`; задачи `SF4.*` закрываются только с commit hash внешнего checker.
   Строгая re-auth проверка конкретного password credential при уже живой session отложена до
   отдельного контракта.
+
+- **D-335** (очередь `AR`, по запросу владельца): перепроверка аккаунта из любого состояния. Основание —
+  `docs/isue/auth-revalidation-review.md` (эксперименты E1–E6, ресерч Kubernetes/Envoy/HAProxy/Temporal/
+  Stripe/Decider). (1) Вердикт провайдера — `Observation`, а не `Command`; граф `AUTH` под внешние факты не
+  расширяется, хотфикс `no_session → session_invalid` откатывается в `AR0.1`. (2) `AUTH.sticky =
+  {challenge, logging_in}`, `sticky_exits = {authenticated}`: наблюдение не затирает интерактивные
+  состояния входа; команды `sticky` не затрагивает. (3) Терминальность `banned/deleted` не меняется:
+  порядок `sticky`/`confirm_leaving` не переставляется, разбан по наблюдению ручной (`D-102`, `D-310`);
+  политика `standing_exit` и `login_success_implies_standing_good` отложены (L4), мёртвый `BANNED ∈
+  confirm_leaving` документируется. (4) Диагностический допуск объявляется сервисом (`DiagnosticPolicy`),
+  применяется только к адресным операциям с `actor` и `reason`, не к `refresh_many`; по умолчанию
+  `lifecycle ∈ {provisioning, ready, retired}`, `availability ∈ {available, paused, cooling}`; `quarantined`
+  и `deleted` — только явной настройкой сервиса (статус `по умолчанию`: данные ресерча по пробам ручной
+  блокировки неоднозначны). (5) `auth.revalidate()` не переводит `auth` в `logging_in`, не меняет
+  `lifecycle`, `standing` и `availability`, возвращает структурный результат с исходом по каждому региону
+  (`applied/sticky/pinned`). (6) Гарантия durable terminal ослаблена: сетка `projection_failed` и
+  `outcome_unknown`; exactly-once у провайдера не обещается. (7) Идемпотентность — `request_key` у
+  провайдерных операций (nullable-колонка, миграция в `AR3.3`); родительская таблица попыток и «RFC B»
+  (шифрованные артефакты, projection worker) не делаются. (8) Поведение `login` при техническом отказе
+  (`→ no_session`) не меняется. (9) Очередь живёт в `docs/plan/AUTH-REVALIDATION-PLAN.md` и
+  `docs/plan/AUTH-REVALIDATION-PROGRESS.md`; идентификаторы `AR<фаза>.<номер>`; код `checker_account`
+  не меняется.
