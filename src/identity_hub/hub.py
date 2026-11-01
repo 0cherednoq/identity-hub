@@ -80,6 +80,7 @@ from identity_hub.read.overview import OverviewMixin
 from identity_hub.read.proxies import ProxyReadMixin
 from identity_hub.read.search import SearchMixin
 from identity_hub.read.services import ServiceDescriptor
+from identity_hub.revalidation import RevalidationMixin
 from identity_hub.rollups import StatsRollups
 from identity_hub.secrets_admin import CredentialsMixin, SecretsAdminMixin, SessionRevokeMixin
 from identity_hub.service import Service
@@ -551,6 +552,7 @@ class SpaceHandle(
     PoolsMixin,
     ProxiesMixin,
     RequirementsMixin,
+    RevalidationMixin,
     SearchMixin,
     SecretsAdminMixin,
     CredentialsMixin,

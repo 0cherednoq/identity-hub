@@ -155,6 +155,12 @@ from identity_hub.protocols import (
     VerificationProbe,
 )
 from identity_hub.proxies import ProxyHealthPolicy
+from identity_hub.revalidation import (
+    AuthRevalidationResult,
+    CredentialVerdict,
+    RevalidationStatus,
+    SessionVerdict,
+)
 from identity_hub.service import (
     LeaseMode,
     OperationRule,
@@ -178,6 +184,7 @@ __all__ = [
     "ApiKey",
     "AttemptsExhausted",
     "AuthProbe",
+    "AuthRevalidationResult",
     "AuthState",
     "Authenticator",
     "Availability",
@@ -199,6 +206,7 @@ __all__ = [
     "CreateManyResult",
     "CredentialCandidate",
     "CredentialInput",
+    "CredentialVerdict",
     "DatabaseBusy",
     "DeliveryStatus",
     "DiagnosticPolicy",
@@ -290,6 +298,7 @@ __all__ = [
     "RecoveryCodes",
     "RefreshResult",
     "Retention",
+    "RevalidationStatus",
     "RevisionConflict",
     "SameSite",
     "SchemaIncompatible",
@@ -303,6 +312,7 @@ __all__ = [
     "SessionAdoptionResult",
     "SessionRefresher",
     "SessionStatus",
+    "SessionVerdict",
     "SessionVerificationOutcome",
     "SessionVerificationResult",
     "Severity",

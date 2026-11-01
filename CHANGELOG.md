@@ -13,6 +13,10 @@
   допущены, карантин и `deleted` нет). Словарь кодов отказа — `BlockerKind`. Поведение существующих
   операций не меняется (D-335).
 
+- `space.auth.revalidate(identity_id, actor=, reason=, request_id=)` (шаг сессии): явная перепроверка из
+  `banned`, `retired`, паузы и охлаждения без предварительных `restore_standing`/`activate`. Структурный
+  `AuthRevalidationResult` (`status`, `session_verdict`, `applied`, `blockers`, `operation_ids`,
+  `retryable`); вердикт применяется наблюдением, активный challenge не затирается (D-335).
 - Внутренний диагностический допуск (`space._diagnostic_lease`, публичный вход — `auth.revalidate`):
   обходит допуск нагрузки только для операции `probe` по `DiagnosticPolicy` сервиса, не меняет
   `lifecycle`/`availability`/`standing`, сохраняет fencing, TTL, квоты и эксклюзивность аренды. Отказ —

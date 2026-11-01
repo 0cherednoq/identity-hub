@@ -13,15 +13,11 @@
 
 <!-- Заполняется при взятии задачи и очищается при завершении. Это checkpoint для продолжения после обрыва. -->
 
-- **Задача:** AR3.1 auth.revalidate(): каркас, шаг сессии, структурный результат
-- **Начата:** 2026-11-01
+- **Задача:** —
+- **Начата:** —
 - **Шаги:**
-  - [ ] Красные тесты: verdict-ы, допуск banned/retired, blocked, missing, challenge, standing, busy, секреты
-  - [ ] Модуль revalidation.py: AuthRevalidationResult, перечисления, RevalidationMixin
-  - [ ] Auth.revalidate, hub.py миксин, экспорты, публичный API и typing-тесты
-  - [ ] Документация guide, CHANGELOG
-  - [ ] scripts/check.sh зелёный, закрыть задачу
-- **Заметки для следующей сессии:** План: diagnostic lease -> _targeted_session_probe(DEFAULT) -> проекция Observation(auth) valid/invalid + mark_session_validity; interactive login (challenge/logging_in) не затирается и не закрывается; опционально standing probe; BUSY -> status in_progress; request_id валидируется, идемпотентность в AR3.3
+  - [ ] —
+- **Заметки для следующей сессии:** —
 
 ## Статус задач
 
@@ -32,12 +28,12 @@
 | AR1.2 | Recovery: `outcome_unknown` и метрика | AR1.1 | done |  | L1; E5 |
 | AR2.1 | `DiagnosticPolicy` и типизированные `Blocker` | AR0.1 | done |  | L2, модель без поведения |
 | AR2.2 | Диагностический допуск: выбор кандидата и гейт внутри lease | AR2.1 | done |  | L2; E2 |
-| AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | in_progress |  | L3 |
+| AR3.1 | `auth.revalidate()`: каркас, шаг сессии, структурный результат | AR1.1, AR2.2 | done |  | L3 |
 | AR3.2 | `auth.revalidate()`: шаг credential без `logging_in` | AR3.1 | todo |  | L3 |
 | AR3.3 | `request_id`: идемпотентность и конкурентность | AR1.2, AR3.2 | todo |  | L3 |
 | AR4.1 | Документация, traceability и финальная сверка | AR0.1, AR1.1, AR1.2, AR2.1, AR2.2, AR3.1, AR3.2, AR3.3 | todo |  | закрытие |
 
-**Итого:** 5 / 9 done
+**Итого:** 6 / 9 done
 
 ## Журнал сессий
 2026-11-01 · AR0.1 · done · вердикт провайдера как Observation, sticky для challenge/logging_in, Observation.retryable; check.sh 2401 passed · дальше AR1.1
@@ -45,3 +41,4 @@
 2026-11-01 · AR1.2 · done · recovery помечает операцию result outcome=unknown на обоих хранилищах; check.sh 2417 passed · дальше AR2.1
 2026-11-01 · AR2.1 · done · DiagnosticPolicy, Service.diagnostics, BlockerKind (коды errors.Blocker); check.sh 2430 passed · дальше AR2.2
 2026-11-01 · AR2.2 · done · диагностический допуск: Lease.diagnostic, гейт только для probe, _diagnostic_lease, событие identity.diagnostic.started; check.sh 2468 passed · дальше AR3.1
+2026-11-01 · AR3.1 · done · auth.revalidate(): допуск, шаг сессии, проба standing, структурный результат; check.sh 2512 passed · дальше AR3.2

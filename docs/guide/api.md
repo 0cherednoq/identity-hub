@@ -82,6 +82,14 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 
 ## Стандартные модели форматов
 
+`space.auth.revalidate(identity_id, actor=..., reason=..., request_id=...)` — явная перепроверка аккаунта
+из любого допустимого состояния. Вердикт провайдера применяется как наблюдение, `lifecycle`,
+`availability` и `standing` не меняются командой, `auth` не переводится в `logging_in`. Возвращает
+`AuthRevalidationResult`: `status` (`completed`, `blocked`, `in_progress`, `failed`), `session_verdict`,
+`credential_verdict`, `applied` (исход каждого региона: `applied`, `unchanged`, `sticky`, `pinned`),
+`blockers`, `operation_ids`, `retryable`. Активный `challenge` не затирается и не закрывается
+(`applied["auth"] == "sticky"`). Если у сервиса объявлена проба `standing`, её исход тоже в `applied`.
+
 Диагностический допуск объявляется сервисом: `Service(diagnostics=DiagnosticPolicy(...))`.
 `DiagnosticPolicy` называет `lifecycles`, `availability` и `standing`, при которых явную проверку
 конкретного аккаунта можно выполнять. По умолчанию это `provisioning`, `ready`, `retired`;
