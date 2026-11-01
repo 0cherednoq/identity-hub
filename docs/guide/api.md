@@ -87,7 +87,11 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 `availability` и `standing` не меняются командой, `auth` не переводится в `logging_in`. Возвращает
 `AuthRevalidationResult`: `status` (`completed`, `blocked`, `in_progress`, `failed`), `session_verdict`,
 `credential_verdict`, `applied` (исход каждого региона: `applied`, `unchanged`, `sticky`, `pinned`),
-`blockers`, `operation_ids`, `retryable`. Активный `challenge` не затирается и не закрывается
+`blockers`, `operation_ids`, `retryable`, `challenge_id`. Параметр `credential=(kind, name)` включает шаг
+credential: если сессии нет или она невалидна, вызывается аутентификатор с этой записью без `logging_in`
+(успех пишет сессию и помечает запись проверенной, отказ помечает именно её, технический сбой ничего
+не меняет); `disabled`, `revoked`, истёкшая или отсутствующая запись — `status=blocked` без вызова
+провайдера, активная, но ранее отвергнутая запись перепроверяется. Активный `challenge` не затирается и не закрывается
 (`applied["auth"] == "sticky"`). Если у сервиса объявлена проба `standing`, её исход тоже в `applied`.
 
 Диагностический допуск объявляется сервисом: `Service(diagnostics=DiagnosticPolicy(...))`.

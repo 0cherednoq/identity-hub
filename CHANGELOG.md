@@ -17,6 +17,10 @@
   `banned`, `retired`, паузы и охлаждения без предварительных `restore_standing`/`activate`. Структурный
   `AuthRevalidationResult` (`status`, `session_verdict`, `applied`, `blockers`, `operation_ids`,
   `retryable`); вердикт применяется наблюдением, активный challenge не затирается (D-335).
+- `auth.revalidate(..., credential=(kind, name))`: шаг credential без `logging_in` и без `Command`. Успех
+  пишет сессию и помечает запись проверенной; отказ помечает именно её; технический сбой не меняет `auth`;
+  активный challenge возвращается без вызова провайдера; `disabled`/`revoked`/истёкшая/отсутствующая запись —
+  `blocked` с типизированным `Blocker`. Новый вердикт `CredentialVerdict.INCONCLUSIVE` (D-335).
 - Внутренний диагностический допуск (`space._diagnostic_lease`, публичный вход — `auth.revalidate`):
   обходит допуск нагрузки только для операции `probe` по `DiagnosticPolicy` сервиса, не меняет
   `lifecycle`/`availability`/`standing`, сохраняет fencing, TTL, квоты и эксклюзивность аренды. Отказ —

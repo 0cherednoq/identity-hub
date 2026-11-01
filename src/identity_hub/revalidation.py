@@ -8,15 +8,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import asyncio
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from identity_hub._space import SpaceBase, logger
+from identity_hub.auth import _CredentialMark, _LoginContext
+from identity_hub.domain.credentials import DISABLED, REVOKED, is_expired
+from identity_hub.domain.provider_operations import safe_error_code
 from identity_hub.domain.regions import Observation
 from identity_hub.enums import AuthState, ChangeSource, LeaseUnavailableReason
 from identity_hub.errors import (
+    AlreadyExists,
     Blocker,
     ConcurrentModification,
     LeaseOwnershipLost,
@@ -26,6 +31,7 @@ from identity_hub.errors import (
     describe_error,
 )
 from identity_hub.events import EventDraft
+from identity_hub.protocols import Blame, LoginChallenge, LoginFailure
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 
 __all__ = [
@@ -61,7 +67,9 @@ class CredentialVerdict(StrEnum):
     REJECTED = "rejected"
     CHALLENGE = "challenge"
     BLOCKED = "blocked"
-    FAILED = "failed"
+    FAILED = "failed"  # технический сбой, состояние не менялось
+    # провайдер отказал не из-за credential (например, аккаунт забанен); причина в code и applied
+    INCONCLUSIVE = "inconclusive"
     NOT_CHECKED = "not_checked"
 
 
@@ -89,7 +97,13 @@ def _check_request_id(request_id: str) -> None:
 
 class RevalidationMixin(SpaceBase):
     async def _revalidate(
-        self, identity_id: UUID, *, actor: str, reason: str, request_id: str
+        self,
+        identity_id: UUID,
+        *,
+        actor: str,
+        reason: str,
+        request_id: str,
+        credential: tuple[str, str] | None = None,
     ) -> AuthRevalidationResult:
         _check_request_id(request_id)
         async with self._tx(own=True) as tx:
@@ -101,6 +115,11 @@ class RevalidationMixin(SpaceBase):
         service = self.hub.service(row.service)
         if service.probes is None or getattr(service.probes, "auth", None) is None:
             raise ValidationFailed(f"у сервиса {service.name} нет auth probe")
+        key: tuple[str, str] | None = None
+        if credential is not None:
+            key = service.credential_key(*credential)
+            if service.authenticator is None:
+                raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
         sync: Any = self
         try:
             lease = await sync._diagnostic_lease(identity_id, actor=actor, reason=reason)
@@ -113,7 +132,14 @@ class RevalidationMixin(SpaceBase):
                 raise
             return _in_progress(identity_id)
         try:
-            return await self._revalidate_session(lease, service, actor)
+            result = await self._revalidate_session(lease, service, actor)
+            if (
+                key is not None
+                and result.status is RevalidationStatus.COMPLETED
+                and result.session_verdict in {SessionVerdict.INVALID, SessionVerdict.MISSING}
+            ):
+                result = await self._revalidate_credential(lease, service, actor, key, result)
+            return result
         finally:
             await lease.release()
 
@@ -239,6 +265,153 @@ class RevalidationMixin(SpaceBase):
             operation_ids=(claim.operation_id,),
             challenge_id=None,
         )
+
+    async def _revalidate_credential(
+        self,
+        lease: Any,
+        service: Any,
+        actor: str,
+        key: tuple[str, str],
+        base: AuthRevalidationResult,
+    ) -> AuthRevalidationResult:
+        """Шаг credential: вызов аутентификатора без `logging_in`, итог применяется наблюдением (D-335)."""
+        sync: Any = self
+        identity_id: UUID = lease.identity_id
+        kind, name = key
+        async with self._tx(own=True) as tx:
+            open_challenge = await tx.open_challenge_of(identity_id)
+            found = await tx.get_credential(identity_id, kind, name)
+            now = await tx.now()
+        if open_challenge is not None:  # активный вопрос не перезапускаем и провайдера не вызываем
+            return replace(
+                base, credential_verdict=CredentialVerdict.CHALLENGE, challenge_id=open_challenge.id
+            )
+        blocker: str | None = None
+        if found is None:
+            blocker = "credential_missing"
+        elif found[1].lifecycle == REVOKED:
+            blocker = "credential_revoked"
+        elif found[1].lifecycle == DISABLED:
+            blocker = "credential_disabled"
+        elif is_expired(found[1].lifecycle, found[1].expires_at, now):
+            blocker = "credential_expired"
+        if blocker is not None:
+            return replace(
+                base,
+                status=RevalidationStatus.BLOCKED,
+                credential_verdict=CredentialVerdict.BLOCKED,
+                blockers=(Blocker(blocker, f"{kind}/{name}"),),
+            )
+        ctx = _LoginContext(self, lease, None, None, requested_credential=key)  # type: ignore[arg-type]
+        lease._start(None)  # вход бывает долгим: аренда продлевается
+        try:
+            try:
+                claim = await sync._claim_login(lease, service)
+            except AlreadyExists:
+                return replace(
+                    base,
+                    status=RevalidationStatus.IN_PROGRESS,
+                    blockers=(Blocker("busy", "login"),),
+                )
+            ctx.attempt_id = claim.claim_id
+            operation_ids = (*base.operation_ids, claim.operation_id)
+            applied = dict(base.applied)
+            try:
+                async with asyncio.timeout(service.login_timeout.total_seconds()):
+                    session = await service.authenticator.login(ctx)
+            except LoginChallenge as asked:
+                challenge_id, outcome = await sync._open_challenge(
+                    lease, asked, claim=claim, credential_marks=ctx._credential_marks, observe=True
+                )
+                applied["auth"] = outcome
+                return replace(
+                    base,
+                    credential_verdict=CredentialVerdict.CHALLENGE,
+                    challenge_id=challenge_id,
+                    applied=applied,
+                    operation_ids=operation_ids,
+                )
+            except LoginFailure as failure:
+                if failure.credential is not None:
+                    fkind, fname = service.credential_key(*failure.credential)
+                    ctx._credential_marks.append(_CredentialMark(fkind, fname, True, failure.code))
+                fault = failure.fault
+                if fault is not None and failure.raw_status is not None and fault.raw_status is None:
+                    fault = replace(fault, raw_status=failure.raw_status)
+                if fault is not None and fault.blame is Blame.SESSION_INVALID:
+                    fault = replace(fault, code=failure.code)
+                target = (
+                    AuthState.SESSION_INVALID
+                    if fault is not None and fault.blame is Blame.SESSION_INVALID
+                    else AuthState.NO_SESSION
+                )
+                applied["auth"] = await sync._set_auth(
+                    lease,
+                    target,
+                    "identity.login.failed",
+                    {"error": "LoginFailure", "code": failure.code, "retryable": failure.retryable},
+                    claim=claim,
+                    outcome="failed",
+                    result={"outcome": "failed", "retryable": failure.retryable},
+                    error_code=failure.code,
+                    auth_code=failure.code,
+                    auth_retryable=failure.retryable,
+                    fault=fault,
+                    credential_marks=ctx._credential_marks,
+                    observe=True,
+                )
+                return replace(
+                    base,
+                    credential_verdict=(
+                        CredentialVerdict.REJECTED
+                        if failure.credential is not None
+                        else CredentialVerdict.INCONCLUSIVE
+                    ),
+                    applied=applied,
+                    operation_ids=operation_ids,
+                    retryable=failure.retryable,
+                    code=failure.code,
+                )
+            except Exception as exc:
+                # технический сбой: ответа провайдера нет, ни auth, ни credential не меняем (D-335)
+                code = "LoginTimeout" if isinstance(exc, TimeoutError) else safe_error_code(exc)
+                await sync._finish_probe(lease, claim, "failed", error_code=code)
+                return replace(
+                    base,
+                    status=RevalidationStatus.FAILED,
+                    credential_verdict=CredentialVerdict.FAILED,
+                    operation_ids=operation_ids,
+                    retryable=True,
+                    code=code,
+                )
+            payload, session_expires_at, session_fingerprint = lease._seal_session_with_expiry(
+                session, DEFAULT_SLOT
+            )
+            marks = ctx._credential_marks
+            if not any(mark.kind == kind and mark.name == name for mark in marks):
+                marks.append(_CredentialMark(kind, name, False))  # аутентификатор принял именно эту запись
+            applied["auth"] = await sync._set_auth(
+                lease,
+                AuthState.AUTHENTICATED,
+                "identity.login.succeeded",
+                {},
+                claim=claim,
+                outcome="succeeded",
+                result={"outcome": "succeeded"},
+                session=payload,
+                session_expires_at=session_expires_at,
+                session_fingerprint=session_fingerprint,
+                credential_marks=marks,
+                observe=True,
+            )
+            return replace(
+                base,
+                credential_verdict=CredentialVerdict.VALID,
+                applied=applied,
+                operation_ids=operation_ids,
+            )
+        finally:
+            await ctx.close()
 
 
 def _in_progress(identity_id: UUID) -> AuthRevalidationResult:

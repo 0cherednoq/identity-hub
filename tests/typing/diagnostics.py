@@ -8,6 +8,7 @@ from uuid import UUID
 from identity_hub import (
     AuthRevalidationResult,
     Availability,
+    CredentialVerdict,
     DiagnosticPolicy,
     Lifecycle,
     RevalidationStatus,
@@ -31,6 +32,10 @@ def _diagnostics_contract(service: Service) -> None:
 async def _revalidate_contract(space: SpaceHandle, identity_id: UUID) -> None:
     result = await space.auth.revalidate(identity_id, actor="checker", reason="recheck", request_id="r-1")
     assert_type(result, AuthRevalidationResult)
+    with_credential = await space.auth.revalidate(
+        identity_id, actor="checker", reason="recheck", request_id="r-2", credential=("default", "default")
+    )
+    assert_type(with_credential.credential_verdict, CredentialVerdict)
     assert_type(result.status, RevalidationStatus)
     assert_type(result.session_verdict, SessionVerdict)
     assert_type(result.applied, dict[str, str])

@@ -47,17 +47,21 @@ class Auth(Namespace):
         actor: str,
         reason: str,
         request_id: str,
+        credential: tuple[str, str] | None = None,
         expected_revision: int | None = None,
     ) -> AuthRevalidationResult:
         """Явная перепроверка аккаунта из любого допустимого состояния (D-335).
 
         Не меняет `lifecycle`, `availability` и `standing` командой, не переводит `auth` в `logging_in`;
         вердикт провайдера применяется как наблюдение, итог показывает, что именно применено.
-        Допуск задаёт `Service.diagnostics`. Отказ допуска — `status=blocked` с `blockers`, занятый
-        аккаунт — `status=in_progress`, технический сбой — `status=failed` (`retryable=True`).
+        `credential=(kind, name)` включает шаг credential: если сессии нет или она невалидна, вызывается
+        аутентификатор с этой записью (без `logging_in`); активный challenge возвращается, а не
+        перезапускается. Допуск задаёт `Service.diagnostics`. Отказ допуска — `status=blocked` с
+        `blockers`, занятый аккаунт — `status=in_progress`, технический сбой — `status=failed`
+        (`retryable=True`).
         """
         return await self._at(identity_id, expected_revision)._revalidate(
-            identity_id, actor=actor, reason=reason, request_id=request_id
+            identity_id, actor=actor, reason=reason, request_id=request_id, credential=credential
         )
 
     async def adopt_session(

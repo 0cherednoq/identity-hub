@@ -1122,12 +1122,13 @@ class LoginMixin(SpaceBase):
         auth_code: str | None = None,
         auth_retryable: bool | None = None,
         fault: Fault | None = None,
+        observe: bool = False,
         session: Any = None,
         session_expires_at: datetime | None = None,
         session_fingerprint: str | None = None,
         previous: ChallengeRow | None = None,
         credential_marks: list[_CredentialMark] | None = None,
-    ) -> None:
+    ) -> str:
         sync: Any = self
         async with (
             sync._projection_guard(lease, claim, outcome),
@@ -1157,14 +1158,20 @@ class LoginMixin(SpaceBase):
                 )
             if previous is not None:
                 await tx.resolve_challenge(previous.id)
-            await apply_region_change(
-                self,
-                tx,
-                lease.identity_id,
-                "auth",
-                DEFAULT_SLOT,
-                Command(state, actor=lease.holder, code=auth_code, retryable=auth_retryable),
-                lease_id=lease.lease_id,
+            change: Command | Observation
+            if observe:  # перепроверка (AR3.2): внешний факт, а не команда из logging_in
+                change = Observation(
+                    state,
+                    observed_at=await tx.now(),
+                    source=ChangeSource.PROBE,
+                    code=auth_code,
+                    actor=lease.holder,
+                    retryable=auth_retryable,
+                )
+            else:
+                change = Command(state, actor=lease.holder, code=auth_code, retryable=auth_retryable)
+            decision = await apply_region_change(
+                self, tx, lease.identity_id, "auth", DEFAULT_SLOT, change, lease_id=lease.lease_id
             )
             if event is not None:
                 await self._emit(
@@ -1178,6 +1185,7 @@ class LoginMixin(SpaceBase):
                         data=dict(data or {}),
                     ),
                 )
+        return str(decision.outcome)
 
     async def _open_challenge(
         self,
@@ -1187,7 +1195,9 @@ class LoginMixin(SpaceBase):
         claim: ProviderClaim | None = None,
         previous: ChallengeRow | None = None,
         credential_marks: list[_CredentialMark] | None = None,
-    ) -> None:
+        observe: bool = False,
+    ) -> tuple[UUID, str]:
+        """Открыть challenge; `(id вопроса, исход региона auth)`. `observe` — перепроверка без logging_in."""
         challenge_id = new_id()
         aad = associated_data("ih_challenges", lease.identity_id, str(challenge_id))
         context = asked.context if asked.context is not None else {}
@@ -1212,14 +1222,18 @@ class LoginMixin(SpaceBase):
             if not opened:
                 # у аккаунта уже открыт вопрос (FR-5.5): вход считается неудачным, состояние не трогаем
                 raise ValidationFailed(f"у аккаунта {lease.identity_id} уже открыт challenge")
-            await apply_region_change(
-                self,
-                tx,
-                lease.identity_id,
-                "auth",
-                DEFAULT_SLOT,
-                Command(AuthState.CHALLENGE, actor=lease.holder),
-                lease_id=lease.lease_id,
+            asked_change: Command | Observation = (
+                Observation(
+                    AuthState.CHALLENGE,
+                    observed_at=await tx.now(),
+                    source=ChangeSource.PROBE,
+                    actor=lease.holder,
+                )
+                if observe
+                else Command(AuthState.CHALLENGE, actor=lease.holder)
+            )
+            decision = await apply_region_change(
+                self, tx, lease.identity_id, "auth", DEFAULT_SLOT, asked_change, lease_id=lease.lease_id
             )
             await self._emit(
                 tx,
@@ -1237,6 +1251,7 @@ class LoginMixin(SpaceBase):
                     },
                 ),
             )
+        return challenge_id, str(decision.outcome)
 
     async def _apply_credential_marks(self, tx: StoreTx, lease: Lease, marks: list[_CredentialMark]) -> None:
         disable = lease.pool.service.disable_rejected_credentials
