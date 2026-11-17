@@ -46,15 +46,9 @@ def _secrets() -> StaticSecretsProvider:
 
 async def test_runtime_definition_is_visible_to_an_already_started_hub() -> None:
     store = MemoryStore()
-    first = IdentityHub(
-        store=store, secrets=_secrets(), service_templates=[Template()]
-    )
-    second = IdentityHub(
-        store=store, secrets=_secrets(), service_templates=[Template()]
-    )
-    background = IdentityHub(
-        store=store, secrets=_secrets(), service_templates=[Template()]
-    )
+    first = IdentityHub(store=store, secrets=_secrets(), service_templates=[Template()])
+    second = IdentityHub(store=store, secrets=_secrets(), service_templates=[Template()])
+    background = IdentityHub(store=store, secrets=_secrets(), service_templates=[Template()])
     await first.start()
     await second.start()
     await background.start()
@@ -88,13 +82,9 @@ async def test_runtime_definition_is_visible_to_an_already_started_hub() -> None
 
 async def test_idempotency_revision_and_disable_semantics() -> None:
     store = MemoryStore()
-    hub = IdentityHub(
-        store=store, secrets=_secrets(), service_templates=[Template()]
-    )
+    hub = IdentityHub(store=store, secrets=_secrets(), service_templates=[Template()])
     await hub.start()
-    spec = RuntimeServiceCreate(
-        name="dynamic", title="Dynamic", url=None, template="test/v1", config={}
-    )
+    spec = RuntimeServiceCreate(name="dynamic", title="Dynamic", url=None, template="test/v1", config={})
     definition, created = await hub.service_definitions.ensure(
         spec, actor="test", idempotency_key="supplier:1"
     )
@@ -150,9 +140,7 @@ async def test_idempotency_revision_and_disable_semantics() -> None:
 
 
 async def test_template_registry_is_frozen_after_start() -> None:
-    hub = IdentityHub(
-        store=MemoryStore(), secrets=_secrets(), service_templates=[Template()]
-    )
+    hub = IdentityHub(store=MemoryStore(), secrets=_secrets(), service_templates=[Template()])
     await hub.start()
     with pytest.raises(ValidationFailed):
         hub.register_service_template(Template())

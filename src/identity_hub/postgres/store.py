@@ -5816,9 +5816,9 @@ class PgStore(Store):
             conflict = (
                 await _execute(
                     session,
-                    select(ServiceRecord.name).where(
-                        ServiceRecord.name.in_(names), ServiceRecord.origin == "runtime"
-                    ).limit(1),
+                    select(ServiceRecord.name)
+                    .where(ServiceRecord.name.in_(names), ServiceRecord.origin == "runtime")
+                    .limit(1),
                     execution_options=self.options,
                 )
             ).scalar_one_or_none()
@@ -5889,9 +5889,7 @@ class PgStore(Store):
             insert(EventRecord).values(
                 event_id=new_id(),
                 type=event_type,
-                severity=str(
-                    Severity.WARNING if event_type.endswith("disabled") else Severity.INFO
-                ),
+                severity=str(Severity.WARNING if event_type.endswith("disabled") else Severity.INFO),
                 space_id=None,
                 service=row.name,
                 identity_id=None,

@@ -278,8 +278,15 @@ class ServiceDefinitions:
     @staticmethod
     def _row(definition: RuntimeServiceDefinition) -> RuntimeServiceRow:
         return RuntimeServiceRow(
-            definition.name, definition.title, definition.url, definition.template, dict(definition.config),
-            definition.enabled, definition.revision, definition.created_at, definition.updated_at
+            definition.name,
+            definition.title,
+            definition.url,
+            definition.template,
+            dict(definition.config),
+            definition.enabled,
+            definition.revision,
+            definition.created_at,
+            definition.updated_at,
         )
 
     @staticmethod

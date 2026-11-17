@@ -52,16 +52,12 @@ def upgrade() -> None:
     )
     op.add_column(
         table,
-        sa.Column(
-            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         schema=schema,
     )
     op.add_column(
         table,
-        sa.Column(
-            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         schema=schema,
     )
     op.add_column(table, sa.Column("idempotency_key", sa.String(256), nullable=True), schema=schema)
@@ -100,8 +96,15 @@ def downgrade() -> None:
     op.drop_constraint("ck_ih_services_revision_positive", table, type_="check", schema=schema)
     op.drop_constraint("ck_ih_services_origin_valid", table, type_="check", schema=schema)
     for column in (
-        "idempotency_fingerprint", "idempotency_key", "updated_at", "created_at", "revision",
-        "enabled", "config", "template", "origin",
+        "idempotency_fingerprint",
+        "idempotency_key",
+        "updated_at",
+        "created_at",
+        "revision",
+        "enabled",
+        "config",
+        "template",
+        "origin",
     ):
         op.drop_column(table, column, schema=schema)
     op.alter_column(
