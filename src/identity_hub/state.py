@@ -120,7 +120,7 @@ async def apply_region_change(
     now = await tx.now()
     for _ in range(MAX_RETRIES):
         identity = await space._identity(tx, identity_id)
-        service = space.hub.service(identity.service)
+        service = await space.hub.resolve_service(identity.service)
         spec = service.region_spec(region)
         if region in COLUMN_REGIONS:
             column, until_column = COLUMN_REGIONS[region]
@@ -251,7 +251,8 @@ class StateMixin(SpaceBase):
         )
         async with self._tx() as tx:
             identity = await self._identity(tx, identity_id)
-            key = _override_key(self.hub.service(identity.service), override.region, override.key)
+            service = await self.hub.resolve_service(identity.service)
+            key = _override_key(service, override.region, override.key)
             if override.region == VERIFICATION.name:
                 # через машину фактора: строка ih_verifications и verified_factors согласованы,
                 # иначе override в verified не давал бы допуска (R2-F10)
@@ -352,7 +353,8 @@ class StateMixin(SpaceBase):
             raise ValidationFailed("observe: until должен содержать часовой пояс")
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
-            key = _override_key(self.hub.service(identity.service), observation.region, observation.key)
+            service = await self.hub.resolve_service(identity.service)
+            key = _override_key(service, observation.region, observation.key)
             observed_at = observation.observed_at or await tx.now()
             change = machine.Observation(
                 state=observation.state,

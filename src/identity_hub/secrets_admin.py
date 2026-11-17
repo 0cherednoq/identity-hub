@@ -68,7 +68,7 @@ class SecretsAdminMixin(SpaceBase):
     ) -> None:
         """Заменить credentials (валидация схемой сервиса, шифрование до транзакции)."""
         async with self._tx(own=True) as tx:
-            service = self.hub.service((await self._identity(tx, identity_id)).service)
+            service = await self.hub.resolve_service((await self._identity(tx, identity_id)).service)
         model = validate_model(service.credentials, credentials, "credentials")
         payload = self.hub._seal_stored_model(model, associated_data("ih_credentials", identity_id))
         value_fingerprint = self.hub._value_fingerprint(model)
@@ -110,7 +110,7 @@ class SecretsAdminMixin(SpaceBase):
         if not slot or len(slot) > 64:
             raise ValidationFailed("session slot must contain from 1 to 64 characters")
         async with self._tx(own=True) as tx:
-            service = self.hub.service((await self._identity(tx, identity_id)).service)
+            service = await self.hub.resolve_service((await self._identity(tx, identity_id)).service)
         model = validate_model(
             service.session_schema(slot), service.session_input(slot, session), f"session {slot}"
         )
@@ -207,7 +207,7 @@ class SecretsAdminMixin(SpaceBase):
         audit: dict[str, str] = {}  # вид и имя записи credentials — в событие, значение — нет
         async with self._tx(own=True) as tx:
             row = await self._identity(tx, identity_id)
-            service = self.hub.service(row.service)
+            service = await self.hub.resolve_service(row.service)
             if kind == "credentials":
                 payload = await tx.get_credentials(identity_id)
                 value = (
@@ -294,7 +294,7 @@ class CredentialsMixin(SpaceBase):
         reset_auth: bool = False,
     ) -> CredentialRow:
         async with self._tx(own=True) as tx:
-            service = self.hub.service((await self._identity(tx, identity_id)).service)
+            service = await self.hub.resolve_service((await self._identity(tx, identity_id)).service)
         kind, name = service.credential_key(kind, name)
         model = validate_model(service.credential_schema(kind), value, f"credentials {kind}")
         public = dict(public_value) if public_value is not None else None
@@ -334,7 +334,7 @@ class CredentialsMixin(SpaceBase):
         action = {ACTIVE: "enable", DISABLED: "disable", REVOKED: "revoke"}[target]
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
-            self.hub.service(row.service).credential_key(kind, name)
+            (await self.hub.resolve_service(row.service)).credential_key(kind, name)
             current = await tx.get_credential(identity_id, kind, name)
             if current is None:
                 raise NotFound("credentials", f"{identity_id}/{kind}/{name}")
@@ -364,7 +364,7 @@ class CredentialsMixin(SpaceBase):
         """
         async with self._tx() as tx:
             row = await self._identity(tx, identity_id)
-            service = self.hub.service(row.service)
+            service = await self.hub.resolve_service(row.service)
             kind, name = service.credential_key(kind, name)
             checked = validity_code(code or "") if rejected else None
             turn_off = (

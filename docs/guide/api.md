@@ -64,7 +64,10 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 |---|---|
 | `hub.start()` | проверить ревизию схемы и синхронизировать реестр сервисов |
 | `hub.aclose()`, `async with hub:` | штатное завершение: записать накопленные метрики и потери аренд, закрыть HTTP-клиент, созданный хабом |
-| `hub.register_service(service)`, `hub.service(name)`, `hub.services` | реестр сервисов |
+| `hub.register_service(service)`, `hub.service(name)`, `hub.services` | static и уже materialized runtime-сервисы; `service()` не выполняет I/O |
+| `hub.register_service_template(template)` | pre-start регистрация Python-шаблона; registry фиксируется после `start()` |
+| `hub.service_definitions` | runtime CRUD: `create`, `ensure`, `get`, `list`, `update`, `enable`, `disable` |
+| `hub.resolve_service(name)` | async resolution runtime definition (`await`) с проверкой enabled и revision-aware кешем |
 | `hub.spaces.create(slug, title)`, `hub.spaces.ensure(slug, title)`, `hub.spaces.get(slug)` | создать пространство (уже есть — `AlreadyExists`), создать при необходимости, найти существующее (`NotFound`) |
 | `hub.space(slug)`, `hub.get_space(slug)` | пространство по slug без обращения к БД; несуществующее — `NotFound` при первой операции (`create=True` — создать); `get_space` возвращает `None` |
 | `hub.list_spaces()`, `hub.spaces_matrix()`, `hub.service_catalog()`, `hub.background_snapshot()` | сводные read-модели по пространствам для админок |

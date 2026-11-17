@@ -85,6 +85,7 @@ from identity_hub.errors import (
     RevisionConflict,
     SchemaIncompatible,
     SecretConfigurationError,
+    ServiceTemplateUnavailable,
     SpaceMismatch,
     StaleFencing,
     StorageError,
@@ -171,12 +172,18 @@ from identity_hub.service import (
     Service,
     Throttle,
 )
+from identity_hub.service_definitions import (
+    JsonValue,
+    RuntimeServiceCreate,
+    RuntimeServiceDefinition,
+    ServiceTemplate,
+)
 from identity_hub.state import Observation, Override
 from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
-__version__ = "1.0.0a8"
+__version__ = "1.0.0a9"
 
 __all__ = [
     "AcceptPolicy",
@@ -230,6 +237,7 @@ __all__ = [
     "IdentityRef",
     "ImportRecord",
     "ImportReport",
+    "JsonValue",
     "Lease",
     "LeaseContext",
     "LeaseContextFilter",
@@ -300,6 +308,8 @@ __all__ = [
     "Retention",
     "RevalidationStatus",
     "RevisionConflict",
+    "RuntimeServiceCreate",
+    "RuntimeServiceDefinition",
     "SameSite",
     "SchemaIncompatible",
     "Screen",
@@ -308,6 +318,8 @@ __all__ = [
     "SecretValue",
     "SecretsProvider",
     "Service",
+    "ServiceTemplate",
+    "ServiceTemplateUnavailable",
     "SessionAdoptionOutcome",
     "SessionAdoptionResult",
     "SessionRefresher",

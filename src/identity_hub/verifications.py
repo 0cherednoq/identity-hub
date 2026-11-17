@@ -27,7 +27,7 @@ from identity_hub.domain.verification import (
     verified_factors_after,
 )
 from identity_hub.enums import ChangeSource
-from identity_hub.errors import ConcurrentModification, ValidationFailed
+from identity_hub.errors import ConcurrentModification, IdentityHubError, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.protocols import ProbeResult
 from identity_hub.store.base import IdentityRow, StoreTx
@@ -59,7 +59,7 @@ async def apply_verification(
     await tx.lock_identities([identity_id])
     for _ in range(MAX_RETRIES):
         identity = await space._identity(tx, identity_id)
-        service = space.hub.service(identity.service)
+        service = await space.hub.resolve_service(identity.service)
         flow = VerificationFlow(service.verification(factor))
         region = await tx.load_region(identity_id, "verification", factor)
         row = await tx.load_verification(identity_id, factor)
@@ -314,13 +314,16 @@ class VerificationsMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             due = await tx.due_regions("verification", limit)
         changed = 0
-        known = {service.name for service in self.hub.services}
         for identity_id, factor in due:
             async with self._tx(own=True) as tx:
                 identity = await tx.get_identity(identity_id)
-                if identity is None or identity.service not in known:
-                    continue  # сервис убран из кода: его аккаунт не останавливает остальных (R2-F06)
-                if factor not in self.hub.service(identity.service).factor_names:
+                if identity is None:
+                    continue
+                try:
+                    service = await self.hub.resolve_service(identity.service)
+                except IdentityHubError:
+                    continue
+                if factor not in service.factor_names:
                     continue  # фактор удалён из кода — игнорируется (FR-10.6)
                 decision = await apply_verification(
                     self,

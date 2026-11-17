@@ -61,6 +61,7 @@ EXPECTED_CODES = {
     "DatabaseBusy": "database_busy",
     "StorageError": "storage_error",
     "SchemaIncompatible": "schema_incompatible",
+    "ServiceTemplateUnavailable": "service_template_unavailable",
     "SecretConfigurationError": "secret_configuration_error",
     "DecryptionFailed": "decryption_failed",
 }

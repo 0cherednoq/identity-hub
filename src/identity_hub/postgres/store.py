@@ -203,6 +203,7 @@ from identity_hub.store.base import (
     QuotaCharge,
     QuotaWindow,
     RotationBatch,
+    RuntimeServiceRow,
     SearchFilter,
     SecretConversionBatch,
     ServiceRow,
@@ -5810,12 +5811,26 @@ class PgStore(Store):
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         if not services:
             return
+        names = [service.name for service in services]
+        async with self.sessionmaker() as session:
+            conflict = (
+                await _execute(
+                    session,
+                    select(ServiceRecord.name).where(
+                        ServiceRecord.name.in_(names), ServiceRecord.origin == "runtime"
+                    ).limit(1),
+                    execution_options=self.options,
+                )
+            ).scalar_one_or_none()
+        if conflict is not None:
+            raise AlreadyExists("service", conflict)
         stmt = insert(ServiceRecord).values(
-            [{"name": s.name, "title": s.title, "url": s.url} for s in services]
+            [{"name": s.name, "title": s.title, "url": s.url, "origin": "static"} for s in services]
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[ServiceRecord.name],
             set_={"title": stmt.excluded.title, "url": stmt.excluded.url, "synced_at": func.now()},
+            where=ServiceRecord.origin == "static",
         )
         async with self._own() as session:
             await _execute(session, stmt, execution_options=self.options)
@@ -5833,6 +5848,252 @@ class PgStore(Store):
                     .values(verification_tier_rank=expression),
                     execution_options=self.options,
                 )
+
+    @staticmethod
+    def _runtime_service_row(record: ServiceRecord) -> RuntimeServiceRow:
+        assert record.template is not None and record.config is not None
+        return RuntimeServiceRow(
+            record.name,
+            record.title,
+            record.url,
+            record.template,
+            dict(record.config),
+            record.enabled,
+            record.revision,
+            record.created_at,
+            record.updated_at,
+            record.idempotency_key,
+            record.idempotency_fingerprint,
+        )
+
+    async def _emit_service_definition_event(
+        self,
+        session: AsyncSession,
+        event_type: str,
+        row: RuntimeServiceRow,
+        *,
+        actor: str,
+        changed_fields: Sequence[str],
+        reason: str | None = None,
+    ) -> None:
+        data: dict[str, Any] = {
+            "name": row.name,
+            "template": row.template,
+            "revision": row.revision,
+            "changed_fields": list(changed_fields),
+        }
+        if reason is not None:
+            data["reason"] = reason
+        await _execute(
+            session,
+            insert(EventRecord).values(
+                event_id=new_id(),
+                type=event_type,
+                severity=str(
+                    Severity.WARNING if event_type.endswith("disabled") else Severity.INFO
+                ),
+                space_id=None,
+                service=row.name,
+                identity_id=None,
+                proxy_id=None,
+                lease_id=None,
+                sequence=None,
+                revision=row.revision,
+                actor=actor,
+                data=data,
+                external=True,
+            ),
+            execution_options=self.options,
+        )
+        await _execute(
+            session,
+            text("SELECT pg_notify(:channel, :payload)"),
+            {"channel": NOTIFY_CHANNEL, "payload": "__global__"},
+        )
+
+    async def create_service_definition(
+        self,
+        definition: RuntimeServiceRow,
+        *,
+        idempotency_key: str | None,
+        fingerprint: str | None,
+        actor: str,
+    ) -> tuple[RuntimeServiceRow, bool]:
+        values = {
+            "name": definition.name,
+            "title": definition.title,
+            "url": definition.url,
+            "origin": "runtime",
+            "template": definition.template,
+            "config": definition.config,
+            "enabled": definition.enabled,
+            "revision": 1,
+            "created_at": definition.created_at,
+            "updated_at": definition.updated_at,
+            "idempotency_key": idempotency_key,
+            "idempotency_fingerprint": fingerprint,
+        }
+        stmt = insert(ServiceRecord).values(**values).on_conflict_do_nothing().returning(ServiceRecord.name)
+        async with self._own() as session:
+            inserted = (await _execute(session, stmt, execution_options=self.options)).scalar_one_or_none()
+            if inserted is not None:
+                record = (
+                    await _execute(
+                        session,
+                        select(ServiceRecord).where(ServiceRecord.name == definition.name),
+                        execution_options=self.options,
+                    )
+                ).scalar_one()
+                row = self._runtime_service_row(record)
+                await self._emit_service_definition_event(
+                    session,
+                    "service.definition.created",
+                    row,
+                    actor=actor,
+                    changed_fields=("title", "url", "template", "config", "enabled"),
+                )
+                return row, True
+            record = None
+            if idempotency_key is not None:
+                record = (
+                    await _execute(
+                        session,
+                        select(ServiceRecord).where(ServiceRecord.idempotency_key == idempotency_key),
+                        execution_options=self.options,
+                    )
+                ).scalar_one_or_none()
+            if record is None:
+                record = (
+                    await _execute(
+                        session,
+                        select(ServiceRecord).where(ServiceRecord.name == definition.name),
+                        execution_options=self.options,
+                    )
+                ).scalar_one_or_none()
+            if record is None or record.origin != "runtime":
+                raise AlreadyExists("service", definition.name)
+            return self._runtime_service_row(record), False
+
+    async def get_service_definition(self, name: str) -> RuntimeServiceRow | None:
+        async with self.sessionmaker() as session:
+            record = (
+                await _execute(
+                    session,
+                    select(ServiceRecord).where(
+                        ServiceRecord.name == name, ServiceRecord.origin == "runtime"
+                    ),
+                    execution_options=self.options,
+                )
+            ).scalar_one_or_none()
+        return self._runtime_service_row(record) if record is not None else None
+
+    async def list_service_definitions(
+        self, *, template: str | None = None, enabled: bool | None = None
+    ) -> list[RuntimeServiceRow]:
+        stmt = select(ServiceRecord).where(ServiceRecord.origin == "runtime")
+        if template is not None:
+            stmt = stmt.where(ServiceRecord.template == template)
+        if enabled is not None:
+            stmt = stmt.where(ServiceRecord.enabled == enabled)
+        stmt = stmt.order_by(ServiceRecord.name)
+        async with self.sessionmaker() as session:
+            records = (await _execute(session, stmt, execution_options=self.options)).scalars().all()
+        return [self._runtime_service_row(record) for record in records]
+
+    async def update_service_definition(
+        self,
+        definition: RuntimeServiceRow,
+        *,
+        expected_revision: int,
+        actor: str,
+        changed_fields: Sequence[str],
+    ) -> RuntimeServiceRow:
+        stmt = (
+            update(ServiceRecord)
+            .where(
+                ServiceRecord.name == definition.name,
+                ServiceRecord.origin == "runtime",
+                ServiceRecord.revision == expected_revision,
+            )
+            .values(
+                title=definition.title,
+                url=definition.url,
+                template=definition.template,
+                config=definition.config,
+                revision=ServiceRecord.revision + 1,
+                updated_at=func.now(),
+            )
+            .returning(ServiceRecord)
+        )
+        async with self._own() as session:
+            record = (await _execute(session, stmt, execution_options=self.options)).scalar_one_or_none()
+            if record is None:
+                current = (
+                    await _execute(
+                        session,
+                        select(ServiceRecord).where(
+                            ServiceRecord.name == definition.name, ServiceRecord.origin == "runtime"
+                        ),
+                        execution_options=self.options,
+                    )
+                ).scalar_one_or_none()
+                if current is None:
+                    raise NotFound("service", definition.name)
+                raise RevisionConflict("service", definition.name, expected_revision, current.revision)
+            row = self._runtime_service_row(record)
+            await self._emit_service_definition_event(
+                session,
+                "service.definition.updated",
+                row,
+                actor=actor,
+                changed_fields=changed_fields,
+            )
+            return row
+
+    async def set_service_definition_enabled(
+        self,
+        name: str,
+        *,
+        enabled: bool,
+        expected_revision: int,
+        actor: str,
+        reason: str | None,
+    ) -> RuntimeServiceRow:
+        stmt = (
+            update(ServiceRecord)
+            .where(
+                ServiceRecord.name == name,
+                ServiceRecord.origin == "runtime",
+                ServiceRecord.revision == expected_revision,
+            )
+            .values(enabled=enabled, revision=ServiceRecord.revision + 1, updated_at=func.now())
+            .returning(ServiceRecord)
+        )
+        async with self._own() as session:
+            record = (await _execute(session, stmt, execution_options=self.options)).scalar_one_or_none()
+            if record is None:
+                current = (
+                    await _execute(
+                        session,
+                        select(ServiceRecord).where(
+                            ServiceRecord.name == name, ServiceRecord.origin == "runtime"
+                        ),
+                        execution_options=self.options,
+                    )
+                ).scalar_one_or_none()
+                if current is None:
+                    raise NotFound("service", name)
+                raise RevisionConflict("service", name, expected_revision, current.revision)
+            row = self._runtime_service_row(record)
+            await self._emit_service_definition_event(
+                session,
+                f"service.definition.{'enabled' if enabled else 'disabled'}",
+                row,
+                actor=actor,
+                changed_fields=("enabled",),
+                reason=reason,
+            )
+            return row
 
     async def get_space(self, slug: str) -> SpaceRef | None:
         async with self.sessionmaker() as session:
@@ -5927,8 +6188,11 @@ class PgStore(Store):
             if external_only:
                 conditions.append(e.external.is_(True))
             stmt = (
-                select(*e, SPACES.c.slug)
-                .join(SPACES, SPACES.c.id == e.space_id)
+                select(
+                    *e,
+                    func.coalesce(SPACES.c.slug, literal("__global__")).label("slug"),
+                )
+                .outerjoin(SPACES, SPACES.c.id == e.space_id)
                 .join(cursor, tuple_(e.tx_id, e.id) > tuple_(cursor.c.last_tx_id, cursor.c.last_id))
                 .where(*conditions)
                 .order_by(e.tx_id, e.id)

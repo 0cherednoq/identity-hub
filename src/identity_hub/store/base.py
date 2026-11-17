@@ -90,6 +90,7 @@ __all__ = [
     "QuotaCharge",
     "QuotaWindow",
     "RotationBatch",
+    "RuntimeServiceRow",
     "SearchFilter",
     "SecretConversionBatch",
     "ServiceRow",
@@ -350,6 +351,21 @@ class ServiceRow:
     title: str
     url: str | None = None
     verification_tiers: tuple[frozenset[str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeServiceRow:
+    name: str
+    title: str
+    url: str | None
+    template: str
+    config: dict[str, Any]
+    enabled: bool
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+    idempotency_key: str | None = None
+    idempotency_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2267,6 +2283,45 @@ class Store(ABC):
     @abstractmethod
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         """Зеркало реестра сервисов для админки (FR-1.3)."""
+
+    @abstractmethod
+    async def create_service_definition(
+        self,
+        definition: RuntimeServiceRow,
+        *,
+        idempotency_key: str | None,
+        fingerprint: str | None,
+        actor: str,
+    ) -> tuple[RuntimeServiceRow, bool]: ...
+
+    @abstractmethod
+    async def get_service_definition(self, name: str) -> RuntimeServiceRow | None: ...
+
+    @abstractmethod
+    async def list_service_definitions(
+        self, *, template: str | None = None, enabled: bool | None = None
+    ) -> list[RuntimeServiceRow]: ...
+
+    @abstractmethod
+    async def update_service_definition(
+        self,
+        definition: RuntimeServiceRow,
+        *,
+        expected_revision: int,
+        actor: str,
+        changed_fields: Sequence[str],
+    ) -> RuntimeServiceRow: ...
+
+    @abstractmethod
+    async def set_service_definition_enabled(
+        self,
+        name: str,
+        *,
+        enabled: bool,
+        expected_revision: int,
+        actor: str,
+        reason: str | None,
+    ) -> RuntimeServiceRow: ...
 
     @abstractmethod
     async def ensure_space(

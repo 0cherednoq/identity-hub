@@ -255,7 +255,7 @@ class Doctor:
         Пачка с коллизией не применяется целиком: разрешите дубли (слияние или удаление
         identity) и запустите снова. Идемпотентно: уже нормализованные строки не трогает.
         """
-        svc = self.hub.service(service)
+        svc = await self.hub.resolve_service(service)
         version = svc.normalize_ref_version
         updated = 0
         collisions: list[list[UUID]] = []

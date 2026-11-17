@@ -217,7 +217,7 @@ class IdentitiesMixin(SpaceBase):
         Аккаунт, секреты, сессии, начальные регионы, связи и событие — одна транзакция
         (в сессии пользователя — savepoint, G-4.3).
         """
-        svc = self.hub.service(service)
+        svc = await self.hub.resolve_service(service)
         all_sessions = dict(sessions or {})
         if session is not None:
             all_sessions[DEFAULT_SLOT] = session
@@ -429,6 +429,7 @@ class IdentitiesMixin(SpaceBase):
             removed = set(remove_tags)
             for identity_id in ids:
                 row = await self._identity(tx, identity_id)
+                await self.hub.resolve_service(row.service)
                 values: dict[str, Any] = {}
                 tags = validate_tags(tag for tag in [*row.tags, *add_tags] if tag not in removed)
                 if tags != row.tags:
@@ -643,6 +644,7 @@ class IdentitiesMixin(SpaceBase):
             # add_tags и слияния меток затирают друг друга (R2-D02).
             await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
+            await self.hub.resolve_service(row.service)
             profile = dict(row.profile)
             if need_profile:
                 secret = await tx.get_profile_secret(identity_id)

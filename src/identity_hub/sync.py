@@ -118,7 +118,7 @@ class SyncMixin(SpaceBase):
         """Внеочередная проба регионов аккаунта (FR-9.7). Возвращает исход по региону."""
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
-        service = self.hub.service(identity.service)
+        service = await self.hub.resolve_service(identity.service)
         targets = _parse_regions(service, regions)
         lease = await self._probe_pool(service).acquire(
             query=self._probe_query(service, [identity_id]), wait=30
@@ -137,7 +137,10 @@ class SyncMixin(SpaceBase):
         limit: int = 50,
     ) -> ReconcileReport:
         """Фоновая сверка: аккаунты, чей регион не сверялся дольше `not_synced_for` (FR-9.7)."""
-        services = [self.hub.service(service)] if service is not None else list(self.hub.services)
+        if service is not None:
+            services = [await self.hub.resolve_service(service)]
+        else:
+            services = list(await self.hub._active_services())
         report = ReconcileReport()
         region_list = list(regions)
         for svc in services:
@@ -320,7 +323,7 @@ class SyncMixin(SpaceBase):
                 identity = await self._identity(tx, identity_id)
             except NotFound:
                 raise OperationNotAllowed("diagnostic", [Blocker("not_found", str(identity_id))]) from None
-        service = self.hub.service(identity.service)
+        service = await self.hub.resolve_service(identity.service)
         policy = service.diagnostic_policy()
         blockers = policy.blockers(identity.lifecycle, identity.availability, identity.standing)
         if blockers:

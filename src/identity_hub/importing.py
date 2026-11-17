@@ -142,7 +142,7 @@ class ImportingMixin(SpaceBase):
 
         `max_identities` — ёмкость прокси, которые импорт создаёт из `ImportRecord.proxy`.
         """
-        svc = self.hub.service(service)
+        svc = await self.hub.resolve_service(service)
         accept_policy = (
             accept if accept is not None else (svc.default_accept if _use_default_accept else None)
         )
@@ -211,7 +211,7 @@ class ImportingMixin(SpaceBase):
         """
         if max_bytes is not None and max_bytes < 1:
             raise ValidationFailed("max_bytes ≥ 1")
-        svc = self.hub.service(service)
+        svc = await self.hub.resolve_service(service)
         report = ImportReport()
         for raw in paths:
             path, problem = _check_file(Path(raw), base_dir, max_bytes)
@@ -247,7 +247,7 @@ class ImportingMixin(SpaceBase):
         run_id: UUID | None = None,
     ) -> UUID:
         """Persist a resumable import without retaining the source file."""
-        svc = self.hub.service(service)
+        svc = await self.hub.resolve_service(service)
         mode = OnExisting(on_existing)
         batch_labels = dict(labels or {})
         staged = [
@@ -945,7 +945,9 @@ class ImportRunner:
                     existing is not None
                     and existing.service == run.service
                     and existing.normalized_ref
-                    == handle.hub.service(run.service).normalize_external_ref(record.external_ref)
+                    == (await handle.hub.resolve_service(run.service)).normalize_external_ref(
+                        record.external_ref
+                    )
                 ):
                     results.append(
                         ImportItemResult(
@@ -973,7 +975,7 @@ class ImportRunner:
         created = set(report.created)
         skipped = {external_ref: reason for external_ref, reason in report.skipped}
         failed = {external_ref: reason for external_ref, reason in report.failed}
-        service = handle.hub.service(run.service)
+        service = await handle.hub.resolve_service(run.service)
         for item, record in pending:
             identity_id = record.id
             # id записи сгенерирован при stage и с существующей identity не совпадает:

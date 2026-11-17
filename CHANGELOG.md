@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+## [1.0.0a9] - 2026-11-17
+
+Девятый альфа-релиз добавляет долговечные runtime-описания сервисов. Приложение может создать
+сервис после `IdentityHub.start()`, а уже запущенные процессы разрешат его без перезапуска.
+Ревизия схемы — `0041`: перед обновлением примените миграцию (`SCHEMA_COMPATIBLE = {"0041"}`).
+
+### Added
+
+- `ServiceTemplate`, `RuntimeServiceCreate` и `RuntimeServiceDefinition` для безопасной материализации
+  runtime-сервиса из установленного Python-кода и JSON-конфигурации.
+- `hub.service_definitions` с `create`, идемпотентным `ensure`, `get`, `list`, optimistic `update`,
+  `enable` и `disable`.
+- `await hub.resolve_service(name)`: revision-aware разрешение runtime-сервиса между процессами.
+  Импорт, создание identity, auth, sync, verification и операции с секретами используют resolver.
+- Миграция `0041` расширяет `ih_services` полями origin, template, config, enabled, revision,
+  timestamps и данными идемпотентности. Startup sync изменяет только static-строки.
+
+### Security
+
+- Runtime `config` обязан быть JSON-объектом до 64 KiB и проходит Pydantic-схему template.
+  Core не загружает исполняемый код из базы. Идемпотентность использует HMAC-отпечаток payload.
+- Disabled definition сохраняет FK и историю, но блокирует новые операции через `OperationNotAllowed`.
+
 ## [1.0.0a8] - 2026-11-02
 
 Восьмой альфа-релиз добавляет явную перепроверку аккаунта `auth.revalidate` из любого допустимого состояния,

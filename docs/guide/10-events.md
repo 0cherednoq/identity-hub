@@ -116,6 +116,9 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 код и срок временного состояния, `source` — источник (`command`, `observation`, `error`, …),
 `actor` и `reason` — кто и почему, `raw_status` — исходный статус платформы для наблюдений.
 
+События `service.definition.*` глобальны для реестра: у них `space="__global__"`.
+Они содержат только имена изменённых полей; значение `config` в журнал не записывается.
+
 <!-- event-data:start -->
 | Тип | Ключи `data` |
 |---|---|
@@ -176,6 +179,10 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 | `proxy.status.changed` | `actor`, `code`, `from`, `host`, `key`, `pool`, `port`, `raw_status`, `reason`, `region`, `source`, `to`, `until` |
 | `proxy.updated` | `fields`, `from_host`, `from_pool`, `from_port`, `from_scheme`, `host`, `pool`, `port` |
 | `session.saved` | `mode`, `replaced_id`, `session_id`, `session_revision`, `slot` |
+| `service.definition.created` | `changed_fields`, `name`, `revision`, `template` |
+| `service.definition.disabled` | `changed_fields`, `name`, `reason`, `revision`, `template` |
+| `service.definition.enabled` | `changed_fields`, `name`, `revision`, `template` |
+| `service.definition.updated` | `changed_fields`, `name`, `revision`, `template` |
 | `webhook.endpoint.disabled` | `endpoint_id`, `failure_streak` |
 | `worker.leases_lost` | `count`, `holder` |
 <!-- event-data:end -->

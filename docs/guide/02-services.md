@@ -1,8 +1,100 @@
 # 2. Сервисы: как описать платформу
 
-`Service` — описание одной платформы в коде. Сервис объявляют один раз и передают в
-`IdentityHub(services=[...])`. В базе хранится только имя и заголовок сервиса; схемы, правила
-и протоколы берутся из кода при каждом обращении. **Код — источник правды о сервисе.**
+`Service` — описание одной платформы в коде. Статический сервис объявляют один раз и передают в
+`IdentityHub(services=[...])`. Runtime-сервис создают из установленного `ServiceTemplate` и
+долговечного JSON-описания. Схемы, authenticator, probes и функции всегда берутся из кода.
+**База не является источником исполняемого кода.**
+
+## Создание runtime-сервиса без перезапуска
+
+Этот сценарий подходит интеграции, которая получает новые сайты или поставщиков во время работы.
+Сначала установите Python-шаблон во все процессы. После deploy создавайте любое число definitions
+этого шаблона без перезапуска.
+
+```python
+from pydantic import BaseModel, ConfigDict
+from identity_hub import (
+    IdentityHub,
+    RuntimeServiceCreate,
+    Service,
+)
+
+
+class BrowserCheckerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    country: str | None = None
+
+
+class BrowserCheckerTemplate:
+    name = "browser_account_checker/v1"
+    config_schema = BrowserCheckerConfig
+
+    def build(self, definition):
+        return Service(
+            name=definition.name,
+            title=definition.title,
+            url=definition.url,
+            # credentials, session, authenticator и probes задаёт приложение
+        )
+
+
+hub = IdentityHub(
+    sessionmaker=sessions,
+    secrets=secrets,
+    service_templates=[BrowserCheckerTemplate()],
+)
+await hub.start()
+
+definition, created = await hub.service_definitions.ensure(
+    RuntimeServiceCreate(
+        name="supplier_a_site_421",
+        title="Example Shop",
+        url="https://example.com",
+        template="browser_account_checker/v1",
+        config={"country": "DE"},
+    ),
+    actor="supplier-sync",
+    idempotency_key="supplier-a:site:421",
+)
+
+report = await space.imports.run(
+    service=definition.name,
+    records=records,
+    on_existing="merge",
+    actor="ingest:supplier-a",
+)
+```
+
+`ensure` возвращает `(definition, created)`. Повтор того же ключа и payload возвращает прежний
+результат. Тот же ключ с другим payload даёт `IdempotencyConflict`. Существующее имя не обновляется
+скрыто: используйте `update(..., expected_revision=...)`.
+
+Другой уже запущенный процесс разрешает сервис при первой async-операции или явно:
+
+```python
+service = await hub.resolve_service("supplier_a_site_421")
+```
+
+Resolver читает текущую revision, валидирует config, вызывает template и обновляет локальный кеш.
+`hub.service(name)` остаётся синхронным cache-only API. Он подходит для static или уже разрешённого
+runtime-сервиса.
+
+### Управление definition
+
+| Метод | Результат |
+|---|---|
+| `create(spec, actor=...)` | Создаёт definition revision 1; занятое имя даёт `AlreadyExists` |
+| `ensure(spec, actor=..., idempotency_key=...)` | Идемпотентное создание для supplier sync |
+| `get(name)` / `list(template=..., enabled=...)` | Читает definitions без материализации сервиса |
+| `update(name, ..., expected_revision=..., actor=...)` | Меняет только указанную revision; stale revision даёт `RevisionConflict` |
+| `disable(...)` / `enable(...)` | Блокирует или разрешает новые операции, не удаляя identity и историю |
+
+Template registry фиксируется после успешного `hub.start()`. Новый template требует deploy и restart.
+Новая definition уже установленного template этого не требует.
+
+Runtime `config` обязан быть JSON-объектом размером не более 64 KiB. Он проходит `config_schema`
+до записи. Не храните в config пароли, токены или исполняемый код. Для секретов используйте
+`SecretsProvider` и секретные хранилища Identity Hub.
 
 ## Минимальный сервис
 

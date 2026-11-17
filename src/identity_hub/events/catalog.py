@@ -96,6 +96,12 @@ def _specs() -> dict[str, EventSpec]:
             ("worker.leases_lost", Severity.WARNING),
         ],
         "delivery": [("webhook.endpoint.disabled", Severity.CRITICAL)],
+        "service": [
+            ("service.definition.created", Severity.INFO),
+            ("service.definition.updated", Severity.INFO),
+            ("service.definition.enabled", Severity.INFO),
+            ("service.definition.disabled", Severity.WARNING),
+        ],
         "admin": [
             ("admin.bulk.executed", Severity.INFO),
             ("admin.accounts.exported", Severity.INFO),

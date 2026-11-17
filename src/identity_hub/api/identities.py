@@ -322,7 +322,7 @@ class Identities(Namespace):
         async with self._space._tx(own=True) as tx:
             if identity_id is None:
                 assert service is not None and external_ref is not None
-                svc = self._space.hub.service(service)
+                svc = await self._space.hub.resolve_service(service)
                 key = (svc.name, svc.normalize_external_ref(external_ref))
                 found = (await tx.find_by_refs([key])).get(key)
                 if found is None or found[1] != tx.space.id:
@@ -383,7 +383,7 @@ class Identities(Namespace):
         """
         if not 1 <= limit <= MAX_TAG_COUNTS:
             raise ValidationFailed(f"limit: от 1 до {MAX_TAG_COUNTS}")
-        name = self._space.hub.service(service).name if service is not None else None
+        name = (await self._space.hub.resolve_service(service)).name if service is not None else None
         async with self._space._tx(own=True) as tx:
             rows = await tx.tag_counts(service=name, limit=limit)
         return [TagCount(tag, count) for tag, count in rows]
@@ -392,6 +392,7 @@ class Identities(Namespace):
 
     async def create(self, spec: IdentityCreate, *, actor: str) -> Identity:
         """Создать identity; если такой id или `(service, external_ref)` уже есть — `AlreadyExists`."""
+        await self._space.hub.resolve_service(spec.service)
         svc, prepared = self._prepare(spec)
         async with self._space._tx() as tx:
             await self._space._create_one(tx, svc, prepared, actor=actor, fail_existing=True)
@@ -402,6 +403,7 @@ class Identities(Namespace):
 
         Identity с тем же ref в другом пространстве — `AlreadyExists`.
         """
+        await self._space.hub.resolve_service(spec.service)
         svc, prepared = self._prepare(spec)
         async with self._space._tx() as tx:
             result = await self._space._create_one(tx, svc, prepared, actor=actor)
@@ -426,6 +428,8 @@ class Identities(Namespace):
         items = list(specs)
         if len(items) > CREATE_MANY_LIMIT:
             raise ValidationFailed(f"create_many: не больше {CREATE_MANY_LIMIT} записей; больше — imports")
+        for service in dict.fromkeys(item.service_name for item in items):
+            await self._space.hub.resolve_service(service)
         prepared = self._prepare_many(items)
         # единый порядок вставки: параллельные пересекающиеся пачки не дают deadlock
         ordered = sorted(prepared, key=lambda pair: (pair[1].row.service, pair[1].row.unique_ref))

@@ -122,6 +122,7 @@ from identity_hub.store.base import (
     QuotaCharge,
     QuotaWindow,
     RotationBatch,
+    RuntimeServiceRow,
     SearchFilter,
     SecretConversionBatch,
     ServiceRow,
@@ -191,6 +192,7 @@ class _SessionRecord:
 class _MemoryState:
     spaces: dict[str, SpaceRef] = field(default_factory=dict)
     services: dict[str, ServiceRow] = field(default_factory=dict)
+    runtime_services: dict[str, RuntimeServiceRow] = field(default_factory=dict)
     identities: dict[UUID, IdentityRow] = field(default_factory=dict)
     regions: dict[tuple[UUID, str, str], RegionState] = field(default_factory=dict)
     # (identity, kind, name) → (секрет, метаданные): несколько credentials на аккаунт (D-214)
@@ -3618,6 +3620,7 @@ class MemoryStore(Store):
         self._locks: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
         self._consumer_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._listeners: defaultdict[str, set[asyncio.Event]] = defaultdict(set)
+        self._transaction_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def _lock(self) -> asyncio.Lock:
@@ -3650,6 +3653,9 @@ class MemoryStore(Store):
         if session is not None:
             raise TypeError("MemoryStore не поддерживает внешнюю SQL-сессию")
         async with self._lock:
+            task = asyncio.current_task()
+            assert task is not None
+            self._transaction_tasks.add(task)
             snapshot = _snapshot(self._state)
             tx = MemoryTx(self, space, self.clock.now())
             try:
@@ -3661,6 +3667,8 @@ class MemoryStore(Store):
                 if tx._notify:
                     for event in self._listeners.get("ih_events", ()):
                         event.set()
+            finally:
+                self._transaction_tasks.discard(task)
 
     async def current_time(self) -> datetime:
         return self.clock.now()
@@ -3671,7 +3679,14 @@ class MemoryStore(Store):
 
     async def sync_services(self, services: Sequence[ServiceRow]) -> None:
         async with self._lock:
-            self._state.services = {service.name: deepcopy(service) for service in services}
+            static = {service.name: deepcopy(service) for service in services}
+            conflict = set(static) & set(self._state.runtime_services)
+            if conflict:
+                raise AlreadyExists("service", sorted(conflict)[0])
+            self._state.services = static | {
+                name: ServiceRow(row.name, row.title, row.url)
+                for name, row in self._state.runtime_services.items()
+            }
             for identity_id, identity in self._state.identities.items():
                 service = self._state.services.get(identity.service)
                 if service is None:
@@ -3686,6 +3701,157 @@ class MemoryStore(Store):
                     default=None,
                 )
                 self._state.identities[identity_id] = replace(identity, verification_tier_rank=rank)
+
+    def _emit_service_definition_event(
+        self,
+        event_type: str,
+        row: RuntimeServiceRow,
+        *,
+        actor: str,
+        changed_fields: Sequence[str],
+        reason: str | None = None,
+    ) -> None:
+        data: dict[str, Any] = {
+            "name": row.name,
+            "template": row.template,
+            "revision": row.revision,
+            "changed_fields": list(changed_fields),
+        }
+        if reason is not None:
+            data["reason"] = reason
+        event = Event(
+            id=self._state.next_event_id,
+            event_id=new_id(),
+            type=event_type,
+            severity=Severity.WARNING if event_type.endswith("disabled") else Severity.INFO,
+            occurred_at=self.clock.now(),
+            space="__global__",
+            service=row.name,
+            identity_id=None,
+            proxy_id=None,
+            lease_id=None,
+            sequence=None,
+            actor=actor,
+            data=data,
+            revision=row.revision,
+        )
+        self._state.next_event_id += 1
+        self._state.events.append((event, UUID(int=0), True))
+
+    async def create_service_definition(
+        self,
+        definition: RuntimeServiceRow,
+        *,
+        idempotency_key: str | None,
+        fingerprint: str | None,
+        actor: str,
+    ) -> tuple[RuntimeServiceRow, bool]:
+        async with self._lock:
+            if idempotency_key is not None:
+                for row in self._state.runtime_services.values():
+                    if row.idempotency_key == idempotency_key:
+                        return deepcopy(row), False
+            existing = self._state.runtime_services.get(definition.name)
+            if existing is not None:
+                return deepcopy(existing), False
+            if definition.name in self._state.services:
+                raise AlreadyExists("service", definition.name)
+            row = replace(
+                definition,
+                idempotency_key=idempotency_key,
+                idempotency_fingerprint=fingerprint,
+            )
+            self._state.runtime_services[row.name] = deepcopy(row)
+            self._state.services[row.name] = ServiceRow(row.name, row.title, row.url)
+            self._emit_service_definition_event(
+                "service.definition.created",
+                row,
+                actor=actor,
+                changed_fields=("title", "url", "template", "config", "enabled"),
+            )
+            return deepcopy(row), True
+
+    async def get_service_definition(self, name: str) -> RuntimeServiceRow | None:
+        if asyncio.current_task() in self._transaction_tasks:
+            row = self._state.runtime_services.get(name)
+            return deepcopy(row) if row is not None else None
+        async with self._lock:
+            row = self._state.runtime_services.get(name)
+            return deepcopy(row) if row is not None else None
+
+    async def list_service_definitions(
+        self, *, template: str | None = None, enabled: bool | None = None
+    ) -> list[RuntimeServiceRow]:
+        async with self._lock:
+            return [
+                deepcopy(row)
+                for row in sorted(self._state.runtime_services.values(), key=lambda item: item.name)
+                if (template is None or row.template == template)
+                and (enabled is None or row.enabled is enabled)
+            ]
+
+    async def update_service_definition(
+        self,
+        definition: RuntimeServiceRow,
+        *,
+        expected_revision: int,
+        actor: str,
+        changed_fields: Sequence[str],
+    ) -> RuntimeServiceRow:
+        async with self._lock:
+            current = self._state.runtime_services.get(definition.name)
+            if current is None:
+                raise NotFound("service", definition.name)
+            if current.revision != expected_revision:
+                raise RevisionConflict("service", definition.name, expected_revision, current.revision)
+            row = replace(
+                definition,
+                revision=expected_revision + 1,
+                created_at=current.created_at,
+                updated_at=self.clock.now(),
+                idempotency_key=current.idempotency_key,
+                idempotency_fingerprint=current.idempotency_fingerprint,
+            )
+            self._state.runtime_services[row.name] = deepcopy(row)
+            self._state.services[row.name] = ServiceRow(row.name, row.title, row.url)
+            self._emit_service_definition_event(
+                "service.definition.updated",
+                row,
+                actor=actor,
+                changed_fields=changed_fields,
+            )
+            return deepcopy(row)
+
+    async def set_service_definition_enabled(
+        self,
+        name: str,
+        *,
+        enabled: bool,
+        expected_revision: int,
+        actor: str,
+        reason: str | None,
+    ) -> RuntimeServiceRow:
+        async with self._lock:
+            current = self._state.runtime_services.get(name)
+            if current is None:
+                raise NotFound("service", name)
+            if current.revision != expected_revision:
+                raise RevisionConflict("service", name, expected_revision, current.revision)
+            row = replace(
+                current,
+                enabled=enabled,
+                revision=expected_revision + 1,
+                updated_at=self.clock.now(),
+            )
+            self._state.runtime_services[name] = row
+            self._emit_service_definition_event(
+                f"service.definition.{'enabled' if enabled else 'disabled'}",
+                row,
+                actor=actor,
+                changed_fields=("enabled",),
+                reason=reason,
+            )
+            return deepcopy(row)
 
     async def ensure_space(
         self,

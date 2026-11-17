@@ -199,7 +199,27 @@ class ServiceRecord(IdentityHubBase):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
     url: Mapped[str | None] = mapped_column(Text)
+    origin: Mapped[str] = mapped_column(String(16), server_default=text("'static'"))
+    template: Mapped[str | None] = mapped_column(String(128))
+    config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    revision: Mapped[int] = mapped_column(BigInteger, server_default=text("1"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    idempotency_key: Mapped[str | None] = mapped_column(String(256))
+    idempotency_fingerprint: Mapped[str | None] = mapped_column(String(128))
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("origin IN ('static', 'runtime')", name="origin_valid"),
+        CheckConstraint("revision >= 1", name="revision_positive"),
+        CheckConstraint(
+            "(origin = 'static' AND template IS NULL AND config IS NULL) OR "
+            "(origin = 'runtime' AND template IS NOT NULL AND config IS NOT NULL)",
+            name="runtime_definition_valid",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_ih_services_idempotency_key"),
+    )
 
 
 class ImportRunRecord(IdentityHubBase):
@@ -1154,7 +1174,9 @@ class EventRecord(IdentityHubBase):
 
     type: Mapped[str] = mapped_column(String(64))  # identity.standing.changed
     severity: Mapped[str] = mapped_column(String(16), default=Severity.INFO)
-    space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"))
+    space_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("ih_spaces.id", ondelete="CASCADE"), nullable=True
+    )
     service: Mapped[str | None] = mapped_column(String(64))
     identity_id: Mapped[UUID | None]  # без FK: журнал переживает удаление
     proxy_id: Mapped[UUID | None]

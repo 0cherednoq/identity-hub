@@ -14,7 +14,7 @@ import random
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Generic, overload
+from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -68,6 +68,7 @@ from identity_hub.store.base import (
 if TYPE_CHECKING:
     from identity_hub.operation import Operation
     from identity_hub.pool import Pool
+    from identity_hub.service import Service
     from identity_hub.verifications import Verification
 
 __all__ = ["Lease", "OnLost", "acquire", "lease_scope"]
@@ -1145,6 +1146,12 @@ async def acquire(
     тому же пулу, сервису и holder; иначе `IdempotencyConflict`. Ключ действует в пределах пространства.
     В shared-режиме ключ не поддерживается: живые shared-аренды не хранятся (D-140).
     """
+    # Resolve at the async boundary so a long-lived Pool observes a runtime
+    # definition being disabled or revised by another process.
+    pool.service = cast(
+        "Service[TCreds, TSession]",
+        await pool.space.hub.resolve_service(pool.service.name),
+    )
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
     from identity_hub.pool import _matching_ids, check_reserve

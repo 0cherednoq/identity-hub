@@ -38,6 +38,7 @@ __all__ = [
     "RevisionConflict",
     "SchemaIncompatible",
     "SecretConfigurationError",
+    "ServiceTemplateUnavailable",
     "SpaceMismatch",
     "StaleFencing",
     "StorageError",
@@ -127,6 +128,17 @@ class ValidationFailed(IdentityHubError):
     def __init__(self, message: str, errors: Sequence[Any] = ()) -> None:
         self.errors = list(errors)
         super().__init__(message)
+
+
+class ServiceTemplateUnavailable(IdentityHubError):
+    """The durable definition refers to code not installed in this process."""
+
+    code = "service_template_unavailable"
+    context_fields = ("template",)
+
+    def __init__(self, template: str) -> None:
+        self.template = template
+        super().__init__(f"service template is unavailable: {template}")
 
 
 class TransitionNotAllowed(IdentityHubError):
@@ -424,6 +436,7 @@ _HTTP_STATUS: dict[str, int] = {
     "database_busy": 503,
     "storage_error": 500,
     "schema_incompatible": 503,
+    "service_template_unavailable": 503,
     "secret_configuration_error": 500,
     "decryption_failed": 500,
     "internal_error": 500,
@@ -433,6 +446,7 @@ _EXIT_CODE: dict[str, int] = {
     "validation_error": 2,
     "not_found": 2,
     "schema_incompatible": 3,
+    "service_template_unavailable": 3,
     "database_busy": 4,
     "secret_configuration_error": 5,
     "decryption_failed": 5,

@@ -43,8 +43,11 @@ from identity_hub.dispatch.webhooks import WebhookDispatcher, WebhookPolicy
 from identity_hub.doctor import Doctor
 from identity_hub.errors import (
     AlreadyExists,
+    Blocker,
     NotFound,
+    OperationNotAllowed,
     SchemaIncompatible,
+    ServiceTemplateUnavailable,
     SpaceMismatch,
     ValidationFailed,
     describe_error,
@@ -84,6 +87,12 @@ from identity_hub.revalidation import RevalidationMixin
 from identity_hub.rollups import StatsRollups
 from identity_hub.secrets_admin import CredentialsMixin, SecretsAdminMixin, SessionRevokeMixin
 from identity_hub.service import Service
+from identity_hub.service_definitions import (
+    RuntimeServiceDefinition,
+    ServiceDefinitions,
+    ServiceTemplate,
+    validate_template,
+)
 from identity_hub.snapshots import StateSnapshots
 from identity_hub.state import StateMixin
 from identity_hub.store.base import ServiceRow, SpaceRef, Store
@@ -131,6 +140,7 @@ class IdentityHub:
         secrets: SecretsProvider | None = None,
         services: Iterable[Service[Any, Any]] = (),
         *,
+        service_templates: Iterable[ServiceTemplate] = (),
         admin_base_url: str | None = None,
         retention: Retention | None = None,
         db_schema: str | None = None,
@@ -227,8 +237,15 @@ class IdentityHub:
         self.redact_refs_in_events = redact_refs_in_events
         self.db_schema = db_schema
         self._services: dict[str, Service[Any, Any]] = {}
+        self._started = False
         for service in services:
             self.register_service(service)
+        self._static_service_names = frozenset(self._services)
+        self._service_templates: dict[str, ServiceTemplate] = {}
+        for template in service_templates:
+            self.register_service_template(template)
+        self._runtime_service_revisions: dict[str, int] = {}
+        self.service_definitions = ServiceDefinitions(self)
         self._spaces: dict[str, SpaceRef] = {}
         self._lease_losses: Counter[tuple[str, str]] = Counter()
         self._closed = False
@@ -286,6 +303,96 @@ class IdentityHub:
         if service.name in self._services and self._services[service.name] is not service:
             raise ValidationFailed(f"сервис {service.name} уже зарегистрирован")
         self._services[service.name] = service
+        if hasattr(self, "_static_service_names"):
+            self._static_service_names = self._static_service_names | {service.name}
+
+    def register_service_template(self, template: ServiceTemplate) -> None:
+        """Register application code used to materialize durable runtime definitions."""
+        if self._started:
+            raise ValidationFailed("service templates are frozen after IdentityHub.start()")
+        validate_template(template)
+        existing = self._service_templates.get(template.name)
+        if existing is not None and existing is not template:
+            raise ValidationFailed(f"service template {template.name} is already registered")
+        self._service_templates[template.name] = template
+
+    def _service_template(self, name: str) -> ServiceTemplate:
+        try:
+            return self._service_templates[name]
+        except KeyError:
+            raise ServiceTemplateUnavailable(name) from None
+
+    def _build_runtime_service(self, definition: RuntimeServiceDefinition) -> Service[Any, Any]:
+        template = self._service_template(definition.template)
+        config = ServiceDefinitions._validated_config(template, definition.config)
+        normalized = RuntimeServiceDefinition(
+            definition.name,
+            definition.title,
+            definition.url,
+            definition.template,
+            config,
+            definition.enabled,
+            definition.revision,
+            definition.created_at,
+            definition.updated_at,
+        )
+        try:
+            service = template.build(normalized)
+        except ValidationFailed:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise ValidationFailed(
+                f"service template {definition.template} could not build {definition.name}"
+            ) from exc
+        if not isinstance(service, Service):
+            raise ValidationFailed(f"service template {definition.template} did not return Service")
+        if (service.name, service.title, service.url) != (
+            definition.name,
+            definition.title,
+            definition.url,
+        ):
+            raise ValidationFailed("runtime Service name, title and url must match its definition")
+        return service
+
+    def _cache_runtime_service(
+        self, definition: RuntimeServiceDefinition, service: Service[Any, Any]
+    ) -> None:
+        self._services[definition.name] = service
+        self._runtime_service_revisions[definition.name] = definition.revision
+
+    def _drop_runtime_service(self, name: str) -> None:
+        self._runtime_service_revisions.pop(name, None)
+        if name not in self._static_service_names:
+            self._services.pop(name, None)
+
+    async def resolve_service(self, name: str | Service[Any, Any]) -> Service[Any, Any]:
+        """Resolve a static service or refresh a runtime service by durable revision."""
+        key = name.name if isinstance(name, Service) else name
+        if key in self._static_service_names:
+            return self._services[key]
+        row = await self._store.get_service_definition(key)
+        if row is None:
+            raise NotFound("service", key)
+        if not row.enabled:
+            self._drop_runtime_service(key)
+            raise OperationNotAllowed(
+                "service", [Blocker("disabled", "runtime service definition is disabled")]
+            )
+        cached = self._services.get(key)
+        if cached is not None and self._runtime_service_revisions.get(key) == row.revision:
+            return cached
+        definition = RuntimeServiceDefinition.from_row(row)
+        service = self._build_runtime_service(definition)
+        self._cache_runtime_service(definition, service)
+        return service
+
+    async def _active_services(self) -> tuple[Service[Any, Any], ...]:
+        """Resolve every enabled service, including runtime definitions not cached locally yet."""
+        resolved = [self._services[name] for name in sorted(self._static_service_names)]
+        definitions = await self._store.list_service_definitions(enabled=True)
+        for definition in definitions:
+            resolved.append(await self.resolve_service(definition.name))
+        return tuple(resolved)
 
     @overload
     def service(self, name: Service[TCreds, TSession]) -> Service[TCreds, TSession]: ...
@@ -370,6 +477,7 @@ class IdentityHub:
                 for s in self._services.values()
             ]
         )
+        self._started = True
         plaintext = await self._store.plaintext_secret_counts()
         if self._secret_storage == "plaintext" or plaintext:
             logger.warning("%s: %s", PLAINTEXT_SECRET_WARNING, plaintext or "режим plaintext")

@@ -28,7 +28,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_release_candidate_version_is_consistent() -> None:
-    assert identity_hub.__version__ == "1.0.0a8"
+    assert identity_hub.__version__ == "1.0.0a9"
     assert version("identity-hub") == identity_hub.__version__
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert metadata["project"]["version"] == identity_hub.__version__
@@ -194,8 +194,11 @@ HUB_PUBLIC = {
     "start",
     "aclose",
     "register_service",
+    "register_service_template",
     "service",
     "services",
+    "service_definitions",
+    "resolve_service",
     # пространства и сводные read-модели
     "space",
     "spaces",

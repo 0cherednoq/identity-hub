@@ -27,6 +27,7 @@ from identity_hub.enums import AuthState, ChangeSource, LeaseUnavailableReason, 
 from identity_hub.errors import (
     Blocker,
     ConcurrentModification,
+    IdentityHubError,
     LeaseOwnershipLost,
     LeaseUnavailable,
     NotFound,
@@ -350,7 +351,7 @@ class LoginMixin(SpaceBase):
             raise ValidationFailed("actor должен быть непустой строкой")
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
-            service = self.hub.service(identity.service)
+            service = await self.hub.resolve_service(identity.service)
             service.session_schema(slot)
             if identity.lifecycle == Lifecycle.RETIRED:
                 raise OperationNotAllowed("verify_session", [Blocker("lifecycle", identity.lifecycle)])
@@ -499,7 +500,7 @@ class LoginMixin(SpaceBase):
             raise ValidationFailed("actor должен быть непустой строкой")
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
-            service = self.hub.service(identity.service)
+            service = await self.hub.resolve_service(identity.service)
             service.session_schema(slot)
             if identity.lifecycle == Lifecycle.RETIRED:
                 raise OperationNotAllowed("adopt_session", [Blocker("lifecycle", identity.lifecycle)])
@@ -701,7 +702,7 @@ class LoginMixin(SpaceBase):
         """Run one explicit login attempt for a selected identity."""
         async with self._tx(own=True) as tx:
             identity = await self._identity(tx, identity_id)
-        service = self.hub.service(identity.service)
+        service = await self.hub.resolve_service(identity.service)
         if service.authenticator is None:
             raise ValidationFailed(f"у сервиса {service.name} нет Authenticator")
         if identity.auth_state == AuthState.LOGGING_IN:
@@ -725,7 +726,10 @@ class LoginMixin(SpaceBase):
 
     async def _run_logins(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
         """Войти в аккаунты `no_session`/`session_invalid` сервисов с Authenticator (FR-5.4)."""
-        services = [self.hub.service(service)] if service is not None else list(self.hub.services)
+        if service is not None:
+            services = [await self.hub.resolve_service(service)]
+        else:
+            services = list(await self.hub._active_services())
         report = LoginReport()
         attempts = 0
         for svc in services:
@@ -804,7 +808,7 @@ class LoginMixin(SpaceBase):
                     data={"challenge_id": str(challenge_id), "kind": challenge.kind},
                 ),
             )
-        svc = self.hub.service(identity.service)
+        svc = await self.hub.resolve_service(identity.service)
         if svc.authenticator is None:
             raise ValidationFailed(f"у сервиса {svc.name} нет Authenticator")
         context = self.hub._open_stored_json(challenge.context, aad)
@@ -827,7 +831,7 @@ class LoginMixin(SpaceBase):
         async with self._tx(own=True) as tx:
             expired = await tx.expired_challenges(limit)
         count = 0
-        known = {service.name for service in self.hub.services}
+        known = {service.name for service in await self.hub._active_services()}
         for challenge in expired:
             async with self._tx(own=True) as tx:
                 if not await tx.resolve_challenge(challenge.id):
@@ -867,9 +871,11 @@ class LoginMixin(SpaceBase):
                 identity = await tx.get_identity(identity_id)
                 if identity is None or identity.auth_state != AuthState.LOGGING_IN:
                     continue
-                if all(identity.service != known.name for known in self.hub.services):
-                    continue  # сервис убран из кода: аккаунт не останавливает обслуживание (R2-F06)
-                timeout = self.hub.service(identity.service).login_timeout + LOGIN_ABANDONED_GRACE
+                try:
+                    service = await self.hub.resolve_service(identity.service)
+                except IdentityHubError:
+                    continue
+                timeout = service.login_timeout + LOGIN_ABANDONED_GRACE
                 if since + timeout > now or await tx.current_lease(identity_id) is not None:
                     continue
                 await apply_region_change(

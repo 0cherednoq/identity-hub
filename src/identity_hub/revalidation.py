@@ -113,7 +113,7 @@ class RevalidationMixin(SpaceBase):
             return AuthRevalidationResult(
                 identity_id, RevalidationStatus.BLOCKED, blockers=(Blocker("not_found", str(identity_id)),)
             )
-        service = self.hub.service(row.service)
+        service = await self.hub.resolve_service(row.service)
         if service.probes is None or getattr(service.probes, "auth", None) is None:
             raise ValidationFailed(f"у сервиса {service.name} нет auth probe")
         key: tuple[str, str] | None = None
