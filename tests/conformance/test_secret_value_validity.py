@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from typing import Any
 
@@ -22,6 +23,7 @@ from identity_hub import (
     StaticSecretsProvider,
     ValidationFailed,
 )
+from identity_hub.read.events import EventFilters
 
 pytestmark = pytest.mark.conformance
 
@@ -272,8 +274,21 @@ async def test_shortcut_reject_disables_by_policy_and_fresh_pair_reopens_login_m
     assert rejected.lifecycle == "disabled"
     assert rejected.reject_code == "credentials_rejected"
 
-    report = await space.auth.login_many(service=service, limit=10)
+    async def lease_events() -> set[str]:
+        page = await space.admin.event_page(filters=EventFilters(include_journal=True))
+        return {
+            str(event.event_id)
+            for event in page.items
+            if event.identity_id == identity.id and event.type.startswith("lease.")
+        }
+
+    history = await space.admin.lease_history(identity.id)
+    events = await lease_events()
+    report = await space.auth.login_many(service=service, limit=1)
     assert report.succeeded == [] and authenticator.calls == 1
+    assert report.operations == {}
+    assert await space.admin.lease_history(identity.id) == history
+    assert await lease_events() == events
 
     await space.secrets.put_credential(
         identity.id,
@@ -287,6 +302,71 @@ async def test_shortcut_reject_disables_by_policy_and_fresh_pair_reopens_login_m
     assert authenticator.calls == 2
     fresh = {row.name: row for row in (await space.secrets.describe(identity.id)).credential_records}["fresh"]
     assert fresh.last_verified_at is not None
+
+
+@pytest.mark.parametrize("retryable", [True, False])
+async def test_batch_retry_is_scoped_to_credential_value(
+    hub_under_test: IdentityHub, space: SpaceHandle, retryable: bool
+) -> None:
+    password = {"phone": "+400", "password": "old"}
+
+    async def login(ctx: Any) -> TgSession:
+        candidate = await ctx.active_credential(schema=TgCredentials)
+        if candidate.value.password == SecretStr("old"):
+            raise LoginFailure("provider_refused", retryable=retryable)
+        return TgSession(auth_key=SecretStr("fresh-session"))
+
+    service = replace(FAKE_TG, name="batch_retry", authenticator=login)
+    hub_under_test.register_service(service)
+    await hub_under_test.start()
+    identity = await space.identities.create(
+        IdentityCreate(service=service.name, external_ref="batch-retry", credentials=password), actor="test"
+    )
+
+    assert identity.id in (await space.auth.login_many(service=service)).failed
+    await space.secrets.verify_credential(identity.id, "default", actor="test")
+    await space.secrets.replace_credentials(identity.id, password, actor="test")
+    assert not (await space.auth.login_many(service=service)).operations
+    assert await space.auth.login(identity.id) is LoginOutcome.FAILED
+    await space.secrets.replace_credentials(identity.id, password, actor="test", reset_auth=True)
+    assert identity.id in (await space.auth.login_many(service=service)).failed
+    await space.secrets.replace_credentials(identity.id, {**password, "password": "new"}, actor="test")
+    assert (await space.auth.login_many(service=service)).succeeded == [identity.id]
+    async with space._tx(own=True) as tx:
+        assert await tx.get_login_retry(identity.id) is None
+
+
+async def test_late_login_refusal_does_not_reject_a_replacement(
+    hub_under_test: IdentityHub, space: SpaceHandle
+) -> None:
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def login(ctx: Any) -> TgSession:
+        candidate = await ctx.active_credential(schema=TgCredentials)
+        if candidate.value.password == SecretStr("old"):
+            entered.set()
+            await finish.wait()
+            raise LoginFailure("credentials_rejected", retryable=False, credential=candidate.key)
+        return TgSession(auth_key=SecretStr("fresh-session"))
+
+    service = replace(FAKE_TG, name="late_refusal", authenticator=login, disable_rejected_credentials=True)
+    hub_under_test.register_service(service)
+    await hub_under_test.start()
+    identity = await space.identities.create(
+        IdentityCreate(
+            service=service.name, external_ref="late", credentials={"phone": "+400", "password": "old"}
+        ),
+        actor="test",
+    )
+    async with asyncio.TaskGroup() as tasks:
+        attempt = tasks.create_task(space.auth.login(identity.id))
+        await asyncio.wait_for(entered.wait(), timeout=3)
+        await space.secrets.replace_credentials(
+            identity.id, {"phone": "+400", "password": "new"}, actor="test"
+        )
+        finish.set()
+    assert attempt.result() is LoginOutcome.FAILED
+    assert (await space.auth.login_many(service=service)).succeeded == [identity.id]
 
 
 async def test_acceptance_retries_account_while_an_unrejected_pair_remains(

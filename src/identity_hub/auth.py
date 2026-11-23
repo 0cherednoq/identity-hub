@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ from pydantic import BaseModel
 from identity_hub._ids import new_id
 from identity_hub._space import SpaceBase, logger
 from identity_hub.crypto import PlaintextPayload, associated_data
+from identity_hub.domain.credentials import is_login_candidate
 from identity_hub.domain.provider_operations import RetryPolicy, safe_error_code
 from identity_hub.domain.redaction import sanitize_text
 from identity_hub.domain.regions import Command, Observation
@@ -36,6 +38,7 @@ from identity_hub.errors import (
     describe_error,
 )
 from identity_hub.events import EventDraft
+from identity_hub.lease import _CandidateBudget, acquire
 from identity_hub.operation import apply_fault_effects
 from identity_hub.protocols import (
     Authenticator,
@@ -50,7 +53,7 @@ from identity_hub.protocols import (
 )
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
-from identity_hub.store.base import CandidateQuery, ChallengeRow, ProviderClaim, StoreTx
+from identity_hub.store.base import CandidateQuery, ChallengeRow, LoginRetryRow, ProviderClaim, StoreTx
 
 if TYPE_CHECKING:
     from identity_hub.lease import Lease
@@ -73,6 +76,8 @@ ALL_LIFECYCLES = frozenset({Lifecycle.PROVISIONING, Lifecycle.READY})
 LOGIN_STANDING = frozenset({Standing.GOOD, Standing.LIMITED, Standing.APPEALING})
 LOGIN_ABANDONED_GRACE = timedelta(seconds=60)
 """Запас сверх `Service.login_timeout`, после которого `logging_in` без аренды считается брошенным."""
+LOGIN_RETRY_BASE_SECONDS = 30
+LOGIN_RETRY_MAX_SECONDS = 600
 
 
 class LoginOutcome(StrEnum):
@@ -176,6 +181,43 @@ class _LinkedIdentity:
         self, slot: str = DEFAULT_SLOT, *, schema: type[BaseModel] | None = None
     ) -> BaseModel | None:
         return await self._lease.session(slot, schema=schema)
+
+
+@dataclass(frozen=True, slots=True)
+class _LoginCredentials:
+    versions: dict[tuple[str, str], tuple[UUID, int]]
+    candidates: dict[str, int]
+
+
+async def _login_credentials(tx: StoreTx, identity_id: UUID) -> _LoginCredentials:
+    rows = await tx.list_credentials(identity_id)
+    now = await tx.now()
+    return _LoginCredentials(
+        {(row.kind, row.name): (row.id, row.login_version) for row in rows},
+        {
+            str(row.id): row.login_version
+            for row in rows
+            if is_login_candidate(row.lifecycle, row.expires_at, row.last_rejected_at, now)
+        },
+    )
+
+
+async def _schedule_login_retry(
+    tx: StoreTx, identity_id: UUID, candidates: dict[str, int], *, retryable: bool
+) -> None:
+    if not retryable:
+        await tx.save_login_retry(identity_id, LoginRetryRow(None, 0, candidates))
+        return
+    previous = await tx.get_login_retry(identity_id)
+    failures = 1
+    if previous is not None and all(
+        previous.credentials.get(key) == value for key, value in candidates.items()
+    ):
+        failures += previous.failures
+    base = LOGIN_RETRY_BASE_SECONDS * 2 ** min(failures - 1, 5)
+    delay = min(LOGIN_RETRY_MAX_SECONDS, base * (1 + random.random() * 0.2))
+    retry_at = await tx.now() + timedelta(seconds=delay)
+    await tx.save_login_retry(identity_id, LoginRetryRow(retry_at, failures, candidates))
 
 
 class _LoginContext:
@@ -731,7 +773,7 @@ class LoginMixin(SpaceBase):
         else:
             services = list(await self.hub._active_services())
         report = LoginReport()
-        attempts = 0
+        budget = _CandidateBudget(limit)
         for svc in services:
             if svc.authenticator is None:
                 if service is not None:
@@ -743,22 +785,13 @@ class LoginMixin(SpaceBase):
                 standing=LOGIN_STANDING,
                 lifecycles=ALL_LIFECYCLES,
                 auth_states=LOGIN_AUTH_STATES,
+                automatic_login=True,
             )
-            while attempts < limit:
+            while budget.remaining > 0:
                 try:
-                    lease = await pool.acquire(query=query)
+                    lease = await acquire(pool, query=query, candidate_budget=budget)
                 except LeaseUnavailable:
                     break
-                query = replace(query, exclude=query.exclude | {lease.identity_id})  # одна попытка на аккаунт
-                async with self._tx(own=True) as tx:
-                    auth = await tx.load_region(lease.identity_id, "auth", DEFAULT_SLOT)
-                    credential_candidate = await tx.credential_candidate_state(lease.identity_id)
-                if credential_candidate is False or (
-                    auth is not None and auth.retryable is False and credential_candidate is not True
-                ):
-                    await lease.release()
-                    continue
-                attempts += 1
                 outcome, error = await self._login(lease, svc, None, None, None, report.operations)
                 _record(report, lease.identity_id, outcome, error)
         return report
@@ -863,11 +896,11 @@ class LoginMixin(SpaceBase):
     async def _expire_logins(self, *, limit: int = 100) -> int:
         """`logging_in` без живой аренды дольше срока входа → `no_session` (процесс упал во время входа)."""
         async with self._tx(own=True) as tx:
-            now = await tx.now()
             stuck = await tx.stuck_logins(limit)
         count = 0
         for identity_id, since in stuck:
             async with self._tx(own=True) as tx:
+                await tx.lock_identities([identity_id])
                 identity = await tx.get_identity(identity_id)
                 if identity is None or identity.auth_state != AuthState.LOGGING_IN:
                     continue
@@ -876,8 +909,16 @@ class LoginMixin(SpaceBase):
                 except IdentityHubError:
                     continue
                 timeout = service.login_timeout + LOGIN_ABANDONED_GRACE
-                if since + timeout > now or await tx.current_lease(identity_id) is not None:
+                auth = await tx.load_region(identity_id, "auth", DEFAULT_SLOT)
+                current_since = auth.changed_at if auth is not None else identity.updated_at
+                if (
+                    current_since != since
+                    or since + timeout > await tx.now()
+                    or await tx.current_lease(identity_id) is not None
+                ):
                     continue
+                credentials = await _login_credentials(tx, identity_id)
+                await _schedule_login_retry(tx, identity_id, credentials.candidates, retryable=True)
                 await apply_region_change(
                     self, tx, identity_id, "auth", DEFAULT_SLOT, Command(AuthState.NO_SESSION, actor="timer")
                 )
@@ -926,6 +967,8 @@ class LoginMixin(SpaceBase):
                 operations[lease.identity_id] = claim.operation_id
             await self._set_auth(lease, AuthState.LOGGING_IN)
             entered = True
+            async with self._tx(own=True) as tx:
+                credentials = await _login_credentials(tx, lease.identity_id)
             try:
                 async with asyncio.timeout(svc.login_timeout.total_seconds()):
                     # функция входа приведена к объекту протокола в Service.__post_init__
@@ -939,6 +982,7 @@ class LoginMixin(SpaceBase):
                     claim=claim,
                     previous=challenge,
                     credential_marks=ctx._credential_marks,
+                    login_credentials=credentials,
                 )
                 entered = False
                 return LoginOutcome.CHALLENGED, None
@@ -976,6 +1020,8 @@ class LoginMixin(SpaceBase):
                     fault=fault,
                     previous=challenge,
                     credential_marks=ctx._credential_marks,
+                    login_credentials=credentials,
+                    credential_specific_failure=failure.credential is not None,
                 )
                 if fault is not None and fault.blame is Blame.PROXY and lease.proxy_id is not None:
                     try:
@@ -1002,6 +1048,7 @@ class LoginMixin(SpaceBase):
                     error_code=code,
                     previous=challenge,
                     credential_marks=ctx._credential_marks,
+                    login_credentials=credentials,
                 )
                 entered = False
                 return LoginOutcome.FAILED, name
@@ -1022,6 +1069,7 @@ class LoginMixin(SpaceBase):
                 session_fingerprint=session_fingerprint,
                 previous=challenge,
                 credential_marks=ctx._credential_marks,
+                login_credentials=credentials,
             )
             entered = False
             return LoginOutcome.SUCCEEDED, None
@@ -1137,6 +1185,8 @@ class LoginMixin(SpaceBase):
         session_fingerprint: str | None = None,
         previous: ChallengeRow | None = None,
         credential_marks: list[_CredentialMark] | None = None,
+        login_credentials: _LoginCredentials | None = None,
+        credential_specific_failure: bool = False,
     ) -> str:
         sync: Any = self
         async with (
@@ -1158,7 +1208,13 @@ class LoginMixin(SpaceBase):
                     value_fingerprint=session_fingerprint,
                 )
                 await tx.mark_session_validity(lease.identity_id, DEFAULT_SLOT, rejected=False)
-            await self._apply_credential_marks(tx, lease, credential_marks or [])
+            await self._apply_credential_marks(tx, lease, credential_marks or [], login_credentials)
+            if state is AuthState.AUTHENTICATED or (credential_specific_failure and auth_retryable is False):
+                await tx.save_login_retry(lease.identity_id, None)
+            elif login_credentials is not None:
+                await _schedule_login_retry(
+                    tx, lease.identity_id, login_credentials.candidates, retryable=auth_retryable is not False
+                )
             if state is AuthState.SESSION_INVALID and session is None:
                 await tx.mark_session_validity(
                     lease.identity_id,
@@ -1208,6 +1264,7 @@ class LoginMixin(SpaceBase):
         claim: ProviderClaim | None = None,
         previous: ChallengeRow | None = None,
         credential_marks: list[_CredentialMark] | None = None,
+        login_credentials: _LoginCredentials | None = None,
         observe: bool = False,
         result_extra: Mapping[str, Any] | None = None,
     ) -> tuple[UUID, str]:
@@ -1226,7 +1283,8 @@ class LoginMixin(SpaceBase):
             # попытка входа завершилась вопросом платформы: операция succeeded, исход — challenged
             if not observe:
                 await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})
-            await self._apply_credential_marks(tx, lease, credential_marks or [])
+            await self._apply_credential_marks(tx, lease, credential_marks or [], login_credentials)
+            await tx.save_login_retry(lease.identity_id, None)
             if previous is not None:
                 await tx.resolve_challenge(previous.id)
             now = await tx.now()
@@ -1276,9 +1334,20 @@ class LoginMixin(SpaceBase):
             )
         return challenge_id, str(decision.outcome)
 
-    async def _apply_credential_marks(self, tx: StoreTx, lease: Lease, marks: list[_CredentialMark]) -> None:
+    async def _apply_credential_marks(
+        self,
+        tx: StoreTx,
+        lease: Lease,
+        marks: list[_CredentialMark],
+        login_credentials: _LoginCredentials | None,
+    ) -> None:
         disable = lease.pool.service.disable_rejected_credentials
         for mark in marks:
+            version = None
+            if login_credentials is not None:
+                version = login_credentials.versions.get((mark.kind, mark.name))
+                if version is None:
+                    raise NotFound("credentials", f"{mark.kind}/{mark.name}")
             row = await tx.mark_credential_validity(
                 lease.identity_id,
                 mark.kind,
@@ -1286,8 +1355,9 @@ class LoginMixin(SpaceBase):
                 rejected=mark.rejected,
                 code=mark.code,
                 disable=disable and mark.rejected,
+                expected_login_version=version,
             )
-            if row is None:
+            if row is None and version is None:
                 raise NotFound("credentials", f"{mark.kind}/{mark.name}")
 
     async def _resolve(self, challenge_id: UUID) -> None:

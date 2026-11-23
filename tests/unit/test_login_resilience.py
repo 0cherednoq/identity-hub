@@ -24,6 +24,7 @@ from identity_hub.clock import FakeClock
 from identity_hub.errors import LeaseUnavailable
 from identity_hub.read.events import EventFilters
 from identity_hub.testing import MemoryStore, make_identity, make_service
+from identity_hub.testing.memory import MemoryTx
 
 pytestmark = pytest.mark.unit
 
@@ -72,6 +73,33 @@ async def _live_lease(space: SpaceHandle, identity_id: UUID) -> Any:
 async def _events(space: SpaceHandle, type_: str) -> list[Any]:
     page = await space.admin.event_page(filters=EventFilters(type=type_, include_journal=True))
     return list(page.items)
+
+
+async def test_batch_budget_includes_failed_acquires_across_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def login(ctx: Any) -> Sess:
+        return Sess(auth_key="k")
+
+    hub, _, space, contested, service = await _hub(login)
+    next_service = make_service("svc_next", session=Sess, authenticator=login)
+    hub.register_service(next_service)
+    await hub.start()
+    other = await make_identity(space, service=next_service, authenticated=False)
+    second = await make_identity(space, service=service, authenticated=False)
+    original = MemoryTx.acquire_lease
+    inspected: list[UUID] = []
+
+    async def acquire(tx: MemoryTx, identity: Any, **kwargs: Any) -> Any:
+        inspected.append(identity.id)
+        if identity.id == contested:
+            raise LeaseUnavailable("test acquire conflict")
+        return await original(tx, identity, **kwargs)
+
+    monkeypatch.setattr(MemoryTx, "acquire_lease", acquire)
+    report = await space.auth.login_many(limit=2)
+    assert inspected == [contested, second]
+    assert report.succeeded == [second]
+    assert await space.admin.lease_history(contested) == []
+    assert await space.admin.lease_history(other) == []
 
 
 # ---------------------------------------------------------------- R2-F01
@@ -210,6 +238,7 @@ async def test_abandoned_logging_in_is_reset_by_maintenance() -> None:
     clock.advance(180)
     await hub.maintenance.run_all()
     assert await _auth(space, identity_id) == "no_session"
+    assert not (await space.auth.login_many(service=svc)).operations
     (failed,) = await _events(space, "identity.login.failed")
     assert (failed.actor, failed.data["error"], failed.data["code"]) == (
         "timer",

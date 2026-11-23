@@ -688,6 +688,7 @@ class CredentialsRecord(DualSecretPayloadMixin, IdentityHubBase):
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reject_code: Mapped[str | None] = mapped_column(String(64))
+    login_version: Mapped[int] = mapped_column(BigInteger, server_default=text("1"))
     revision: Mapped[int] = mapped_column(BigInteger, default=1, server_default=text("1"))
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -704,6 +705,20 @@ class CredentialsRecord(DualSecretPayloadMixin, IdentityHubBase):
             name="payload_format_valid",
         ),
     )
+
+
+class LoginRetryRecord(IdentityHubBase):
+    """Расписание и допуск пакетного входа, привязанные к версиям credentials."""
+
+    __tablename__ = "ih_login_retry"
+
+    identity_id: Mapped[UUID] = mapped_column(primary_key=True)
+    space_id: Mapped[UUID]
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failures: Mapped[int]
+    credentials: Mapped[dict[str, int]] = mapped_column(JSONB)
+
+    __table_args__ = (_identity_fk(),)
 
 
 class SessionRecord(DualSecretPayloadMixin, IdentityHubBase):
@@ -976,6 +991,18 @@ class ThrottleStateRecord(IdentityHubBase):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     space_id: Mapped[UUID]
     tat: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (_identity_fk(),)
+
+
+class ThrottleRecoveryRecord(IdentityHubBase):
+    """Последнее нечистое завершение эксклюзивной аренды для GCRA."""
+
+    __tablename__ = "ih_throttle_recovery"
+
+    identity_id: Mapped[UUID] = mapped_column(primary_key=True)
+    space_id: Mapped[UUID]
+    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (_identity_fk(),)
 

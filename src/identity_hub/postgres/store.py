@@ -51,7 +51,7 @@ from sqlalchemy.dialects.postgresql import array as pg_array
 from sqlalchemy.engine import Result
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.sql import Executable, Select
+from sqlalchemy.sql import ColumnElement, Executable, Select
 
 from identity_hub._ids import new_id
 from identity_hub.crypto.envelope import (
@@ -116,6 +116,7 @@ from identity_hub.postgres.models import (
     LeaseHistoryRecord,
     LeaseLogRecord,
     LeaseRecord,
+    LoginRetryRecord,
     NotificationChannelRecord,
     NotificationRecord,
     NotificationRuleRecord,
@@ -131,6 +132,7 @@ from identity_hub.postgres.models import (
     StateSnapshotRecord,
     StatsMetricBatchRecord,
     StatsRollupRecord,
+    ThrottleRecoveryRecord,
     ThrottleStateRecord,
     VerificationRecord,
     WebhookDeliveryRecord,
@@ -138,10 +140,12 @@ from identity_hub.postgres.models import (
 )
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
+from identity_hub.state import DEFAULT_SLOT
 from identity_hub.store.base import (
     NO_LEASE_OPTIONS,
     NOTIFY_CHANNEL,
     PICK_DEMOTE_CHUNK,
+    UNCLEAN_LEASE_ENDS,
     UNREADABLE_IMPORT_ITEM,
     AcceptanceRow,
     AttentionChallengeRow,
@@ -171,6 +175,7 @@ from identity_hub.store.base import (
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
+    LoginRetryRow,
     MetricsSnapshot,
     NewCredentialRow,
     NewIdentity,
@@ -232,6 +237,7 @@ IDENTITIES = cast(Table, IdentityRecord.__table__)
 IMPORT_RUNS = cast(Table, ImportRunRecord.__table__)
 IMPORT_ITEMS = cast(Table, ImportItemRecord.__table__)
 REGION_STATES = cast(Table, RegionStateRecord.__table__)
+LOGIN_RETRIES = cast(Table, LoginRetryRecord.__table__)
 CREDENTIALS = cast(Table, CredentialsRecord.__table__)
 SESSIONS = cast(Table, SessionRecord.__table__)
 LINKS = cast(Table, IdentityLinkRecord.__table__)
@@ -241,6 +247,7 @@ HISTORY = cast(Table, LeaseHistoryRecord.__table__)
 LEASE_LOGS = cast(Table, LeaseLogRecord.__table__)
 QUOTAS = cast(Table, QuotaUsageRecord.__table__)
 THROTTLES = cast(Table, ThrottleStateRecord.__table__)
+THROTTLE_RECOVERY = cast(Table, ThrottleRecoveryRecord.__table__)
 OPERATION_KEYS = cast(Table, OperationKeyRecord.__table__)
 PROVIDER_OPERATIONS = cast(Table, ProviderOperationRecord.__table__)
 PROXIES = cast(Table, ProxyRecord.__table__)
@@ -831,6 +838,18 @@ class PgTx(StoreTx):
                 "reject_code": None,
                 "version": c.version + 1,
                 "revision": c.revision + 1,
+                "login_version": case(
+                    (c.value_fingerprint == stmt.excluded.value_fingerprint, c.login_version),
+                    (
+                        and_(
+                            c.value_fingerprint.is_(None),
+                            stmt.excluded.value_fingerprint.is_(None),
+                            c.payload == stmt.excluded.payload,
+                        ),
+                        c.login_version,
+                    ),
+                    else_=c.login_version + 1,
+                ),
                 "updated_at": func.now(),
             },
         ).returning(*_CREDENTIAL_COLUMNS)
@@ -906,6 +925,7 @@ class PgTx(StoreTx):
         rejected: bool,
         code: str | None = None,
         disable: bool = False,
+        expected_login_version: tuple[UUID, int] | None = None,
     ) -> CredentialRow | None:
         c = CREDENTIALS.c
         values: dict[str, Any] = {
@@ -920,18 +940,19 @@ class PgTx(StoreTx):
                 (c.lifecycle == "revoked", c.lifecycle),
                 else_="disabled",
             )
+        match = [
+            c.identity_id == identity_id,
+            c.space_id == self.space.id,
+            c.kind == kind,
+            c.name == name,
+        ]
+        if expected_login_version is not None:
+            expected_id, expected_version = expected_login_version
+            match.extend([c.id == expected_id, c.login_version == expected_version])
         row = (
             (
                 await self.execute(
-                    update(CREDENTIALS)
-                    .where(
-                        c.identity_id == identity_id,
-                        c.space_id == self.space.id,
-                        c.kind == kind,
-                        c.name == name,
-                    )
-                    .values(**values)
-                    .returning(*_CREDENTIAL_COLUMNS)
+                    update(CREDENTIALS).where(*match).values(**values).returning(*_CREDENTIAL_COLUMNS)
                 )
             )
             .mappings()
@@ -939,27 +960,87 @@ class PgTx(StoreTx):
         )
         return _credential_row(row) if row is not None else None
 
-    async def credential_candidate_state(self, identity_id: UUID) -> bool | None:
+    def _credential_records(self, identity_id: UUID | ColumnElement[UUID]) -> Select[Any]:
         c = CREDENTIALS.c
-        rows = list(
-            (
-                await self.execute(
-                    select(c.lifecycle, c.expires_at, c.last_rejected_at).where(
-                        c.identity_id == identity_id,
-                        c.space_id == self.space.id,
-                    )
+        return select(c.id).where(c.identity_id == identity_id, c.space_id == self.space.id)
+
+    def _active_credential_records(self, identity_id: UUID | ColumnElement[UUID]) -> Select[Any]:
+        c = CREDENTIALS.c
+        return self._credential_records(identity_id).where(
+            c.lifecycle == "active",
+            or_(c.expires_at.is_(None), c.expires_at > func.now()),
+            c.last_rejected_at.is_(None),
+        )
+
+    def _login_candidate_condition(
+        self, identity_id: ColumnElement[UUID], *, ignore_backoff: bool = False
+    ) -> ColumnElement[bool]:
+        auth, retry, c = REGION_STATES.c, LOGIN_RETRIES.c, CREDENTIALS.c
+        rejected = (
+            select(auth.identity_id)
+            .where(
+                auth.space_id == self.space.id,
+                auth.identity_id == identity_id,
+                auth.region == "auth",
+                auth.key == DEFAULT_SLOT,
+                auth.retryable.is_(False),
+            )
+            .exists()
+        )
+        present = self._credential_records(identity_id).exists()
+        active = self._active_credential_records(identity_id).exists()
+        changed = (
+            self._active_credential_records(identity_id)
+            .where(
+                retry.credentials.op("->>")(sa_cast(c.id, Text)).is_distinct_from(
+                    sa_cast(c.login_version, Text)
                 )
-            ).all()
+            )
+            .correlate(IDENTITIES, LOGIN_RETRIES)
+            .exists()
         )
-        if not rows:
-            return None
-        now = await self.now()
-        return any(
-            row.lifecycle == "active"
-            and (row.expires_at is None or row.expires_at > now)
-            and row.last_rejected_at is None
-            for row in rows
+        blocked = (
+            select(retry.identity_id)
+            .where(
+                retry.identity_id == identity_id,
+                retry.space_id == self.space.id,
+                retry.retry_at.is_(None)
+                if ignore_backoff
+                else or_(retry.retry_at.is_(None), retry.retry_at > func.now()),
+                ~changed,
+            )
+            .exists()
         )
+        return and_(or_(active, and_(~present, ~rejected)), ~blocked)
+
+    async def login_candidate_eligible(self, identity_id: UUID, *, ignore_backoff: bool = False) -> bool:
+        i = IDENTITIES.c
+        stmt = select(self._login_candidate_condition(i.id, ignore_backoff=ignore_backoff)).where(
+            i.id == identity_id, i.space_id == self.space.id
+        )
+        return bool((await self.execute(stmt)).scalar_one_or_none())
+
+    async def get_login_retry(self, identity_id: UUID) -> LoginRetryRow | None:
+        retry = LOGIN_RETRIES.c
+        row = (
+            await self.execute(
+                select(retry.retry_at, retry.failures, retry.credentials).where(
+                    retry.identity_id == identity_id, retry.space_id == self.space.id
+                )
+            )
+        ).one_or_none()
+        return LoginRetryRow(row.retry_at, row.failures, row.credentials) if row is not None else None
+
+    async def save_login_retry(self, identity_id: UUID, retry: LoginRetryRow | None) -> None:
+        table = LOGIN_RETRIES
+        if retry is None:
+            await self.execute(
+                delete(table).where(table.c.identity_id == identity_id, table.c.space_id == self.space.id)
+            )
+            return
+        values = {"retry_at": retry.retry_at, "failures": retry.failures, "credentials": retry.credentials}
+        stmt = insert(table).values(identity_id=identity_id, space_id=self.space.id, **values)
+        await self.execute(stmt.on_conflict_do_update(index_elements=[table.c.identity_id], set_=values))
 
     async def put_session(
         self,
@@ -1382,6 +1463,8 @@ class PgTx(StoreTx):
             conditions.append(i.auth_state.in_(sorted(query.auth_states)))
         elif query.needs_auth:
             conditions.append(i.auth_state == AuthState.AUTHENTICATED)
+        if query.automatic_login:
+            conditions.append(self._login_candidate_condition(i.id))
         if query.required_factors:
             conditions.append(i.verified_factors.contains(sorted(query.required_factors)))
             # фактор с вышедшим сроком действия допуска не даёт и до прогона обслуживания (R2-F13)
@@ -1540,16 +1623,7 @@ class PgTx(StoreTx):
     ) -> YieldRequest | None:
         i, lease = IDENTITIES.c, LEASES.c
         stmt = (
-            select(
-                lease.identity_id,
-                lease.lease_id,
-                lease.pool,
-                lease.holder,
-                lease.priority,
-                lease.yield_requested_priority,
-                lease.yield_requested_at,
-                i.service,
-            )
+            select(lease.identity_id, lease.lease_id, i.service)
             .select_from(LEASES.join(IDENTITIES, i.id == lease.identity_id))
             .where(
                 lease.space_id == self.space.id,
@@ -1559,10 +1633,23 @@ class PgTx(StoreTx):
             )
             .order_by(lease.priority, lease.acquired_at, lease.identity_id)
             .limit(1)
-            .with_for_update(of=LEASES, skip_locked=True)
+            .with_for_update(of=IDENTITIES, skip_locked=True)
         )
-        victim = (await self.execute(stmt)).mappings().one_or_none()
-        if victim is None:
+        candidate = (await self.execute(stmt)).one_or_none()
+        if candidate is None:
+            return None
+        victim = (
+            (
+                await self.execute(
+                    select(LEASES)
+                    .where(lease.identity_id == candidate.identity_id, lease.lease_id == candidate.lease_id)
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if victim is None or victim["expires_at"] <= await self.now():
             return None
         if (
             grace_seconds is not None
@@ -1570,11 +1657,13 @@ class PgTx(StoreTx):
             and victim["yield_requested_at"] + timedelta(seconds=grace_seconds) <= await self.now()
         ):
             now = await self.now()
-            await self.execute(
+            closed = await self.execute(
                 update(HISTORY)
                 .where(HISTORY.c.lease_id == victim["lease_id"], HISTORY.c.released_at.is_(None))
                 .values(released_at=now, end_reason=LeaseEndReason.YIELDED)
             )
+            if closed.rowcount:  # type: ignore[attr-defined]
+                await self._record_throttle_recovery_end(victim["identity_id"], now)
             await self.execute(delete(LEASES).where(LEASES.c.identity_id == victim["identity_id"]))
             await self.execute(
                 update(IDENTITIES)
@@ -1598,7 +1687,7 @@ class PgTx(StoreTx):
                 EventDraft(
                     "lease.yield_requested",
                     actor="system",
-                    service=victim["service"],
+                    service=candidate.service,
                     identity_id=victim["identity_id"],
                     lease_id=victim["lease_id"],
                     data={
@@ -1734,6 +1823,7 @@ class PgTx(StoreTx):
                 )
                 if closed.rowcount:  # type: ignore[attr-defined]
                     reclaimed = _lease_row(old)
+                    await self._record_throttle_recovery_end(identity.id, old["expires_at"])
             values = {
                 "space_id": self.space.id,
                 "lease_id": lease_id,
@@ -1863,6 +1953,18 @@ class PgTx(StoreTx):
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
     ) -> str:
+        # Те же блокировки и порядок, что при захвате, отзыве и expiration.
+        await self.lock_identities([lease.identity_id])
+        current = None
+        if not shared:
+            leases = LEASES.c
+            current = (
+                await self.execute(
+                    select(leases.expires_at, (leases.expires_at <= func.now()).label("expired"))
+                    .where(leases.identity_id == lease.identity_id, leases.token == lease.token)
+                    .with_for_update()
+                )
+            ).one_or_none()
         history = (
             await self.execute(
                 select(HISTORY.c.released_at, HISTORY.c.end_reason)
@@ -1877,35 +1979,26 @@ class PgTx(StoreTx):
         end_reason: Any = reason
         expired = False
         if not shared:
-            live = (
+            if current is not None:
                 await self.execute(
                     update(LEASES)
-                    .where(
-                        LEASES.c.identity_id == lease.identity_id,
-                        LEASES.c.token == lease.token,
-                        LEASES.c.expires_at > func.now(),
-                    )
-                    .values(expires_at=func.now(), idempotency_key=None)
-                    .returning(LEASES.c.lease_id)
+                    .where(LEASES.c.identity_id == lease.identity_id, LEASES.c.token == lease.token)
+                    .values(expires_at=func.least(LEASES.c.expires_at, func.now()), idempotency_key=None)
                 )
-            ).scalar_one_or_none()
-            if live is None:
+            if current is None or current.expired:
                 # срок вышел, аккаунт никто не взял: история закрывается как истёкшая (D-213)
-                expired_at = (
-                    await self.execute(
-                        update(LEASES)
-                        .where(LEASES.c.identity_id == lease.identity_id, LEASES.c.token == lease.token)
-                        .values(idempotency_key=None)
-                        .returning(LEASES.c.expires_at)
-                    )
-                ).scalar_one_or_none()
-                released_at = expired_at if expired_at is not None else func.now()
+                released_at = current.expires_at if current is not None else func.now()
                 end_reason, expired = _expiry_reason(released_at), True
-        await self.execute(
-            update(HISTORY)
-            .where(HISTORY.c.lease_id == lease.lease_id, HISTORY.c.released_at.is_(None))
-            .values(released_at=released_at, end_reason=end_reason, **_counter_values(counters))
-        )
+        closed = (
+            await self.execute(
+                update(HISTORY)
+                .where(HISTORY.c.lease_id == lease.lease_id, HISTORY.c.released_at.is_(None))
+                .values(released_at=released_at, end_reason=end_reason, **_counter_values(counters))
+                .returning(HISTORY.c.released_at, HISTORY.c.end_reason)
+            )
+        ).one()
+        if not shared and closed.end_reason in UNCLEAN_LEASE_ENDS:
+            await self._record_throttle_recovery_end(lease.identity_id, closed.released_at)
         return "expired" if expired else "released"
 
     async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
@@ -1934,24 +2027,29 @@ class PgTx(StoreTx):
                 )
             )
 
-    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
+    async def get_throttle_recovery_end(self, identity_id: UUID) -> datetime | None:
+        recovery = THROTTLE_RECOVERY.c
         return cast(
             "datetime | None",
             (
                 await self.execute(
-                    select(HISTORY.c.released_at)
-                    .where(
-                        HISTORY.c.space_id == self.space.id,
-                        HISTORY.c.identity_id == identity_id,
-                        HISTORY.c.end_reason.in_(
-                            [LeaseEndReason.EXPIRED, LeaseEndReason.LOST, LeaseEndReason.REVOKED]
-                        ),
-                        HISTORY.c.released_at.is_not(None),
+                    select(recovery.ended_at).where(
+                        recovery.identity_id == identity_id, recovery.space_id == self.space.id
                     )
-                    .order_by(HISTORY.c.released_at.desc())
-                    .limit(1)
                 )
             ).scalar_one_or_none(),
+        )
+
+    async def _record_throttle_recovery_end(self, identity_id: UUID, ended_at: datetime) -> None:
+        recovery = THROTTLE_RECOVERY.c
+        stmt = insert(THROTTLE_RECOVERY).values(
+            identity_id=identity_id, space_id=self.space.id, ended_at=ended_at
+        )
+        await self.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[recovery.identity_id],
+                set_={"ended_at": func.greatest(recovery.ended_at, stmt.excluded.ended_at)},
+            )
         )
 
     async def take_shared_throttle(
@@ -2092,6 +2190,7 @@ class PgTx(StoreTx):
         return value
 
     async def revoke_lease(self, identity_id: UUID) -> LeaseRow | None:
+        await self.lock_identities([identity_id])
         row = (
             (
                 await self.execute(
@@ -2115,11 +2214,13 @@ class PgTx(StoreTx):
             .where(IDENTITIES.c.id == identity_id)
             .values(fencing_seq=IDENTITIES.c.fencing_seq + 1)
         )
-        await self.execute(
+        closed = await self.execute(
             update(HISTORY)
             .where(HISTORY.c.lease_id == row["lease_id"], HISTORY.c.released_at.is_(None))
             .values(released_at=func.now(), end_reason=LeaseEndReason.REVOKED)
         )
+        if closed.rowcount:  # type: ignore[attr-defined]
+            await self._record_throttle_recovery_end(identity_id, await self.now())
         return _lease_row(row)
 
     async def get_credentials(self, identity_id: UUID) -> StoredPayload | None:
@@ -5399,7 +5500,7 @@ class PgTx(StoreTx):
         rows = list(
             (
                 await self.execute(
-                    select(LEASES, IDENTITIES.c.service)
+                    select(LEASES.c.identity_id, LEASES.c.lease_id, IDENTITIES.c.service)
                     .join(HISTORY, HISTORY.c.lease_id == LEASES.c.lease_id)
                     .join(IDENTITIES, IDENTITIES.c.id == LEASES.c.identity_id)
                     .where(
@@ -5410,12 +5511,30 @@ class PgTx(StoreTx):
                     )
                     .order_by(LEASES.c.expires_at)
                     .limit(limit)
-                    .with_for_update(of=LEASES, skip_locked=True)
+                    .with_for_update(of=IDENTITIES, skip_locked=True)
                 )
             ).mappings()
         )
         drafts: list[EventDraft] = []
-        for row in rows:
+        for candidate in rows:
+            row = (
+                (
+                    await self.execute(
+                        update(LEASES)
+                        .where(
+                            LEASES.c.identity_id == candidate["identity_id"],
+                            LEASES.c.lease_id == candidate["lease_id"],
+                            LEASES.c.expires_at <= func.now(),
+                        )
+                        .values(idempotency_key=None)
+                        .returning(*LEASES.c)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                continue
             closed = await self.execute(
                 update(HISTORY)
                 .where(HISTORY.c.lease_id == row["lease_id"], HISTORY.c.released_at.is_(None))
@@ -5423,14 +5542,12 @@ class PgTx(StoreTx):
             )
             if not closed.rowcount:  # type: ignore[attr-defined]
                 continue
-            await self.execute(
-                update(LEASES).where(LEASES.c.identity_id == row["identity_id"]).values(idempotency_key=None)
-            )
+            await self._record_throttle_recovery_end(row["identity_id"], row["expires_at"])
             drafts.append(
                 EventDraft(
                     "lease.expired",
                     actor="maintenance",
-                    service=row["service"],
+                    service=candidate["service"],
                     identity_id=row["identity_id"],
                     lease_id=row["lease_id"],
                     data={

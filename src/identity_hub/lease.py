@@ -12,7 +12,7 @@ import inspect
 import logging
 import random
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from uuid import UUID
@@ -138,7 +138,8 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         # диагностическая аренда (D-335): гейт пробы использует политику сервиса, а не правило нагрузки
         self.diagnostic: DiagnosticPolicy | None = None
         self._renew_lock = asyncio.Lock()
-        self._throttle_state = dict(row.throttle_state)
+        self._throttle_initial: dict[str, datetime | None] = {}
+        self._throttle_taken: dict[str, datetime] = {}
         self._throttle_locks: dict[str, asyncio.Lock] = {}
 
     # --------------------------------------------------------- свойства
@@ -528,10 +529,23 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
                         return delay
                     await self.pool.space.hub.clock.sleep(delay.total_seconds())
                     continue
+                if name not in self._throttle_initial:
+                    async with self.pool.space._tx(own=True) as tx:
+                        await self._check_fencing(tx)
+                        state = await tx.get_throttle_state(self.identity_id, (name,))
+                        unclean = await tx.get_throttle_recovery_end(self.identity_id)
+                    self.check()
+                    initial = state.get(name)
+                    if unclean is not None:
+                        bound = unclean + limit.interval * limit.burst
+                        initial = max(initial, bound) if initial is not None else bound
+                    self._throttle_initial[name] = initial
                 now = self.pool.space.hub.clock.now()
-                delay, tat = gcra_take(now, self._throttle_state.get(name), limit)
+                delay, tat = gcra_take(
+                    now, self._throttle_taken.get(name) or self._throttle_initial[name], limit
+                )
                 if delay <= timedelta(0):
-                    self._throttle_state[name] = tat
+                    self._throttle_taken[name] = tat
                     return timedelta(0)
                 if not wait:
                     return delay
@@ -982,12 +996,12 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         }.get(end, "lease.released")
         try:
             async with asyncio.timeout(RELEASE_TIMEOUT), self.pool.space._tx(own=True) as tx:
-                if self.pool.service.throttles and self._throttle_state:
-                    await tx.save_throttle_state(self.identity_id, self._throttle_state)
                 outcome = await tx.release_lease(self._row, str(end), counters, shared=self.pool.shared)
                 if outcome == "expired":
                     event_type, end = "lease.expired", LeaseEndReason.EXPIRED
                 if outcome in ("released", "expired"):
+                    if self._throttle_taken:
+                        await tx.save_throttle_state(self.identity_id, self._throttle_taken)
                     await self.pool.space._emit(
                         tx,
                         EventDraft(
@@ -1117,6 +1131,12 @@ class _SkipCandidate(Exception):
         self.identity_id = identity_id
 
 
+@dataclass(slots=True)
+class _CandidateBudget:
+    remaining: int
+    inspected: set[UUID] = field(default_factory=set)
+
+
 async def acquire(
     pool: Pool[TCreds, TSession],
     *,
@@ -1138,6 +1158,7 @@ async def acquire(
     require_quota: bool = False,
     keep_free: int | None = None,
     priority: int | None = None,
+    candidate_budget: _CandidateBudget | None = None,
 ) -> Lease[TCreds, TSession]:
     """Выдать аккаунт в аренду (FR-6.1). Короткая транзакция: выбор SKIP LOCKED + прокси + аренда + история.
 
@@ -1180,6 +1201,8 @@ async def acquire(
     elif require_quota:
         raise ValidationFailed("require_quota не сочетается с готовым запросом")
     query = replace(query, priority=options.priority)
+    if candidate_budget is not None:
+        query = replace(query, exclude=query.exclude | candidate_budget.inspected)
     space = pool.space
     clock = space.hub.clock
     started = clock.monotonic()
@@ -1190,18 +1213,9 @@ async def acquire(
     reserve_blocked = False
     requested = query  # без кандидатов, пропущенных из-за гонки: они заняты, а не недопустимы
 
-    async def with_throttles(tx: StoreTx, row: LeaseRow) -> LeaseRow:
-        if not pool.service.throttles or pool.shared:
-            return row
-        state = await tx.get_throttle_state(row.identity_id, tuple(pool.service.throttles))
-        unclean = await tx.last_unclean_lease_end(row.identity_id)
-        if unclean is not None:
-            for name, throttle in pool.service.throttles.items():
-                bound = unclean + throttle.interval * throttle.burst
-                state[name] = max(state.get(name, bound), bound)
-        return replace(row, throttle_state=state)
-
     while True:
+        if candidate_budget is not None and candidate_budget.remaining <= 0:
+            raise LeaseUnavailable(f"пул {pool.name}: исчерпан бюджет отбора")
         try:
             async with space._tx(own=True) as tx:
                 if idempotency_key is not None:
@@ -1236,13 +1250,17 @@ async def acquire(
                         )
                         if proxy is not None:
                             existing = replace(existing, proxy_id=proxy.id)
-                        existing = await with_throttles(tx, existing)
                         _observe_acquisition(pool, started, wait_seconds, "reused")
                         return Lease(pool, existing, identity, proxy)
                 effective_reserve = await pool._effective_reserve(tx, query, reserve)
                 candidate, blocked = await tx.pick_candidate_reserving(query, effective_reserve)
                 reserve_blocked |= blocked
                 if candidate is not None:
+                    if candidate_budget is not None:
+                        candidate_budget.remaining -= 1
+                        candidate_budget.inspected.add(candidate.id)
+                    if query.automatic_login and not await tx.login_candidate_eligible(candidate.id):
+                        raise _SkipCandidate(candidate.id)
                     proxy, drafts = await _resolve_proxy(pool, tx, candidate)
                     try:
                         row, reclaimed = await tx.acquire_lease(
@@ -1275,7 +1293,6 @@ async def acquire(
                             )
                         )
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
-                    row = await with_throttles(tx, row)
                     await space._emit(tx, *drafts)
                     if idempotency_key is not None:
                         await tx.complete_idempotency_key(

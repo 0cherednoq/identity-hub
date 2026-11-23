@@ -183,7 +183,7 @@ from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
-__version__ = "1.0.0a9"
+__version__ = "1.0.0a10"
 
 __all__ = [
     "AcceptPolicy",
