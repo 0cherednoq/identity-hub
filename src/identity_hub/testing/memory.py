@@ -30,6 +30,7 @@ from identity_hub.crypto.envelope import (
     associated_data,
     credential_associated_data,
 )
+from identity_hub.domain.credentials import is_login_candidate
 from identity_hub.domain.idempotency import FINGERPRINT_VERSION, LEGACY_FINGERPRINT_VERSION
 from identity_hub.domain.provider_operations import CLAIMABLE as CLAIMABLE_OPERATIONS
 from identity_hub.domain.provider_operations import TERMINAL as TERMINAL_OPERATIONS
@@ -63,6 +64,7 @@ from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
     NO_LEASE_OPTIONS,
     PICK_DEMOTE_CHUNK,
+    UNCLEAN_LEASE_ENDS,
     UNREADABLE_IMPORT_ITEM,
     AcceptanceRow,
     AttentionChallengeRow,
@@ -92,6 +94,7 @@ from identity_hub.store.base import (
     LeaseRow,
     LeaseStatsRow,
     LinkRow,
+    LoginRetryRow,
     MetricsSnapshot,
     NewIdentity,
     NewIdentityRows,
@@ -199,6 +202,7 @@ class _MemoryState:
     credentials: dict[tuple[UUID, str, str], tuple[StoredPayload, CredentialRow]] = field(
         default_factory=dict
     )
+    login_retries: dict[UUID, LoginRetryRow] = field(default_factory=dict)
     profile_secrets: dict[UUID, StoredPayload] = field(default_factory=dict)
     # все записи сессий по id, включая отозванные (история, D-218); текущая запись слота — в session_slots
     sessions: dict[UUID, _SessionRecord] = field(default_factory=dict)
@@ -212,6 +216,7 @@ class _MemoryState:
     # token аренды по lease_id: в строке истории его нет, а fence разделяемой аренды сверяет его (D-212)
     history_tokens: dict[UUID, UUID] = field(default_factory=dict)
     throttle_state: dict[tuple[UUID, str], datetime] = field(default_factory=dict)
+    throttle_recovery: dict[UUID, datetime] = field(default_factory=dict)
     # identity → (время, порядковый номер) последней попытки фоновой сверки
     probe_attempts: dict[UUID, tuple[datetime, int]] = field(default_factory=dict)
     next_probe_attempt: int = 1
@@ -634,12 +639,21 @@ class MemoryTx(StoreTx):
                 value_fingerprint,
             )
         else:
+            previous_payload, previous = old
+            same_value = (
+                previous.value_fingerprint == value_fingerprint
+                if value_fingerprint is not None
+                else previous.value_fingerprint is None
+                and isinstance(payload, PlaintextPayload)
+                and previous_payload == payload
+            )
             row = replace(
-                old[1],
+                previous,
                 public_value=deepcopy(public_value),
                 expires_at=expires_at,
                 revision=old[1].revision + 1,
                 version=old[1].version + 1,
+                login_version=previous.login_version + (not same_value),
                 updated_at=self._now,
                 value_fingerprint=value_fingerprint,
                 last_verified_at=None,
@@ -683,9 +697,15 @@ class MemoryTx(StoreTx):
         rejected: bool,
         code: str | None = None,
         disable: bool = False,
+        expected_login_version: tuple[UUID, int] | None = None,
     ) -> CredentialRow | None:
         found = await self.get_credential(identity_id, kind, name)
         if found is None:
+            return None
+        if (
+            expected_login_version is not None
+            and (found[1].id, found[1].login_version) != expected_login_version
+        ):
             return None
         row = replace(
             found[1],
@@ -699,16 +719,39 @@ class MemoryTx(StoreTx):
         self.state.credentials[(identity_id, kind, name)] = (found[0], row)
         return row
 
-    async def credential_candidate_state(self, identity_id: UUID) -> bool | None:
-        rows = await self.list_credentials(identity_id)
-        if not rows:
-            return None
-        return any(
-            row.lifecycle == "active"
-            and (row.expires_at is None or row.expires_at > self._now)
-            and row.last_rejected_at is None
+    def _credential_records(self, identity_id: UUID) -> list[CredentialRow]:
+        return [row for (owner, _, _), (_, row) in self.state.credentials.items() if owner == identity_id]
+
+    def _login_candidate_eligible(self, identity_id: UUID, *, ignore_backoff: bool = False) -> bool:
+        rows = self._credential_records(identity_id)
+        active = [
+            row
             for row in rows
+            if is_login_candidate(row.lifecycle, row.expires_at, row.last_rejected_at, self._now)
+        ]
+        auth = self.state.regions.get((identity_id, "auth", "default"))
+        if not active and (rows or (auth is not None and auth.retryable is False)):
+            return False
+        retry = self.state.login_retries.get(identity_id)
+        if retry is None or (retry.retry_at is not None and (ignore_backoff or retry.retry_at <= self._now)):
+            return True
+        return any(retry.credentials.get(str(row.id)) != row.login_version for row in active)
+
+    async def login_candidate_eligible(self, identity_id: UUID, *, ignore_backoff: bool = False) -> bool:
+        return self._own(identity_id) is not None and self._login_candidate_eligible(
+            identity_id, ignore_backoff=ignore_backoff
         )
+
+    async def get_login_retry(self, identity_id: UUID) -> LoginRetryRow | None:
+        return deepcopy(self.state.login_retries.get(identity_id)) if self._own(identity_id) else None
+
+    async def save_login_retry(self, identity_id: UUID, retry: LoginRetryRow | None) -> None:
+        if self._own(identity_id) is None:
+            return
+        if retry is None:
+            self.state.login_retries.pop(identity_id, None)
+        else:
+            self.state.login_retries[identity_id] = deepcopy(retry)
 
     async def put_session(
         self,
@@ -884,6 +927,8 @@ class MemoryTx(StoreTx):
             del self.state.data[data_key]
         for throttle_key in [item for item in self.state.throttle_state if item[0] == identity_id]:
             del self.state.throttle_state[throttle_key]
+        self.state.login_retries.pop(identity_id, None)
+        self.state.throttle_recovery.pop(identity_id, None)
         for verification_key in [item for item in self.state.verifications if item[0] == identity_id]:
             del self.state.verifications[verification_key]
         for verification_key, verification in list(self.state.verifications.items()):
@@ -1028,6 +1073,8 @@ class MemoryTx(StoreTx):
             bound = self.state.proxies[proxy_id] if proxy_id is not None else None
             if bound is not None and (not bound.enabled or (query.proxy_wait and bound.status != "alive")):
                 return False
+        if query.automatic_login and not self._login_candidate_eligible(row.id):
+            return False
         return not any(self._exhausted_until(row.id, charge) for charge in query.quotas)
 
     def _exhausted_until(self, identity_id: UUID, charge: QuotaCharge) -> datetime | None:
@@ -1098,6 +1145,7 @@ class MemoryTx(StoreTx):
                 duration=self._now - history.acquired_at,
                 end_reason=str(LeaseEndReason.YIELDED),
             )
+            self._record_throttle_recovery_end(victim.identity_id, self._now)
             self.state.leases.pop(victim.identity_id)
             identity = self._own(victim.identity_id)
             assert identity is not None
@@ -1221,15 +1269,16 @@ class MemoryTx(StoreTx):
                 raise LeaseUnavailable(
                     f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
                 )
-            reclaimed = old
             history = self.state.history[old.lease_id]
             if history.released_at is None:
+                reclaimed = old
                 self.state.history[old.lease_id] = replace(
                     history,
                     released_at=old.expires_at,
                     duration=old.expires_at - history.acquired_at,
                     end_reason=str(expiry_reason(history.hold_deadline, old.expires_at)),
                 )
+                self._record_throttle_recovery_end(identity.id, old.expires_at)
         # shared-аренды не вытесняют друг друга: fencing растёт только при эксклюзивном захвате (D-140)
         fencing = current.fencing_seq if shared else current.fencing_seq + 1
         # время захвата ставят обе аренды — по нему идёт LRU-выборка (IMP-01, D-209)
@@ -1352,6 +1401,8 @@ class MemoryTx(StoreTx):
             end_reason=end_reason,
             **_merge_counters(history, counters),
         )
+        if not shared and end_reason in UNCLEAN_LEASE_ENDS:
+            self._record_throttle_recovery_end(lease.identity_id, released_at)
         return "expired" if expired else "released"
 
     async def get_throttle_state(self, identity_id: UUID, names: Sequence[str]) -> dict[str, datetime]:
@@ -1367,16 +1418,12 @@ class MemoryTx(StoreTx):
             current = self.state.throttle_state.get(key)
             self.state.throttle_state[key] = max(current, tat) if current is not None else tat
 
-    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
-        ends = [
-            row.released_at
-            for row in self.state.history.values()
-            if row.identity_id == identity_id
-            and row.end_reason in {"expired", "lost", "revoked"}
-            and row.released_at is not None
-            and self.state.history_spaces.get(row.lease_id) == self.space.id
-        ]
-        return max(ends, default=None)
+    async def get_throttle_recovery_end(self, identity_id: UUID) -> datetime | None:
+        return self.state.throttle_recovery.get(identity_id) if self._own(identity_id) else None
+
+    def _record_throttle_recovery_end(self, identity_id: UUID, ended_at: datetime) -> None:
+        previous = self.state.throttle_recovery.get(identity_id)
+        self.state.throttle_recovery[identity_id] = max(previous, ended_at) if previous else ended_at
 
     async def take_shared_throttle(
         self, identity_id: UUID, name: str, interval_seconds: float, burst: int
@@ -1446,6 +1493,7 @@ class MemoryTx(StoreTx):
         self.state.history[lease.lease_id] = replace(
             history, released_at=self._now, duration=self._now - history.acquired_at, end_reason="revoked"
         )
+        self._record_throttle_recovery_end(identity_id, self._now)
         return lease
 
     async def charge_quotas(
@@ -3589,6 +3637,7 @@ class MemoryTx(StoreTx):
                     duration=lease.expires_at - history.acquired_at,
                     end_reason=str(expiry_reason(history.hold_deadline, lease.expires_at)),
                 )
+                self._record_throttle_recovery_end(identity_id=lease.identity_id, ended_at=lease.expires_at)
                 identity = self.state.identities[lease.identity_id]
                 drafts.append(
                     EventDraft(

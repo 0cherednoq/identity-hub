@@ -410,6 +410,7 @@ await space.pools.revoke(identity_id, reason="зависший воркер", ac
 | `await lease.save_session(...)`, `await lease.mark_authenticated()` | запись с проверкой fencing |
 | `lease.proxy` | `SecretValue` с URL прокси; строка **с логином и паролем** — `lease.proxy.reveal()`, не логируйте |
 | `lease.operation(kind, key=...)` | операция на платформе, см. [лимиты](08-limits.md) |
+| `await lease.throttle(name, wait=...)` | занять GCRA-слот для именованного лимита. Первое обращение загружает состояние, см. [троттлинг](08-limits.md#троттлинг-частоты) |
 | `lease.verification(factor)` | процесс верификации |
 | `lease.lost`, `lease.check()` | состояние аренды; `check()` бросает `LeaseLost` и после освобождения |
 | `lease.context` | контекст для логов (`lease_id`, `identity_id`, `pool`) |

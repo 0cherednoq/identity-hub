@@ -18,12 +18,17 @@ from uuid import UUID
 
 from identity_hub.clock import Clock
 from identity_hub.crypto.envelope import StoredPayload
+from identity_hub.domain.credentials import is_login_candidate
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import LeaseEndReason
 from identity_hub.errors import SecretConfigurationError
 from identity_hub.events import Event, EventDraft
 from identity_hub.rollups import BucketSize, RollupDelta, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame
+
+UNCLEAN_LEASE_ENDS = frozenset(
+    {LeaseEndReason.EXPIRED, LeaseEndReason.LOST, LeaseEndReason.REVOKED, LeaseEndReason.MAX_HOLD}
+)
 
 NOTIFY_CHANNEL = "ih_events"
 """Канал NOTIFY внешних событий: будит диспетчер при коммите (FR-13.6)."""
@@ -482,6 +487,7 @@ class CandidateQuery:
     without_link: frozenset[str] = frozenset()
     not_target_of: tuple[str, str | None] | None = None
     is_target_of: tuple[str, str | None] | None = None
+    automatic_login: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -505,7 +511,6 @@ class LeaseRow:
     priority: int = 0
     yield_requested_at: datetime | None = None
     yield_requested_priority: int | None = None
-    throttle_state: dict[str, datetime] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -914,6 +919,14 @@ class CredentialRow:
     last_verified_at: datetime | None = None
     last_rejected_at: datetime | None = None
     reject_code: str | None = None
+    login_version: int = 1  # версия значения для допуска к повторному входу
+
+
+@dataclass(frozen=True, slots=True)
+class LoginRetryRow:
+    retry_at: datetime | None  # None — отказ запрещает вход с теми же credentials
+    failures: int
+    credentials: dict[str, int]  # id пригодной записи → login_version на момент попытки
 
 
 @dataclass(frozen=True, slots=True)
@@ -1393,12 +1406,29 @@ class StoreTx(ABC):
         rejected: bool,
         code: str | None = None,
         disable: bool = False,
+        expected_login_version: tuple[UUID, int] | None = None,
     ) -> CredentialRow | None:
         """Атомарно пометить конкретную запись проверенной или отклонённой."""
 
-    @abstractmethod
     async def credential_candidate_state(self, identity_id: UUID) -> bool | None:
         """True — есть активная пара; False — записи есть, но кандидатов нет; None — записей нет."""
+        rows = await self.list_credentials(identity_id)
+        if not rows:
+            return None
+        now = await self.now()
+        return any(
+            is_login_candidate(row.lifecycle, row.expires_at, row.last_rejected_at, now) for row in rows
+        )
+
+    @abstractmethod
+    async def login_candidate_eligible(self, identity_id: UUID, *, ignore_backoff: bool = False) -> bool:
+        """Повторить проверку допуска к пакетному входу после блокировки кандидата."""
+
+    @abstractmethod
+    async def get_login_retry(self, identity_id: UUID) -> LoginRetryRow | None: ...
+
+    @abstractmethod
+    async def save_login_retry(self, identity_id: UUID, retry: LoginRetryRow | None) -> None: ...
 
     @abstractmethod
     async def put_session(
@@ -1611,8 +1641,8 @@ class StoreTx(ABC):
         """Сохранить TAT монотонно (greatest), не укорачивая состояние другого держателя."""
 
     @abstractmethod
-    async def last_unclean_lease_end(self, identity_id: UUID) -> datetime | None:
-        """Конец последней истёкшей/потерянной аренды для консервативного восстановления TAT."""
+    async def get_throttle_recovery_end(self, identity_id: UUID) -> datetime | None:
+        """Сохранённый конец последней нечистой аренды для восстановления TAT."""
 
     @abstractmethod
     async def take_shared_throttle(

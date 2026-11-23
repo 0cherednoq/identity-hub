@@ -46,6 +46,7 @@ async def _reset_auth_after_credentials(
 ) -> None:
     """Явно снять прежний отказ входа в транзакции записи новых credentials."""
     if row.auth_state in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
+        await tx.save_login_retry(row.id, None)
         await apply_region_change(
             space,
             tx,
@@ -78,6 +79,7 @@ class SecretsAdminMixin(SpaceBase):
                 tx, idempotency_key, "replace_credentials", command, model
             ):
                 return
+            await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
             await tx.put_credentials(identity_id, payload, value_fingerprint=value_fingerprint)
             if reset_auth:
@@ -303,6 +305,7 @@ class CredentialsMixin(SpaceBase):
         payload = self.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
         value_fingerprint = self.hub._value_fingerprint(model)
         async with self._tx() as tx:
+            await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
             current = await tx.get_credential(identity_id, kind, name)
             if current is not None and current[1].lifecycle == REVOKED:
@@ -333,6 +336,7 @@ class CredentialsMixin(SpaceBase):
     ) -> bool:
         action = {ACTIVE: "enable", DISABLED: "disable", REVOKED: "revoke"}[target]
         async with self._tx() as tx:
+            await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
             (await self.hub.resolve_service(row.service)).credential_key(kind, name)
             current = await tx.get_credential(identity_id, kind, name)
@@ -363,6 +367,7 @@ class CredentialsMixin(SpaceBase):
         выключением отклонённой записи; регион `auth` аккаунта не затрагивается.
         """
         async with self._tx() as tx:
+            await tx.lock_identities([identity_id])
             row = await self._identity(tx, identity_id)
             service = await self.hub.resolve_service(row.service)
             kind, name = service.credential_key(kind, name)

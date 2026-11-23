@@ -60,6 +60,12 @@ def is_expired(lifecycle: str, expires_at: datetime | None, now: datetime) -> bo
     return lifecycle == ACTIVE and expires_at is not None and expires_at <= now
 
 
+def is_login_candidate(
+    lifecycle: str, expires_at: datetime | None, last_rejected_at: datetime | None, now: datetime
+) -> bool:
+    return lifecycle == ACTIVE and not is_expired(lifecycle, expires_at, now) and last_rejected_at is None
+
+
 _VALIDITY_CODE = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
 
 

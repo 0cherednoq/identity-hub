@@ -13,6 +13,7 @@ from pydantic import BaseModel, SecretStr
 from tests.fixtures.services import FAKE_TG, TgSession
 
 from identity_hub import IdentityCreate, IdentityHub, LoginChallenge, LoginOutcome, SpaceHandle
+from identity_hub.clock import FakeClock
 
 pytestmark = [pytest.mark.conformance]
 
@@ -76,9 +77,25 @@ async def test_failure_and_challenge_are_operation_outcomes(
     assert (failed.state, failed.error_code) == ("failed", "ConnectionError")
     (challenged,) = await _operations(space, asking)
     assert (challenged.state, challenged.result) == ("succeeded", {"outcome": "challenged"})
-    report = await space.auth.login_many(service="op_fail1")  # аккаунт снова в no_session
+    history = await space.admin.lease_history(failing)
+    assert (await space.auth.login_many(service="op_fail1")).operations == {}
+    assert await space.admin.lease_history(failing) == history
+    async with space._tx(own=True) as tx:
+        retry = await tx.get_login_retry(failing)
+        now = await tx.now()
+        assert retry is not None and retry.retry_at is not None and retry.failures == 1
+        assert timedelta(seconds=29) <= retry.retry_at - now <= timedelta(seconds=36)
+        if isinstance(hub_under_test.clock, FakeClock):
+            hub_under_test.clock.advance(retry.retry_at - now)
+        else:
+            await tx.save_login_retry(failing, replace(retry, retry_at=now))
+    report = await space.auth.login_many(service="op_fail1")
     retried = [op for op in await _operations(space, failing) if op.id != failed.id]
     assert report.operations == {failing: retried[0].id}  # отчёт называет операцию попытки
+    async with space._tx(own=True) as tx:
+        retry = await tx.get_login_retry(failing)
+        assert retry is not None and retry.retry_at is not None and retry.failures == 2
+        assert timedelta(seconds=59) <= retry.retry_at - await tx.now() <= timedelta(seconds=72)
 
 
 async def test_late_result_of_old_worker_writes_nothing(

@@ -95,7 +95,7 @@ class Auth(Namespace):
         return await self._space._run_login(identity_id, credential=credential)
 
     async def login_many(self, *, service: Service | str | None = None, limit: int = 10) -> LoginReport:
-        """Войти в identity без сессии у сервисов с `Authenticator`; одна попытка на identity."""
+        """Войти в identity без сессии. `limit` — общий бюджет кандидатов, включая гонки захвата."""
         return await self._space._run_logins(service=service, limit=limit)
 
     async def answer_challenge(

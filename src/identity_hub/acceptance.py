@@ -110,7 +110,6 @@ class AcceptanceWorker:
         attempts: int,
     ) -> bool:
         from identity_hub.auth import LoginOutcome
-        from identity_hub.state import DEFAULT_SLOT
 
         policy = AcceptPolicy.load(stored_policy)
         identity = await space.identities.get(identity_id)
@@ -130,11 +129,8 @@ class AcceptanceWorker:
         if identity.auth not in {AuthState.NO_SESSION, AuthState.SESSION_INVALID}:
             return False
         async with space._tx(own=True) as tx:
-            auth = await tx.load_region(identity_id, "auth", DEFAULT_SLOT)
-            credential_candidate = await tx.credential_candidate_state(identity_id)
-        if credential_candidate is False or (
-            auth is not None and auth.retryable is False and credential_candidate is not True
-        ):
+            eligible = await tx.login_candidate_eligible(identity_id, ignore_backoff=True)
+        if not eligible:
             await self._retire_or_finish(space, identity_id, policy, identity.auth_code, identity.standing)
             return True
 
@@ -151,8 +147,7 @@ class AcceptanceWorker:
 
         current = await space.identities.get(identity_id)
         async with space._tx(own=True) as tx:
-            auth = await tx.load_region(identity_id, "auth", DEFAULT_SLOT)
-            credential_candidate = await tx.credential_candidate_state(identity_id)
+            eligible = await tx.login_candidate_eligible(identity_id, ignore_backoff=True)
         code = current.auth_code
         if code in policy.retire_on or current.standing in policy.retire_on:
             await space.identities.retire(
@@ -161,11 +156,7 @@ class AcceptanceWorker:
                 reason=f"acceptance rejected: {code or current.standing}",
             )
             await self._finish(space, identity_id)
-        elif (
-            credential_candidate is False
-            or (auth is not None and auth.retryable is False and credential_candidate is not True)
-            or attempts + 1 >= policy.max_attempts
-        ):
+        elif not eligible or attempts + 1 >= policy.max_attempts:
             await self._finish(space, identity_id)
         else:
             async with space._tx(own=True) as tx:
