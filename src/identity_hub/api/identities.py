@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -725,7 +725,7 @@ class Identities(Namespace):
         async def activate(handle: SpaceHandle, identity_id: UUID) -> None:
             await handle._set_lifecycle(identity_id, Lifecycle.READY, actor=actor, reason=reason)
 
-        return await self._space._run_batch(ids, activate, atomic=atomic)
+        return await self._state_batch(ids, activate, atomic=atomic)
 
     async def retire_many(
         self, ids: Iterable[UUID], *, actor: str, reason: str | None = None, atomic: bool = False
@@ -735,7 +735,7 @@ class Identities(Namespace):
         async def retire(handle: SpaceHandle, identity_id: UUID) -> None:
             await handle._retire(identity_id, actor=actor, reason=reason)
 
-        return await self._space._run_batch(ids, retire, atomic=atomic)
+        return await self._state_batch(ids, retire, atomic=atomic)
 
     async def restore_standing_many(
         self, ids: Iterable[UUID], *, actor: str, reason: str, atomic: bool = False
@@ -746,7 +746,7 @@ class Identities(Namespace):
         async def restore(handle: SpaceHandle, identity_id: UUID) -> None:
             await handle._restore_standing(identity_id, actor=actor, reason=reason)
 
-        return await self._space._run_batch(ids, restore, atomic=atomic)
+        return await self._state_batch(ids, restore, atomic=atomic)
 
     async def override_many(
         self, ids: Iterable[UUID], override: Override, *, atomic: bool = False
@@ -760,7 +760,7 @@ class Identities(Namespace):
         async def apply(handle: SpaceHandle, identity_id: UUID) -> None:
             await handle._override(identity_id, override)
 
-        return await self._space._run_batch(ids, apply, atomic=atomic)
+        return await self._state_batch(ids, apply, atomic=atomic)
 
     async def delete_many(
         self, ids: Iterable[UUID], *, actor: str, revoke: bool = False, atomic: bool = False
@@ -770,12 +770,31 @@ class Identities(Namespace):
         Identity со связями или живой арендой (без `revoke=True`) попадает в `rejected`.
         """
 
+        targets = tuple(ids)
+
+        async def prepare(tx: StoreTx) -> None:
+            from identity_hub.proxy_allocator import lock_identity_proxy_rows
+
+            await lock_identity_proxy_rows(tx, targets)
+
         async def delete(handle: SpaceHandle, identity_id: UUID) -> None:
             await handle._delete(identity_id, actor=actor, revoke=revoke)
 
-        return await self._space._run_batch(ids, delete, atomic=atomic)
+        return await self._space._run_batch(targets, delete, atomic=atomic, prepare=prepare)
 
     # ------------------------------------------------------------------ служебное
+
+    async def _state_batch(
+        self, ids: Iterable[UUID], command: Callable[[SpaceHandle, UUID], Awaitable[object]], *, atomic: bool
+    ) -> BatchResult[UUID]:
+        from identity_hub.proxy_allocator import lock_identity_proxy_rows
+
+        targets = tuple(ids)
+
+        async def prepare(tx: StoreTx) -> None:
+            await lock_identity_proxy_rows(tx, targets)
+
+        return await self._space._run_batch(targets, command, atomic=atomic, prepare=prepare)
 
     def _prepare(self, spec: IdentityCreate) -> tuple[Service, PreparedIdentity]:
         svc = self._space.hub.service(spec.service)

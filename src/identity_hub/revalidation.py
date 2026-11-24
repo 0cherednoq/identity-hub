@@ -33,6 +33,10 @@ from identity_hub.errors import (
 )
 from identity_hub.events import EventDraft
 from identity_hub.protocols import Blame, LoginChallenge, LoginFailure
+from identity_hub.proxy_finalization import accepted as proxy_accepted
+from identity_hub.proxy_finalization import finalize as finalize_proxy
+from identity_hub.proxy_finalization import prepare as prepare_proxy
+from identity_hub.proxy_finalization import projection_proof, with_assignment
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 
 __all__ = [
@@ -234,6 +238,8 @@ class RevalidationMixin(SpaceBase):
             self._tx(own=True) as tx,
         ):
             await lease._check_fencing(tx)
+            await prepare_proxy(tx, identity_id)
+            decision = None
             actual_revision = await lease._session_revision(tx, DEFAULT_SLOT)
             if actual_revision != source_revision:
                 raise ConcurrentModification(
@@ -278,12 +284,24 @@ class RevalidationMixin(SpaceBase):
                     )
                     applied["auth"] = str(decision.outcome)
             stored = {"outcome": str(verdict), "applied": dict(applied), "credential": label}
+            assignment = await finalize_proxy(
+                self,
+                tx,
+                identity_id,
+                lease=lease,
+                actor=actor,
+                reason="session_revalidation",
+                proof=projection_proof("auth", DEFAULT_SLOT, decision),
+                state_accepted=proxy_accepted(decision),
+                allow_bind=True,
+            )
+            final_result = with_assignment(stored, assignment)
             if verdict is SessionVerdict.FAILED:  # неопознанный ответ: повтор с тем же request_id допустим
                 await sync._apply_operation(
-                    tx, lease, claim, "failed", result=stored, error_code="unrecognized_state"
+                    tx, lease, claim, "failed", result=final_result, error_code="unrecognized_state"
                 )
             else:
-                await sync._apply_operation(tx, lease, claim, "succeeded", result=stored)
+                await sync._apply_operation(tx, lease, claim, "succeeded", result=final_result)
         if verdict is SessionVerdict.FAILED:
             return AuthRevalidationResult(
                 identity_id,

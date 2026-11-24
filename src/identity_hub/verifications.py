@@ -30,6 +30,10 @@ from identity_hub.enums import ChangeSource
 from identity_hub.errors import ConcurrentModification, IdentityHubError, ValidationFailed
 from identity_hub.events import EventDraft
 from identity_hub.protocols import ProbeResult
+from identity_hub.proxy_finalization import accepted as proxy_accepted
+from identity_hub.proxy_finalization import finalize as finalize_proxy
+from identity_hub.proxy_finalization import prepare as prepare_proxy
+from identity_hub.proxy_finalization import projection_proof
 from identity_hub.store.base import IdentityRow, StoreTx
 
 if TYPE_CHECKING:
@@ -166,6 +170,7 @@ class Verification:
         space = self.lease.pool.space
         async with space._tx(own=True) as tx:
             await self.lease._check_fencing(tx)
+            await prepare_proxy(tx, self.lease.identity_id)
             decision = await apply_verification(
                 space,
                 tx,
@@ -175,6 +180,17 @@ class Verification:
                 actor=self.lease.holder,
                 lease_id=self.lease.lease_id,
                 evidence=evidence,
+            )
+            await finalize_proxy(
+                space,
+                tx,
+                self.lease.identity_id,
+                lease=self.lease,
+                actor=self.lease.holder,
+                reason="verification_result",
+                proof=projection_proof("verification", self.factor, decision.region),
+                state_accepted=proxy_accepted(decision.region),
+                allow_bind=True,
             )
         return decision.status
 
@@ -298,16 +314,17 @@ class VerificationsMixin(SpaceBase):
             return flow.abandon(status, now, actor, reason)
 
         async with self._tx() as tx:
-            return (
-                await apply_verification(
-                    self,
-                    tx,
-                    identity_id,
-                    factor,
-                    step,
-                    actor=actor,
-                )
-            ).status
+            await prepare_proxy(tx, identity_id)
+            decision = await apply_verification(self, tx, identity_id, factor, step, actor=actor)
+            await finalize_proxy(
+                self,
+                tx,
+                identity_id,
+                actor=actor,
+                reason="verification_review",
+                state_accepted=proxy_accepted(decision.region),
+            )
+            return decision.status
 
     async def _expire_verifications(self, *, limit: int = 100) -> int:
         """Истёкшие сроки: verified → expired, pending → missing (ТЗ §8.9, обслуживание)."""
@@ -325,6 +342,7 @@ class VerificationsMixin(SpaceBase):
                     continue
                 if factor not in service.factor_names:
                     continue  # фактор удалён из кода — игнорируется (FR-10.6)
+                await prepare_proxy(tx, identity_id)
                 decision = await apply_verification(
                     self,
                     tx,
@@ -332,6 +350,14 @@ class VerificationsMixin(SpaceBase):
                     factor,
                     lambda flow, s, verified, now: flow.expire(s, now),
                     actor="timer",
+                )
+                await finalize_proxy(
+                    self,
+                    tx,
+                    identity_id,
+                    actor="timer",
+                    reason="verification_expired",
+                    state_accepted=proxy_accepted(decision.region),
                 )
                 changed += int(decision.changed)
         return changed

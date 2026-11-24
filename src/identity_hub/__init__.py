@@ -19,6 +19,7 @@ from identity_hub.api.proxies import (
     ProxyCreated,
     ProxyCreateManyResult,
     ProxyDeleteManyResult,
+    ProxyGroup,
     RecheckReport,
 )
 from identity_hub.api.secrets import SecretRef
@@ -81,6 +82,7 @@ from identity_hub.errors import (
     LeaseUnavailable,
     NotFound,
     OperationNotAllowed,
+    ProxyAssignmentConflict,
     QuotaExhausted,
     RevisionConflict,
     SchemaIncompatible,
@@ -156,6 +158,7 @@ from identity_hub.protocols import (
     VerificationProbe,
 )
 from identity_hub.proxies import ProxyHealthPolicy
+from identity_hub.proxy_assignment import AllOf, AnyOf, ProxyAssignment, ProxyBindingPolicy, RegionIn
 from identity_hub.revalidation import (
     AuthRevalidationResult,
     CredentialVerdict,
@@ -183,11 +186,13 @@ from identity_hub.store.base import LeaseFence
 from identity_hub.sync import ReconcileReport
 from identity_hub.verifications import Verification
 
-__version__ = "1.0.0a10"
+__version__ = "1.0.0a11"
 
 __all__ = [
     "AcceptPolicy",
+    "AllOf",
     "AlreadyExists",
+    "AnyOf",
     "ApiKey",
     "AttemptsExhausted",
     "AuthProbe",
@@ -289,11 +294,15 @@ __all__ = [
     "ProbeResult",
     "Probes",
     "Proxy",
+    "ProxyAssignment",
+    "ProxyAssignmentConflict",
+    "ProxyBindingPolicy",
     "ProxyCreate",
     "ProxyCreateManyResult",
     "ProxyCreated",
     "ProxyDeleteManyResult",
     "ProxyDownPolicy",
+    "ProxyGroup",
     "ProxyHealthPolicy",
     "ProxyPolicy",
     "ProxyStatus",
@@ -305,6 +314,7 @@ __all__ = [
     "RecordingMetrics",
     "RecoveryCodes",
     "RefreshResult",
+    "RegionIn",
     "Retention",
     "RevalidationStatus",
     "RevisionConflict",

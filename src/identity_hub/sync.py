@@ -35,6 +35,10 @@ from identity_hub.errors import (
 from identity_hub.events import EventDraft
 from identity_hub.protocols import ProbeResult
 from identity_hub.provider_worker import NO_RETRY
+from identity_hub.proxy_finalization import accepted as proxy_accepted
+from identity_hub.proxy_finalization import finalize as finalize_proxy
+from identity_hub.proxy_finalization import prepare as prepare_proxy
+from identity_hub.proxy_finalization import projection_proof, with_assignment
 from identity_hub.service import PROBE_OPERATION, Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, ProviderClaim, StoreTx
@@ -428,6 +432,7 @@ class SyncMixin(SpaceBase):
                 self._tx(own=True) as tx,
             ):
                 await lease._check_fencing(tx)
+                await prepare_proxy(tx, lease.identity_id)
                 verification_decision = await apply_verification(
                     self,
                     tx,
@@ -437,12 +442,23 @@ class SyncMixin(SpaceBase):
                     actor=lease.holder,
                     lease_id=lease.lease_id,
                 )
+                assignment = await finalize_proxy(
+                    self,
+                    tx,
+                    lease.identity_id,
+                    lease=lease,
+                    actor=lease.holder,
+                    reason="verification_probe",
+                    proof=projection_proof("verification", key, verification_decision.region),
+                    state_accepted=proxy_accepted(verification_decision.region),
+                    allow_bind=True,
+                )
                 await self._apply_operation(
                     tx,
                     lease,
                     claim,
                     "succeeded",
-                    result={"outcome": verification_decision.status.state},
+                    result=with_assignment({"outcome": verification_decision.status.state}, assignment),
                 )
             return verification_decision.status.state
         state = result.state
@@ -453,6 +469,8 @@ class SyncMixin(SpaceBase):
             self._projection_guard(lease, claim, str(state)),
             self._tx(own=True) as tx,
         ):
+            await lease._check_fencing(tx)
+            await prepare_proxy(tx, lease.identity_id)
             observed_at = result.observed_at or await tx.now()
             region_decision = await apply_region_change(
                 self,
@@ -472,5 +490,18 @@ class SyncMixin(SpaceBase):
                 lease_id=lease.lease_id,
             )
             outcome: Outcome = region_decision.outcome
-            await self._apply_operation(tx, lease, claim, "succeeded", result={"outcome": str(outcome)})
+            assignment = await finalize_proxy(
+                self,
+                tx,
+                lease.identity_id,
+                lease=lease,
+                actor=lease.holder,
+                reason="region_probe",
+                proof=projection_proof(region, key, region_decision),
+                state_accepted=proxy_accepted(region_decision),
+                allow_bind=True,
+            )
+            await self._apply_operation(
+                tx, lease, claim, "succeeded", result=with_assignment({"outcome": str(outcome)}, assignment)
+            )
         return str(outcome)

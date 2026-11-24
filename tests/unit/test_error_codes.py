@@ -46,6 +46,7 @@ EXPECTED_CODES = {
     "ConcurrentModification": "concurrent_modification",
     "ConsumerCursorExpired": "consumer_cursor_expired",
     "RevisionConflict": "revision_conflict",
+    "ProxyAssignmentConflict": "proxy_assignment_conflict",
     "IdempotencyConflict": "idempotency_conflict",
     "OperationNotAllowed": "operation_not_allowed",
     "QuotaExhausted": "quota_exceeded",
@@ -96,6 +97,7 @@ def test_every_code_has_http_status() -> None:
         (NotFound("identity", uuid4()), 404, 2),
         (identity_hub.LeaseUnavailable("нет"), 503, 1),  # F6.2a (R1-27): временная недоступность
         (RevisionConflict("identity", 1, 2, 3), 409, 1),
+        (identity_hub.ProxyAssignmentConflict("policy_changed", uuid4()), 409, 1),
         (LeaseRevoked(uuid4(), "admin"), 409, 1),
         (QuotaExhausted("send", 60), 429, 1),
         (identity_hub.DatabaseBusy("lock timeout"), 503, 4),
@@ -139,6 +141,10 @@ def test_context_is_json_safe_and_limited_to_declared_fields() -> None:
             {"errors": ["profile.birthday: Input should be a valid date"]},
         ),
         (SchemaIncompatible("0007", None), {"expected": "0007", "actual": None}),
+        (
+            identity_hub.ProxyAssignmentConflict("assignment_changed", identity_id),
+            {"reason": "assignment_changed", "allocation_id": str(identity_id)},
+        ),
     ]
     for error, expected in cases:
         assert error.context == expected
@@ -158,6 +164,14 @@ def test_new_errors_survive_pickle() -> None:
     restored = pickle.loads(pickle.dumps(error))
     assert type(restored) is RevisionConflict
     assert restored.context == error.context and restored.code == "revision_conflict"
+
+
+def test_proxy_assignment_error_survives_pickle_and_rejects_untrusted_reason() -> None:
+    error = identity_hub.ProxyAssignmentConflict("assignment_changed", uuid4())
+    restored = pickle.loads(pickle.dumps(error))
+    assert type(restored) is type(error) and restored.context == error.context
+    with pytest.raises(ValueError, match="unknown proxy assignment conflict"):
+        identity_hub.ProxyAssignmentConflict("token=SECRET", uuid4())
 
 
 def test_cli_returns_exit_code_and_prints_code(

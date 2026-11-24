@@ -34,6 +34,7 @@ __all__ = [
     "LeaseUnavailable",
     "NotFound",
     "OperationNotAllowed",
+    "ProxyAssignmentConflict",
     "QuotaExhausted",
     "RevisionConflict",
     "SchemaIncompatible",
@@ -178,6 +179,26 @@ class RevisionConflict(ConcurrentModification):
     """`expected_revision` не совпал с текущей ревизией агрегата (IMP-07)."""
 
     code = "revision_conflict"
+
+
+class ProxyAssignmentConflict(IdentityHubError):
+    """Устаревшее назначение, версия политики или невыполненное условие подтверждения."""
+
+    code = "proxy_assignment_conflict"
+    context_fields = ("reason", "allocation_id")
+
+    def __init__(self, reason: str, allocation_id: UUID) -> None:
+        if reason not in {
+            "assignment_changed",
+            "policy_changed",
+            "not_reserved",
+            "proxy_unavailable",
+            "condition_not_met",
+        }:
+            raise ValueError("unknown proxy assignment conflict")
+        self.reason = reason
+        self.allocation_id = allocation_id
+        super().__init__(f"proxy assignment conflict: {reason}")
 
 
 class IdempotencyConflict(IdentityHubError):
@@ -413,6 +434,7 @@ class SecretConfigurationError(IdentityHubError):
 # ------------------------------------------------------------------ отображение кодов
 
 _HTTP_STATUS: dict[str, int] = {
+    "proxy_assignment_conflict": 409,
     "validation_error": 422,
     "not_found": 404,
     "no_resource_available": 503,

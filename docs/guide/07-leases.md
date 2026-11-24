@@ -447,6 +447,17 @@ async with space.pools.define("inbox", service=MAIL).lease(among=[mailbox_id]) a
 
 ## История и мониторинг
 
+В allocations-группе `lease.proxy_allocation_id` указывает выданное назначение. Reserved и draining
+живут по canonical lease; продление не создаёт независимый TTL proxy. Bound сохраняет постоянную
+пару при release/expiry. Свою проверку подтверждают через `await lease.confirm_proxy(reason=...)`.
+Проверяются актуальные правила, полный fence, endpoint/health и ожидаемое поколение.
+Повтор не занимает второе место. `lease.using(session).confirm_proxy()` участвует в SQL-транзакции
+приложения; её rollback отменяет подтверждение и outbox, snapshot исходного Lease не меняется.
+Пример совместной записи результата — [proxy_assignment.py](../../examples/proxy_assignment.py).
+
+После expiry fencing отклоняет записи в Hub. Отмену сетевой операции и закрытие клиента обеспечивает
+приложение через управляемую аренду и обработку потери владения; DB не останавливает зависший HTTP-запрос.
+
 ```python
 await space.admin.lease_history(identity_id, limit=50)       # аренды аккаунта: кто, сколько, чем кончилась
 await space.admin.lease_stats(identity_id, since=...)        # число, длительность, загрузка

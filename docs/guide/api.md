@@ -52,7 +52,7 @@ space = await hub.spaces.ensure("production", "Production")  # простран�
 | `space.admin` | read-модели UI | `overview`, `identity_page`, `lease_dashboard`, `event_page`, `human_queue`… | для админок |
 | `space.analytics` | отчёты | `series`, `funnel`, `cohorts`, `ban_rate`, `utilization`… | для админок |
 | `hub.read` | read-схема Core | `identities`, `identity_links`, `leases`, `lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`, `credentials`, `sessions` — для join и `among=` | [Интеграция](../integrations.md#read-схема-join-с-таблицами-приложения) |
-| `space.maintenance` | обслуживание | `expire_challenges`, `expire_verifications`, `reindex_search` | обычно вызывает диспетчер |
+| `space.maintenance` | обслуживание | `expire_challenges`, `expire_verifications`, `reindex_search`, `cleanup_proxy_allocations` | обычно вызывает диспетчер |
 
 ## Контракт хаба
 
@@ -405,6 +405,199 @@ await space.proxies.recheck_due(checker)
 ```
 
 Подробно — [Прокси](09-proxies.md).
+
+`ProxyPolicy.binding` принимает `ProxyBindingPolicy(mode="deferred", bind_when=..., unbind_when=...)`.
+Условия строятся через `RegionIn(region, states={...}, key=...)`, `AllOf(*rules)`, `AnyOf(*rules)`.
+Пустые композиции запрещены; неизвестный факт не удовлетворяет условию. У `auth` ключ по умолчанию
+`default`, у `verification` обязателен объявленный фактор. Правила поддерживают строгий JSON roundtrip
+через `ProxyBindingPolicy.to_dict()` / `ProxyBindingPolicy.from_dict()`; неизвестные поля отвергаются.
+Для `immediate` нельзя задавать `bind_when`, а `binding` требует `sticky=True` и эксклюзивную аренду.
+
+`await space.proxies.get_group(name)` возвращает `ProxyGroup(name, capacity_accounting, revision)`.
+`configure_group(name, capacity_accounting="bindings" | "allocations", actor=..., reason=...)`
+сохраняет общий режим группы; изменение режима требует drain аренд пространства и собственной
+транзакции. Вызов через `using(session)` запрещён. Повтор того же режима не меняет revision и
+не создаёт повторного события. Режим `allocations` конвертирует существующие привязки в ledger
+без увеличения занятой ёмкости; физически переполненная группа не переключается.
+
+`proxies.rebind(identity_id, proxy_id, actor=..., reason=..., expected_binding_id=None)` — явное
+доверенное назначение администратора. Оно проходит общий allocator; заполненный proxy не меняет
+старую привязку. `unbind(identity_id, actor=..., reason=..., expected_binding_id=None)` снимает пару.
+В режиме allocations используемый proxy удерживает место в draining до завершения аренды.
+`expected_binding_id` защищает новую пару от поздней команды с ID предыдущего назначения;
+несовпадение даёт `ProxyAssignmentConflict(reason="assignment_changed")`.
+`disable(..., unbind=True)` отменяет и резервы выключаемого proxy. Изменение endpoint/credentials
+строгого proxy требует drain. `move` сохраняет режим учёта; для его смены используют configure_group.
+Обычный импорт deferred-сервиса с `ImportRecord.proxy` отклоняется с `confirmation_required`;
+аккаунт можно импортировать без proxy.
+
+Для переноса уже проверенных привязок `imports.run`, `run_files` и `stage` принимают
+`proxy_binding="trusted", proxy_binding_reason="причина доверия"` с непустым actor.
+Это явная административная команда, которая не доказывает валидность аккаунта. Параметры задаёт
+вызывающий код; поле из импортируемого файла не включает этот режим. Фоновый импорт сохраняет
+решение в зашифрованном задании. Дедупликация URL использует режим фактической группы proxy;
+strict-импорт учитывает резервы и draining. Нехватка места отклоняет соответствующую запись и
+зависимые от неё связи, сохраняя независимые записи пачки.
+
+Удаление строгого proxy требует отсутствия живых uses, даже с `unbind=True`. Удаление аккаунта
+с `revoke=True` завершает его назначения вместе с отзывом аренды в одной транзакции. Завершённые
+назначения сохраняют поколения и исходные ID после удаления ресурсов до штатного retention.
+Doctor сверяет три счётчика под proxy-lock по ledger; истёкший use сам по себе не обнуляет занятость.
+
+В группе `allocations` публичный acquire создаёт lease и назначение одной транзакцией.
+`ProxyBindingPolicy(mode="deferred")` выдаёт временный резерв, сохраняя постоянную пару до
+подтверждения. Новая декларация требует явного opt-in группы; в `bindings` она отклоняется.
+`binding=None` с `sticky=True` закрепляет сразу, `sticky=False` использует временное назначение.
+Прежняя собственная привязка может использоваться без второго места, даже когда proxy заполнен.
+Строгая выдача поддерживает только exclusive-аренды.
+
+У Lease доступны `proxy_allocation_id` и `proxy_assignment_state` — снимок назначения при выдаче.
+Обычный release закрывает reserved/draining и сохраняет bound. Snapshot Service/policy этой
+аренды не меняется от другого acquire через тот же Pool. Replay возвращает выданные proxy/allocation
+из аренды, включая draining после административной замены пары. Другая политика/revision под
+тем же ключом даёт IdempotencyConflict; истечение ключа раньше живой аренды не снимает проверку.
+
+`await lease.confirm_proxy(reason="application_check_accepted")` закрепляет только выданный proxy.
+Метод проверяет живую аренду, поколение привязки, актуальность политики, здоровье proxy и правила.
+Возвращает `ProxyAssignment(allocation_id, identity_id, proxy_id, state, updated_at)`; повтор сохраняет
+тот же результат без второго места и события. `bind_when` ограничивает и ручное подтверждение,
+совпавший `unbind_when` запрещает его. Потеря аренды или изменение поколения не обходятся повтором.
+
+Для одной фиксации результата checker и назначения используйте явную транзакцию приложения:
+
+```python
+async with sessions() as db, db.begin():
+    await space.using(db).identities.observe(identity_id, observation, actor="checker", source=source)
+    assignment = await lease.using(db).confirm_proxy(reason="application_check_accepted")
+```
+
+Сетевая проверка завершается до входа в транзакцию. Адаптер `lease.using(db)` поддерживает только
+подтверждение; acquire, heartbeat и release остаются самостоятельными. Он не обновляет snapshot
+исходного Lease, даже после commit. Возвращённый DTO описывает результат внутри транзакции;
+rollback отменяет состояние, назначение, счётчики и события вместе. Самостоятельный confirm
+обновляет snapshot Lease после успешной фиксации.
+
+Release, revoke и принудительный yield закрывают reserved/draining, сохраняя bound. Истечение
+TTL или max_hold освобождает резерв при обработке expire либо повторном захвате аккаунта.
+Heartbeat продлевает use через canonical lease и не выходит за max_hold. Смерть процесса не
+превращает резерв в постоянную привязку. Групповой sweep вне выбранного аккаунта ещё не подключён.
+
+Встроенные login/verify/adopt/revalidate/sync применяют `bind_when` после принятой проекции и до
+освобождения своей аренды. Пин, устаревший факт или sticky-отказ не заменяются сырым verdict.
+Правила видят итоговые session/auth/lifecycle составной команды. Совпавший `unbind_when` имеет
+приоритет, снимает постоянную пару и отменяет резерв замены. Observe/override, импорт обновления,
+timer-переходы и классифицированные ошибки применяют снятие по принятому состоянию.
+Обычный acquire по уже хорошему состоянию не считается новой проверкой.
+
+Конфликт поколения после административной замены сохраняет verdict без изменения новой пары.
+В результате provider operation доступен безопасный `proxy_assignment` с outcome и allocation_id.
+Потеря lease fence или provider claim отклоняет всю проекцию, включая подтверждение.
+
+Смена правил сервиса не запускает массовую отвязку. Для выбранных аккаунтов выполните явное
+согласование существующих назначений:
+
+```python
+result = await space.proxies.reconcile_bindings(
+    identity_ids,
+    service="site-a",
+    actor="operator",
+    reason="apply updated proxy rules",
+    atomic=True,
+)
+```
+
+Команда возвращает `BatchResult[UUID]`, поддерживает `using(session)` и ограничена 1000 identity.
+Она сохраняет адрес, поколение пары и занятый слот; совпавший `unbind_when` снимает пару и отменяет
+резерв замены, оставляя живое использование в draining. Reconcile не создаёт привязку и не подтверждает
+резерв по уже подходящему состоянию. Повтор тех же правил и revision не меняет snapshot и не создаёт событие.
+
+`proxy_policy=` задаёт новый override пула явно; он компонуется с текущим Service. Если его не передать,
+применяются только текущие сервисные правила. Прежняя нормализованная композиция не подставляется
+автоматически. `expected_service_revision=` проверяет revision runtime-сервиса; для static Service
+параметр не нужен. `expected_bindings={identity_id: binding_id}` защищает от запоздалой команды и должен
+покрывать все выбранные identity. Без него команда явно работает с текущими поколениями.
+
+Новая политика устаревает доказательство проверки, начатой до reconcile. Её confirm возвращает
+`policy_changed`; встроенная проекция сохраняет verdict с этим исходом без изменения назначения.
+Replay acquire восстанавливает тот же ресурс и прежнее доказательство, не обновляет его права.
+Даже смена A → B → A не восстанавливает старую проверку. После rollback внешней транзакции
+прежняя политика и доказательство восстанавливаются вместе. Аудит — `proxy.binding.policy_reconciled`;
+изменение самой пары дополнительно даёт `proxy.binding.changed`.
+
+Статус реализации PA4.2: правила, reconcile, recovery и наблюдаемость подключены.
+Итоговый аудит совместимости, гонок и нагрузки ещё в работе; фича целиком не завершена.
+Группы `bindings` сохраняют прежний режим учёта.
+
+Автоматический promotion требует нового принятого факта из удовлетворённой ветки `bind_when`.
+В `AllOf` остальные факты могут служить прежними предусловиями; в `AnyOf` новая не совпавшая
+ветка не подтверждает другую, совпавшую только по старому состоянию. Значение доказанного факта
+должно сохраняться в итоговом снимке. Поэтому технический retry/cooling не подтверждает резерв
+по прежнему `auth=authenticated`. Если приложение явно задаёт критерий по cooling или принятому
+standing, такой факт может подтвердить резерв. `verify_session` доказывает проверенный слот;
+`adopt_session` дополнительно принимает canonical auth/lifecycle. Pin/stale не дают доказательства.
+Явный `confirm_proxy` остаётся доверенным решением приложения после собственной проверки.
+
+### Очистка назначений прокси
+
+```python
+closed = await space.maintenance.cleanup_proxy_allocations(limit=100, group="checker")
+```
+
+Один вызов сверяет до `limit` прокси, рассматривает до `limit` незавершённых назначений
+и до `limit` открытых записей истории.
+`limit` — целое число от 1 до 1000; `group=None` охватывает пространство. Метод возвращает число
+освобождённых назначений. Сверка счётчиков относится только к группам с учётом `allocations`.
+Три короткие собственные транзакции не входят в `using(session)` вызывающего. Курсоры проходят
+фиксированный диапазон ID; занятые строки пропускаются, а следующий цикл возвращается к ним.
+Отсутствие закрытых строк в одном вызове не означает конец обхода.
+
+Живой canonical lease удерживает reserved/draining; подтверждённый binding остаётся после expiry.
+Очистка перепроверяет lease под блокировками: продление и confirm не теряются. Независимого TTL
+резерва нет. Фоновый maintenance сначала завершает истёкшие lease/history, затем выполняет recovery
+в новых транзакциях. При `no_proxy` acquire один раз пробует малую пачку recovery целевой группы
+после отката неудачной выдачи. Если пачки недостаточно, возможен временный отказ до следующего прохода.
+
+Retention удаляет released только после `max(lease_history, operation_keys)`, когда не осталось
+сохранённой истории, binding или живого использования. Закрытый pointer `ih_leases` не удерживает
+назначение бесконечно. Старый lease после удаления tombstone по-прежнему не проходит fence.
+
+Если canonical row уже потерян или заменён другим lease ID, managed use в открытой истории
+закрывается с `end_reason="lost"` и журнальным `lease.lost` с reason orphaned. Binding сохраняется.
+Наличие той же canonical generation, даже expired, оставляет закрытие обычному expire. Время
+orphan-закрытия — время обнаружения, а не восстановленный из heartbeat TTL. Метод возвращает число
+освобождённых ledger-слотов; закрытая history отдельно учитывается как proxy_history в maintenance.
+
+### Чтение занятости прокси
+
+`proxies.list()` и `admin.proxy_detail/overview()` возвращают `bound_count`, `reserved_count`,
+`draining_count`, `occupied_count`, `available_capacity`, `capacity_accounting`, `cleanup_pending_count`.
+`occupied_count` — сумма трёх состояний; expired reserve продолжает занимать место до cleanup.
+`cleanup_pending_count` считает reserved/draining без живого canonical use. Свободная физическая
+ёмкость сама по себе не означает пригодность прокси: здоровье и `enabled` проверяются отдельно.
+`proxies.get/create/ensure/update` сохраняют краткий DTO без счётчиков; для них новые поля — None.
+
+В read-схеме v6 `hub.read.proxy_bindings` содержит только постоянные пары и nullable `binding_id`
+(у legacy-пары поколения нет). `proxy_allocations` показывает reserved/bound/draining/released с
+ID назначения, identity/proxy, owner lease ID и временем. `proxy_groups` содержит режим и revision;
+у прежней группы без строки конфигурации подразумевается bindings. `leases` и `lease_history`
+содержат `proxy_allocation_id`. Фильтр по space_id остаётся обязанностью SQL-запроса приложения.
+Policy JSON, fingerprint, lease token и credentials в selectable не входят.
+
+MetricsHook получает gauges `identity_hub_proxy_slots{space,group,state}` для bound/reserved/draining/
+occupied и `identity_hub_proxy_cleanup_pending{space,group}`. Сбор выполняет dispatcher, его можно
+вызвать через обычную работу диспетчера; на heartbeat новых запросов не добавляется. Gauge каждой
+группы отражает снимок чтения, а не атомарный снимок всех пространств. Отказы попыток используют
+`identity_hub_failures_total{space,service,scope,reason}` со scope proxy_acquire/proxy_confirm/
+proxy_finalization; reason различает no_proxy/policy_changed/assignment_changed и прочие причины.
+Этот счётчик описывает попытки и не откатывается с командой приложения.
+
+Зафиксированные переходы дают идемпотентные аналитические ряды `proxy.reservations.created`,
+`proxy.reservations.confirmed`, `proxy.reservations.released`, `proxy.allocations.draining`,
+`proxy.allocations.released`, `proxy.expirations`. Пары `.sum`/`.count` для
+`proxy.reservation_seconds` и `proxy.cleanup_delay_seconds` позволяют получить среднюю длительность
+резерва и задержку очистки после canonical expiry. Доступ: `space.analytics.series`, измерения
+service/group. Они строятся из committed outbox; повтор обработки не увеличивает значения.
+Expiry-счётчик относится к освобождённым временным слотам; постоянный binding после expiry не снимается.
 
 ### Пакетные команды
 

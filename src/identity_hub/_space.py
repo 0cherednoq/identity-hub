@@ -168,6 +168,7 @@ class SpaceBase:
         command: Callable[[Self, K], Awaitable[object]],
         *,
         atomic: bool = False,
+        prepare: Callable[[StoreTx], Awaitable[None]] | None = None,
     ) -> BatchResult[K]:
         """Выполнить `command(handle, key)` для каждого ключа одной транзакцией (`D-224`).
 
@@ -176,6 +177,7 @@ class SpaceBase:
         в своей точке сохранения. Ошибка библиотеки по сущности откатывает только её и попадает
         в `rejected`; при `atomic=True` она отменяет пачку и пробрасывается. Сбой хранилища,
         конфигурации и чужое исключение отменяют пачку всегда.
+        `prepare(tx)` подготавливает общий набор блокировок до первой поэлементной команды.
         """
         unique = sorted(set(keys), key=_batch_order)
         if len(unique) > MAX_BATCH:
@@ -184,6 +186,8 @@ class SpaceBase:
         if not unique:
             return result
         async with self._tx() as tx:
+            if prepare is not None:
+                await prepare(tx)
             handle = self._copy()
             handle._batch_tx = tx
             for key in unique:

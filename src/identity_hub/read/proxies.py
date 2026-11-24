@@ -56,6 +56,11 @@ class ProxyCard:
     disabled_reason: str | None = None
     disabled_by: str | None = None
     disabled_at: datetime | None = None
+    reserved_count: int = 0
+    draining_count: int = 0
+    occupied_count: int = 0
+    capacity_accounting: str = "bindings"
+    cleanup_pending_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +77,11 @@ class ProxyPoolCapacity:
     in_lease_count: int
     utilization: float
     disabled: int = 0
+    reserved_count: int = 0
+    draining_count: int = 0
+    occupied_count: int = 0
+    capacity_accounting: str = "bindings"
+    cleanup_pending_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +105,7 @@ class ProxyDetail:
 
 
 def _card(row: ProxyReadRow) -> ProxyCard:
-    available = max(0, row.max_identities - row.bound_count)
+    available = max(0, row.max_identities - row.occupied_count)
     return ProxyCard(
         id=row.id,
         pool=row.pool,
@@ -115,7 +125,7 @@ def _card(row: ProxyReadRow) -> ProxyCard:
         max_identities=row.max_identities,
         bound_count=row.bound_count,
         available_capacity=available,
-        capacity_utilization=row.bound_count / row.max_identities,
+        capacity_utilization=row.occupied_count / row.max_identities,
         in_lease_count=row.in_lease_count,
         created_at=row.created_at,
         actions_available=False,
@@ -124,11 +134,16 @@ def _card(row: ProxyReadRow) -> ProxyCard:
         disabled_reason=row.disabled_reason,
         disabled_by=row.disabled_by,
         disabled_at=row.disabled_at,
+        reserved_count=row.reserved_count,
+        draining_count=row.draining_count,
+        occupied_count=row.occupied_count,
+        capacity_accounting=row.capacity_accounting,
+        cleanup_pending_count=row.cleanup_pending_count,
     )
 
 
 def _pool(row: ProxyPoolCapacityRow) -> ProxyPoolCapacity:
-    available = max(0, row.max_identities - row.bound_count)
+    available = max(0, row.max_identities - row.occupied_count)
     return ProxyPoolCapacity(
         pool=row.pool,
         proxies=row.proxies,
@@ -140,8 +155,13 @@ def _pool(row: ProxyPoolCapacityRow) -> ProxyPoolCapacity:
         bound_count=row.bound_count,
         available_capacity=available,
         in_lease_count=row.in_lease_count,
-        utilization=row.bound_count / row.max_identities if row.max_identities else 0.0,
+        utilization=row.occupied_count / row.max_identities if row.max_identities else 0.0,
         disabled=row.disabled,
+        reserved_count=row.reserved_count,
+        draining_count=row.draining_count,
+        occupied_count=row.occupied_count,
+        capacity_accounting=row.capacity_accounting,
+        cleanup_pending_count=row.cleanup_pending_count,
     )
 
 

@@ -96,7 +96,7 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 | Состояния | `identity.standing.changed`, `auth.changed`, `availability.changed`, `verification.changed`, `tier.reached/lost`, `state.overridden`, `state.drift` | Реакция на баны, разлогины, карантин |
 | Вход | `identity.login.succeeded/failed`, `identity.challenge.opened/answered/expired`, `identity.diagnostic.started` | Показать оператору, что нужен SMS-код |
 | Секреты | `identity.credentials.updated`, `session.updated`, `secret.revealed` | Аудит |
-| Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.pool.exhausted`, `proxy.checker.failed`, `proxy.disabled`, `proxy.enabled`, `proxy.updated`, `proxy.deleted`, `proxy.secret.revealed` | Мониторинг прокси, аудит |
+| Прокси | `proxy.status.changed`, `proxy.binding.changed`, `proxy.binding.policy_reconciled`, `proxy.group.configured`, `proxy.reservation.*`, `proxy.allocation.*`, `proxy.pool.exhausted`, `proxy.checker.failed`, `proxy.disabled`, `proxy.enabled`, `proxy.updated`, `proxy.deleted`, `proxy.secret.revealed` | Мониторинг прокси, аудит |
 | Пулы | `pool.capacity.low/empty/ok`, `identity.quota.exhausted`, `worker.leases_lost` | Нехватка и восстановление ёмкости, проблемы воркеров |
 
 События аренд и операций (`lease.*`, `operation.*`) и `dispatcher.event.skipped` — журнальные: они видны в
@@ -104,6 +104,26 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 отправляются. Своих типов событий добавить нельзя.
 
 ## Состав `data`
+
+События `proxy.reservation.*` описывают резерв: создание, подтверждение и отмену.
+`proxy.allocation.draining` означает, что постоянная пара или резерв уже сняты, но живой use ещё
+удерживает слот. `proxy.allocation.released` фиксирует физическое освобождение. При отмене
+резерва возможны reservation.released и allocation.draining/released одной командой.
+`proxy.binding.changed` по-прежнему относится только к постоянной паре.
+
+Идентификаторы identity/proxy/lease находятся в envelope; `lease_id` может быть null, если переход
+не относится к конкретному use. `binding_id` в data заполнен для поколения постоянной пары,
+`policy_revision` — revision runtime-сервиса (null для static/admin). Actor этих технических
+переходов — proxy_allocator; человек и его причина сохраняются в сопутствующем аудите команды.
+`reason` перехода — код reserved/confirmed/detached/proxy_unbound/use_closed/expired/orphaned.
+`reservation_seconds` присутствует при выходе из reserved; `expired=true` и задержка cleanup
+относятся к освобождению истёкшего canonical use. Пропавший current row даёт orphaned без выдуманного TTL.
+
+Переходы накапливаются в транзакции и пишутся в outbox после lease/history. Commit и rollback
+приложения охватывают их вместе с ledger/counters, включая внутренний savepoint и using(session).
+Повтор команды без перехода не создаёт новых событий. События резерва внутри одной транзакции
+сохраняют порядок created → confirmed/released; события других частей команды могут стоять
+раньше них. Используйте generation ID, а не соседство событий разных типов, для согласования.
 
 Ключи `data` по типам событий. Ключ из таблицы может отсутствовать в конкретном событии
 (например, `reason` есть только у команд с причиной), но других ключей в `data` нет: таблицу
@@ -169,7 +189,14 @@ for worker in hub.workers:                       # dispatch, maintenance, reconc
 | `pool.capacity.empty` | `available`, `pool`, `threshold` |
 | `pool.capacity.low` | `available`, `pool`, `threshold` |
 | `pool.capacity.ok` | `eligible`, `free`, `pool`, `previous_state` |
-| `proxy.binding.changed` | `from_proxy_id`, `pool`, `reason`, `to_proxy_id` |
+| `proxy.binding.changed` | `allocation_id`, `from_proxy_id`, `pool`, `reason`, `to_proxy_id` |
+| `proxy.binding.policy_reconciled` | `allocation_ids`, `binding_id`, `outcome`, `reason`, `service_revision` |
+| `proxy.group.configured` | `capacity_accounting`, `group`, `previous`, `reason`, `revision` |
+| `proxy.reservation.created` | `allocation_id`, `binding_id`, `cleanup_delay_seconds`, `expired`, `from`, `group`, `policy_revision`, `reason`, `reservation_seconds`, `to` |
+| `proxy.reservation.confirmed` | `allocation_id`, `binding_id`, `cleanup_delay_seconds`, `expired`, `from`, `group`, `policy_revision`, `reason`, `reservation_seconds`, `to` |
+| `proxy.reservation.released` | `allocation_id`, `binding_id`, `cleanup_delay_seconds`, `expired`, `from`, `group`, `policy_revision`, `reason`, `reservation_seconds`, `to` |
+| `proxy.allocation.draining` | `allocation_id`, `binding_id`, `cleanup_delay_seconds`, `expired`, `from`, `group`, `policy_revision`, `reason`, `reservation_seconds`, `to` |
+| `proxy.allocation.released` | `allocation_id`, `binding_id`, `cleanup_delay_seconds`, `expired`, `from`, `group`, `policy_revision`, `reason`, `reservation_seconds`, `to` |
 | `proxy.checker.failed` | `pool`, `proxies`, `reason` |
 | `proxy.deleted` | `host`, `pool`, `port`, `proxy_id`, `unbound` |
 | `proxy.disabled` | `host`, `pool`, `port`, `reason`, `unbound` |

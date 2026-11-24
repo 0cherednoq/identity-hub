@@ -79,6 +79,13 @@ def _specs() -> dict[str, EventSpec]:
         "proxy": [
             ("proxy.status.changed", Severity.INFO),
             ("proxy.binding.changed", Severity.INFO),
+            ("proxy.binding.policy_reconciled", Severity.INFO),
+            ("proxy.group.configured", Severity.INFO),
+            ("proxy.reservation.created", Severity.INFO),
+            ("proxy.reservation.confirmed", Severity.INFO),
+            ("proxy.reservation.released", Severity.INFO),
+            ("proxy.allocation.draining", Severity.INFO),
+            ("proxy.allocation.released", Severity.INFO),
             ("proxy.pool.exhausted", Severity.CRITICAL),
             ("proxy.updated", Severity.INFO),  # сменили логин и пароль или группу
             ("proxy.deleted", Severity.WARNING),
