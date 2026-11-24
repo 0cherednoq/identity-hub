@@ -24,7 +24,7 @@ from identity_hub.crypto import PlaintextPayload, associated_data
 from identity_hub.domain.credentials import is_login_candidate
 from identity_hub.domain.provider_operations import RetryPolicy, safe_error_code
 from identity_hub.domain.redaction import sanitize_text
-from identity_hub.domain.regions import Command, Observation
+from identity_hub.domain.regions import Command, Observation, RegionDecision
 from identity_hub.enums import AuthState, ChangeSource, LeaseUnavailableReason, Lifecycle, Standing
 from identity_hub.errors import (
     Blocker,
@@ -51,6 +51,10 @@ from identity_hub.protocols import (
     LoginFailure,
     ProbeResult,
 )
+from identity_hub.proxy_finalization import accepted as proxy_accepted
+from identity_hub.proxy_finalization import finalize as finalize_proxy
+from identity_hub.proxy_finalization import prepare as prepare_proxy
+from identity_hub.proxy_finalization import projection_proof, with_assignment
 from identity_hub.service import Service
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CandidateQuery, ChallengeRow, LoginRetryRow, ProviderClaim, StoreTx
@@ -466,6 +470,8 @@ class LoginMixin(SpaceBase):
                 self._tx(own=True) as tx,
             ):
                 await lease._check_fencing(tx)
+                await prepare_proxy(tx, identity_id)
+                auth_decision = None
                 actual_revision = await lease._session_revision(tx, slot)
                 if actual_revision != source_revision:
                     raise ConcurrentModification(
@@ -494,7 +500,7 @@ class LoginMixin(SpaceBase):
                         ),
                     )
                     if rejected and slot == DEFAULT_SLOT:
-                        await apply_region_change(
+                        auth_decision = await apply_region_change(
                             self,
                             tx,
                             identity_id,
@@ -511,12 +517,28 @@ class LoginMixin(SpaceBase):
                             ),
                             lease_id=lease.lease_id,
                         )
+                assignment = await finalize_proxy(
+                    self,
+                    tx,
+                    identity_id,
+                    lease=lease,
+                    actor=actor,
+                    reason="session_verification",
+                    proof={("auth", slot): str(AuthState.AUTHENTICATED)}
+                    if outcome is SessionVerificationOutcome.VALID
+                    else projection_proof("auth", DEFAULT_SLOT, auth_decision),
+                    state_accepted=(
+                        outcome in {SessionVerificationOutcome.VALID, SessionVerificationOutcome.INVALID}
+                        and (auth_decision is None or proxy_accepted(auth_decision))
+                    ),
+                    allow_bind=True,
+                )
                 await sync._apply_operation(
                     tx,
                     lease,
                     claim,
                     "succeeded",
-                    result={"outcome": str(outcome)},
+                    result=with_assignment({"outcome": str(outcome)}, assignment),
                 )
             return SessionVerificationResult(
                 identity_id,
@@ -634,22 +656,18 @@ class LoginMixin(SpaceBase):
                 self._tx(own=True) as tx,
             ):
                 await lease._check_fencing(tx)
+                await prepare_proxy(tx, identity_id)
+                auth_decision = None
+                lifecycle_decision = None
                 actual_revision = await lease._session_revision(tx, slot)
                 if actual_revision != source_revision:
                     raise ConcurrentModification(
                         "session", f"{identity_id}/{slot}", source_revision, actual_revision
                     )
-                await sync._apply_operation(
-                    tx,
-                    lease,
-                    claim,
-                    "succeeded",
-                    result={"outcome": str(outcome)},
-                )
                 if outcome is SessionAdoptionOutcome.INVALID:
                     await tx.mark_session_validity(identity_id, slot, rejected=True, code="session_invalid")
                     if slot == DEFAULT_SLOT:
-                        await apply_region_change(
+                        auth_decision = await apply_region_change(
                             self,
                             tx,
                             identity_id,
@@ -689,7 +707,7 @@ class LoginMixin(SpaceBase):
                                 value_fingerprint=default_fingerprint,
                             )
                         await tx.mark_session_validity(identity_id, DEFAULT_SLOT, rejected=False)
-                    await apply_region_change(
+                    auth_decision = await apply_region_change(
                         self,
                         tx,
                         identity_id,
@@ -700,7 +718,7 @@ class LoginMixin(SpaceBase):
                     )
                     final_auth = AuthState.AUTHENTICATED
                     if activate:
-                        await apply_region_change(
+                        lifecycle_decision = await apply_region_change(
                             self,
                             tx,
                             identity_id,
@@ -725,6 +743,30 @@ class LoginMixin(SpaceBase):
                             },
                         ),
                     )
+                assignment = await finalize_proxy(
+                    self,
+                    tx,
+                    identity_id,
+                    lease=lease,
+                    actor=actor,
+                    reason="session_adoption",
+                    proof={
+                        **projection_proof("auth", DEFAULT_SLOT, auth_decision),
+                        **projection_proof("lifecycle", "", lifecycle_decision),
+                    },
+                    state_accepted=(
+                        outcome in {SessionAdoptionOutcome.INVALID, SessionAdoptionOutcome.ADOPTED}
+                        and (auth_decision is None or proxy_accepted(auth_decision))
+                    ),
+                    allow_bind=True,
+                )
+                await sync._apply_operation(
+                    tx,
+                    lease,
+                    claim,
+                    "succeeded",
+                    result=with_assignment({"outcome": str(outcome)}, assignment),
+                )
             return SessionAdoptionResult(
                 identity_id,
                 slot,
@@ -867,18 +909,27 @@ class LoginMixin(SpaceBase):
         known = {service.name for service in await self.hub._active_services()}
         for challenge in expired:
             async with self._tx(own=True) as tx:
+                await prepare_proxy(tx, challenge.identity_id)
                 if not await tx.resolve_challenge(challenge.id):
                     continue
                 identity = await self._identity(tx, challenge.identity_id)
                 # сервис убран из кода: вопрос закрывается, состояние аккаунта не трогаем (R2-F06)
                 if identity.auth_state == AuthState.CHALLENGE and identity.service in known:
-                    await apply_region_change(
+                    decision = await apply_region_change(
                         self,
                         tx,
                         identity.id,
                         "auth",
                         DEFAULT_SLOT,
                         Command(AuthState.NO_SESSION, actor="timer"),
+                    )
+                    await finalize_proxy(
+                        self,
+                        tx,
+                        identity.id,
+                        actor="timer",
+                        reason="challenge_expired",
+                        state_accepted=proxy_accepted(decision),
                     )
                 await self._emit(
                     tx,
@@ -900,7 +951,7 @@ class LoginMixin(SpaceBase):
         count = 0
         for identity_id, since in stuck:
             async with self._tx(own=True) as tx:
-                await tx.lock_identities([identity_id])
+                await prepare_proxy(tx, identity_id)
                 identity = await tx.get_identity(identity_id)
                 if identity is None or identity.auth_state != AuthState.LOGGING_IN:
                     continue
@@ -919,8 +970,16 @@ class LoginMixin(SpaceBase):
                     continue
                 credentials = await _login_credentials(tx, identity_id)
                 await _schedule_login_retry(tx, identity_id, credentials.candidates, retryable=True)
-                await apply_region_change(
+                decision = await apply_region_change(
                     self, tx, identity_id, "auth", DEFAULT_SLOT, Command(AuthState.NO_SESSION, actor="timer")
+                )
+                await finalize_proxy(
+                    self,
+                    tx,
+                    identity_id,
+                    actor="timer",
+                    reason="login_abandoned",
+                    state_accepted=proxy_accepted(decision),
                 )
                 await self._emit(
                     tx,
@@ -1194,10 +1253,11 @@ class LoginMixin(SpaceBase):
             self._tx(own=True) as tx,
         ):
             await lease._check_fencing(tx)
-            if not observe:
-                await self._apply_login(tx, lease, claim, outcome, result=result, error_code=error_code)
+            await prepare_proxy(tx, lease.identity_id)
+            fault_decisions: list[RegionDecision] = []
+            proof: dict[tuple[str, str], str] = {}
             if fault is not None:
-                await apply_fault_effects(lease, tx, fault)
+                await apply_fault_effects(lease, tx, fault, decisions=fault_decisions, projection_facts=proof)
             if session is not None:
                 await lease._write_session(
                     tx,
@@ -1239,9 +1299,28 @@ class LoginMixin(SpaceBase):
             decision = await apply_region_change(
                 self, tx, lease.identity_id, "auth", DEFAULT_SLOT, change, lease_id=lease.lease_id
             )
-            if observe:  # в result операции попадает исход auth (AR3.3: повтор запроса читает его)
-                stored = None if result is None else {**result, "applied": {"auth": str(decision.outcome)}}
-                await self._apply_login(tx, lease, claim, outcome, result=stored, error_code=error_code)
+            domain_result = (
+                observe or outcome == "succeeded" or fault is not None or auth_retryable is not None
+            )
+            assignment = await finalize_proxy(
+                self,
+                tx,
+                lease.identity_id,
+                lease=lease,
+                actor=lease.holder,
+                reason="auth_result",
+                proof={**proof, **projection_proof("auth", DEFAULT_SLOT, decision)},
+                state_accepted=claim is not None
+                and domain_result
+                and (proxy_accepted(decision) or any(proxy_accepted(item) for item in fault_decisions)),
+                allow_bind=True,
+            )
+            stored = result
+            if observe and result is not None:
+                stored = {**result, "applied": {"auth": str(decision.outcome)}}
+            await self._apply_login(
+                tx, lease, claim, outcome, result=with_assignment(stored, assignment), error_code=error_code
+            )
             if event is not None:
                 await self._emit(
                     tx,
@@ -1280,9 +1359,7 @@ class LoginMixin(SpaceBase):
             self._tx(own=True) as tx,
         ):
             await lease._check_fencing(tx)
-            # попытка входа завершилась вопросом платформы: операция succeeded, исход — challenged
-            if not observe:
-                await self._apply_login(tx, lease, claim, "succeeded", result={"outcome": "challenged"})
+            await prepare_proxy(tx, lease.identity_id)
             await self._apply_credential_marks(tx, lease, credential_marks or [], login_credentials)
             await tx.save_login_retry(lease.identity_id, None)
             if previous is not None:
@@ -1308,6 +1385,7 @@ class LoginMixin(SpaceBase):
             decision = await apply_region_change(
                 self, tx, lease.identity_id, "auth", DEFAULT_SLOT, asked_change, lease_id=lease.lease_id
             )
+            stored: dict[str, Any] = {"outcome": "challenged"}
             if observe:
                 stored = {
                     "outcome": "challenged",
@@ -1315,7 +1393,17 @@ class LoginMixin(SpaceBase):
                     "applied": {"auth": str(decision.outcome)},
                     **(result_extra or {}),
                 }
-                await self._apply_login(tx, lease, claim, "succeeded", result=stored)
+            assignment = await finalize_proxy(
+                self,
+                tx,
+                lease.identity_id,
+                lease=lease,
+                actor=lease.holder,
+                reason="auth_challenge",
+                state_accepted=proxy_accepted(decision),
+                allow_bind=claim is not None,
+            )
+            await self._apply_login(tx, lease, claim, "succeeded", result=with_assignment(stored, assignment))
             await self._emit(
                 tx,
                 EventDraft(

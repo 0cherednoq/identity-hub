@@ -19,7 +19,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from identity_hub._space import logger
+from identity_hub._ids import new_id
+from identity_hub._space import logger, require_actor_and_reason
 from identity_hub.context import LeaseContext, _current
 from identity_hub.crypto import associated_data, credential_associated_data
 from identity_hub.diagnostics import DiagnosticPolicy
@@ -41,6 +42,7 @@ from identity_hub.errors import (
     LeaseLost,
     LeaseRevoked,
     LeaseUnavailable,
+    ProxyAssignmentConflict,
     RevisionConflict,
     StaleFencing,
     ValidationFailed,
@@ -50,22 +52,45 @@ from identity_hub.events import EventDraft
 from identity_hub.formats.proxy import ProxyUrl
 from identity_hub.metrics import record_metric
 from identity_hub.protocols import CredentialCandidate, TCreds, TSession
-from identity_hub.service import ProxyDownPolicy
+from identity_hub.proxy_allocator import ProxyCapacityChanged
+from identity_hub.proxy_assignment import ProxyAssignment
+from identity_hub.proxy_issuance import (
+    ProxyCandidateBlocked,
+    ProxyIssuance,
+    assignment_fingerprint,
+)
+from identity_hub.proxy_issuance import (
+    issue as issue_proxy,
+)
+from identity_hub.proxy_issuance import (
+    managed as managed_proxy_group,
+)
+from identity_hub.proxy_issuance import (
+    request_base as proxy_request_base,
+)
+from identity_hub.proxy_issuance import (
+    validate_replay as validate_proxy_replay,
+)
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import (
     CandidateQuery,
+    IdempotencyClaim,
     IdempotencyRequest,
     IdentityRow,
     LeaseCounters,
     LeaseFence,
     LeaseRenewal,
     LeaseRow,
+    ProxyAllocationRow,
+    ProxyGroupRow,
     ProxyRow,
     StoreTx,
     expiry_reason,
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from identity_hub.operation import Operation
     from identity_hub.pool import Pool
     from identity_hub.service import Service
@@ -112,9 +137,11 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         row: LeaseRow,
         identity: IdentityRow,
         proxy: ProxyRow | None = None,
+        allocation: ProxyAllocationRow | None = None,
     ) -> None:
         self.pool = pool
         self.proxy_info = proxy
+        self._proxy_allocation = allocation
         self._row = row
         self._token = row.token  # приватный: только для продления и освобождения
         self.identity = identity
@@ -199,6 +226,54 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
     @property
     def proxy_id(self) -> UUID | None:
         return self._row.proxy_id
+
+    @property
+    def proxy_allocation_id(self) -> UUID | None:
+        return self._row.proxy_allocation_id
+
+    @property
+    def proxy_assignment_state(self) -> str | None:
+        """Снимок назначения на момент выдачи/подтверждения; не live-запрос к БД."""
+        return self._proxy_allocation.state if self._proxy_allocation else None
+
+    async def confirm_proxy(self, *, reason: str) -> ProxyAssignment:
+        """Подтвердить proxy текущей аренды по её fence и правилам; повтор не занимает второе место."""
+        return await self._confirm_proxy(reason=reason)
+
+    def using(self, session: AsyncSession) -> LeaseProxyConfirmation[TCreds, TSession]:
+        """Связать только подтверждение с транзакцией приложения; результат не меняет snapshot Lease."""
+        if session is None:
+            raise ValidationFailed("confirm_proxy.using requires session")
+        return LeaseProxyConfirmation(self, session)
+
+    async def _confirm_proxy(self, *, reason: str, session: AsyncSession | None = None) -> ProxyAssignment:
+        from identity_hub.proxy_confirmation import confirm_assignment
+
+        self.check()
+        actor, reason = require_actor_and_reason(self.holder, reason, "подтверждение proxy")
+        allocation_id = self.proxy_allocation_id
+        if allocation_id is None:
+            raise ValidationFailed("lease has no managed proxy allocation")
+        space = self.pool.space
+        try:
+            async with space.hub._store.transaction(await space.ref(), session=session) as tx:
+                row = await confirm_assignment(
+                    space, tx, self.pool, self.fence, allocation_id, actor=actor, reason=reason
+                )
+        except ProxyAssignmentConflict as exc:
+            record_metric(
+                space.hub.metrics,
+                "counter",
+                "identity_hub_failures_total",
+                space=space.slug,
+                service=self.pool.service.name,
+                scope="proxy_confirm",
+                reason=exc.reason,
+            )
+            raise
+        if session is None:
+            self._proxy_allocation = row  # Только после успешного commit собственной транзакции.
+        return ProxyAssignment.from_row(row)
 
     @property
     def proxy(self) -> ProxyUrl | None:
@@ -916,10 +991,13 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
 
     async def mark_authenticated(self, slot: str = DEFAULT_SLOT) -> None:
         """Вход выполнен пользователем сам (без Authenticator, FR-5.6): auth → authenticated."""
+        from identity_hub.proxy_finalization import accepted, finalize, prepare, projection_proof
+
         self.check()
         async with self.pool.space._tx(own=True) as tx:
             await self._check_fencing(tx)
-            await apply_region_change(
+            await prepare(tx, self.identity_id)
+            decision = await apply_region_change(
                 self.pool.space,
                 tx,
                 self.identity_id,
@@ -927,6 +1005,17 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
                 slot,
                 Command(AuthState.AUTHENTICATED, actor=self.holder),
                 lease_id=self.lease_id,
+            )
+            await finalize(
+                self.pool.space,
+                tx,
+                self.identity_id,
+                lease=self,
+                actor=self.holder,
+                reason="mark_authenticated",
+                proof=projection_proof("auth", slot, decision),
+                state_accepted=accepted(decision),
+                allow_bind=True,
             )
 
     @property
@@ -1027,7 +1116,7 @@ class Lease(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpar
         self.pool.space.hub._live_leases.pop(self.lease_id, None)
         if outcome == "revoked":
             self._revoked_on_release = True
-        if self.pool._capacity_state != "ok":
+        if (self.pool._capacity_owner or self.pool)._capacity_state != "ok":
             try:
                 async with asyncio.timeout(RELEASE_TIMEOUT):
                     await self.pool._check_capacity()
@@ -1079,6 +1168,19 @@ def _lost_error(reason: str | None) -> type[LeaseLost]:
     if reason == LeaseEndReason.REVOKED:
         return LeaseRevoked
     return LeaseExpired if reason == LeaseEndReason.EXPIRED else LeaseLost
+
+
+class LeaseProxyConfirmation(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve API
+    """Подтверждение proxy в пользовательской сессии; commit принадлежит приложению."""
+
+    __slots__ = ("_lease", "_session")
+
+    def __init__(self, lease: Lease[TCreds, TSession], session: AsyncSession) -> None:
+        self._lease = lease
+        self._session = session
+
+    async def confirm_proxy(self, *, reason: str) -> ProxyAssignment:
+        return await self._lease._confirm_proxy(reason=reason, session=self._session)
 
 
 @contextlib.asynccontextmanager
@@ -1169,9 +1271,11 @@ async def acquire(
     """
     # Resolve at the async boundary so a long-lived Pool observes a runtime
     # definition being disabled or revised by another process.
-    pool.service = cast(
-        "Service[TCreds, TSession]",
-        await pool.space.hub.resolve_service(pool.service.name),
+    pool = pool._for_service(
+        cast(
+            "Service[TCreds, TSession]",
+            await pool.space.hub.resolve_service(pool.service.name),
+        )
     )
     if idempotency_key is not None and pool.shared:
         raise ValidationFailed("idempotency_key не поддерживается для shared-аренды")
@@ -1210,30 +1314,52 @@ async def acquire(
     deadline = clock.monotonic() + wait_seconds
     delay = 0.05
     exhausted_reported = False
+    recovery_attempted = False
+    proxy_selection_retries = 0
     reserve_blocked = False
     requested = query  # без кандидатов, пропущенных из-за гонки: они заняты, а не недопустимы
 
     while True:
         if candidate_budget is not None and candidate_budget.remaining <= 0:
             raise LeaseUnavailable(f"пул {pool.name}: исчерпан бюджет отбора")
+        recovery_candidate: UUID | None = None
         try:
             async with space._tx(own=True) as tx:
+                policy = pool.proxy_policy
+                primary = await tx.proxy_group(policy.group) if policy else None
+                strict = managed_proxy_group(primary)
+                if policy is not None and policy.binding is not None and not strict:
+                    raise ValidationFailed("proxy binding policy requires allocations accounting")
+                if strict and pool.shared:
+                    raise ValidationFailed("allocations accounting requires exclusive leases")
+                key_claim = None
                 if idempotency_key is not None:
                     # Ключ принадлежит одной команде (пул + сервис + holder) и блокируется первым:
                     # параллельный повтор ждёт здесь и затем получает уже выданную аренду.
                     key_namespace = namespace(tx.space.id, LEASE_FAMILY)
-                    await tx.claim_idempotency_key(
+                    key_payload: dict[str, Any] = {
+                        "pool": pool.name,
+                        "service": pool.service.name,
+                        "holder": pool.holder,
+                    }
+                    if strict:
+                        key_payload["proxy_request"] = proxy_request_base(pool, primary)
+                    key_claim = await tx.claim_idempotency_key(
                         IdempotencyRequest(
                             namespace=key_namespace,
                             key=idempotency_key,
                             operation=LEASE_FAMILY,
-                            fingerprint=fingerprint(
-                                LEASE_FAMILY,
-                                {"pool": pool.name, "service": pool.service.name, "holder": pool.holder},
-                            ),
+                            fingerprint=fingerprint(LEASE_FAMILY, key_payload),
                             ttl=space.hub.retention.operation_keys,
+                            allow_legacy=not strict,
                         )
                     )
+                    previous_request = _proxy_key_request(key_claim)
+                    if not key_claim.claimed:
+                        if isinstance(previous_request, dict):
+                            await validate_proxy_replay(tx, pool, primary, previous_request)
+                        elif strict:
+                            raise IdempotencyConflict(LEASE_FAMILY)
                     existing = await tx.find_live_lease(idempotency_key)
                     if existing is not None:
                         identity = await space._identity(tx, existing.identity_id)
@@ -1244,14 +1370,31 @@ async def acquire(
                             or identity.service != pool.service.name
                         ):
                             raise IdempotencyConflict(LEASE_FAMILY)
-                        policy = pool.proxy_policy
-                        proxy = (
-                            await tx.get_binding(existing.identity_id) if policy and policy.sticky else None
+                        await tx.check_fence(
+                            LeaseFence(
+                                existing.identity_id, existing.lease_id, existing.token, existing.fencing
+                            )
                         )
-                        if proxy is not None:
-                            existing = replace(existing, proxy_id=proxy.id)
+                        if existing.proxy_request is not None:
+                            if not key_claim.claimed and (
+                                previous_request != existing.proxy_request
+                                or (key_claim.result or {}).get("lease_id") != str(existing.lease_id)
+                                or (key_claim.result or {}).get("identity_id") != str(existing.identity_id)
+                            ):
+                                raise IdempotencyConflict(LEASE_FAMILY)
+                            await validate_proxy_replay(tx, pool, primary, existing.proxy_request)
+                        elif strict or existing.proxy_allocation_id is not None:
+                            raise IdempotencyConflict(LEASE_FAMILY)
+                        proxy = await tx.get_proxy(existing.proxy_id) if existing.proxy_id else None
+                        allocation = (
+                            await tx.proxy_allocation(existing.proxy_allocation_id)
+                            if existing.proxy_allocation_id
+                            else None
+                        )
+                        if key_claim.claimed:
+                            await _complete_lease_key(tx, idempotency_key, existing)
                         _observe_acquisition(pool, started, wait_seconds, "reused")
-                        return Lease(pool, existing, identity, proxy)
+                        return Lease(pool, existing, identity, proxy, allocation)
                 effective_reserve = await pool._effective_reserve(tx, query, reserve)
                 candidate, blocked = await tx.pick_candidate_reserving(query, effective_reserve)
                 reserve_blocked |= blocked
@@ -1259,9 +1402,19 @@ async def acquire(
                     if candidate_budget is not None:
                         candidate_budget.remaining -= 1
                         candidate_budget.inspected.add(candidate.id)
+                        recovery_candidate = candidate.id
                     if query.automatic_login and not await tx.login_candidate_eligible(candidate.id):
                         raise _SkipCandidate(candidate.id)
-                    proxy, drafts = await _resolve_proxy(pool, tx, candidate)
+                    lease_id = new_id()
+                    issuance = await _resolve_proxy(pool, tx, candidate, lease_id, primary)
+                    proxy, drafts = issuance.proxy, issuance.drafts
+                    if (
+                        issuance.allocation is not None
+                        and key_claim is not None
+                        and (not key_claim.claimed or (not strict and key_claim.attempt > 1))
+                        and _proxy_key_request(key_claim) is None
+                    ):
+                        raise IdempotencyConflict(LEASE_FAMILY)
                     try:
                         row, reclaimed = await tx.acquire_lease(
                             candidate,
@@ -1272,12 +1425,48 @@ async def acquire(
                             shared=pool.shared,
                             proxy_id=proxy.id if proxy else None,
                             options=options,
+                            lease_id=lease_id,
                         )
                     except LeaseUnavailable:
                         # JOIN с ih_leases читает снимок начала SELECT. Под высокой конкуренцией
                         # конкурент может успеть закоммитить аренду после снимка, но до INSERT;
                         # fencing/уникальный ключ сохраняют безопасность, а выбор нужно повторить.
                         raise _SkipCandidate(candidate.id) from None
+                    if issuance.allocation is not None:
+                        from identity_hub.proxy_allocator import attach_use, confirm
+
+                        allocation = issuance.allocation
+                        fence = LeaseFence(row.identity_id, row.lease_id, row.token, row.fencing)
+                        await attach_use(tx, fence, allocation.id, request=issuance.request)
+                        assert policy is not None
+                        if policy.sticky and (policy.binding is None or policy.binding.mode == "immediate"):
+                            previous = await tx.proxy_bindings(identity_id=candidate.id)
+                            allocation, changed = await confirm(
+                                tx,
+                                fence,
+                                allocation.id,
+                                policy_fingerprint=assignment_fingerprint(issuance.request or {}),
+                            )
+                            if changed:
+                                drafts.append(
+                                    EventDraft(
+                                        "proxy.binding.changed",
+                                        actor=pool.holder,
+                                        service=pool.service.name,
+                                        identity_id=candidate.id,
+                                        proxy_id=allocation.proxy_id,
+                                        data={
+                                            "from_proxy_id": str(previous[0].proxy_id) if previous else None,
+                                            "to_proxy_id": str(allocation.proxy_id),
+                                            "reason": "initial" if not previous else "rebind",
+                                            "pool": proxy.pool if proxy else policy.group,
+                                        },
+                                    )
+                                )
+                        issuance.allocation = allocation
+                        refreshed = await tx.current_lease(candidate.id)
+                        assert refreshed is not None
+                        row = refreshed
                     if reclaimed is not None:
                         drafts.append(
                             _lease_event(
@@ -1295,16 +1484,9 @@ async def acquire(
                     drafts.append(_lease_event("lease.acquired", pool, row, {"shared": pool.shared}))
                     await space._emit(tx, *drafts)
                     if idempotency_key is not None:
-                        await tx.complete_idempotency_key(
-                            namespace(tx.space.id, LEASE_FAMILY),
-                            idempotency_key,
-                            "succeeded",
-                            result_type=LEASE_FAMILY,
-                            result_version=1,
-                            result={"lease_id": str(row.lease_id), "identity_id": str(row.identity_id)},
-                        )
+                        await _complete_lease_key(tx, idempotency_key, row)
                     _observe_acquisition(pool, started, wait_seconds, "acquired")
-                    return Lease(pool, row, candidate, proxy)
+                    return Lease(pool, row, candidate, proxy, issuance.allocation)
                 if not pool.shared:
                     result = await tx.request_yield(
                         requested,
@@ -1318,7 +1500,23 @@ async def acquire(
         except _SkipCandidate as skip:
             query = replace(query, exclude=query.exclude | {skip.identity_id})
             continue
-        except _PoolExhausted:
+        except (_PoolExhausted, ProxyCapacityChanged) as exhausted:
+            if isinstance(exhausted, ProxyCapacityChanged) and proxy_selection_retries < 20:
+                proxy_selection_retries += 1
+                if candidate_budget is not None and recovery_candidate is not None:
+                    candidate_budget.remaining += 1
+                    candidate_budget.inspected.discard(recovery_candidate)
+                continue  # Новая TX перечитывает свободные proxy без обратного захвата locks.
+            if not recovery_attempted and pool.proxy_policy is not None:
+                recovery_attempted = True
+                recovered = await space.hub._proxy_recovery.run_and_repair(
+                    space, group=pool.proxy_policy.group, limit=16, managed_only=True
+                )
+                if any(recovered):
+                    if candidate_budget is not None and recovery_candidate is not None:
+                        candidate_budget.remaining += 1
+                        candidate_budget.inspected.discard(recovery_candidate)
+                    continue  # Основная TX откатилась до захвата чужих identity/proxy.
             if not exhausted_reported:  # одно событие на вызов, а не на каждую итерацию ожидания
                 exhausted_reported = True
                 await _pool_exhausted(pool)
@@ -1423,47 +1621,53 @@ def _observe_acquisition(pool: Pool[Any, Any], started: float, wait_seconds: flo
         )
 
 
+def _proxy_key_request(claim: IdempotencyClaim) -> dict[str, Any] | None:
+    if claim.result_type != LEASE_FAMILY or claim.result_version != 2:
+        return None
+    request = (claim.result or {}).get("proxy_request")
+    return request if isinstance(request, dict) else None
+
+
+async def _complete_lease_key(tx: StoreTx, key: str, row: LeaseRow) -> None:
+    result: dict[str, Any] = {"lease_id": str(row.lease_id), "identity_id": str(row.identity_id)}
+    if row.proxy_request is not None:
+        result["proxy_request"] = row.proxy_request
+    await tx.complete_idempotency_key(
+        namespace(tx.space.id, LEASE_FAMILY),
+        key,
+        "succeeded",
+        result_type=LEASE_FAMILY,
+        result_version=2 if row.proxy_request is not None else 1,
+        result=result,
+    )
+
+
 async def _resolve_proxy(
-    pool: Pool[Any, Any], tx: StoreTx, candidate: IdentityRow
-) -> tuple[ProxyRow | None, list[EventDraft]]:
-    """Прокси аренды по политике сервиса/пула (FR-8.2, 8.3). В той же транзакции, что и захват."""
-    policy = pool.proxy_policy
-    if policy is None:
-        return None, []
-    current = await tx.get_binding(candidate.id) if policy.sticky else None
-    if current is not None and current.issuable:
-        return current, []
-    # выключение оператором — не поломка: привязка сохраняется при любой политике (D-224)
-    if current is not None and (not current.enabled or policy.on_proxy_down is ProxyDownPolicy.WAIT):
-        raise _SkipCandidate(candidate.id)  # прокси упал или выключен между выборкой и захватом
-    chosen = await tx.choose_proxy(policy.group, policy.max_identities, claim=policy.sticky)
-    if chosen is None:
-        raise _PoolExhausted
-    drafts: list[EventDraft] = []
-    if policy.sticky:
-        await tx.bind_proxy(candidate.id, chosen.id, current.id if current else None)
-        drafts.append(
-            EventDraft(
-                "proxy.binding.changed",
-                actor=pool.holder,
-                service=pool.service.name,
-                identity_id=candidate.id,
-                proxy_id=chosen.id,
-                data={
-                    "from_proxy_id": str(current.id) if current else None,
-                    "to_proxy_id": str(chosen.id),
-                    "reason": "rebind" if current else "initial",
-                    "pool": policy.group,
-                },
-            )
-        )
-    return chosen, drafts
+    pool: Pool[Any, Any], tx: StoreTx, candidate: IdentityRow, lease_id: UUID, primary: ProxyGroupRow | None
+) -> ProxyIssuance:
+    try:
+        return await issue_proxy(tx, pool, candidate, lease_id, primary)
+    except ProxyCandidateBlocked:
+        raise _SkipCandidate(candidate.id) from None
+    except ProxyCapacityChanged:
+        raise
+    except LeaseUnavailable:
+        raise _PoolExhausted from None
 
 
 async def _pool_exhausted(pool: Pool[Any, Any]) -> None:
     policy = pool.proxy_policy
     assert policy is not None
     hub = pool.space.hub
+    record_metric(
+        hub.metrics,
+        "counter",
+        "identity_hub_failures_total",
+        space=pool.space.slug,
+        service=pool.service.name,
+        scope="proxy_acquire",
+        reason="no_proxy",
+    )
     # событие внешнее и critical: каждый ждущий воркер не должен слать его в вебхуки и Telegram
     key = (pool.space.slug, pool.name, policy.group)
     now = hub.clock.monotonic()

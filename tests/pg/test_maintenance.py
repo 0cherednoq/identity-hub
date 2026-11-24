@@ -211,7 +211,10 @@ async def test_lease_sweeper_does_not_revisit_released_leases(
     async with sessionmaker() as session:
         index = (
             await session.execute(
-                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_ih_lease_history_open_space'")
+                text(
+                    "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    "AND indexname = 'ix_ih_lease_history_open_space'"
+                )
             )
         ).scalar_one()
     assert "space_id, lease_id" in index and "released_at IS NULL" in index

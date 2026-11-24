@@ -31,3 +31,11 @@ class SpaceMaintenance(Namespace):
     async def reindex_search(self, service: str, *, batch_size: int = 500) -> int:
         """Пересчитать search_text после изменения searchable-полей сервиса (FR-11.8)."""
         return await self._space._reindex_search(service, batch_size=batch_size)
+
+    async def cleanup_proxy_allocations(self, *, limit: int = 100, group: str | None = None) -> int:
+        """По limit ledger/proxy/history в трёх своих TX, без ожидания занятых строк."""
+        closed, _ = await self._space.hub._proxy_recovery.run_and_repair(
+            self._space, limit=limit, group=group
+        )
+        await self._space.hub._proxy_recovery.close_orphan_history(self._space, limit=limit, group=group)
+        return closed

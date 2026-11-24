@@ -11,7 +11,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -22,7 +22,7 @@ from identity_hub.domain.credentials import is_login_candidate
 from identity_hub.domain.regions import RegionState
 from identity_hub.enums import LeaseEndReason
 from identity_hub.errors import SecretConfigurationError
-from identity_hub.events import Event, EventDraft
+from identity_hub.events import Event, EventDraft, scrub
 from identity_hub.rollups import BucketSize, RollupDelta, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame
 
@@ -87,8 +87,11 @@ __all__ = [
     "OverviewServiceRow",
     "OverviewSnapshot",
     "ProviderOperationRow",
+    "ProxyAllocationRow",
     "ProxyBindingHistoryRow",
+    "ProxyBindingRow",
     "ProxyBoundIdentityRow",
+    "ProxyGroupRow",
     "ProxyPoolCapacityRow",
     "ProxyReadRow",
     "ProxyRow",
@@ -511,6 +514,8 @@ class LeaseRow:
     priority: int = 0
     yield_requested_at: datetime | None = None
     yield_requested_priority: int | None = None
+    proxy_allocation_id: UUID | None = None
+    proxy_request: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -678,6 +683,7 @@ class IdempotencyRequest:
     # команда с секретами (D-208): ключ отпечатков и отпечатки той же команды прежними ключами
     fingerprint_key_id: str | None = None
     alternates: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    allow_legacy: bool = True
 
     def fingerprint_for(self, key_id: str | None) -> str:
         """Отпечаток этой команды ключом записи; нет ключа у живой записи — `SecretConfigurationError`."""
@@ -764,6 +770,9 @@ class ProxyRow:
     disabled_reason: str | None = None
     disabled_by: str | None = None
     disabled_at: datetime | None = None
+    reserved_count: int = 0
+    draining_count: int = 0
+    bound_count: int = 0
 
     @property
     def issuable(self) -> bool:
@@ -797,6 +806,50 @@ class ProxyReadRow:
     disabled_reason: str | None = None
     disabled_by: str | None = None
     disabled_at: datetime | None = None
+    reserved_count: int = 0
+    draining_count: int = 0
+    capacity_accounting: str = "bindings"
+    cleanup_pending_count: int = 0
+
+    @property
+    def occupied_count(self) -> int:
+        return self.bound_count + self.reserved_count + self.draining_count
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyGroupRow:
+    space_id: UUID
+    name: str
+    capacity_accounting: str = "bindings"
+    revision: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyAllocationRow:
+    """Назначение занимает одно место; lease token здесь не хранится."""
+
+    id: UUID
+    space_id: UUID
+    identity_id: UUID
+    proxy_id: UUID
+    state: str
+    created_at: datetime
+    updated_at: datetime
+    owner_lease_id: UUID | None = None
+    expected_binding_id: UUID | None = None
+    policy_fingerprint: str | None = None
+    ended_at: datetime | None = None
+    reason: str | None = None
+    policy: dict[str, Any] | None = None
+    expected_proxy_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyBindingRow:
+    identity_id: UUID
+    proxy_id: UUID
+    bound_at: datetime
+    allocation_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -833,6 +886,14 @@ class ProxyPoolCapacityRow:
     bound_count: int
     in_lease_count: int
     disabled: int = 0  # выключено оператором; статусы считаются по всем прокси группы
+    reserved_count: int = 0
+    draining_count: int = 0
+    capacity_accounting: str = "bindings"
+    cleanup_pending_count: int = 0
+
+    @property
+    def occupied_count(self) -> int:
+        return self.bound_count + self.reserved_count + self.draining_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -1041,6 +1102,8 @@ class LeaseHistoryRow:
     ref: str | None = None
     hold_deadline: datetime | None = None
     priority: int = 0
+    proxy_allocation_id: UUID | None = None
+    proxy_request: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1273,6 +1336,16 @@ class StoreTx(ABC):
     """Единица работы в рамках одного пространства (своя транзакция или savepoint пользователя)."""
 
     space: SpaceRef
+    _deferred_events: list[EventDraft]
+
+    def defer_events(self, drafts: Sequence[EventDraft]) -> None:
+        """Внутренние безопасные события записываются после lease/history, перед окончанием TX."""
+        self._deferred_events.extend(replace(draft, data=scrub(draft.data)) for draft in drafts)
+
+    async def flush_deferred_events(self) -> None:
+        if self._deferred_events:
+            await self.emit(self._deferred_events)
+            self._deferred_events.clear()
 
     @abstractmethod
     async def now(self) -> datetime:
@@ -1598,11 +1671,13 @@ class StoreTx(ABC):
         shared: bool,
         proxy_id: UUID | None = None,
         options: LeaseOptions = NO_LEASE_OPTIONS,
+        lease_id: UUID | None = None,
     ) -> tuple[LeaseRow, LeaseRow | None]:
         """Захватить аренду заблокированного кандидата: fencing + 1, ih_leases, строка истории (G-4.2).
 
         Истёкшая аренда перезаписывается, её история закрывается как `expired` временем `expires_at`
         (FR-6.8). Возвращает (новая аренда, перезахваченная истёкшая или None).
+        `lease_id` позволяет создать резерв перед владельцем в этой же транзакции (PA2.1).
         """
 
     @abstractmethod
@@ -1749,6 +1824,105 @@ class StoreTx(ABC):
     # --------------------------------------------------------- прокси (P5.1)
 
     @abstractmethod
+    async def proxy_group(self, name: str) -> ProxyGroupRow | None: ...
+
+    @abstractmethod
+    async def proxy_store_group(self, row: ProxyGroupRow) -> None: ...
+
+    @abstractmethod
+    async def proxy_group_proxies(self, group: str) -> list[ProxyRow]: ...
+
+    @abstractmethod
+    async def proxy_lock_rows(self, ids: Sequence[UUID]) -> None:
+        """Блокировки proxy в порядке ID, после всех затрагиваемых identity."""
+
+    @abstractmethod
+    async def proxy_bindings(
+        self, *, identity_id: UUID | None = None, proxy_id: UUID | None = None, group: str | None = None
+    ) -> list[ProxyBindingRow]: ...
+
+    @abstractmethod
+    async def proxy_store_binding(self, identity_id: UUID, allocation: ProxyAllocationRow | None) -> None:
+        """Только запись отношения; счётчики изменяет общий allocator."""
+
+    @abstractmethod
+    async def proxy_allocation(self, allocation_id: UUID) -> ProxyAllocationRow | None: ...
+
+    @abstractmethod
+    async def proxy_allocations(
+        self,
+        *,
+        identity_id: UUID | None = None,
+        proxy_id: UUID | None = None,
+        include_released: bool = False,
+        limit: int | None = None,
+    ) -> list[ProxyAllocationRow]: ...
+
+    @abstractmethod
+    async def proxy_cleanup_page(
+        self, limit: int, *, after: UUID | None = None, until: UUID | None = None
+    ) -> tuple[list[ProxyAllocationRow], UUID | None]:
+        """Не больше limit pending ledger по ID; until фиксирует верхнюю границу цикла."""
+
+    @abstractmethod
+    async def proxy_cleanup_lock_rows(self, rows: Sequence[ProxyAllocationRow]) -> set[UUID]:
+        """SKIP LOCKED только заданной пачки: identity по ID, затем proxy. Вернуть allocation IDs."""
+
+    @abstractmethod
+    async def proxy_history_page(
+        self, limit: int, *, after: UUID | None = None, until: UUID | None = None
+    ) -> tuple[list[LeaseHistoryRow], UUID | None]:
+        """Не больше limit открытых history по lease ID; managed use фильтруется после discovery."""
+
+    @abstractmethod
+    async def proxy_close_orphan_history(
+        self, rows: Sequence[LeaseHistoryRow]
+    ) -> list[tuple[LeaseHistoryRow, bool]]:
+        """Identity → history SKIP LOCKED; закрыть лишь утратившие canonical generation managed uses.
+
+        Proxy/ledger/counters не меняются. Наличие даже expired canonical row той же аренды
+        оставляет её обычному expire; история не является источником TTL.
+        Bool отмечает удерживаемую identity-lock: отсутствующую identity событие не обновляет.
+        """
+
+    @abstractmethod
+    async def proxy_counter_page(
+        self, limit: int, *, after: UUID | None = None, until: UUID | None = None
+    ) -> tuple[list[tuple[UUID, str]], UUID | None]:
+        """Не больше limit пар (proxy ID, group) по ID; фиксированная граница цикла."""
+
+    @abstractmethod
+    async def proxy_lock_rows_skip_locked(self, ids: Sequence[UUID]) -> set[UUID]:
+        """Захватить только заданные proxy по ID без ожидания занятых строк."""
+
+    @abstractmethod
+    async def proxy_store_allocation(self, row: ProxyAllocationRow) -> None:
+        """Внутренняя запись ledger; caller держит identity/proxy и обновляет счётчики атомарно."""
+
+    @abstractmethod
+    async def proxy_set_counters(
+        self, proxy_id: UUID, *, bound: int, reserved: int, draining: int
+    ) -> None: ...
+
+    @abstractmethod
+    async def proxy_allocation_in_use(
+        self, allocation_id: UUID, *, excluding_lease_id: UUID | None = None
+    ) -> bool: ...
+
+    @abstractmethod
+    async def proxy_use_lease(self, allocation: ProxyAllocationRow) -> LeaseRow | None:
+        """Canonical use этой генерации, включая истёкший; только для диагностики expiry."""
+
+    @abstractmethod
+    async def proxy_attach_lease(
+        self, fence: LeaseFence, allocation: ProxyAllocationRow, *, request: dict[str, Any] | None = None
+    ) -> None: ...
+
+    @abstractmethod
+    async def proxy_has_live_leases(self) -> bool:
+        """Консервативный drain пространства, включая незакрытые SHARED-аренды."""
+
+    @abstractmethod
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
         """(id, создан). Дубликат по fingerprint или `aliases` в пространстве — существующий id (FR-8.1)."""
 
@@ -1807,7 +1981,9 @@ class StoreTx(ABC):
         """Удалить прокси вместе с привязками; вернуть id отвязанных аккаунтов. `None` — прокси нет."""
 
     @abstractmethod
-    async def choose_proxy(self, pool: str, max_identities: int | None, *, claim: bool) -> ProxyRow | None:
+    async def choose_proxy(
+        self, pool: str, max_identities: int | None, *, claim: bool, proxy_id: UUID | None = None
+    ) -> ProxyRow | None:
         """Наименее загруженный живой прокси пула с запасом ёмкости.
 
         `claim=True` — атомарно занять единицу ёмкости (`bound_count + 1`, D-117) для sticky-привязки.
@@ -2278,7 +2454,11 @@ class StoreTx(ABC):
 
     @abstractmethod
     async def expire_leases(self, limit: int) -> int:
-        """Закрыть историю истёкших аренд временем expires_at и записать lease.expired."""
+        """Закрыть use и историю истёкших аренд, записать lease.expired.
+
+        Identity и весь набор proxy пачки блокируются до lease/history. Временные
+        назначения освобождаются идемпотентно, постоянные пары сохраняются.
+        """
 
 
 class Store(ABC):
@@ -2291,7 +2471,7 @@ class Store(ABC):
 
     @abstractmethod
     def transaction(
-        self, space: SpaceRef, *, session: Any | None = None
+        self, space: SpaceRef, *, session: Any | None = None, proxy_configuration: bool = False
     ) -> AbstractAsyncContextManager[StoreTx]:
         """Своя транзакция библиотеки, либо savepoint в сессии пользователя (ТЗ T-1, T-3)."""
 

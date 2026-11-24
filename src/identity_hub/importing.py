@@ -12,14 +12,14 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import pydantic_core
 from pydantic import BaseModel
 
 from identity_hub._ids import new_id
-from identity_hub._space import SpaceBase, logger
+from identity_hub._space import SpaceBase, logger, require_actor_and_reason
 from identity_hub.acceptance import AcceptPolicy
 from identity_hub.crypto import associated_data, credential_associated_data, reveal
 from identity_hub.crypto.envelope import DecryptionFailed
@@ -118,6 +118,7 @@ class _Prepared:
     record: ImportRecord
     prepared: Any  # identities.PreparedIdentity
     proxy: Any = None  # NewProxy
+    managed_proxy: bool = False
 
 
 class ImportingMixin(SpaceBase):
@@ -136,12 +137,15 @@ class ImportingMixin(SpaceBase):
         run_id: UUID | None = None,
         max_identities: int = 3,
         on_batch: BatchHook | None = None,
+        proxy_binding: Literal["policy", "trusted"] = "policy",
+        proxy_binding_reason: str | None = None,
         _use_default_accept: bool = True,
     ) -> ImportReport:
         """Импорт потока записей (FR-2.4). Идемпотентен: повтор кладёт записи в `skipped`.
 
         `max_identities` — ёмкость прокси, которые импорт создаёт из `ImportRecord.proxy`.
         """
+        actor, proxy_binding_reason = _proxy_binding_options(proxy_binding, actor, proxy_binding_reason)
         svc = await self.hub.resolve_service(service)
         accept_policy = (
             accept if accept is not None else (svc.default_accept if _use_default_accept else None)
@@ -176,6 +180,8 @@ class ImportingMixin(SpaceBase):
                     merge_sessions,
                     on_batch=on_batch,
                     accept=accept_policy,
+                    proxy_binding=proxy_binding,
+                    proxy_binding_reason=proxy_binding_reason,
                 )
                 batch = []
         if batch:
@@ -192,6 +198,8 @@ class ImportingMixin(SpaceBase):
                 merge_sessions,
                 on_batch=on_batch,
                 accept=accept_policy,
+                proxy_binding=proxy_binding,
+                proxy_binding_reason=proxy_binding_reason,
             )
         return report
 
@@ -245,8 +253,11 @@ class ImportingMixin(SpaceBase):
         labels: Mapping[str, str | int | float | bool] | None = None,
         actor: str = "import",
         run_id: UUID | None = None,
+        proxy_binding: Literal["policy", "trusted"] = "policy",
+        proxy_binding_reason: str | None = None,
     ) -> UUID:
         """Persist a resumable import without retaining the source file."""
+        actor, proxy_binding_reason = _proxy_binding_options(proxy_binding, actor, proxy_binding_reason)
         svc = await self.hub.resolve_service(service)
         mode = OnExisting(on_existing)
         batch_labels = dict(labels or {})
@@ -276,7 +287,10 @@ class ImportingMixin(SpaceBase):
             NewImportItem(
                 position=position,
                 payload=self.hub._seal_stored_json(
-                    _record_payload(record),
+                    {
+                        **_record_payload(record),
+                        "_proxy_binding": {"mode": proxy_binding, "reason": proxy_binding_reason},
+                    },
                     _import_aad(import_id, position),
                 ),
             )
@@ -322,6 +336,8 @@ class ImportingMixin(SpaceBase):
         *,
         on_batch: BatchHook | None = None,
         accept: AcceptPolicy | None = None,
+        proxy_binding: Literal["policy", "trusted"] = "policy",
+        proxy_binding_reason: str | None = None,
     ) -> None:
         from identity_hub.identities import prepare_identity
 
@@ -362,6 +378,14 @@ class ImportingMixin(SpaceBase):
                     svc.verification(factor)
                 proxy = None
                 if record.proxy:
+                    policy = svc.proxy_policy
+                    if (
+                        policy is not None
+                        and policy.binding is not None
+                        and policy.binding.mode == "deferred"
+                        and proxy_binding != "trusted"
+                    ):
+                        raise ValidationFailed("proxy binding: confirmation_required")
                     pool = svc.proxy_policy.group if svc.proxy_policy else "import"
                     proxy = self._prepare_proxy(  # type: ignore[attr-defined]
                         record.proxy, pool, None, None, None, None, None, max_identities, None
@@ -394,7 +418,6 @@ class ImportingMixin(SpaceBase):
                 to_link: list[_Prepared] = []
                 fresh: list[_Prepared] = []  # новые аккаунты пачки: вставляются вместе
                 unlinkable = await self._unresolved_links(tx, svc, ready, existing, by_id)
-                capacity: dict[str, list[int]] = {}  # отпечаток прокси → [ёмкость, занято]
                 for item in ready:
                     row = item.prepared.row
                     found = existing.get((svc.name, row.unique_ref))
@@ -422,29 +445,52 @@ class ImportingMixin(SpaceBase):
                             )
                         )
                         continue
-                    if item.proxy is not None and not await self._proxy_has_room(tx, item.proxy, capacity):
-                        failed.append((row.external_ref, "прокси: нет свободной ёмкости (max_identities)"))
-                        continue
-                    if item.proxy is not None:
-                        # слот прокси занимается при отборе: иначе пачка разом пройдёт проверку
-                        capacity[item.proxy.fingerprint][1] += 1
                     fresh.append(item)
                 # I6.3: аккаунты пачки и их дочерние строки вставляются одной серией SQL
                 now = await tx.now()
                 accepted = set(
                     await tx.insert_identities([_identity_rows(item.prepared, now) for item in fresh])
                 )
+                targets = await self._import_proxy_targets(tx, svc, fresh, accepted, failed, updated)
+                binding_drafts: list[EventDraft] = []
                 for item in fresh:
                     row = item.prepared.row
                     if row.id not in accepted:
-                        failed.append((row.external_ref, "id занят другим аккаунтом"))
-                        if item.proxy is not None:  # слот, занятый при отборе, возвращается
-                            capacity[item.proxy.fingerprint][1] -= 1
                         continue
                     if item.proxy is not None:
-                        proxy_id, _ = await tx.insert_proxy(item.proxy)
-                        await tx.bind_proxy(row.id, proxy_id, None)
-                        await tx.adjust_proxy_load(proxy_id, 1)
+                        proxy_id = targets[row.id]
+                        if item.managed_proxy:
+                            from identity_hub.proxy_allocator import rebind
+
+                            await rebind(
+                                tx,
+                                row.id,
+                                proxy_id,
+                                source="trusted_import" if proxy_binding == "trusted" else "import",
+                            )
+                        else:
+                            await tx.bind_proxy(row.id, proxy_id, None)
+                            await tx.adjust_proxy_load(proxy_id, 1)
+                        if item.managed_proxy or proxy_binding == "trusted":
+                            target = await tx.get_proxy(proxy_id)
+                            assert target is not None
+                            binding_drafts.append(
+                                EventDraft(
+                                    "proxy.binding.changed",
+                                    actor=actor,
+                                    service=svc.name,
+                                    identity_id=row.id,
+                                    proxy_id=proxy_id,
+                                    data={
+                                        "from_proxy_id": None,
+                                        "to_proxy_id": str(proxy_id),
+                                        "reason": f"trusted import: {proxy_binding_reason}"
+                                        if proxy_binding == "trusted"
+                                        else "identity imported",
+                                        "pool": target.pool,
+                                    },
+                                )
+                            )
                     for factor, state in item.record.verifications.items():
                         await self._initial_verification(tx, row.id, factor, state, actor)
                     inserted[row.unique_ref] = row.id
@@ -463,6 +509,16 @@ class ImportingMixin(SpaceBase):
                             for draft in _registered_drafts(svc, item.prepared, actor)
                         ),
                     )
+                if binding_drafts:
+                    await self._emit(tx, *binding_drafts)
+                from identity_hub.proxy_finalization import finalize
+
+                # У новой identity без managed proxy нет прежнего active ledger (FK).
+                # Existing rows проверяются всегда: Service policy могла измениться, а pool
+                # override старой пары хранится в ledger независимо от текущего Service.
+                managed_created = {item.prepared.row.id for item in created_items if item.managed_proxy}
+                for identity_id in sorted({*managed_created, *updated}):
+                    await finalize(self, tx, identity_id, actor=actor, reason="identity_import")
                 if created and accept is not None:
                     await tx.enqueue_acceptance(created, accept.dump())
                 if created or updated:  # пачка из одних обновлений тоже видна в событиях (R2-F24)
@@ -757,15 +813,81 @@ class ImportingMixin(SpaceBase):
             suffix += 1
         return f"{base}-{suffix}"
 
-    async def _proxy_has_room(self, tx: Any, proxy: Any, capacity: dict[str, list[int]]) -> bool:
-        """Есть ли у прокси записи импорта свободная ёмкость (R2-F09)."""
-        state = capacity.get(proxy.fingerprint)
-        if state is None:
-            existing_id = await tx.proxy_by_fingerprint([proxy.fingerprint, *proxy.aliases])
-            read = await tx.proxy_read_one(existing_id) if existing_id is not None else None
-            state = [read.max_identities, read.bound_count] if read is not None else [proxy.max_identities, 0]
-            capacity[proxy.fingerprint] = state
-        return state[1] < state[0]
+    async def _import_proxy_targets(
+        self,
+        tx: Any,
+        svc: Service,
+        fresh: list[_Prepared],
+        accepted: set[UUID],
+        failed: list[tuple[str, str]],
+        updated: Sequence[UUID] = (),
+    ) -> dict[UUID, UUID]:
+        """Все новые identity уже вставлены; proxy блокируются до проверки и записи назначений."""
+        items = sorted(
+            (item for item in fresh if item.proxy is not None and item.prepared.row.id in accepted),
+            key=lambda item: item.proxy.fingerprint,
+        )
+        rows = await tx.insert_proxies([item.proxy for item in items]) if items else []
+        targets = {item.prepared.row.id: row.id for item, (row, _) in zip(items, rows, strict=True)}
+        wanted = {self._link_ref(svc, target) for item in fresh for target in item.record.links.values()}
+        # Цели связей тоже берутся до proxy: FK не должен ждать их удаления под proxy-lock.
+        known = await tx.find_by_refs(sorted(wanted)) if wanted else {}
+        from identity_hub.proxy_allocator import lock_identity_proxy_rows
+
+        await tx.lock_identities(
+            sorted({*accepted, *updated, *(found[0] for found in known.values() if found[1] == tx.space.id)})
+        )
+        # Новые identity уже вставлены нами, чужих назначений у них быть не может.
+        await lock_identity_proxy_rows(tx, updated, additional_proxy_ids=targets.values())
+        rejected = {
+            item.prepared.row.unique_ref: "id занят другим аккаунтом"
+            for item in fresh
+            if item.prepared.row.id not in accepted
+        }
+        remaining: dict[UUID, int] = {}
+        managed: dict[UUID, bool] = {}
+        for item in fresh:
+            identity = item.prepared.row
+            proxy_id = targets.get(identity.id)
+            if proxy_id is None:
+                continue
+            if proxy_id not in remaining:
+                proxy = await tx.get_proxy(proxy_id)
+                group = await tx.proxy_group(proxy.pool)
+                managed[proxy_id] = group is not None and group.capacity_accounting == "allocations"
+                occupied = proxy.bound_count
+                if managed[proxy_id]:
+                    occupied += proxy.reserved_count + proxy.draining_count
+                remaining[proxy_id] = proxy.max_identities - occupied
+                if managed[proxy_id] and not proxy.issuable:
+                    remaining[proxy_id] = 0
+            item.managed_proxy = managed[proxy_id]
+            if remaining[proxy_id] < 1:
+                rejected[identity.unique_ref] = "прокси: нет свободной ёмкости (max_identities)"
+            else:
+                remaining[proxy_id] -= 1
+        # Отказ ёмкости у цели связи отклоняет зависимые записи, сохраняя независимые.
+        changed = True
+        while changed:
+            changed = False
+            for item in fresh:
+                ref = item.prepared.row.unique_ref
+                if ref in rejected:
+                    continue
+                for role, target in item.record.links.items():
+                    service_name, target_ref = self._link_ref(svc, target)
+                    if service_name == svc.name and target_ref in rejected:
+                        rejected[ref] = f"связь {role}: связанный аккаунт не импортирован"
+                        changed = True
+                        break
+        for item in fresh:
+            identity = item.prepared.row
+            if identity.unique_ref in rejected:
+                if identity.id in accepted:
+                    await tx.delete_identity(identity.id)  # Назначений и событий для неё ещё нет.
+                    accepted.remove(identity.id)
+                failed.append((identity.external_ref, rejected[identity.unique_ref]))
+        return targets
 
     async def _initial_verification(
         self, tx: Any, identity_id: UUID, factor: str, state: str, actor: str
@@ -912,10 +1034,15 @@ class ImportRunner:
     async def _process(self, handle: ImportingMixin, run: Any, claimed: list[Any]) -> list[ImportItemResult]:
         records: list[tuple[Any, ImportRecord]] = []
         results: list[ImportItemResult] = []
+        binding_options: set[tuple[str, str | None]] = set()
         for item in claimed:
             try:
                 raw = self.hub._open_stored_json(item.payload, _import_aad(run.id, item.position))
+                options = raw.get("_proxy_binding", {"mode": "policy", "reason": None})
+                mode, reason = options["mode"], options["reason"]
+                _proxy_binding_options(mode, run.actor, reason)
                 records.append((item, _payload_record(raw)))
+                binding_options.add((mode, reason))
             except DecryptionFailed:
                 # ключа нет или шифртекст повреждён: запись остаётся в БД, прогон завершится failed
                 results.append(
@@ -962,6 +1089,9 @@ class ImportRunner:
                     pending.append((item, record))
         if not pending:
             return results
+        if len(binding_options) != 1:
+            raise ValidationFailed("staged import has inconsistent proxy binding options")
+        proxy_binding, proxy_binding_reason = next(iter(binding_options))
         report = await handle._import_many(
             service=run.service,
             records=[record for _, record in pending],
@@ -971,6 +1101,8 @@ class ImportRunner:
             actor=run.actor,
             run_id=run.id,
             _use_default_accept=False,
+            proxy_binding=proxy_binding,  # type: ignore[arg-type] # Проверено _proxy_binding_options.
+            proxy_binding_reason=proxy_binding_reason,
         )
         created = set(report.created)
         skipped = {external_ref: reason for external_ref, reason in report.skipped}
@@ -1094,6 +1226,16 @@ def _updated_id(report: ImportReport, service: Service, record: ImportRecord) ->
         return report.updated_refs.get(service.normalize_external_ref(record.external_ref))
     except Exception:
         return None
+
+
+def _proxy_binding_options(mode: str, actor: str, reason: str | None) -> tuple[str, str | None]:
+    if not isinstance(mode, str) or mode not in {"policy", "trusted"}:
+        raise ValidationFailed("proxy_binding: policy или trusted")
+    if mode == "trusted":
+        return require_actor_and_reason(actor, reason, "доверенное назначение proxy при импорте")
+    if reason is not None:
+        raise ValidationFailed("proxy_binding_reason требует proxy_binding=trusted")
+    return actor, None
 
 
 def _record_payload(record: ImportRecord) -> dict[str, Any]:

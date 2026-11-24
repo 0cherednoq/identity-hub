@@ -27,7 +27,7 @@ from identity_hub.postgres.models import IdentityHubBase
 __all__ = ["READ_SCHEMA_VERSION", "READ_TABLES", "ReadSchema"]
 
 # Меняется только при несовместимом изменении набора, имён или типов публичных колонок.
-READ_SCHEMA_VERSION = 5
+READ_SCHEMA_VERSION = 6
 
 # Публичное имя таблицы → (физическая таблица, {публичная колонка: физическая колонка}).
 READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
@@ -78,6 +78,8 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "acquired_at": "acquired_at",
             "heartbeat_at": "heartbeat_at",
             "expires_at": "expires_at",
+            "proxy_id": "proxy_id",
+            "proxy_allocation_id": "proxy_allocation_id",
         },
     ),
     "lease_history": (
@@ -92,6 +94,7 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "ref": "ref",
             "hold_deadline": "hold_deadline",
             "proxy_id": "proxy_id",
+            "proxy_allocation_id": "proxy_allocation_id",
             "acquired_at": "acquired_at",
             "last_heartbeat_at": "last_heartbeat_at",
             "released_at": "released_at",
@@ -161,6 +164,8 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "pinned_until": "pinned_until",
             "max_identities": "max_identities",
             "bound_count": "bound_count",
+            "reserved_count": "reserved_count",
+            "draining_count": "draining_count",
             "enabled": "enabled",
             "disabled_reason": "disabled_reason",
             "disabled_by": "disabled_by",
@@ -176,6 +181,31 @@ READ_TABLES: Mapping[str, tuple[str, Mapping[str, str]]] = {
             "space_id": "space_id",
             "proxy_id": "proxy_id",
             "bound_at": "bound_at",
+            "binding_id": "allocation_id",
+        },
+    ),
+    "proxy_groups": (
+        "ih_proxy_groups",
+        {
+            "space_id": "space_id",
+            "name": "name",
+            "capacity_accounting": "capacity_accounting",
+            "revision": "revision",
+        },
+    ),
+    "proxy_allocations": (
+        "ih_proxy_allocations",
+        {
+            "id": "id",
+            "space_id": "space_id",
+            "identity_id": "identity_id",
+            "proxy_id": "proxy_id",
+            "state": "state",
+            "owner_lease_id": "owner_lease_id",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+            "ended_at": "ended_at",
+            "reason": "reason",
         },
     ),
     # метаданные credentials и сессий без секретов: плоская таблица админки одним join (C8.2)
@@ -266,6 +296,8 @@ class ReadSchema:
         self.events: Table = built["events"]
         self.proxies: Table = built["proxies"]
         self.proxy_bindings: Table = built["proxy_bindings"]
+        self.proxy_groups: Table = built["proxy_groups"]
+        self.proxy_allocations: Table = built["proxy_allocations"]
         self.identity_links: Table = built["identity_links"]
         self.credentials: Table = built["credentials"]
         self.sessions: Table = built["sessions"]

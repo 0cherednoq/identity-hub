@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -59,6 +60,13 @@ from identity_hub.errors import (
     ValidationFailed,
 )
 from identity_hub.events import Event, EventDraft
+from identity_hub.proxy_allocator import (
+    close_lease_use,
+    close_reclaimed_use,
+    reconcile_counters,
+    require_legacy,
+    validate_proxy_change,
+)
 from identity_hub.rollups import BucketSize, RollupDelta, RollupKey, RollupRow
 from identity_hub.snapshots import StateSnapshotFrame, StateSnapshotRow
 from identity_hub.store.base import (
@@ -117,8 +125,11 @@ from identity_hub.store.base import (
     OverviewSnapshot,
     ProviderClaim,
     ProviderOperationRow,
+    ProxyAllocationRow,
     ProxyBindingHistoryRow,
+    ProxyBindingRow,
     ProxyBoundIdentityRow,
+    ProxyGroupRow,
     ProxyPoolCapacityRow,
     ProxyReadRow,
     ProxyRow,
@@ -229,6 +240,9 @@ class _MemoryState:
     proxies: dict[UUID, ProxyRow] = field(default_factory=dict)
     proxy_load: dict[UUID, int] = field(default_factory=dict)
     bindings: dict[UUID, UUID] = field(default_factory=dict)
+    proxy_groups: dict[tuple[UUID, str], ProxyGroupRow] = field(default_factory=dict)
+    proxy_allocations: dict[UUID, ProxyAllocationRow] = field(default_factory=dict)
+    binding_allocations: dict[UUID, UUID] = field(default_factory=dict)
     binding_times: dict[UUID, datetime] = field(default_factory=dict)
     link_times: dict[tuple[UUID, str], datetime] = field(default_factory=dict)
     verifications: dict[tuple[UUID, str], VerificationRow] = field(default_factory=dict)
@@ -382,7 +396,9 @@ class MemoryTx(StoreTx):
         self.space = space
         self._now = now
         self._notify = False
+        self._allocation_owner_checks: set[UUID] = set()
         self._revised: set[UUID] = set()  # identity, чья ревизия уже поднята этой командой (D-205)
+        self._deferred_events: list[EventDraft] = []
 
     @property
     def state(self) -> _MemoryState:
@@ -395,11 +411,13 @@ class MemoryTx(StoreTx):
     async def savepoint(self) -> AsyncIterator[None]:
         snapshot = _snapshot(self.state)
         revised, notify = set(self._revised), self._notify
+        deferred = list(self._deferred_events)
         try:
             yield
         except BaseException:
             _restore(self.state, snapshot)
             self._revised, self._notify = revised, notify
+            self._deferred_events = deferred
             raise
 
     def _own(self, identity_id: UUID) -> IdentityRow | None:
@@ -892,6 +910,8 @@ class MemoryTx(StoreTx):
         ]
 
     async def delete_identity(self, identity_id: UUID) -> bool:
+        if await self.proxy_allocations(identity_id=identity_id):
+            raise ValidationFailed("managed identity requires allocator")
         if self._own(identity_id) is None:
             return False
         del self.state.identities[identity_id]
@@ -913,6 +933,7 @@ class MemoryTx(StoreTx):
         self.state.profile_secrets.pop(identity_id, None)
         bound = self.state.bindings.pop(identity_id, None)
         self.state.binding_times.pop(identity_id, None)
+        self.state.binding_allocations.pop(identity_id, None)
         if bound is not None:  # место на прокси освобождается, как каскад в PostgreSQL (R2-P06)
             self.state.proxy_load[bound] = max(0, self.state.proxy_load.get(bound, 0) - 1)
         for region_key in [item for item in self.state.regions if item[0] == identity_id]:
@@ -1138,6 +1159,7 @@ class MemoryTx(StoreTx):
             and victim.yield_requested_at is not None
             and victim.yield_requested_at + timedelta(seconds=grace_seconds) <= self._now
         ):
+            await close_lease_use(self, victim, shared=False)
             history = self.state.history[victim.lease_id]
             self.state.history[victim.lease_id] = replace(
                 history,
@@ -1256,7 +1278,10 @@ class MemoryTx(StoreTx):
         shared: bool,
         proxy_id: UUID | None = None,
         options: LeaseOptions = NO_LEASE_OPTIONS,
+        lease_id: UUID | None = None,
     ) -> tuple[LeaseRow, LeaseRow | None]:
+        if lease_id is not None and lease_id in self.state.history:
+            raise AlreadyExists("lease", lease_id)
         current = self._own(identity.id)
         if current is None:
             raise LeaseUnavailable(
@@ -1269,6 +1294,7 @@ class MemoryTx(StoreTx):
                 raise LeaseUnavailable(
                     f"аккаунт {identity.id} уже в аренде", reason=LeaseUnavailableReason.BUSY
                 )
+            await close_reclaimed_use(self, old)
             history = self.state.history[old.lease_id]
             if history.released_at is None:
                 reclaimed = old
@@ -1299,7 +1325,7 @@ class MemoryTx(StoreTx):
             hold_deadline = self._now + timedelta(seconds=options.max_hold_seconds)
             expires_at = min(expires_at, hold_deadline)
         lease = LeaseRow(
-            new_id(),  # публичный id аренды упорядочен по времени, как в PostgreSQL (R2-P10)
+            lease_id if lease_id is not None else new_id(),  # PA2.1: ID будущего владельца резерва
             uuid4(),  # token — секрет аренды, случайный
             identity.id,
             fencing,
@@ -1382,7 +1408,15 @@ class MemoryTx(StoreTx):
     async def release_lease(
         self, lease: LeaseRow, reason: str, counters: LeaseCounters, *, shared: bool
     ) -> str:
+        if (
+            self.state.history_spaces.get(lease.lease_id) != self.space.id
+            or self.state.history_tokens.get(lease.lease_id) != lease.token
+        ):
+            return "closed"
         history = self.state.history.get(lease.lease_id)
+        if history is None or history.identity_id != lease.identity_id or history.fencing != lease.fencing:
+            return "closed"
+        await close_lease_use(self, lease, shared=shared)
         if history is None or history.released_at is not None:
             return "revoked" if history is not None and history.end_reason == "revoked" else "closed"
         released_at, end_reason, expired = self._now, reason, False
@@ -1484,6 +1518,7 @@ class MemoryTx(StoreTx):
         lease = self.state.leases.get(identity_id)
         if lease is None or lease.expires_at <= self._now or self._own(identity_id) is None:
             return None
+        await close_lease_use(self, lease, shared=False)
         self.state.leases.pop(identity_id)
         identity = self.state.identities[identity_id]
         self.state.identities[identity_id] = replace(
@@ -1553,8 +1588,11 @@ class MemoryTx(StoreTx):
         expired = old is not None and old.expires_at <= self._now
         if old is not None and not expired:
             same = old.operation == request.operation and (
-                old.fingerprint_version == LEGACY_FINGERPRINT_VERSION
-                or old.fingerprint == request.fingerprint_for(old.fingerprint_key_id)
+                (old.fingerprint_version == LEGACY_FINGERPRINT_VERSION and request.allow_legacy)
+                or (
+                    old.fingerprint_version != LEGACY_FINGERPRINT_VERSION
+                    and old.fingerprint == request.fingerprint_for(old.fingerprint_key_id)
+                )
             )
             if not same:
                 raise IdempotencyConflict(old.operation)
@@ -1625,6 +1663,8 @@ class MemoryTx(StoreTx):
             self.state.sessions[current.id] = replace(current, status=status, updated_at=self._now)
 
     async def insert_proxy(self, row: NewProxy) -> tuple[UUID, bool]:
+        if await self.proxy_group(row.pool) is None:
+            await self.proxy_store_group(ProxyGroupRow(self.space.id, row.pool))
         known = await self.proxy_by_fingerprint([row.fingerprint, *row.aliases])
         if known is not None:
             return known, False
@@ -1663,11 +1703,316 @@ class MemoryTx(StoreTx):
 
     async def get_proxy(self, proxy_id: UUID) -> ProxyRow | None:
         proxy = self.state.proxies.get(proxy_id)
-        return proxy if proxy is not None and proxy.space_id == self.space.id else None
+        return (
+            replace(proxy, bound_count=self.state.proxy_load.get(proxy_id, 0))
+            if proxy is not None and proxy.space_id == self.space.id
+            else None
+        )
+
+    async def proxy_group(self, name: str) -> ProxyGroupRow | None:
+        return self.state.proxy_groups.get((self.space.id, name))
+
+    async def proxy_store_group(self, row: ProxyGroupRow) -> None:
+        if row.space_id != self.space.id:
+            raise SpaceMismatch("proxy group belongs to another space")
+        self.state.proxy_groups[(self.space.id, row.name)] = row
+
+    async def proxy_group_proxies(self, group: str) -> list[ProxyRow]:
+        return [
+            replace(row, bound_count=self.state.proxy_load.get(row.id, 0))
+            for row in sorted(self.state.proxies.values(), key=lambda row: row.id)
+            if row.space_id == self.space.id and row.pool == group
+        ]
+
+    async def proxy_lock_rows(self, ids: Sequence[UUID]) -> None:
+        pass  # Все транзакции MemoryStore уже сериализованы.
+
+    async def proxy_bindings(
+        self, *, identity_id: UUID | None = None, proxy_id: UUID | None = None, group: str | None = None
+    ) -> list[ProxyBindingRow]:
+        return [
+            ProxyBindingRow(
+                identity,
+                proxy,
+                self.state.binding_times[identity],
+                self.state.binding_allocations.get(identity),
+            )
+            for identity, proxy in sorted(self.state.bindings.items())
+            if self._own(identity) is not None
+            and (identity_id is None or identity == identity_id)
+            and (proxy_id is None or proxy == proxy_id)
+            and (group is None or self.state.proxies[proxy].pool == group)
+        ]
+
+    async def proxy_store_binding(self, identity_id: UUID, allocation: ProxyAllocationRow | None) -> None:
+        if self._own(identity_id) is None:
+            raise NotFound("identity", identity_id)
+        if allocation is None:
+            self.state.bindings.pop(identity_id, None)
+            self.state.binding_times.pop(identity_id, None)
+            self.state.binding_allocations.pop(identity_id, None)
+        else:
+            if (
+                allocation.identity_id != identity_id
+                or allocation.space_id != self.space.id
+                or allocation.state != "bound"
+            ):
+                raise ValidationFailed("invalid proxy binding allocation")
+            stored = self.state.proxy_allocations.get(allocation.id)
+            if stored is None or (stored.space_id, stored.identity_id, stored.proxy_id) != (
+                self.space.id,
+                identity_id,
+                allocation.proxy_id,
+            ):
+                raise ValidationFailed("invalid proxy binding allocation")
+            if self.state.bindings.get(identity_id) != allocation.proxy_id:
+                self.state.binding_times[identity_id] = self._now
+            self.state.bindings[identity_id] = allocation.proxy_id
+            self.state.binding_allocations[identity_id] = allocation.id
+
+    async def proxy_allocation(self, allocation_id: UUID) -> ProxyAllocationRow | None:
+        row = self.state.proxy_allocations.get(allocation_id)
+        return deepcopy(row) if row is not None and row.space_id == self.space.id else None
+
+    async def proxy_allocations(
+        self,
+        *,
+        identity_id: UUID | None = None,
+        proxy_id: UUID | None = None,
+        include_released: bool = False,
+        limit: int | None = None,
+    ) -> list[ProxyAllocationRow]:
+        rows = [
+            row
+            for row in sorted(self.state.proxy_allocations.values(), key=lambda row: row.id)
+            if row.space_id == self.space.id
+            and (include_released or row.state != "released")
+            and (identity_id is None or row.identity_id == identity_id)
+            and (proxy_id is None or row.proxy_id == proxy_id)
+        ]
+        return deepcopy(rows if limit is None else rows[:limit])
+
+    async def proxy_cleanup_page(
+        self, limit: int, *, after: UUID | None = None, until: UUID | None = None
+    ) -> tuple[list[ProxyAllocationRow], UUID | None]:
+        if until is None:
+            until = max(
+                (
+                    row.id
+                    for row in self.state.proxy_allocations.values()
+                    if row.space_id == self.space.id and row.state in {"reserved", "draining"}
+                ),
+                default=None,
+            )
+        pending = (
+            row
+            for row in self.state.proxy_allocations.values()
+            if row.space_id == self.space.id
+            and row.state in {"reserved", "draining"}
+            and until is not None
+            and row.id <= until
+            and (after is None or row.id > after)
+        )
+        return deepcopy(heapq.nsmallest(limit, pending, key=lambda row: row.id)), until
+
+    async def proxy_cleanup_lock_rows(self, rows: Sequence[ProxyAllocationRow]) -> set[UUID]:
+        # MemoryStore держит общий transaction-lock, конкурентных row-lock нет.
+        return {
+            row.id
+            for row in rows
+            if self._own(row.identity_id) is not None
+            and (proxy := self.state.proxies.get(row.proxy_id)) is not None
+            and proxy.space_id == self.space.id
+        }
+
+    async def proxy_history_page(
+        self, limit: int, *, after: UUID | None = None, until: UUID | None = None
+    ) -> tuple[list[LeaseHistoryRow], UUID | None]:
+        if until is None:
+            until = max(
+                (
+                    row.lease_id
+                    for row in self.state.history.values()
+                    if self.state.history_spaces.get(row.lease_id) == self.space.id
+                    and row.released_at is None
+                ),
+                default=None,
+            )
+        rows = (
+            row
+            for row in self.state.history.values()
+            if self.state.history_spaces.get(row.lease_id) == self.space.id
+            and row.released_at is None
+            and until is not None
+            and row.lease_id <= until
+            and (after is None or row.lease_id > after)
+        )
+        return deepcopy(heapq.nsmallest(limit, rows, key=lambda row: row.lease_id)), until
+
+    async def proxy_close_orphan_history(
+        self, rows: Sequence[LeaseHistoryRow]
+    ) -> list[tuple[LeaseHistoryRow, bool]]:
+        closed = []
+        for candidate in sorted(rows, key=lambda row: row.lease_id):
+            if self.state.history_spaces.get(candidate.lease_id) != self.space.id:
+                continue
+            row = self.state.history.get(candidate.lease_id)
+            if row is None or row.released_at is not None or row.proxy_allocation_id is None:
+                continue
+            lease = self.state.leases.get(row.identity_id)
+            if lease is not None and lease.lease_id == row.lease_id:
+                continue
+            changed = replace(
+                row,
+                released_at=self._now,
+                end_reason=str(LeaseEndReason.LOST),
+                duration=self._now - row.acquired_at,
+            )
+            self.state.history[row.lease_id] = changed
+            closed.append((deepcopy(changed), self._own(row.identity_id) is not None))
+        return closed
+
+    async def proxy_counter_page(
+        self, limit: int, *, after: UUID | None = None, until: UUID | None = None
+    ) -> tuple[list[tuple[UUID, str]], UUID | None]:
+        if until is None:
+            until = max(
+                (row.id for row in self.state.proxies.values() if row.space_id == self.space.id),
+                default=None,
+            )
+        pending = (
+            (row.id, row.pool)
+            for row in self.state.proxies.values()
+            if row.space_id == self.space.id
+            and until is not None
+            and row.id <= until
+            and (after is None or row.id > after)
+        )
+        return heapq.nsmallest(limit, pending), until
+
+    async def proxy_lock_rows_skip_locked(self, ids: Sequence[UUID]) -> set[UUID]:
+        return {
+            proxy_id
+            for proxy_id in ids
+            if (proxy := self.state.proxies.get(proxy_id)) is not None and proxy.space_id == self.space.id
+        }
+
+    async def proxy_store_allocation(self, row: ProxyAllocationRow) -> None:
+        previous = self.state.proxy_allocations.get(row.id)
+        if previous is not None and (previous.space_id, previous.identity_id, previous.proxy_id) != (
+            row.space_id,
+            row.identity_id,
+            row.proxy_id,
+        ):
+            raise ValidationFailed("invalid proxy allocation scope")
+        if previous is not None:
+            row = replace(row, created_at=previous.created_at)
+        if row.space_id != self.space.id or (
+            row.state != "released"
+            and (self._own(row.identity_id) is None or await self.get_proxy(row.proxy_id) is None)
+        ):
+            raise ValidationFailed("invalid proxy allocation scope")
+        if row.state not in {"reserved", "bound", "draining", "released"} or (row.state == "released") != (
+            row.ended_at is not None
+        ):
+            raise ValidationFailed("invalid proxy allocation state")
+        if row.state == "reserved" and row.owner_lease_id is None:
+            raise ValidationFailed("reserved allocation requires owner")
+        if row.owner_lease_id is not None:
+            owner = self.state.history.get(row.owner_lease_id)
+            if owner is not None and (
+                owner.identity_id != row.identity_id
+                or self.state.history_spaces[row.owner_lease_id] != self.space.id
+            ):
+                raise ValidationFailed("invalid proxy allocation owner")
+        if row.state != "released" and any(
+            other.id != row.id
+            and other.state != "released"
+            and (other.identity_id, other.proxy_id) == (row.identity_id, row.proxy_id)
+            for other in self.state.proxy_allocations.values()
+        ):
+            raise ValidationFailed("duplicate active proxy allocation")
+        self.state.proxy_allocations[row.id] = deepcopy(row)
+        self._allocation_owner_checks.add(row.id)
+
+    async def proxy_set_counters(self, proxy_id: UUID, *, bound: int, reserved: int, draining: int) -> None:
+        row = await self.get_proxy(proxy_id)
+        if row is None:
+            raise NotFound("proxy", proxy_id)
+        if min(bound, reserved, draining) < 0:
+            raise ValidationFailed("negative proxy allocation counter")
+        self.state.proxy_load[proxy_id] = bound
+        self.state.proxies[proxy_id] = replace(
+            row, bound_count=bound, reserved_count=reserved, draining_count=draining
+        )
+
+    async def proxy_allocation_in_use(
+        self, allocation_id: UUID, *, excluding_lease_id: UUID | None = None
+    ) -> bool:
+        allocation = await self.proxy_allocation(allocation_id)
+        if allocation is None:
+            return False
+        row = self.state.leases.get(allocation.identity_id)
+        return (
+            row is not None
+            and (row.proxy_allocation_id == allocation_id or row.lease_id == allocation.owner_lease_id)
+            and row.lease_id != excluding_lease_id
+            and row.expires_at > self._now
+            and self._own(row.identity_id) is not None
+        )
+
+    async def proxy_use_lease(self, allocation: ProxyAllocationRow) -> LeaseRow | None:
+        if allocation.space_id != self.space.id or self._own(allocation.identity_id) is None:
+            return None
+        row = self.state.leases.get(allocation.identity_id)
+        if row and (row.proxy_allocation_id == allocation.id or row.lease_id == allocation.owner_lease_id):
+            return row
+        return None
+
+    async def proxy_attach_lease(
+        self, fence: LeaseFence, allocation: ProxyAllocationRow, *, request: dict[str, Any] | None = None
+    ) -> None:
+        await self.check_fence(fence)
+        if (
+            fence.shared
+            or allocation.identity_id != fence.identity_id
+            or allocation.space_id != self.space.id
+        ):
+            raise ValidationFailed("invalid allocation lease")
+        self.state.leases[fence.identity_id] = replace(
+            self.state.leases[fence.identity_id],
+            proxy_id=allocation.proxy_id,
+            proxy_allocation_id=allocation.id,
+            proxy_request=deepcopy(request),
+        )
+        self.state.history[fence.lease_id] = replace(
+            self.state.history[fence.lease_id],
+            proxy_id=allocation.proxy_id,
+            proxy_allocation_id=allocation.id,
+            proxy_request=deepcopy(request),
+        )
+
+    async def proxy_has_live_leases(self) -> bool:
+        for history in self.state.history.values():
+            if (
+                self.state.history_spaces.get(history.lease_id) != self.space.id
+                or history.released_at is not None
+            ):
+                continue
+            current = self.state.leases.get(history.identity_id)
+            if current is None or current.lease_id != history.lease_id or current.expires_at > self._now:
+                return True
+        return False
 
     async def update_proxy(
         self, proxy_id: UUID, values: dict[str, Any], expected: dict[str, Any] | None = None
     ) -> bool:
+        if {"scheme", "host", "port", "pool", "max_identities"} & values.keys():
+            await validate_proxy_change(self, proxy_id, values)
+        if "pool" in values:
+            target = await self.proxy_group(values["pool"])
+            if target is None:
+                await self.proxy_store_group(ProxyGroupRow(self.space.id, values["pool"]))
         row = await self.get_proxy(proxy_id)
         if row is None or any(getattr(row, key) != value for key, value in (expected or {}).items()):
             return False
@@ -1694,6 +2039,7 @@ class MemoryTx(StoreTx):
     async def set_proxy_secret(
         self, proxy_id: UUID, fingerprint: str, secret: StoredPayload, *, fingerprint_key_id: str | None
     ) -> bool:
+        await validate_proxy_change(self, proxy_id, {"credentials": True})
         row = await self.get_proxy(proxy_id)
         if row is None:
             return False
@@ -1711,6 +2057,9 @@ class MemoryTx(StoreTx):
         return True
 
     async def unbind_identity(self, identity_id: UUID) -> UUID | None:
+        binding = await self.get_binding(identity_id)
+        if binding is not None:
+            await require_legacy(self, binding.id)
         if self._own(identity_id) is None:
             return None
         proxy_id = self.state.bindings.pop(identity_id, None)
@@ -1720,16 +2069,13 @@ class MemoryTx(StoreTx):
         return proxy_id
 
     async def unbind_proxy(self, proxy_id: UUID) -> list[UUID]:
-        if await self.get_proxy(proxy_id) is None:
-            return []
-        unbound = [identity_id for identity_id, bound in self.state.bindings.items() if bound == proxy_id]
-        for identity_id in unbound:
-            del self.state.bindings[identity_id]
-            self.state.binding_times.pop(identity_id, None)
-        self.state.proxy_load[proxy_id] = 0
-        return unbound
+        from identity_hub.proxy_allocator import unbind_proxy
+
+        return await unbind_proxy(self, proxy_id)
 
     async def delete_proxy(self, proxy_id: UUID) -> list[UUID] | None:
+        if await self.proxy_allocations(proxy_id=proxy_id, limit=1):
+            raise ValidationFailed("proxy allocation cleanup required before delete")
         if await self.get_proxy(proxy_id) is None:
             return None
         unbound = [identity_id for identity_id, bound in self.state.bindings.items() if bound == proxy_id]
@@ -1744,15 +2090,30 @@ class MemoryTx(StoreTx):
         proxy_id = self.state.bindings.get(identity_id)
         return await self.get_proxy(proxy_id) if proxy_id is not None and self._own(identity_id) else None
 
-    async def choose_proxy(self, pool: str, max_identities: int | None, *, claim: bool) -> ProxyRow | None:
+    async def choose_proxy(
+        self, pool: str, max_identities: int | None, *, claim: bool, proxy_id: UUID | None = None
+    ) -> ProxyRow | None:
+        group = await self.proxy_group(pool)
+        if claim and group is not None and group.capacity_accounting == "allocations":
+            raise ValidationFailed("managed proxy requires allocator")
         candidates = []
         for proxy in self.state.proxies.values():
             capacity = proxy.max_identities if max_identities is None else max_identities
-            load = self.state.proxy_load.get(proxy.id, 0)
-            if proxy.space_id == self.space.id and proxy.pool == pool and proxy.issuable and load < capacity:
+            load = self.state.proxy_load.get(proxy.id, 0) + proxy.reserved_count + proxy.draining_count
+            if (
+                proxy.space_id == self.space.id
+                and proxy.pool == pool
+                and proxy.issuable
+                and load < capacity
+                and (proxy_id is None or proxy.id == proxy_id)
+            ):
                 candidates.append(proxy)
         candidates.sort(
-            key=lambda proxy: (self.state.proxy_load.get(proxy.id, 0), proxy.error_score, proxy.id)
+            key=lambda proxy: (
+                self.state.proxy_load.get(proxy.id, 0) + proxy.reserved_count + proxy.draining_count,
+                proxy.error_score,
+                proxy.id,
+            )
         )
         if not candidates:
             return None
@@ -1762,6 +2123,9 @@ class MemoryTx(StoreTx):
         return selected
 
     async def bind_proxy(self, identity_id: UUID, proxy_id: UUID, previous: UUID | None) -> None:
+        await require_legacy(self, proxy_id)
+        if previous is not None:
+            await require_legacy(self, previous)
         if self._own(identity_id) is None or await self.get_proxy(proxy_id) is None:
             return
         self.state.bindings[identity_id] = proxy_id
@@ -1770,6 +2134,10 @@ class MemoryTx(StoreTx):
             self.state.proxy_load[previous] = max(0, self.state.proxy_load.get(previous, 0) - 1)
 
     async def rebind_proxy(self, identity_id: UUID, proxy_id: UUID) -> tuple[UUID | None, ProxyRow] | None:
+        await require_legacy(self, proxy_id)
+        binding = await self.get_binding(identity_id)
+        if binding is not None:
+            await require_legacy(self, binding.id)
         if self._own(identity_id) is None:
             return None
         target = await self.get_proxy(proxy_id)
@@ -1786,6 +2154,7 @@ class MemoryTx(StoreTx):
         return previous, target
 
     async def adjust_proxy_load(self, proxy_id: UUID, delta: int) -> None:
+        await require_legacy(self, proxy_id)
         if await self.get_proxy(proxy_id) is not None:
             self.state.proxy_load[proxy_id] = max(0, self.state.proxy_load.get(proxy_id, 0) + delta)
 
@@ -1824,16 +2193,23 @@ class MemoryTx(StoreTx):
         for proxy in self.state.proxies.values():
             if proxy.space_id != self.space.id:
                 continue
-            bound_count = sum(value == proxy.id for value in self.state.bindings.values())
+            config = await self.proxy_group(proxy.pool)
+            mode = config.capacity_accounting if config else "bindings"
+            bound_count = (
+                proxy.bound_count
+                if mode == "allocations"
+                else sum(value == proxy.id for value in self.state.bindings.values())
+            )
+            occupied = bound_count + proxy.reserved_count + proxy.draining_count
             if pool is not None and proxy.pool != pool:
                 continue
             if status is not None and proxy.status != status:
                 continue
             if enabled is not None and proxy.enabled != enabled:
                 continue
-            if capacity == "available" and bound_count >= proxy.max_identities:
+            if capacity == "available" and occupied >= proxy.max_identities:
                 continue
-            if capacity == "full" and bound_count < proxy.max_identities:
+            if capacity == "full" and occupied < proxy.max_identities:
                 continue
             if capacity == "unbound" and bound_count != 0:
                 continue
@@ -1864,6 +2240,10 @@ class MemoryTx(StoreTx):
                     disabled_reason=proxy.disabled_reason,
                     disabled_by=proxy.disabled_by,
                     disabled_at=proxy.disabled_at,
+                    reserved_count=proxy.reserved_count,
+                    draining_count=proxy.draining_count,
+                    capacity_accounting=mode,
+                    cleanup_pending_count=await self._proxy_cleanup_pending_count(proxy.id),
                 )
             )
         result.sort(key=lambda row: (row.created_at, row.id), reverse=True)
@@ -1896,6 +2276,17 @@ class MemoryTx(StoreTx):
         )
         return next((row for row in rows if row.id == proxy_id), None)
 
+    async def _proxy_cleanup_pending_count(self, proxy_id: UUID) -> int:
+        return sum(
+            [
+                not await self.proxy_allocation_in_use(row.id)
+                for row in self.state.proxy_allocations.values()
+                if row.space_id == self.space.id
+                and row.proxy_id == proxy_id
+                and row.state in {"reserved", "draining"}
+            ]
+        )
+
     async def proxy_pool_capacities(self) -> list[ProxyPoolCapacityRow]:
         pools: dict[str, dict[str, int]] = {}
         for proxy in self.state.proxies.values():
@@ -1913,17 +2304,37 @@ class MemoryTx(StoreTx):
                     "bound_count": 0,
                     "in_lease_count": 0,
                     "disabled": 0,
+                    "reserved_count": 0,
+                    "draining_count": 0,
+                    "cleanup_pending_count": 0,
                 },
             )
             values["proxies"] += 1
             values["disabled"] += 0 if proxy.enabled else 1
             values[proxy.status if proxy.status in {"alive", "quarantined", "dead"} else "other"] += 1
             values["max_identities"] += proxy.max_identities
-            values["bound_count"] += sum(value == proxy.id for value in self.state.bindings.values())
+            config = await self.proxy_group(proxy.pool)
+            values["bound_count"] += (
+                proxy.bound_count
+                if config and config.capacity_accounting == "allocations"
+                else sum(value == proxy.id for value in self.state.bindings.values())
+            )
+            values["reserved_count"] += proxy.reserved_count
+            values["draining_count"] += proxy.draining_count
+            values["cleanup_pending_count"] += await self._proxy_cleanup_pending_count(proxy.id)
             values["in_lease_count"] += sum(
                 row.proxy_id == proxy.id and row.released_at is None for row in self.state.history.values()
             )
-        return [ProxyPoolCapacityRow(pool=pool, **values) for pool, values in sorted(pools.items())]
+        return [
+            ProxyPoolCapacityRow(
+                pool=pool,
+                capacity_accounting=config.capacity_accounting
+                if (config := await self.proxy_group(pool))
+                else "bindings",
+                **values,
+            )
+            for pool, values in sorted(pools.items())
+        ]
 
     async def proxy_binding_history(
         self,
@@ -2653,7 +3064,9 @@ class MemoryTx(StoreTx):
         live = self.state.leases.get(row.identity_id)
         own = live is not None and live.lease_id == row.lease_id
         expires_at = live.expires_at if live is not None and own else None
-        values = asdict(row)
+        values = {
+            name: value for name, value in asdict(row).items() if name in LeaseReadRow.__dataclass_fields__
+        }
         if live is not None and own:  # heartbeat — в ih_leases, история раз в stats_flush (D-210)
             values["last_heartbeat_at"] = live.heartbeat_at
         return LeaseReadRow(
@@ -3628,6 +4041,7 @@ class MemoryTx(StoreTx):
         )[:limit]
         drafts: list[EventDraft] = []
         for lease in expired:
+            await close_lease_use(self, lease, shared=False)
             self.state.leases.pop(lease.identity_id, None)
             history = self.state.history[lease.lease_id]
             if history.released_at is None:
@@ -3698,7 +4112,9 @@ class MemoryStore(Store):
         return clock
 
     @asynccontextmanager
-    async def transaction(self, space: SpaceRef, *, session: Any | None = None) -> AsyncIterator[MemoryTx]:
+    async def transaction(
+        self, space: SpaceRef, *, session: Any | None = None, proxy_configuration: bool = False
+    ) -> AsyncIterator[MemoryTx]:
         if session is not None:
             raise TypeError("MemoryStore не поддерживает внешнюю SQL-сессию")
         async with self._lock:
@@ -3709,6 +4125,19 @@ class MemoryStore(Store):
             tx = MemoryTx(self, space, self.clock.now())
             try:
                 yield tx
+                await tx.flush_deferred_events()
+                # Как DEFERRABLE owner FK в PostgreSQL: проверяем владельца при commit.
+                for allocation_id in tx._allocation_owner_checks:
+                    allocation = self._state.proxy_allocations.get(allocation_id)
+                    if allocation is not None and allocation.owner_lease_id is not None:
+                        owner = self._state.history.get(allocation.owner_lease_id)
+                        if (
+                            owner is None
+                            or owner.identity_id != allocation.identity_id
+                            or self._state.history_spaces.get(allocation.owner_lease_id)
+                            != allocation.space_id
+                        ):
+                            raise ValidationFailed("invalid proxy allocation owner")
             except BaseException:
                 _restore(self._state, snapshot)
                 raise
@@ -4542,7 +4971,16 @@ class MemoryStore(Store):
                             del self._state.webhook_deliveries[delivery_id]
                         result["webhook_deliveries"] = result.get("webhook_deliveries", 0) + len(orphaned)
                 else:
-                    keys = [key for key, item in collection.items() if timestamp(item) < cutoff]
+                    retained_owners = (
+                        {row.owner_lease_id for row in self._state.proxy_allocations.values()}
+                        if name == "lease_history"
+                        else set()
+                    )
+                    keys = [
+                        key
+                        for key, item in collection.items()
+                        if timestamp(item) < cutoff and key not in retained_owners
+                    ]
                     for key in keys:
                         del collection[key]
                     if name == "import_runs":
@@ -4554,6 +4992,24 @@ class MemoryStore(Store):
                         for lease_id in [k for k in self._state.history_spaces if k not in collection]:
                             del self._state.history_spaces[lease_id]
                     result[name] = len(keys)
+            if "proxy_allocations" in names:
+                cutoff = now - max(retention["lease_history"], retention["operation_keys"])
+                referenced = {row.proxy_allocation_id for row in self._state.history.values()}
+                referenced.update(self._state.binding_allocations.values())
+                referenced.update(
+                    row.proxy_allocation_id for row in self._state.leases.values() if row.expires_at > now
+                )
+                gone_allocations = [
+                    row.id
+                    for row in self._state.proxy_allocations.values()
+                    if row.state == "released"
+                    and row.ended_at is not None
+                    and row.ended_at < cutoff
+                    and row.id not in referenced
+                ]
+                for allocation_id in gone_allocations:
+                    del self._state.proxy_allocations[allocation_id]
+                result["proxy_allocations"] = len(gone_allocations)
             for name, size in (("rollup_hours", BucketSize.HOUR), ("rollup_days", BucketSize.DAY)):
                 if name not in names:
                     continue
@@ -4717,20 +5173,12 @@ class MemoryStore(Store):
                 if fix and changes:
                     self._state.identities[identity_id] = replace(row, **changes)
             for proxy_id, proxy in self._state.proxies.items():
-                expected_load = sum(bound == proxy_id for bound in self._state.bindings.values())
-                actual_load = self._state.proxy_load.get(proxy_id, 0)
-                if actual_load != expected_load:
-                    issues.append(
-                        DoctorIssue(
-                            "proxy.bound_count",
-                            spaces[proxy.space_id],
-                            proxy_id,
-                            expected_load,
-                            actual_load,
-                        )
-                    )
-                    if fix:
-                        self._state.proxy_load[proxy_id] = expected_load
+                ref = self._state.spaces[spaces[proxy.space_id]]
+                tx = MemoryTx(self, ref, self.clock.now())  # Общий lock doctor уже удерживается.
+                issues.extend(
+                    DoctorIssue(kind, ref.slug, proxy_id, expected, actual)
+                    for kind, expected, actual in await reconcile_counters(tx, proxy_id, fix=fix)
+                )
             return issues
 
     def _rotation_views(self) -> dict[str, tuple[Any, Callable[[Any], bytes]]]:

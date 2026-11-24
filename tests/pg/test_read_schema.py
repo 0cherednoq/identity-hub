@@ -52,12 +52,12 @@ EXPECTED_COLUMNS = {
     },
     "leases": {
         "identity_id", "space_id", "lease_id", "pool", "holder", "acquired_at", "heartbeat_at",
-        "expires_at", "purpose", "ref", "hold_deadline",
+        "expires_at", "purpose", "ref", "hold_deadline", "proxy_id", "proxy_allocation_id",
     },
     "lease_history": {
         "lease_id", "space_id", "identity_id", "pool", "holder", "proxy_id", "acquired_at",
         "last_heartbeat_at", "released_at", "duration", "end_reason", "operations", "succeeded",
-        "failed", "last_error", "purpose", "ref", "hold_deadline",
+        "failed", "last_error", "purpose", "ref", "hold_deadline", "proxy_allocation_id",
     },
     "region_states": {
         "identity_id", "space_id", "region", "key", "state", "code", "until", "changed_at",
@@ -72,9 +72,14 @@ EXPECTED_COLUMNS = {
         "id", "space_id", "group", "scheme", "host", "port", "status", "error_score", "fail_streak",
         "next_check_at", "status_changed_at", "status_source", "checked_at", "pinned_until",
         "max_identities", "bound_count", "created_at", "enabled", "disabled_reason", "disabled_by",
-        "disabled_at",
+        "disabled_at", "reserved_count", "draining_count",
     },
-    "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at"},
+    "proxy_bindings": {"identity_id", "space_id", "proxy_id", "bound_at", "binding_id"},
+    "proxy_groups": {"space_id", "name", "capacity_accounting", "revision"},
+    "proxy_allocations": {
+        "id", "space_id", "identity_id", "proxy_id", "state", "owner_lease_id", "created_at",
+        "updated_at", "ended_at", "reason",
+    },
     "identity_links": {"identity_id", "space_id", "role", "linked_identity_id", "created_at"},
     # C8.2: метаданные записей без секретов — колонки перечислены и в tests/pg/test_read_schema_access.py
     "credentials": {
@@ -300,13 +305,52 @@ async def test_identity_links_support_public_anti_join(hub: IdentityHub, db: Asy
 
 def test_column_allowlist_and_version() -> None:
     read = ReadSchema()
-    assert READ_SCHEMA_VERSION == 5 and read.version == READ_SCHEMA_VERSION
+    assert READ_SCHEMA_VERSION == 6 and read.version == READ_SCHEMA_VERSION
     assert set(READ_TABLES) == set(EXPECTED_COLUMNS)
     for name, expected in EXPECTED_COLUMNS.items():
         table = getattr(read, name)
         assert set(table.c.keys()) == expected, name
         assert not {column.name for column in table.c} & FORBIDDEN, name
     assert {name: str(read.identities.c[name].type) for name in IDENTITY_V4_TYPES} == IDENTITY_V4_TYPES
+
+
+async def test_managed_proxy_selectables_separate_binding_from_use(space, hub, db):
+    from tests.conformance.test_proxy_allocation_recovery import _setup
+
+    _, _, leases = await _setup(space, count=2)
+    await leases[0].confirm_proxy(reason="accepted")
+    read, ref = hub.read, await space.ref()
+    async with db.connect() as conn:
+        allocations = (
+            (
+                await conn.execute(
+                    select(read.proxy_allocations).where(read.proxy_allocations.c.space_id == ref.id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        bindings = (
+            (await conn.execute(select(read.proxy_bindings).where(read.proxy_bindings.c.space_id == ref.id)))
+            .mappings()
+            .all()
+        )
+        group = (
+            (await conn.execute(select(read.proxy_groups).where(read.proxy_groups.c.space_id == ref.id)))
+            .mappings()
+            .one()
+        )
+        uses = (
+            (await conn.execute(select(read.leases).where(read.leases.c.space_id == ref.id))).mappings().all()
+        )
+    assert {row["state"] for row in allocations} == {"bound", "reserved"}
+    assert len(bindings) == 1 and bindings[0]["binding_id"] == leases[0].proxy_allocation_id
+    assert group["capacity_accounting"] == "allocations" and group["revision"] >= 1
+    assert {row["proxy_allocation_id"] for row in uses} == {lease.proxy_allocation_id for lease in leases}
+    dumped = repr([*map(dict, allocations), *map(dict, uses)])
+    assert all(str(lease._row.token) not in dumped for lease in leases)
+    for lease in leases:
+        await lease.release()
 
 
 def test_sql_snapshot_has_no_secret_columns() -> None:

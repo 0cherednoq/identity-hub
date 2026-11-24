@@ -151,6 +151,12 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
     priority: int = 0
     yield_grace: timedelta | None = None
     _capacity_state: str = field(default="ok", init=False, repr=False)
+    _proxy_override: ProxyPolicy | None = field(default=None, init=False, repr=False)
+    _proxy_composed: ProxyPolicy | None = field(default=None, init=False, repr=False)
+    _capacity_owner: Pool[TCreds, TSession] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _service_revision: int | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.name or len(self.name) > 128:
@@ -173,8 +179,26 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
         if self.yield_grace is not None and self.shared:
             raise ValidationFailed("yield_grace не поддерживается для SHARED-пула")
         _check_profile_filter(self.service, self.profile)
-        if self.proxy_policy is None:
-            self.proxy_policy = self.service.proxy_policy
+        from identity_hub.proxy_assignment import compose_proxy_policy
+
+        self._proxy_override = self.proxy_policy
+        try:
+            self.proxy_policy = compose_proxy_policy(self.service.proxy_policy, self.proxy_policy)
+        except ValueError as exc:
+            raise ValidationFailed(str(exc)) from None
+        self.service.validate_proxy_policy(self.proxy_policy)
+        self._proxy_composed = self.proxy_policy
+
+    def _for_service(self, service: Service[TCreds, TSession]) -> Pool[TCreds, TSession]:
+        """Снимок выдачи: параллельный acquire не меняет Service/policy уже выданной аренды."""
+        override = self._proxy_override if self.proxy_policy is self._proxy_composed else self.proxy_policy
+        snapshot = replace(self, service=service, proxy_policy=override)
+        snapshot._capacity_owner = self._capacity_owner or self
+        snapshot._service_revision = self.space.hub._runtime_service_revisions.get(service.name)
+        if self._capacity_owner is None:
+            self.service, self.proxy_policy = service, snapshot.proxy_policy
+            self._proxy_override, self._proxy_composed = override, snapshot.proxy_policy
+        return snapshot
 
     @property
     def shared(self) -> bool:
@@ -442,7 +466,8 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
             effective = await self._effective_reserve(tx, query, self.reserve)
             available = max(0, free - effective)
             state = "empty" if available == 0 else ("low" if available <= threshold else "ok")
-            previous_state = self._capacity_state
+            owner = self._capacity_owner or self
+            previous_state = owner._capacity_state
             if state != previous_state:
                 if state == "ok":
                     capacity = await self._eligible_capacity(tx, query, 1_000_000)
@@ -470,7 +495,7 @@ class Pool(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unpara
                             data={"pool": self.name, "available": available, "threshold": self.capacity_low},
                         ),
                     )
-                self._capacity_state = state
+                owner._capacity_state = state
         record_metric(
             self.space.hub.metrics,
             "gauge",

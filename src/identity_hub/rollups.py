@@ -165,6 +165,34 @@ def event_contributions(event: Event) -> tuple[tuple[str, tuple[tuple[str, str],
         )
     elif event.type == "proxy.status.changed":
         items.append(("proxies.status", _dim(pool=data.get("pool"), state=data.get("to")), 1.0))
+    elif event.type in {
+        "proxy.reservation.created",
+        "proxy.reservation.confirmed",
+        "proxy.reservation.released",
+        "proxy.allocation.draining",
+        "proxy.allocation.released",
+    }:
+        dims = _dim(group=data.get("group"))
+        family, outcome = event.type.rsplit(".", 1)
+        items.append((f"{family}s.{outcome}", dims, 1.0))
+        seconds = data.get("reservation_seconds")
+        if event.type.startswith("proxy.reservation.") and isinstance(seconds, int | float):
+            items.extend(
+                [
+                    ("proxy.reservation_seconds.sum", dims, max(0.0, float(seconds))),
+                    ("proxy.reservation_seconds.count", dims, 1.0),
+                ]
+            )
+        if event.type == "proxy.allocation.released" and data.get("expired") is True:
+            items.append(("proxy.expirations", dims, 1.0))
+            delay = data.get("cleanup_delay_seconds")
+            if isinstance(delay, int | float):
+                items.extend(
+                    [
+                        ("proxy.cleanup_delay_seconds.sum", dims, max(0.0, float(delay))),
+                        ("proxy.cleanup_delay_seconds.count", dims, 1.0),
+                    ]
+                )
     return tuple(items)
 
 

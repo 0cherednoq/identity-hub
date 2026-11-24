@@ -40,6 +40,7 @@ from identity_hub.protocols import (
     _FunctionAuthenticator,
     _MappingClassifier,
 )
+from identity_hub.proxy_assignment import ProxyBindingPolicy, predicate_regions
 
 __all__ = [
     "PROBE_OPERATION",
@@ -185,10 +186,16 @@ class ProxyPolicy:
     sticky: bool = True
     max_identities: int | None = None  # None — берётся из прокси (ih_proxies.max_identities)
     on_proxy_down: ProxyDownPolicy = ProxyDownPolicy.WAIT
+    binding: ProxyBindingPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.group:
             raise ValueError("ProxyPolicy: нужна группа прокси (group)")
+        if self.binding is not None:
+            if not isinstance(self.binding, ProxyBindingPolicy):
+                raise ValueError("ProxyPolicy.binding: нужен ProxyBindingPolicy")
+            if not self.sticky:
+                raise ValueError("ProxyPolicy.binding требует sticky=True")
 
 
 @dataclass(frozen=True)
@@ -271,6 +278,21 @@ class Service(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unp
         """Политика диагностического допуска сервиса или политика по умолчанию."""
         return self.diagnostics if self.diagnostics is not None else DEFAULT_DIAGNOSTIC_POLICY
 
+    def validate_proxy_policy(self, policy: ProxyPolicy | None) -> None:
+        """Проверить ссылки правил на факторы/слоты именно этого сервиса."""
+        if policy is None or policy.binding is None:
+            return
+        if self.lease_mode is LeaseMode.SHARED:
+            raise ValidationFailed("proxy binding policy требует эксклюзивную аренду")
+        for rule in (policy.binding.bind_when, policy.binding.unbind_when):
+            if rule is None:
+                continue
+            for leaf in predicate_regions(rule):
+                if leaf.region == "verification" and leaf.key not in self.factor_names:
+                    raise ValidationFailed("proxy predicate: фактор не объявлен сервисом")
+                if leaf.region == "auth" and leaf.key not in {"default", *self.session_slots}:
+                    raise ValidationFailed("proxy predicate: слот не объявлен сервисом")
+
     def session_schema(self, slot: str) -> type[BaseModel]:
         """Схема конкретного слота; необъявленный слот использует прежнюю общую `session`."""
         if not isinstance(slot, str) or not 1 <= len(slot) <= 64:
@@ -323,6 +345,7 @@ class Service(Generic[TCreds, TSession]):  # noqa: UP046 - defaults preserve unp
                 object.__setattr__(self, "error_classifier", _MappingClassifier(self.error_classifier))
         if errors:
             raise ValidationFailed(f"сервис {self.name!r} объявлен некорректно", errors)
+        self.validate_proxy_policy(self.proxy_policy)
         if PROBE_OPERATION not in self.operations:
             ops = {
                 **self.operations,

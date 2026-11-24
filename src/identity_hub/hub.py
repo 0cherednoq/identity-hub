@@ -71,6 +71,7 @@ from identity_hub.pool import PoolsMixin
 from identity_hub.protocols import SecretsProvider, TCreds, TSession
 from identity_hub.provider_worker import ProviderOperationsWorker
 from identity_hub.proxies import ProxiesMixin, ProxyHealthPolicy
+from identity_hub.proxy_recovery import ProxyRecovery
 from identity_hub.read.admin_state import AdminStateMixin
 from identity_hub.read.analytics import AnalyticsMixin
 from identity_hub.read.background import BackgroundSnapshot
@@ -251,6 +252,7 @@ class IdentityHub:
         self._closed = False
         # когда пул последний раз сообщал proxy.pool.exhausted (монотонные часы, R1-12)
         self._proxy_exhausted_at: dict[tuple[str, str, str], float] = {}
+        self._proxy_recovery = ProxyRecovery(self)
 
     def _seal_stored_model(self, model: BaseModel | Mapping[str, Any], aad: bytes) -> StoredPayload:
         """Подготовить любой секрет (credentials/session/proxy/profile/…) в выбранном формате (D-323)."""

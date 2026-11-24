@@ -26,11 +26,10 @@ from identity_hub.crypto import associated_data
 from identity_hub.domain import regions as machine
 from identity_hub.domain.region_specs import PROXY_HEALTH
 from identity_hub.domain.regions import Change, Command, Observation, Outcome, RegionDecision, RegionState
-from identity_hub.enums import ChangeSource, LeaseUnavailableReason, ProxyStatus
+from identity_hub.enums import ChangeSource, ProxyStatus
 from identity_hub.errors import (
     AlreadyExists,
     ConcurrentModification,
-    LeaseUnavailable,
     NotFound,
     ValidationFailed,
     describe_error,
@@ -584,7 +583,7 @@ class ProxiesMixin(SpaceBase):
                         EventDraft(
                             "proxy.binding.changed",
                             actor=actor,
-                            service=bound.get(identity_id),
+                            service=bound.get(identity_id) or (await self._identity(tx, identity_id)).service,
                             identity_id=identity_id,
                             data={
                                 "from_proxy_id": str(proxy_id),
@@ -612,6 +611,8 @@ class ProxiesMixin(SpaceBase):
 
         Возвращает число отвязанных аккаунтов.
         """
+        from identity_hub.proxy_allocator import prepare_proxy_delete
+
         async with self._tx() as tx:
             row = await self._proxy(tx, proxy_id)
             bound = await tx.proxy_bound_identities(proxy_id)
@@ -619,8 +620,12 @@ class ProxiesMixin(SpaceBase):
                 raise ValidationFailed(
                     f"к прокси привязано аккаунтов: {len(bound)}; перепривяжите их или удалите с unbind=True"
                 )
-            services = {item.identity_id: item.service for item in bound}
-            unbound = await tx.delete_proxy(proxy_id) or []
+            unbound = await prepare_proxy_delete(tx, proxy_id, unbind=unbind)
+            row = await self._proxy(tx, proxy_id)
+            services = {
+                identity_id: (await self._identity(tx, identity_id)).service for identity_id in unbound
+            }
+            await tx.delete_proxy(proxy_id)
             drafts = [
                 EventDraft(
                     "proxy.binding.changed",
@@ -661,6 +666,7 @@ class ProxiesMixin(SpaceBase):
         secret = ProxySecret(username=username, password=SecretStr(password) if password else None)
         payload = self.hub._seal_stored_model(secret, associated_data("ih_proxies", proxy_id))
         async with self._tx() as tx:
+            await tx.proxy_lock_rows([proxy_id])
             row = await self._proxy(tx, proxy_id)
             tag, key_id, aliases = self._proxy_fingerprints(row.scheme, row.host, row.port, username)
             other = await tx.proxy_by_fingerprint([tag, *aliases])
@@ -688,6 +694,7 @@ class ProxiesMixin(SpaceBase):
         if scheme is None and host is None and port is None and username is UNSET and password is UNSET:
             raise ValidationFailed("прокси: укажите, что изменить")
         async with self._tx() as tx:
+            await tx.proxy_lock_rows([proxy_id])
             row = await self._proxy(tx, proxy_id)
             ad = associated_data("ih_proxies", proxy_id)
             current = self.hub._open_stored_model(ProxySecret, row.secret, ad)
@@ -740,6 +747,7 @@ class ProxiesMixin(SpaceBase):
         if not group or len(group) > 128:
             raise ValidationFailed("пул прокси: от 1 до 128 символов")
         async with self._tx() as tx:
+            await tx.proxy_lock_rows([proxy_id])
             row = await self._proxy(tx, proxy_id)
             if row.pool == group:
                 return row
@@ -755,14 +763,23 @@ class ProxiesMixin(SpaceBase):
             data["from_pool"] = previous
         await self._emit(tx, EventDraft("proxy.updated", actor=actor, proxy_id=row.id, data=data))
 
-    async def _unbind_identity(self, identity_id: UUID, *, reason: str, actor: str) -> bool:
-        """Снять sticky-привязку аккаунта; `False` — привязки не было. Место на прокси освобождается."""
+    async def _unbind_identity(
+        self, identity_id: UUID, *, reason: str, actor: str, expected_binding_id: UUID | None = None
+    ) -> bool:
+        """Снять привязку/резерв; активное использование строгого proxy удерживает место."""
+        from identity_hub.proxy_allocator import detach
+
         actor, reason = require_actor_and_reason(actor, reason, "отвязка прокси")
         async with self._tx() as tx:
+            await tx.lock_identities([identity_id])
             identity = await self._identity(tx, identity_id)
-            previous = await tx.unbind_identity(identity_id)
-            if previous is None:
+            bindings = await tx.proxy_bindings(identity_id=identity_id)
+            result = await detach(tx, identity_id, expected_binding_id=expected_binding_id)
+            if result is None and not bindings:
                 return False
+            previous = bindings[0].proxy_id if bindings else None
+            if previous is None:
+                return True  # Только резерв: постоянная пара не менялась (аудит назначения — PA4.2).
             proxy = await tx.get_proxy(previous)
             await self._emit(
                 tx,
@@ -781,27 +798,27 @@ class ProxiesMixin(SpaceBase):
             )
             return True
 
-    async def _rebind_proxy(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
-        """Move an account's sticky binding without exceeding target capacity."""
-        if not reason.strip():
-            raise ValidationFailed("proxy rebind requires a reason")
+    async def _rebind_proxy(
+        self,
+        identity_id: UUID,
+        proxy_id: UUID,
+        *,
+        reason: str,
+        actor: str,
+        expected_binding_id: UUID | None = None,
+    ) -> bool:
+        """Доверенное назначение с физическим лимитом и проверкой поколения."""
+        from identity_hub.proxy_allocator import rebind
+
+        actor, reason = require_actor_and_reason(actor, reason, "перепривязка прокси")
         async with self._tx() as tx:
-            identity = await tx.get_identity(identity_id)
-            if identity is None:
-                raise NotFound("identity", identity_id)
-            target = await self._proxy(tx, proxy_id)
-            if target.status != ProxyStatus.ALIVE:
-                raise ValidationFailed("target proxy must be alive")
-            if not target.enabled:
-                raise ValidationFailed("target proxy is disabled")
-            result = await tx.rebind_proxy(identity_id, proxy_id)
-            if result is None:
-                raise LeaseUnavailable(
-                    "target proxy has no available capacity", reason=LeaseUnavailableReason.NO_PROXY
-                )
-            previous, claimed = result
-            if previous == claimed.id:
+            previous, claimed = await rebind(
+                tx, identity_id, proxy_id, expected_binding_id=expected_binding_id
+            )
+            if previous == claimed:
                 return False
+            identity = await self._identity(tx, identity_id)
+            target = await self._proxy(tx, claimed)
             await self._emit(
                 tx,
                 EventDraft(
@@ -809,12 +826,12 @@ class ProxiesMixin(SpaceBase):
                     actor=actor,
                     service=identity.service,
                     identity_id=identity_id,
-                    proxy_id=claimed.id,
+                    proxy_id=claimed,
                     data={
                         "from_proxy_id": str(previous) if previous else None,
-                        "to_proxy_id": str(claimed.id),
+                        "to_proxy_id": str(claimed),
                         "reason": reason,
-                        "pool": claimed.pool,
+                        "pool": target.pool,
                     },
                 ),
             )

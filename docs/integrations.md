@@ -63,7 +63,11 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 `hub.read` — публичная read-схема на SQLAlchemy Core (версия `hub.read.version`). Она даёт
 стабильные selectable без секретов и служебных полей: `identities`, `identity_links`, `leases`,
-`lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`, `credentials`, `sessions`.
+`lease_history`, `region_states`, `events`, `proxies`, `proxy_bindings`, `proxy_groups`,
+`proxy_allocations`, `credentials`, `sessions`. Read-схема v6 отделяет постоянные пары от
+reserved/draining: join с `proxy_bindings` по-прежнему возвращает только закреплённый proxy.
+Для временного использования берите `leases.c.proxy_allocation_id` → `proxy_allocations.c.id`,
+проверяйте space_id и срок canonical lease. Owner lease ID — ссылка, не lease token.
 Физические таблицы библиотеки приватны и
 могут меняться между версиями; read-схема меняется только с повышением версии.
 
@@ -86,7 +90,7 @@ async with farmers.lease(among=stmt) as lease:                # тот же sele
 
 - Каждая таблица содержит `space_id` — фильтруйте по `(await space.ref()).id`.
 - Имена колонок совпадают со словарём API: `identities.c.auth`, `identities.c.revision`,
-  `proxies.c.group`. `READ_SCHEMA_VERSION = 5`: с версии 2 `identities.c.revision` — ревизия
+  `proxies.c.group`. `READ_SCHEMA_VERSION = 6`: с версии 2 `identities.c.revision` — ревизия
   агрегата, а не номер события (`D-205`), у `events` появилась колонка `revision`. С версии 3 у `leases` и `lease_history` есть колонки `purpose` и `ref` — назначение аренды, с версии 4 — `hold_deadline`, потолок удержания. Секретов (`credentials`, сессии, логины прокси), `token` аренды, fencing и
   fingerprint в схеме нет. С версии 5 `identities.c.verification_tier_rank` содержит индекс
   наивысшего достигнутого tier в порядке `Service.tiers` (`NULL`, если tier не достигнут).

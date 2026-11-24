@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable, Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from identity_hub.acceptance import AcceptPolicy
@@ -44,6 +44,8 @@ class Imports(Namespace):
         run_id: UUID | None = None,
         max_identities: int = 3,
         on_batch: BatchHook | None = None,
+        proxy_binding: Literal["policy", "trusted"] = "policy",
+        proxy_binding_reason: str | None = None,
     ) -> ImportReport:
         """Импортировать поток записей пачками по `batch_size`, каждая — своя транзакция.
 
@@ -72,6 +74,8 @@ class Imports(Namespace):
             run_id=run_id,
             max_identities=max_identities,
             on_batch=on_batch,
+            proxy_binding=proxy_binding,
+            proxy_binding_reason=proxy_binding_reason,
         )
 
     async def run_files(
@@ -91,6 +95,8 @@ class Imports(Namespace):
         base_dir: str | Path | None = None,
         max_bytes: int | None = None,
         on_batch: BatchHook | None = None,
+        proxy_binding: Literal["policy", "trusted"] = "policy",
+        proxy_binding_reason: str | None = None,
     ) -> ImportReport:
         """Прочитать файлы импортёрами `Service.importers` и импортировать; параметры — как у `run`.
 
@@ -113,6 +119,8 @@ class Imports(Namespace):
             run_id=run_id,
             max_identities=max_identities,
             on_batch=on_batch,
+            proxy_binding=proxy_binding,
+            proxy_binding_reason=proxy_binding_reason,
         )
 
     async def stage(
@@ -126,6 +134,8 @@ class Imports(Namespace):
         labels: Mapping[str, str | int | float | bool] | None = None,
         actor: str,
         run_id: UUID | None = None,
+        proxy_binding: Literal["policy", "trusted"] = "policy",
+        proxy_binding_reason: str | None = None,
     ) -> UUID:
         """Сохранить импорт до 10 000 записей зашифрованным; обработает диспетчер. Возвращает id прогона."""
         return await self._space._stage_import(
@@ -137,6 +147,8 @@ class Imports(Namespace):
             labels=labels,
             actor=actor,
             run_id=run_id,
+            proxy_binding=proxy_binding,
+            proxy_binding_reason=proxy_binding_reason,
         )
 
     async def get(self, run_id: UUID) -> ImportRunInfo:

@@ -174,6 +174,14 @@ class Maintenance:
         for space in await self._spaces():
             async with space._tx(own=True) as tx:
                 report.add("leases", await tx.expire_leases(batch))
+            # Новая TX: после expire уже были lease/history-lock.
+            closed, repaired = await self.hub._proxy_recovery.run_and_repair(space, limit=min(batch, 1000))
+            report.add("proxy_allocations", closed)
+            report.add("proxy_counters", repaired)
+            report.add(
+                "proxy_history",
+                await self.hub._proxy_recovery.close_orphan_history(space, limit=min(batch, 1000)),
+            )
         # операции провайдера с истёкшим claim — без сетевого I/O (IMP-11, D-223)
         report.add("provider_operations", await self.hub._provider_worker.run_once(batch))
         report.add("acceptance", await self.hub._acceptance.run_once(batch))
@@ -210,6 +218,7 @@ class Maintenance:
                 {
                     "lease_logs",
                     "lease_history",
+                    "proxy_allocations",
                     "webhook_deliveries",
                     "notifications",
                     "events",

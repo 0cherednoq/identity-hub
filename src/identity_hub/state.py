@@ -205,6 +205,32 @@ def _actor(change: Change) -> str:
     return change.actor if not isinstance(change, Timer) else "timer"
 
 
+async def _apply_state_command(
+    space: SpaceBase,
+    tx: StoreTx,
+    identity_id: UUID,
+    region: str,
+    key: str,
+    change: Change,
+    *,
+    lease_id: UUID | None = None,
+) -> RegionDecision:
+    """Граница одношаговой команды; составные проекции используют свой общий finalizer."""
+    from identity_hub.proxy_finalization import accepted, finalize, prepare
+
+    await prepare(tx, identity_id)
+    decision = await apply_region_change(space, tx, identity_id, region, key, change, lease_id=lease_id)
+    await finalize(
+        space,
+        tx,
+        identity_id,
+        actor=_actor(change),
+        reason="state_command",
+        state_accepted=accepted(decision),
+    )
+    return decision
+
+
 class StateMixin(SpaceBase):
     """Регионы состояния аккаунта (ТЗ §3, FR-9)."""
 
@@ -213,7 +239,7 @@ class StateMixin(SpaceBase):
     ) -> RegionDecision:
         """Решение владельца (команда lifecycle). Выполняется в транзакции пользователя, если она передана."""
         async with self._tx() as tx:
-            return await apply_region_change(
+            return await _apply_state_command(
                 self, tx, identity_id, "lifecycle", "", Command(str(state), actor=actor, reason=reason)
             )
 
@@ -228,7 +254,7 @@ class StateMixin(SpaceBase):
                 raise TransitionNotAllowed(
                     "standing", identity.standing, Standing.GOOD, "restore разрешён только из banned"
                 )
-            return await apply_region_change(
+            return await _apply_state_command(
                 self,
                 tx,
                 identity_id,
@@ -250,6 +276,9 @@ class StateMixin(SpaceBase):
             until=override.until,
         )
         async with self._tx() as tx:
+            from identity_hub.proxy_finalization import accepted, finalize, prepare
+
+            await prepare(tx, identity_id)
             identity = await self._identity(tx, identity_id)
             service = await self.hub.resolve_service(identity.service)
             key = _override_key(service, override.region, override.key)
@@ -267,8 +296,16 @@ class StateMixin(SpaceBase):
                     actor=override.actor,
                 )
                 assert decision.region is not None
+                await finalize(
+                    self,
+                    tx,
+                    identity_id,
+                    actor=override.actor,
+                    reason="state_override",
+                    state_accepted=accepted(decision.region),
+                )
                 return decision.region
-            return await apply_region_change(self, tx, identity_id, override.region, key, change)
+            return await _apply_state_command(self, tx, identity_id, override.region, key, change)
 
     async def _cool_down(
         self,
@@ -288,7 +325,7 @@ class StateMixin(SpaceBase):
             raise ValidationFailed("cool_down: until должен содержать часовой пояс")
         async with self._tx() as tx:
             deadline = until if until is not None else await tx.now() + for_  # type: ignore[operator]
-            return await apply_region_change(
+            return await _apply_state_command(
                 self,
                 tx,
                 identity_id,
@@ -304,7 +341,7 @@ class StateMixin(SpaceBase):
         if region in COLUMN_REGIONS:
             raise ValidationFailed(f"регион {region} не поддерживает закрепление")
         async with self._tx() as tx:
-            return await apply_region_change(
+            return await _apply_state_command(
                 self,
                 tx,
                 identity_id,
@@ -326,7 +363,7 @@ class StateMixin(SpaceBase):
     ) -> RegionDecision:
         """Наблюдение (проба, ошибка, вебхук) — всегда своя транзакция (ТЗ §7.2)."""
         async with self._tx(own=True) as tx:
-            return await apply_region_change(
+            return await _apply_state_command(
                 self, tx, identity_id, region, key, observation, lease_id=lease_id
             )
 
@@ -351,7 +388,9 @@ class StateMixin(SpaceBase):
             raise ValidationFailed("observe: observed_at должен содержать часовой пояс")
         if observation.until is not None and observation.until.tzinfo is None:
             raise ValidationFailed("observe: until должен содержать часовой пояс")
-        async with self._tx(own=True) as tx:
+        # Явная команда приложения участвует в using(session), в том числе вместе
+        # с lease.confirm_proxy. Внутренние сетевые наблюдения сохраняют own=True.
+        async with self._tx() as tx:
             identity = await self._identity(tx, identity_id)
             service = await self.hub.resolve_service(identity.service)
             key = _override_key(service, observation.region, observation.key)
@@ -365,7 +404,7 @@ class StateMixin(SpaceBase):
                 until=observation.until,
                 actor=actor,
             )
-            return await apply_region_change(self, tx, identity_id, observation.region, key, change)
+            return await _apply_state_command(self, tx, identity_id, observation.region, key, change)
 
     async def _command(
         self,
@@ -378,8 +417,8 @@ class StateMixin(SpaceBase):
         own: bool = True,
     ) -> RegionDecision:
         async with self._tx(own=own) as tx:
-            return await apply_region_change(self, tx, identity_id, region, key, command, lease_id=lease_id)
+            return await _apply_state_command(self, tx, identity_id, region, key, command, lease_id=lease_id)
 
     async def _expire(self, identity_id: UUID, region: str, *, key: str = "") -> RegionDecision:
         async with self._tx(own=True) as tx:
-            return await apply_region_change(self, tx, identity_id, region, key, Timer())
+            return await _apply_state_command(self, tx, identity_id, region, key, Timer())

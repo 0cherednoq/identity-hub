@@ -23,3 +23,10 @@ def test_recording_metrics_and_backend_failure_isolated() -> None:
             raise RuntimeError("metrics backend down")
 
     record_metric(Broken(), "counter", "ignored")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("label", ["proxy_id", "allocation_id", "binding_id"])
+def test_proxy_resource_ids_never_become_metric_labels(label):
+    hook = RecordingMetrics()
+    record_metric(hook, "counter", "custom", **{label: "id"})
+    assert not hook.events

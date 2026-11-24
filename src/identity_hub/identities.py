@@ -423,6 +423,10 @@ class IdentitiesMixin(SpaceBase):
             else:
                 ids = sorted(set(identity_ids or ()))
             await tx.lock_identities(ids)
+            if lifecycle is not None:
+                from identity_hub.proxy_allocator import lock_identity_proxy_rows
+
+                await lock_identity_proxy_rows(tx, ids)
 
             changed = 0
             skipped = 0
@@ -480,6 +484,16 @@ class IdentitiesMixin(SpaceBase):
                         Command(lifecycle, actor=actor),
                     )
                     lifecycle_changed = decision.changed
+                    from identity_hub.proxy_finalization import accepted, finalize
+
+                    await finalize(
+                        self,
+                        tx,
+                        identity_id,
+                        actor=actor,
+                        reason="identity_update",
+                        state_accepted=accepted(decision),
+                    )
                 if data_changed or lifecycle_changed:
                     changed += 1
                 else:
@@ -590,6 +604,8 @@ class IdentitiesMixin(SpaceBase):
         Аккаунт с живой арендой не удаляется: воркер продолжал бы работать с ним, а история аренды
         осталась бы открытой. `revoke=True` отзывает аренду в той же транзакции.
         """
+        from identity_hub.proxy_allocator import prepare_identity_delete
+
         async with self._tx() as tx:
             await tx.lock_identities([identity_id])  # новая аренда не появится до конца транзакции
             row = await self._identity(tx, identity_id)
@@ -597,11 +613,15 @@ class IdentitiesMixin(SpaceBase):
             if incoming:
                 refs = [f"{dependent} ({role})" for dependent, role in incoming]
                 raise ValidationFailed("на аккаунт ссылаются связи — сначала удалите их", refs)
-            if await tx.current_lease(identity_id) is not None:
-                if not revoke:
-                    raise ValidationFailed(
-                        "у аккаунта живая аренда — дождитесь её освобождения или удалите с revoke=True"
-                    )
+            lease = await tx.current_lease(identity_id)
+            if lease is not None and not revoke:
+                raise ValidationFailed(
+                    "у аккаунта живая аренда — дождитесь её освобождения или удалите с revoke=True"
+                )
+            await prepare_identity_delete(
+                tx, identity_id, finishing_lease_id=lease.lease_id if lease else None
+            )
+            if lease is not None:
                 revoked = await tx.revoke_lease(identity_id)
                 if revoked is not None:
                     await self._emit(

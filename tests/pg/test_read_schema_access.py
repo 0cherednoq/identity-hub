@@ -35,8 +35,8 @@ def test_projections_expose_metadata_without_secrets() -> None:
     assert set(read.sessions.c.keys()) == SESSION_COLUMNS
     for table in (read.credentials, read.sessions):
         assert not {column.name for column in table.c} & SECRET_COLUMNS
-    # добавление таблиц совместимо: версия не меняется (`D-326`)
-    assert READ_SCHEMA_VERSION == 5
+    # PA4.2 версионирует новые proxy selectable и ссылки назначения в lease/binding.
+    assert READ_SCHEMA_VERSION == 6
 
 
 async def test_lease_among_unverified_credentials(hub: IdentityHub, db: AsyncEngine) -> None:

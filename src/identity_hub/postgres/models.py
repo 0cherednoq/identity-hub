@@ -77,6 +77,8 @@ __all__ = [
     "NotificationRuleRecord",
     "OperationKeyRecord",
     "ProviderOperationRecord",
+    "ProxyAllocationRecord",
+    "ProxyGroupRecord",
     "ProxyRecord",
     "QuotaUsageRecord",
     "RegionStateRecord",
@@ -836,6 +838,10 @@ class LeaseRecord(IdentityHubBase):
 
     __tablename__ = "ih_leases"
 
+    proxy_id: Mapped[UUID | None]
+    proxy_allocation_id: Mapped[UUID | None]
+    proxy_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+
     identity_id: Mapped[UUID] = mapped_column(primary_key=True)
     space_id: Mapped[UUID]
 
@@ -889,6 +895,8 @@ class LeaseHistoryRecord(IdentityHubBase):
     pool: Mapped[str] = mapped_column(String(128))
     holder: Mapped[str] = mapped_column(String(256))
     proxy_id: Mapped[UUID | None]  # через какой прокси работали
+    proxy_allocation_id: Mapped[UUID | None]
+    proxy_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     purpose: Mapped[str | None] = mapped_column(String(64))  # метка вида работы (N1.1)
     ref: Mapped[str | None] = mapped_column(String(256))  # ссылка на задачу держателя
     # потолок удержания (N1.2): продление не ставит expires_at позже
@@ -912,11 +920,18 @@ class LeaseHistoryRecord(IdentityHubBase):
     last_error: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
+        UniqueConstraint("lease_id", "space_id", "identity_id", name="uq_ih_lease_history_owner_scope"),
         CheckConstraint(
             "end_reason IS NULL OR end_reason IN (" + ", ".join(f"'{r.value}'" for r in LeaseEndReason) + ")",
             name="end_reason_valid",
         ),
         Index("ix_ih_lease_history_identity", "identity_id", "acquired_at"),
+        Index(
+            "ix_ih_lease_history_proxy_allocation",
+            "proxy_allocation_id",
+            "space_id",
+            postgresql_where=text("proxy_allocation_id IS NOT NULL"),
+        ),
         Index("ix_ih_lease_history_space_acquired", "space_id", "acquired_at"),
         Index("ix_ih_lease_history_space_released", "space_id", "released_at"),
         Index("ix_ih_lease_history_space_holder_acquired", "space_id", "holder", "acquired_at"),
@@ -1144,6 +1159,8 @@ class ProxyRecord(DualSecretPayloadMixin, IdentityHubBase):
     bound_count: Mapped[int] = mapped_column(
         Integer, default=0, server_default=text("0")
     )  # D-117, миграция 0004
+    reserved_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    draining_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -1152,11 +1169,123 @@ class ProxyRecord(DualSecretPayloadMixin, IdentityHubBase):
         UniqueConstraint("id", "space_id", name="uq_ih_proxies_id_space"),
         _enum_check("status", ProxyStatus),
         CheckConstraint("bound_count >= 0", name="bound_count_nonnegative"),
+        CheckConstraint("reserved_count >= 0", name="reserved_count_nonnegative"),
+        CheckConstraint("draining_count >= 0", name="draining_count_nonnegative"),
         CheckConstraint("max_identities >= 1", name="max_identities_positive"),
         CheckConstraint("port BETWEEN 1 AND 65535", name="port_valid"),
         payload_format_check(),
         Index("ix_ih_proxies_pick", "space_id", "pool", "status"),
+        Index("ix_ih_proxies_space_id", "space_id", "id"),
         Index("ix_ih_proxies_host", "host", postgresql_using="gin", postgresql_ops={"host": "gin_trgm_ops"}),
+    )
+
+
+class ProxyGroupRecord(IdentityHubBase):
+    """Общий режим допуска группы для всех процессов и способов назначения."""
+
+    __tablename__ = "ih_proxy_groups"
+
+    space_id: Mapped[UUID] = mapped_column(ForeignKey("ih_spaces.id", ondelete="CASCADE"), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    capacity_accounting: Mapped[str] = mapped_column(
+        String(16), default="bindings", server_default="bindings"
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+    __table_args__ = (
+        CheckConstraint("capacity_accounting IN ('bindings', 'allocations')", name="accounting_valid"),
+        CheckConstraint("revision > 0", name="revision_positive"),
+    )
+
+
+class ProxyAllocationRecord(IdentityHubBase):
+    """Временное либо постоянное назначение; срок использования принадлежит lease."""
+
+    __tablename__ = "ih_proxy_allocations"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=new_id)
+    space_id: Mapped[UUID]
+    identity_id: Mapped[UUID]
+    proxy_id: Mapped[UUID]
+    active_identity_id: Mapped[UUID | None] = mapped_column(
+        Computed(
+            "CASE WHEN state::text <> 'released'::text THEN identity_id ELSE NULL::uuid END", persisted=True
+        )
+    )
+    active_proxy_id: Mapped[UUID | None] = mapped_column(
+        Computed(
+            "CASE WHEN state::text <> 'released'::text THEN proxy_id ELSE NULL::uuid END", persisted=True
+        )
+    )
+    state: Mapped[str] = mapped_column(String(16))
+    owner_lease_id: Mapped[UUID | None]
+    policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
+    expected_binding_id: Mapped[UUID | None]
+    expected_proxy_id: Mapped[UUID | None]
+    policy_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["space_id"], ["ih_spaces.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["active_identity_id", "space_id"],
+            ["ih_identities.id", "ih_identities.space_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["active_proxy_id", "space_id"], ["ih_proxies.id", "ih_proxies.space_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("id", "space_id", "identity_id", "proxy_id", name="uq_ih_proxy_allocations_scope"),
+        ForeignKeyConstraint(
+            ["owner_lease_id", "space_id", "identity_id"],
+            ["ih_lease_history.lease_id", "ih_lease_history.space_id", "ih_lease_history.identity_id"],
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint("state <> 'reserved' OR owner_lease_id IS NOT NULL", name="reserved_owner_required"),
+        CheckConstraint("state IN ('reserved', 'bound', 'draining', 'released')", name="state_valid"),
+        CheckConstraint("(state = 'released') = (ended_at IS NOT NULL)", name="ended_at_valid"),
+        Index(
+            "uq_ih_proxy_allocations_active_pair",
+            "space_id",
+            "identity_id",
+            "proxy_id",
+            unique=True,
+            postgresql_where=text("state <> 'released'"),
+        ),
+        Index("ix_ih_proxy_allocations_proxy", "proxy_id", "space_id", "state"),
+        Index("ix_ih_proxy_allocations_owner", "owner_lease_id", "space_id"),
+        Index("ix_ih_proxy_allocations_identity", "identity_id", "space_id"),
+        Index("ix_ih_proxy_allocations_space", "space_id"),
+        Index(
+            "ix_ih_proxy_allocations_pending",
+            "space_id",
+            "id",
+            postgresql_where=text("state IN ('reserved', 'draining')"),
+        ),
+        Index(
+            "ix_ih_proxy_allocations_released",
+            "space_id",
+            "ended_at",
+            "id",
+            postgresql_where=text("state = 'released'"),
+        ),
+        Index(
+            "ix_ih_proxy_allocations_active_identity_id",
+            "active_identity_id",
+            "space_id",
+            postgresql_where=text("active_identity_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_ih_proxy_allocations_active_proxy_id",
+            "active_proxy_id",
+            "space_id",
+            postgresql_where=text("active_proxy_id IS NOT NULL"),
+        ),
     )
 
 
@@ -1168,10 +1297,21 @@ class BindingRecord(IdentityHubBase):
     identity_id: Mapped[UUID] = mapped_column(primary_key=True)
     space_id: Mapped[UUID]
     proxy_id: Mapped[UUID]
+    allocation_id: Mapped[UUID | None]
     bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         _identity_fk(),
+        ForeignKeyConstraint(
+            ["allocation_id", "space_id", "identity_id", "proxy_id"],
+            [
+                "ih_proxy_allocations.id",
+                "ih_proxy_allocations.space_id",
+                "ih_proxy_allocations.identity_id",
+                "ih_proxy_allocations.proxy_id",
+            ],
+            ondelete="RESTRICT",
+        ),
         # прокси из того же пространства, что и аккаунт
         ForeignKeyConstraint(
             ["proxy_id", "space_id"],
@@ -1179,6 +1319,7 @@ class BindingRecord(IdentityHubBase):
             ondelete="RESTRICT",
         ),
         Index("ix_ih_bindings_proxy_id", "proxy_id"),  # загрузка прокси
+        Index("ix_ih_bindings_allocation_id", "allocation_id"),
     )
 
 

@@ -14,7 +14,7 @@ from identity_hub.hub import SpaceHandle
 pytestmark = [pytest.mark.pg]
 
 LEASES, ROUNDS = 30, 10
-STATS = text("SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 'ih_leases'")
+STATS = text("SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relid = 'ih_leases'::regclass")
 
 
 async def _stats(db: AsyncEngine) -> tuple[int, int]:
@@ -62,7 +62,8 @@ async def test_lease_indexes_do_not_cover_heartbeat_columns(db: AsyncEngine) -> 
             (
                 await conn.execute(
                     text(
-                        "SELECT indexdef FROM pg_indexes WHERE tablename IN ('ih_leases', 'ih_lease_history')"
+                        "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                        "AND tablename IN ('ih_leases', 'ih_lease_history')"
                     )
                 )
             )
@@ -70,7 +71,7 @@ async def test_lease_indexes_do_not_cover_heartbeat_columns(db: AsyncEngine) -> 
             .all()
         )
         options = (
-            await conn.execute(text("SELECT reloptions FROM pg_class WHERE relname = 'ih_leases'"))
+            await conn.execute(text("SELECT reloptions FROM pg_class WHERE oid = 'ih_leases'::regclass"))
         ).scalar_one()
     assert not [d for d in definitions if "expires_at" in d or "heartbeat" in d]
     assert "fillfactor=70" in (options or [])

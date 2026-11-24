@@ -23,7 +23,15 @@ from identity_hub._space import logger
 from identity_hub.domain.admissibility import IdentitySnapshot, evaluate
 from identity_hub.domain.idempotency import OPERATION_FAMILY, namespace
 from identity_hub.domain.redaction import sanitize_text
-from identity_hub.domain.regions import CODE_LIMIT, RAW_STATUS_LIMIT, Command, Observation, Timer
+from identity_hub.domain.regions import (
+    CODE_LIMIT,
+    RAW_STATUS_LIMIT,
+    Command,
+    Observation,
+    Outcome,
+    RegionDecision,
+    Timer,
+)
 from identity_hub.enums import AuthState, Availability, ChangeSource, SessionStatus, Standing
 from identity_hub.errors import OperationNotAllowed, TransitionNotAllowed
 from identity_hub.events import EventDraft
@@ -77,11 +85,28 @@ class Operation:
 
     async def cool_down(self, retry_after: timedelta | float) -> None:
         """Rate limit / flood-wait: availability → cooling до now + retry_after; только удлиняет (FR-7.4)."""
+        from identity_hub.proxy_finalization import finalize, prepare
+
         seconds = retry_after.total_seconds() if isinstance(retry_after, timedelta) else float(retry_after)
         space = self.lease.pool.space
         async with space._tx(own=True) as tx:
+            await self.lease._check_fencing(tx)
+            await prepare(tx, self.lease.identity_id)
             until = await tx.now() + timedelta(seconds=seconds)
-            await _cooling(self.lease, tx, until)
+            decision = await _cooling(self.lease, tx, until)
+            from identity_hub.proxy_finalization import accepted, projection_proof
+
+            await finalize(
+                space,
+                tx,
+                self.lease.identity_id,
+                lease=self.lease,
+                actor=self.lease.holder,
+                reason="operation_cooling",
+                proof=projection_proof("availability", "", decision),
+                state_accepted=accepted(decision),
+                allow_bind=True,
+            )
 
     def __repr__(self) -> str:
         return (
@@ -144,6 +169,11 @@ async def operation_scope(
             lease_id=lease.lease_id,
             actor=lease.holder,
         )
+        if result.paused_until is not None:
+            from identity_hub.proxy_finalization import finalize, prepare
+
+            await prepare(tx, lease.identity_id)
+            await finalize(space, tx, lease.identity_id, lease=lease, actor=lease.holder, reason="pacing")
     op = Operation(
         lease,
         kind,
@@ -268,7 +298,27 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
         async with space._tx(own=True) as tx:
             if op.key is not None and not op.duplicate:
                 await tx.complete_idempotency_key(namespace(tx.space.id, OPERATION_FAMILY), op.key, "failed")
-            await apply_fault_effects(lease, tx, fault)
+            from identity_hub.proxy_finalization import finalize, prepare
+
+            await lease._check_fencing(tx)
+            await prepare(tx, lease.identity_id)
+            decisions: list[RegionDecision] = []
+            proof: dict[tuple[str, str], str] = {}
+            await apply_fault_effects(lease, tx, fault, decisions=decisions, projection_facts=proof)
+            if fault.blame in {Blame.IDENTITY, Blame.SESSION_INVALID, Blame.IDENTITY_BANNED}:
+                from identity_hub.proxy_finalization import accepted
+
+                await finalize(
+                    space,
+                    tx,
+                    lease.identity_id,
+                    lease=lease,
+                    actor=lease.holder,
+                    reason="operation_fault",
+                    proof=proof,
+                    state_accepted=any(accepted(decision) for decision in decisions),
+                    allow_bind=True,
+                )
             # Blame.PROXY — здоровье прокси (ниже, своей транзакцией); Blame.REQUEST — состояние не меняется
             await space._emit(
                 tx,
@@ -297,7 +347,14 @@ async def _on_failure(lease: Lease, op: Operation, exc: Exception) -> None:
             logger.exception("не удалось учесть ошибку прокси %s", lease.proxy_id)
 
 
-async def apply_fault_effects(lease: Lease, tx: StoreTx, fault: Fault) -> Fault:
+async def apply_fault_effects(
+    lease: Lease,
+    tx: StoreTx,
+    fault: Fault,
+    *,
+    decisions: list[RegionDecision] | None = None,
+    projection_facts: dict[tuple[str, str], str] | None = None,
+) -> Fault:
     """Применить последствия безопасного `Fault` в переданной транзакции (D-310)."""
     fault = replace(
         fault,
@@ -307,15 +364,28 @@ async def apply_fault_effects(lease: Lease, tx: StoreTx, fault: Fault) -> Fault:
     space = lease.pool.space
     service = lease.pool.service
     now = await tx.now()
+    observed = decisions if decisions is not None else []
+
+    def record(region: str, key: str, decision: RegionDecision | None) -> None:
+        if decision is None:
+            return
+        observed.append(decision)
+        if projection_facts is not None and decision.outcome in {Outcome.APPLIED, Outcome.UNCHANGED}:
+            projection_facts[(region, key)] = decision.state.state
+
     if fault.blame is Blame.IDENTITY:
         score = await tx.add_error_score(lease.identity_id, fault.weight)
         if fault.retry_after is not None:
-            await _cooling(lease, tx, now + fault.retry_after)
+            cooling = await _cooling(lease, tx, now + fault.retry_after)
+            record("availability", "", cooling)
         if score >= service.quarantine_threshold:
-            await _set_availability(lease, tx, Command(Availability.QUARANTINED, actor=lease.holder))
+            quarantine = await _set_availability(
+                lease, tx, Command(Availability.QUARANTINED, actor=lease.holder)
+            )
+            record("availability", "", quarantine)
     elif fault.blame is Blame.SESSION_INVALID:
         await tx.set_session_status(lease.identity_id, DEFAULT_SLOT, SessionStatus.INVALID)
-        await apply_region_change(
+        decision = await apply_region_change(
             space,
             tx,
             lease.identity_id,
@@ -331,8 +401,9 @@ async def apply_fault_effects(lease: Lease, tx: StoreTx, fault: Fault) -> Fault:
             ),
             lease_id=lease.lease_id,
         )
+        record("auth", DEFAULT_SLOT, decision)
     elif fault.blame is Blame.IDENTITY_BANNED:
-        await apply_region_change(
+        decision = await apply_region_change(
             space,
             tx,
             lease.identity_id,
@@ -349,27 +420,28 @@ async def apply_fault_effects(lease: Lease, tx: StoreTx, fault: Fault) -> Fault:
             ),
             lease_id=lease.lease_id,
         )
+        record("standing", "", decision)
     return fault
 
 
-async def _cooling(lease: Lease, tx: StoreTx, until: datetime) -> None:
-    await _set_availability(lease, tx, Command(Availability.COOLING, actor=lease.holder, until=until))
+async def _cooling(lease: Lease, tx: StoreTx, until: datetime) -> RegionDecision | None:
+    return await _set_availability(lease, tx, Command(Availability.COOLING, actor=lease.holder, until=until))
 
 
-async def _set_availability(lease: Lease, tx: StoreTx, command: Command) -> None:
+async def _set_availability(lease: Lease, tx: StoreTx, command: Command) -> RegionDecision | None:
     space = lease.pool.space
     try:
-        await apply_region_change(
+        return await apply_region_change(
             space, tx, lease.identity_id, "availability", "", command, lease_id=lease.lease_id
         )
     except TransitionNotAllowed:
         # истёкший paused/cooling ещё не снят лениво — снять таймером и повторить; иначе состояние тяжелее
-        await apply_region_change(
+        timer = await apply_region_change(
             space, tx, lease.identity_id, "availability", "", Timer(), lease_id=lease.lease_id
         )
         try:
-            await apply_region_change(
+            return await apply_region_change(
                 space, tx, lease.identity_id, "availability", "", command, lease_id=lease.lease_id
             )
         except TransitionNotAllowed:
-            return
+            return timer

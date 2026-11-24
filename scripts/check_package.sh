@@ -27,7 +27,8 @@ fi
 uv pip install -q --python "$python" "${wheels[0]}"
 
 # Запуск из пустого каталога: пакет берётся из окружения, а не из src/ репозитория.
-cp "$root"/examples/telegram_service.py "$root"/examples/account_lifecycle.py "$work/"
+cp "$root"/examples/telegram_service.py "$root"/examples/account_lifecycle.py \
+  "$root"/examples/proxy_assignment.py "$work/"
 cd "$work"
 "$python" - <<'PY'
 import pathlib
@@ -43,6 +44,7 @@ PY
 "$bin/identity-hub" --help > /dev/null
 "$python" telegram_service.py > /dev/null
 "$python" account_lifecycle.py > /dev/null
+"$python" proxy_assignment.py > /dev/null
 
 # sdist — только библиотека (см. [tool.hatch.build.targets.sdist]).
 if tar -tzf "${sdists[0]}" | grep -E '^[^/]+/(admin|docs/plan|docs/review|\.github|\.venv)/' ; then

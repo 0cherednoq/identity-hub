@@ -17,15 +17,18 @@ from identity_hub.api._base import Namespace
 from identity_hub.api.batch import MAX_BATCH, BatchResult
 from identity_hub.api.identities import OnConflict, Page
 from identity_hub.enums import ProxyStatus
-from identity_hub.errors import NotFound, ValidationFailed
+from identity_hub.errors import NotFound, RevisionConflict, ValidationFailed
+from identity_hub.events import EventDraft
 from identity_hub.identities import UNSET, _Unset
 from identity_hub.proxies import parse_proxy_url
 from identity_hub.read.search import decode_cursor, encode_cursor
+from identity_hub.service import ProxyPolicy, Service
 from identity_hub.store.base import NewProxy, ProxyReadRow, ProxyRow
 
 if TYPE_CHECKING:
     from identity_hub.hub import SpaceHandle
     from identity_hub.proxies import ProxyChecker, ProxyHealthPolicy
+    from identity_hub.store.base import StoreTx
 
 __all__ = [
     "Proxies",
@@ -34,10 +37,18 @@ __all__ = [
     "ProxyCreateManyResult",
     "ProxyCreated",
     "ProxyDeleteManyResult",
+    "ProxyGroup",
     "RecheckReport",
 ]
 
 MAX_PROXY_PAGE = 200
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyGroup:
+    name: str
+    capacity_accounting: str
+    revision: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +76,12 @@ class Proxy:
     disabled_reason: str | None = None
     disabled_by: str | None = None
     disabled_at: datetime | None = None
+    reserved_count: int | None = None
+    draining_count: int | None = None
+    occupied_count: int | None = None
+    available_capacity: int | None = None
+    capacity_accounting: str | None = None
+    cleanup_pending_count: int | None = None
 
     @classmethod
     def from_row(cls, row: ProxyRow | ProxyReadRow) -> Proxy:
@@ -86,6 +103,14 @@ class Proxy:
             disabled_reason=row.disabled_reason,
             disabled_by=row.disabled_by,
             disabled_at=row.disabled_at,
+            reserved_count=row.reserved_count if isinstance(row, ProxyReadRow) else None,
+            draining_count=row.draining_count if isinstance(row, ProxyReadRow) else None,
+            occupied_count=row.occupied_count if isinstance(row, ProxyReadRow) else None,
+            available_capacity=max(0, row.max_identities - row.occupied_count)
+            if isinstance(row, ProxyReadRow)
+            else None,
+            capacity_accounting=row.capacity_accounting if isinstance(row, ProxyReadRow) else None,
+            cleanup_pending_count=row.cleanup_pending_count if isinstance(row, ProxyReadRow) else None,
         )
 
 
@@ -155,6 +180,47 @@ class Proxies(Namespace):
     __slots__ = ()
 
     # ------------------------------------------------------------------ чтение
+
+    async def get_group(self, name: str) -> ProxyGroup:
+        from identity_hub.proxy_allocator import validate_group_configuration
+
+        validate_group_configuration(name, "bindings")
+        async with self._space._tx() as tx:
+            row = await tx.proxy_group(name)
+            if row is None:
+                raise NotFound("proxy_group", name)
+            return ProxyGroup(row.name, row.capacity_accounting, row.revision)
+
+    async def configure_group(
+        self, name: str, *, capacity_accounting: str, actor: str, reason: str
+    ) -> ProxyGroup:
+        """Переключить глобальный учёт только после drain, вне транзакции приложения."""
+        from identity_hub.proxy_allocator import configure_group, validate_group_configuration
+
+        actor, reason = require_actor_and_reason(actor, reason, "proxy group configuration")
+        validate_group_configuration(name, capacity_accounting)
+        if self._space._session is not None or self._space._batch_tx is not None:
+            raise ValidationFailed("proxy group configuration requires its own transaction")
+        ref = await self._space.ref()
+        async with self._space.hub._store.transaction(ref, proxy_configuration=True) as tx:
+            previous = await tx.proxy_group(name)
+            row, changed = await configure_group(tx, name, capacity_accounting)
+            if changed:
+                await self._space._emit(
+                    tx,
+                    EventDraft(
+                        "proxy.group.configured",
+                        actor=actor,
+                        data={
+                            "group": name,
+                            "capacity_accounting": row.capacity_accounting,
+                            "previous": previous.capacity_accounting if previous else "bindings",
+                            "revision": row.revision,
+                            "reason": reason,
+                        },
+                    ),
+                )
+            return ProxyGroup(row.name, row.capacity_accounting, row.revision)
 
     async def get(self, proxy_id: UUID) -> Proxy:
         """Прокси этого пространства или `NotFound`."""
@@ -341,11 +407,17 @@ class Proxies(Namespace):
         (`validation_error`), остальные удаляются; `atomic=True` — первый отказ отменяет всё.
         """
         unbound: dict[UUID, int] = {}
+        targets = tuple(ids)
+
+        async def prepare(tx: StoreTx) -> None:
+            from identity_hub.proxy_allocator import lock_proxy_batch
+
+            await lock_proxy_batch(tx, targets)
 
         async def delete(handle: SpaceHandle, proxy_id: UUID) -> None:
             unbound[proxy_id] = await handle._delete_proxy(proxy_id, actor=actor, unbind=unbind)
 
-        result = await self._space._run_batch(ids, delete, atomic=atomic)
+        result = await self._space._run_batch(targets, delete, atomic=atomic, prepare=prepare)
         return ProxyDeleteManyResult(
             result.applied, result.rejected, sum(unbound[proxy_id] for proxy_id in result.applied)
         )
@@ -486,9 +558,19 @@ class Proxies(Namespace):
 
         return await self._space._run_batch(wanted, override, atomic=atomic)
 
-    async def rebind(self, identity_id: UUID, proxy_id: UUID, *, reason: str, actor: str) -> bool:
-        """Перепривязать identity к другому прокси (sticky)."""
-        return await self._space._rebind_proxy(identity_id, proxy_id, reason=reason, actor=actor)
+    async def rebind(
+        self,
+        identity_id: UUID,
+        proxy_id: UUID,
+        *,
+        reason: str,
+        actor: str,
+        expected_binding_id: UUID | None = None,
+    ) -> bool:
+        """Доверенное назначение администратора. Ожидаемое поколение защищает от поздней команды."""
+        return await self._space._rebind_proxy(
+            identity_id, proxy_id, reason=reason, actor=actor, expected_binding_id=expected_binding_id
+        )
 
     async def rebind_many(
         self, bindings: Mapping[UUID, UUID], *, reason: str, actor: str, atomic: bool = False
@@ -502,15 +584,87 @@ class Proxies(Namespace):
         actor, reason = require_actor_and_reason(actor, reason, "перепривязка прокси")
         targets = dict(bindings)
 
+        async def prepare(tx: StoreTx) -> None:
+            from identity_hub.proxy_allocator import lock_rebind_batch
+
+            await lock_rebind_batch(tx, targets)
+
         async def rebind(handle: SpaceHandle, identity_id: UUID) -> None:
             await handle._rebind_proxy(identity_id, targets[identity_id], reason=reason, actor=actor)
 
-        return await self._space._run_batch(targets, rebind, atomic=atomic)
+        return await self._space._run_batch(targets, rebind, atomic=atomic, prepare=prepare)
 
-    async def unbind(self, identity_id: UUID, *, reason: str, actor: str) -> bool:
+    async def unbind(
+        self, identity_id: UUID, *, reason: str, actor: str, expected_binding_id: UUID | None = None
+    ) -> bool:
         """Снять привязку identity к прокси; `False` — привязки не было.
 
-        Место на прокси освобождается; следующая аренда выберет прокси по политике сервиса.
+        В режиме allocations активное использование удерживает место до завершения аренды.
+        Следующая аренда выберет прокси по политике сервиса. `expected_binding_id` проверяет поколение.
         Событие `proxy.binding.changed` с `to_proxy_id=None`.
         """
-        return await self._space._unbind_identity(identity_id, reason=reason, actor=actor)
+        return await self._space._unbind_identity(
+            identity_id, reason=reason, actor=actor, expected_binding_id=expected_binding_id
+        )
+
+    async def reconcile_bindings(
+        self,
+        ids: Iterable[UUID],
+        *,
+        service: Service | str,
+        actor: str,
+        reason: str,
+        proxy_policy: ProxyPolicy | None = None,
+        expected_service_revision: int | None = None,
+        expected_bindings: Mapping[UUID, UUID] | None = None,
+        atomic: bool = False,
+    ) -> BatchResult[UUID]:
+        """Применить текущие правила к существующим назначениям; без подтверждения резерва.
+
+        Override задаётся явно и компонуется с текущим Service. Снятие удерживает live use
+        в draining. Изменение политики делает доказательство старой проверки устаревшим.
+        expected_bindings защищает от позднего задания над прежним поколением пары.
+        """
+        from identity_hub.pool import Pool
+        from identity_hub.proxy_allocator import lock_identity_proxy_rows
+        from identity_hub.proxy_reconciliation import reconcile
+
+        actor, reason = require_actor_and_reason(actor, reason, "согласование политики прокси")
+        if expected_service_revision is not None and (
+            isinstance(expected_service_revision, bool)
+            or not isinstance(expected_service_revision, int)
+            or expected_service_revision < 1
+        ):
+            raise ValidationFailed("expected_service_revision requires a positive integer")
+        resolved = await self._space.hub.resolve_service(
+            service.name if isinstance(service, Service) else service
+        )
+        root: Pool = Pool(
+            self._space, "identity-hub:proxy-reconcile", resolved, proxy_policy=proxy_policy, holder=actor
+        )
+        pool = root._for_service(resolved)
+        if expected_service_revision is not None and pool._service_revision != expected_service_revision:
+            raise RevisionConflict(
+                "service", resolved.name, expected_service_revision, pool._service_revision
+            )
+        targets = tuple(ids)
+        expected = dict(expected_bindings or {})
+        if expected_bindings is not None and set(expected) != set(targets):
+            raise ValidationFailed("expected_bindings must cover exactly the selected identities")
+
+        async def prepare(tx: StoreTx) -> None:
+            await lock_identity_proxy_rows(tx, targets)
+
+        async def apply(handle: SpaceHandle, identity_id: UUID) -> None:
+            async with handle._tx() as tx:
+                await reconcile(
+                    handle,
+                    tx,
+                    identity_id,
+                    pool,
+                    actor=actor,
+                    reason=reason,
+                    expected_binding_id=expected.get(identity_id),
+                )
+
+        return await self._space._run_batch(targets, apply, atomic=atomic, prepare=prepare)

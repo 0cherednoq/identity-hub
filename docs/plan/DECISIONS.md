@@ -400,3 +400,279 @@
   включая `max_hold` и принудительную уступку. Штатная уступка сохраняет TAT как при чистом
   release. После `0043` retention истории аренд не участвует в восстановлении.
   Описание и тестирование отражены в [ишью](../isue/lease-history-login-amplification.md).
+
+- **D-337** (назначения прокси, PA, 2026-11-24): реализация по
+  [плану](PROXY-ALLOCATION-PLAN.md), запрошенная пользователем. Назначение резервирует ёмкость
+  независимо от постоянной привязки. Подтверждение и снятие имеют независимые правила; в ядре
+  нет состояния `valid/invalid`. Допустимы явное подтверждение и ограниченные декларативные
+  предикаты `RegionIn`/`AllOf`/`AnyOf`, без исполняемых callbacks. Пул наследует условия сервиса:
+  подтверждение усиливается через AND, снятие через OR; отключить условия сервиса нельзя.
+  Новый строгий учёт включается для всей сохранённой группы, старые группы по умолчанию остаются
+  в режиме bindings. В первом выпуске строгие назначения только под EXCLUSIVE-арендами.
+  TTL берётся из авторитетного `ih_leases.expires_at`, с проверкой lease ID/token/fencing и
+  `hold_deadline`; история не является источником свежего heartbeat. `reserved → bound`
+  переносит существующее место, а не занимает второе. Снятие при живом lease переводит назначение
+  в draining. ID назначения является поколением привязки, поздние команды проверяют ожидаемый ID.
+  Активное использование представлено ссылкой существующего lease на назначение; отдельная таблица
+  uses и второй heartbeat не нужны. Предлагаемый порядок: idempotency key → конфигурации групп
+  (sorted, shared/exclusive) → identity (sorted) → регионы → proxy (sorted) → allocation/binding
+  → lease/history → provider operation → outbox. Sweeper не держит lease-lock до proxy-lock.
+  Точная реализация блокировок и составных FK проверяется на PA1.1/PA1.2, не считается доказанной
+  одной декларацией. Переход в strict требует согласованного обновления процессов и drain;
+  совместное выполнение со старым allocator не поддерживается. Старые idempotency fingerprints
+  не переписываются: для legacy сохраняется прежняя форма запроса, strict использует форму с
+  нормализованной политикой/revision и конфликтует с несовместимым старым ключом, не создавая
+  вторую аренду. До PA2.1 новые декларации не включают runtime-фичу: acquire явно отвергает их
+  до записей, чтобы deferred не превращался молча в немедленную sticky-привязку.
+
+- **D-338** (PA1.2, 2026-11-24): общий allocator работает через типизированные CRUD-примитивы StoreTx;
+  счётчики изменяются вместе с ledger под отсортированными identity/proxy-блокировками.
+  Для переключения профиля выбран shared/exclusive advisory-барьер пространства перед ключами
+  идемпотентности. Он заменяет первоначальную схему блокировок отдельных групп, потому что группа
+  существующей привязки определяется после выбора аккаунта. Нормальные транзакции берут shared,
+  конфигурация только в своей транзакции берёт exclusive и требует drain пространства.
+  Callback доставки не держит барьер на сетевом I/O. Все процессы должны быть обновлены перед
+  включением allocations; старый runtime в барьере не участвует. Новая миграция 0045 дополняет 0044:
+  owner FK составной `(lease_id, space_id, identity_id)`, DEFERRABLE INITIALLY DEFERRED, для атомарного
+  создания резерва до вставки заранее известного lease ID; reserved без owner запрещён CHECK.
+  При bound/released owner очищается, поэтому постоянная привязка не блокирует retention истории.
+  JSON policy хранит декларацию, не код; expected_proxy_id дополняет expected_binding_id для замены
+  legacy-привязки, у которой ещё нет поколения. Новый lease очищает proxy_allocation_id предыдущего
+  владельца. MemoryStore проверяет отложенный owner FK на commit и копирует JSON-снимки.
+  До PA1.3/PA2.1 прямые legacy-мутации и выдача строгих прокси отвергаются, а не обходят ledger.
+
+- **D-339** (PA1.3, 2026-11-24): административные rebind/unbind используют общий allocator.
+  Rebind с actor/reason является явным доверенным назначением, проверяет physical capacity и optional
+  expected_binding_id; он не заимствует reserved-пару без fence владельца. Старый use сохраняет
+  draining до окончания. Disable с отвязкой сначала блокирует все найденные identity, затем proxy;
+  если повторное чтение обнаружило новую identity, команда получает ConcurrentModification и
+  откатывается, не захватывая её после proxy. Rebind_many заранее блокирует весь набор identity,
+  затем все затрагиваемые proxy пачки; поэлементный порядок не защищает от пересечения с другой пачкой.
+  Резерв замены на выключаемом proxy отменяется без
+  удаления прежней пары другого proxy. Смена endpoint/credentials и move строгого proxy запрещены
+  при reserved/draining/живом use. Move допускается внутри одного режима учёта; переход между
+  режимами выполняется только configure_group с exclusive-барьером и drain пространства.
+  Это не требует повышения блокировки внутри session/batch. Обычный импорт deferred-сервиса с
+  proxy отклоняется confirmation_required; доверенный режим импорта и удаление ledger — следующий
+  незавершённый шаг PA1.3. Публичная выдача резервов пока не включена.
+
+- **D-340** (PA1.3, 2026-11-24): импорт принимает proxy_binding=policy|trusted и отдельную причину
+  доверия. Trusted требует непустых actor/reason и задаётся только командой, не ImportRecord или
+  содержимым файла. Stage сохраняет решение в зашифрованном payload; старые задания означают policy.
+  Сначала вставляются identity и блокируются цели связей, затем создаются/блокируются proxy в
+  детерминированном порядке. Отбор вместимости под lock сохраняет частичный успех; запись строгой
+  привязки всё равно проходит общий allocator. Учитывается фактическая группа после дедупликации URL.
+  Отказ цели связи отклоняет зависимые записи до назначения и сохраняет независимые.
+  Удаление identity/proxy завершает назначения, но не удаляет их историю. Миграция 0046 оставляет
+  исходные identity_id/proxy_id долговечными, а FK защищают вычисляемые active_identity_id/active_proxy_id
+  только для reserved/bound/draining. Released сохраняет поколение до retention, даже после удаления
+  ресурсов; space FK сохраняет область хранения. Downgrade с такими записями запрещён до штатного
+  retention, не стирает историю автоматически. Proxy с живым use не удаляется; identity revoke закрывает
+  назначение до lease/history-lock в той же транзакции. Batch заранее берёт полный набор блокировок.
+
+- **D-341** (PA1.3 / основа PA4.1, 2026-11-24): doctor больше не записывает ранее прочитанный COUNT
+  поверх выдачи. Для каждого proxy общий reconcile_counters сначала берёт proxy-lock и заново читает
+  ledger/binding. В allocations восстанавливаются три счётчика, в bindings сохраняется прежний смысл
+  bound_count. Несогласованные пары ledger/binding диагностируются, не исправляются предположением.
+  PostgreSQL выполняет эту часть в scoped Store.transaction с барьером конфигурации, MemoryStore —
+  под уже удерживаемым общим lock. Reconcile не захватывает identity или lease после proxy и не
+  подменяет cleanup истёкших использований. Endpoint/credentials читаются для изменения уже под
+  proxy-lock: параллельная правка не может записать fingerprint от устаревшего адреса.
+
+- **D-342** (PA2.1, 2026-11-24): Pool хранит исходный proxy override. Каждая выдача получает
+  отдельный снимок Service/policy с runtime revision; другая выдача не меняет уже выданный Lease
+  и не наращивает прежнее дерево предикатов. Состояние порога capacity остаётся общим для Pool.
+  Lease ID известен до reserve: reserve/acquire/attach и immediate-confirm выполняются в одной TX.
+  Использование существующего bound тоже записывает pointer, не занимает второе место.
+  Фактический режим sticky-привязки учитывается независимо от объявленной группы. Opt-in строгой
+  группы переносит прежнюю здоровую legacy-пару через новый резерв, сохраняя её до confirm.
+  Строгие SHARED-выдачи запрещены. Legacy-выбор блокирует весь набор прежних/выбранного proxy
+  по ID и занимает выбранный ID с прежней семантикой override max_identities.
+  Миграция 0047 добавляет proxy_request в lease/history: снимок относится к конкретному use,
+  поскольку bound-поколение может быть административным и обслуживать разные политики по очереди.
+  Snapshot включает декларацию, Service revision, объявленную и фактическую group revision, без секретов.
+  Strict-primary fingerprint включает известный до выбора нормализованный запрос; legacy-форма ключа
+  сохраняется. Если strict обнаружен по существующей паре после выбора identity, обязательный
+  типизированный receipt v2 хранит полный snapshot. Неподтверждённый старый receipt/failed retry
+  не обходит сравнение. Для известного strict version=0 запрещён даже при совпавшем hash.
+  Replay проверяет receipt v2 и durable request, lease/identity IDs и полный fence; возвращает
+  proxy/allocation самой аренды, а не текущий binding. После истечения ключа живая аренда всё ещё
+  проверяет request, затем восстанавливает receipt. После drain downgrade может удалить снимки;
+  при живом use downgrade 0047 запрещён.
+
+- **D-343** (PA2.1 / начало PA2.3, 2026-11-24): обычный release согласует временные назначения
+  до lease/history-lock. Исключить завершающий lease из live-use можно только после проверки
+  полного fence. Чужой token/space/fencing не освобождает место; поздний release не трогает нового
+  владельца. Bound сохраняется. Reserve закрывает истёкшие reserved/draining той же identity под
+  общим отсортированным набором proxy-lock и может повторно использовать её собственное место.
+  Групповой sweep, revoke/forced yield/expiry/max_hold и history-retention требуют отдельной
+  интеграции PA2.3/PA4.1: обычный release не считается её заменой. Operational LeaseReadRow
+  явно проецируется отдельно от полной history, чтобы новые внутренние JSON-поля не меняли DTO.
+
+- **D-344** (PA2.2, 2026-11-24): `Lease.confirm_proxy(reason=...)` проверяет полный fence,
+  canonical request выдачи, текущую Service/group revision и итоговое принятое состояние.
+  `unbind_when` имеет приоритет; `bind_when` остаётся обязательным предусловием ручного вызова.
+  Невыполненное условие не меняет ledger. Автоматическое снятие относится к finalizer PA3.2.
+  Подтверждение не выбирает другой endpoint; health/поколение перепроверяет allocator.
+  Безопасный неизменяемый `ProxyAssignment` возвращает ID/состояние/updated_at без lease token,
+  URL и request JSON. Повтор возвращает тот же результат, не создаёт второе событие/место.
+  `lease.using(session)` связывает только confirm, не acquire/renew/release. Исходный Lease
+  остаётся snapshot при commit и rollback внешней сессии; самостоятельный confirm обновляет
+  его только после успешного commit. Явный `identities.observe()` теперь, как override, уважает
+  `space.using(session)`: факт приложения и confirm могут иметь одну фиксацию. Внутренние
+  наблюдения сетевых операций сохраняют собственные транзакции и прежнюю защиту claim/fence.
+
+- **D-345** (PA2.3, 2026-11-24): revoke и forced yield закрывают reserved/draining до
+  lease/history-lock; bound сохраняется. Expire отбирает только открытую историю, берёт identity
+  через SKIP LOCKED и весь отсортированный набор proxy пачки до первого изменения lease/history.
+  Истёкший lease нельзя оживить heartbeat; срок и max_hold принадлежат canonical ih_leases.
+  Reclaim до перезаписи закрывает только use прежнего lease (pointer или owner), сохраняя новый
+  резерв, который reserve мог уже вставить той же транзакцией. Это действует и при выдаче
+  без proxy policy. Полный fence не позволяет позднему release закрыть нового владельца.
+  Retention отсекает историю с owner FK до блокировки/удаления history; точечный scalar lookup
+  с LIMIT 1 использует owner index и не превращает короткую пачку в полный scan ledger.
+  Bounded sweep вне выбранной identity, orphan recovery и retention ledger остаются PA4.1.
+
+- **D-346** (PA3.1 / часть PA3.2, 2026-11-24): общий `proxy_finalization` вызывается на границе
+  полной принятой проекции, до terminal apply provider claim и commit. `prepare` берёт identity
+  и все proxy команды до provider/history-lock; state/import/batch готовят полный набор пачки.
+  Региональные/session записи защищены своей уже захваченной identity; их запись после proxy
+  не требует новой identity. Этот вариант уточняет первоначальную последовательность п. 7.3:
+  запрет обратного захвата identity и порядок proxy → provider/history остаются обязательными.
+  Low-level apply_region_change/apply_verification и подписчики не принимают решение назначения.
+  APPLIED/UNCHANGED считаются принятым результатом, pin/stale/sticky и технический сбой не дают
+  доказательства для bind. Acquire не подтверждает прежнее хорошее состояние. Итоговые auth,
+  session и lifecycle adopt согласуются вместе; отдельные транзакции многошагового probe остаются
+  отдельными решениями. Положительное правило требует владельца выданного назначения; отрицательное
+  имеет приоритет и отменяет резерв замены, сохраняя живое использование в draining.
+  Встроенные login/verify/adopt/revalidate/sync и шаги verification финализируют до release.
+  State/verification/timer/import, reset_auth credentials, fault/cooling/pacing вызывают тот же hook.
+  Verdict хранит безопасный `proxy_assignment={outcome, allocation_id}`; assignment_changed,
+  policy_changed и condition_not_met — результаты согласования, а не отказ принятия verdict.
+  Потеря fence/claim откатывает verdict, назначение, validity marks, счётчики и outbox вместе.
+  Снимок исходного Lease от автоматической проекции не меняется. Lease без выданного allocation
+  не имеет snapshot поколения и не получает права менять текущую административную пару.
+  Runtime revision не переписывает старые назначения автоматически; явный reconcile политики
+  остаётся PA3.2 и должен инвалидировать доказательство ранее начатого use при смене ledger policy.
+
+- **D-347** (PA3.2, 2026-11-24): `proxies.reconcile_bindings(ids, service=..., proxy_policy=...,
+  actor=..., reason=...)` явно применяет нынешние сервисные правила и новый override, возвращает
+  BatchResult, поддерживает atomic/using(session). Старая нормализованная композиция не подставляется
+  вместо нового override. Runtime revision проверяется при старте команды и повторно под identity;
+  expected_service_revision и полная expected_bindings дают явную защиту задания оператора.
+  Reconcile не выбирает другой endpoint, не создаёт пару и не подтверждает резерв. Политика текущего
+  bound и резервов меняется вместе; отрицательное правило затем применяет общий finalizer. Draining
+  уже снятого поколения не определяет правила новой пары. Живое использование удерживает место.
+  `revise_policy` — команда allocator без изменения счётчиков; идентификатор binding сохраняется.
+  Аудит policy_reconciled не подменяет binding.changed; повтор без изменений не даёт событий.
+  Inner proxy request имеет version=2 (receipt acquire сохраняет result_version=2). Per-use request
+  дополнительно хранит allocation_policy_fingerprint, захваченный при выдаче. Он не входит в hash
+  декларации, чтобы не получить рекурсивный fingerprint. Ledger хранит саму декларацию. При смене
+  ledger policy добавляется новый reconciliation_id, hash которого инвалидирует старый use даже
+  после A → B → A. Одинаковая текущая политика nonce не меняет. Confirm/finalizer проверяют наличие
+  subject-поля, текущий hash ledger и известную версию; отсутствие поля не равно admin fingerprint=None.
+  Replay не обновляет subject-поле, включая восстановление receipt после истечения ключа. Старый lease
+  может восстановить свой исходный endpoint, но не получает право подтвердить новую ledger policy.
+  После commit reconcile поздняя встроенная проекция сохраняет verdict с policy_changed; rollback восстанавливает
+  прежний hash и права. Bound с известной ledger policy v1 может использовать новый v2 use; старый
+  live request v1 не имеет subject-доказательства и требует drain/новой аренды до подтверждения.
+  DDL не меняется (schema 0047), смешанный rollout старых strict-писателей не поддерживается.
+
+- **D-348** (PA4.1, 2026-11-24): recovery использует keyset по ID с фиксированной верхней
+  границей цикла, отдельно для ledger и proxy. Discovery и число попыток row-lock ограничены
+  limit 1–1000. Identity и затем proxy захватываются в порядке ID через SKIP LOCKED; занятые
+  строки повторяются в следующем цикле, постоянный приток новых не расширяет текущий диапазон.
+  Курсор продвигается CAS после commit; rollback и параллельный устаревший проход его не портят.
+  Курсор в памяти процесса — оптимизация: рестарт безопасно начинает новый обход.
+  Canonical lease перепроверяется под identity/proxy-lock, нового TTL резерва нет. Confirm,
+  heartbeat и новая выдача не теряются; bound не снимается при закрытии использования.
+  Сверка счётчиков строгих proxy идёт перед ledger отдельной TX под proxy-lock, без захвата
+  identity/lease. Несогласованное отношение ledger/binding не исправляется догадкой; legacy
+  автоматическая сверка не меняет. Maintenance завершает expire TX до recovery; lazy acquire
+  после rollback делает одну малую попытку и повторяет выдачу лишь при восстановленной ёмкости.
+  Внутренний candidate budget возвращается для откатившейся попытки, если recovery помог.
+  Retention released ждёт max(lease_history, operation_keys) и исчезновения сохранённых ссылок;
+  закрытый canonical pointer не удерживает tombstone. Миграция 0048 добавляет индексы pending,
+  released, history pointer и space/proxy keyset. Структурные состояния остаются SQL literals,
+  чтобы generic prepared plan использовал partial indexes. DELETE выбирает ограниченный массив
+  ID через initplan и PK lookup: semi-join с полным scan таблицы не допускается.
+
+- **D-349** (PA4.2, 2026-11-24): read-схема v6 содержит отдельные proxy_allocations/proxy_groups,
+  binding_id постоянной пары и ссылки lease/history на allocation. Token, policy JSON и fingerprint
+  не публикуются. Admin/API list разделяют bound/reserved/draining/occupied, режим группы, доступную
+  физическую ёмкость и cleanup_pending_count. Последний считает pending без живого canonical use,
+  не уменьшает occupied и не вводит свой TTL. Capacity available/full учитывает все состояния;
+  unbound продолжает означать отсутствие постоянной пары. Legacy bound читается как число пар,
+  strict — из транзакционно поддерживаемого счётчика, совпадающего с allocator admission.
+  Краткие API DTO get/create/ensure/update сохраняют nullable counters.
+  Пять событий переходов создаёт общий allocator; draft фиксирует IDs, причину-код, revision и
+  длительности, не raw policy/исключение/URL/token. Технический actor — proxy_allocator;
+  пользовательский actor/reason остаются в аудите самой команды. Без живого use lease_id nullable.
+  Отложенная очередь StoreTx пишется перед завершением собственной TX или savepoint using(session),
+  после lease/history. Внутренний savepoint копирует очередь и восстанавливает её при rollback.
+  Outer rollback отменяет outbox/NOTIFY вместе с ledger и counters. Очередь очищает данные через scrub.
+  Повтор без изменения состояния не создаёт события. Reservation events сохраняют взаимный порядок,
+  но могут следовать за binding.changed той же команды; из соседства разных типов нельзя выводить
+  бизнес-решение. Reserved → draining даёт reservation.released и allocation.draining; последующее
+  закрытие — только allocation.released, чтобы длительность и отмена не учитывались дважды.
+  current_lease возвращает лишь живой use. Новый внутренний proxy_use_lease читает canonical row
+  этой генерации даже после expiry только для метаданных события, не для разрешения владения.
+  Отсутствующий row считается orphaned без придуманного срока. Heartbeat/TTL-индексы не меняются.
+  MetricsHook даёт групповые gauges slots/pending и счётчики отказов попыток acquire/confirm/finalize;
+  они best effort и не являются частью rollback приложения. Длительности резерва, количество
+  освобождений по expiry и задержка cleanup вычисляются из committed событий в идемпотентных
+  rollups и доступны analytics.series (sum/count для длительностей). Resource ID labels запрещены.
+  Gauge — снимок отдельной space/group; глобальная атомарность между пространствами не обещается.
+  Новых запросов на heartbeat нет. DDL head остаётся 0048.
+
+- **D-350** (PA5.1/R14, 2026-11-24): обнаружен и воспроизведён orphan use: canonical row потерян,
+  managed history открыта, binding сохранён. Обычный expire начинает с canonical leases и не
+  обнаруживает такую историю. Отдельный ограниченный keyset-проход использует уже существующий
+  partial index открытой history (space_id, lease_id); новый индекс и миграция не нужны.
+  Discovery рассматривает до limit открытых строк, managed references фильтруются после него,
+  чтобы sparse filter не превращал LIMIT в неограниченный обход legacy/live rows. Граница цикла
+  фиксирована, курсор CAS продвигается после commit. В своей TX блокируются identity, затем
+  history в порядке ID через SKIP LOCKED. Proxy/allocator не затрагиваются, поэтому их rank
+  пропущен, обратного захвата нет. Перед UPDATE проверяется отсутствие canonical generation
+  с теми же space/identity/lease ID, независимо от expires_at: expired row относится к обычному
+  expire. Старую открытую history можно закрыть при новом live use того же binding; новая история
+  и текущая аренда не меняются. Закрытие lost фиксирует время обнаружения и reason orphaned,
+  не выводит TTL из history/heartbeat, не исправляет throttle и не снимает постоянную пару.
+  Журнальный lease.lost записывается в той же TX. Для отсутствующей identity envelope identity_id
+  остаётся null, чтобы flush не захватывал заново возможную пересозданную identity после history.
+  Повторный/параллельный проход не даёт второго события. Обычная legacy history без allocation
+  reference не меняется. Maintenance и публичный cleanup выполняют этот третий проход отдельно;
+  lazy capacity recovery остаётся двумя TX, закрытие history не является восстановлением слота.
+
+- **D-351** (PA5.1/R12, 2026-11-24): положительный автоматический promotion reserved требует
+  нового принятого факта из удовлетворённой ветки bind_when. Аудит воспроизвёл технический fault
+  с retry/cooling, который подтверждал резерв по старому auth=authenticated. Итоговый snapshot
+  остаётся обязательным: доказательство содержит пары (region, key) и значения только принятых
+  проекций APPLIED/UNCHANGED, pin/stale исключены. Значение должно совпадать с конечным snapshot.
+  AllOf допускает исторические предусловия, но требует новое доказательство хотя бы одного
+  удовлетворённого дочернего правила. AnyOf требует его в совпавшей ветке: новая не совпавшая
+  availability не подтверждает старый auth из соседней ветки. Это правило применяется рекурсивно
+  к композиции сервиса и пула, без callback или жёстких значений «валидности».
+  Login/adopt/revalidate/sync/verification/mark_authenticated/cooling/fault передают принятые
+  факты явно. У verify_session VALID принятое validity-наблюдение доказывает только проверенный
+  auth-slot, глобальный auth при этом не переопределяется. Fault может подтверждать назначение,
+  если приложение явно объявило критерий на принятую бизнес-проекцию (например standing=limited
+  или availability=cooling); простой сбой не подменяет auth-проверку. Уже bound не требует нового
+  promotion-доказательства для идемпотентного результата. Отрицательное правило по полному снимку
+  сохраняет приоритет. Ручной confirm — явное доверенное решение приложения, его canonical
+  условия/fence/generation проверяются как прежде. Новый proof локален команде, не сохраняется
+  в request и не расширяет права старого lease; policy/subject/revision guards остаются обязательными.
+
+- **D-352** (PA5.1/R15, 2026-11-24): совместимость проверяется исходными regression-тестами,
+  включая SQL-бюджет импорта. Состояние capacity читается через общий owner пула: snapshot Service
+  не владеет переходами low/empty/ok. Потеря свободного места между выбором proxy и его lock/claim
+  даёт внутренний ProxyCapacityChanged. Acquire откатывает всю TX и перечитывает доступные proxy,
+  максимум 20 повторов, не расходуя identity candidate budget на откатившийся выбор. Захвата нового
+  proxy после уже взятого lock нет; исключение остаётся LeaseUnavailable для внутренних вызывающих.
+  Детерминированный PG barrier заставляет пять кандидатов выбрать один proxy при двух адресах
+  вместимостью два: оба режима дают четыре аренды и один отказ, счётчики 2+2.
+  При импорте свежие identity уже вставлены текущей TX и не могут иметь прежних назначений по FK.
+  Их identity/link targets по-прежнему блокируются до proxy, но поиск прежних ledger/binding и
+  finalization выполняются только для существующих identity либо новых managed-привязок.
+  Пулы с override не обходятся по текущему service policy: существующие identity проверяются всегда.
+  Это сохраняет постоянный SQL-бюджет импорта без proxy и прежние правила trusted import.

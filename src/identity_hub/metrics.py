@@ -39,8 +39,21 @@ _BUILTIN_LABELS: dict[str, frozenset[str]] = {
     "identity_hub_lease_wait_seconds": frozenset({"space", "service", "pool", "outcome"}),
     "identity_hub_operation_duration_seconds": frozenset({"space", "service", "operation", "status"}),
     "identity_hub_pool_available": frozenset({"space", "service", "pool"}),
+    "identity_hub_proxy_slots": frozenset({"space", "group", "state"}),
+    "identity_hub_proxy_cleanup_pending": frozenset({"space", "group"}),
 }
-_FORBIDDEN_LABELS = frozenset({"identity_id", "lease_id", "event_id", "run_id", "external_ref"})
+_FORBIDDEN_LABELS = frozenset(
+    {
+        "identity_id",
+        "lease_id",
+        "event_id",
+        "run_id",
+        "external_ref",
+        "proxy_id",
+        "allocation_id",
+        "binding_id",
+    }
+)
 
 
 class MetricsHook(Protocol):
@@ -265,3 +278,30 @@ class MetricsReporter:
             record_metric(hook, "gauge", "identity_hub_dispatcher_cursor_lag", lag, consumer=consumer)
         for queue, size in snapshot.delivery_queue.items():
             record_metric(hook, "gauge", "identity_hub_delivery_queue", size, queue=queue)
+        for space in await self.hub._store.maintenance_spaces():
+            async with self.hub._store.transaction(space) as tx:
+                groups = await tx.proxy_pool_capacities()
+            for group in groups:
+                for state, value in (
+                    ("bound", group.bound_count),
+                    ("reserved", group.reserved_count),
+                    ("draining", group.draining_count),
+                    ("occupied", group.occupied_count),
+                ):
+                    record_metric(
+                        hook,
+                        "gauge",
+                        "identity_hub_proxy_slots",
+                        value,
+                        space=space.slug,
+                        group=group.pool,
+                        state=state,
+                    )
+                record_metric(
+                    hook,
+                    "gauge",
+                    "identity_hub_proxy_cleanup_pending",
+                    group.cleanup_pending_count,
+                    space=space.slug,
+                    group=group.pool,
+                )

@@ -31,6 +31,8 @@ from identity_hub.domain.regions import Command
 from identity_hub.enums import AuthState
 from identity_hub.errors import NotFound, TransitionNotAllowed, ValidationFailed
 from identity_hub.events import EventDraft
+from identity_hub.proxy_finalization import finalize as finalize_proxy
+from identity_hub.proxy_finalization import prepare as prepare_proxy
 from identity_hub.state import DEFAULT_SLOT, apply_region_change
 from identity_hub.store.base import CredentialRow, IdempotencyRequest, IdentityRow, StoreTx
 
@@ -79,11 +81,12 @@ class SecretsAdminMixin(SpaceBase):
                 tx, idempotency_key, "replace_credentials", command, model
             ):
                 return
-            await tx.lock_identities([identity_id])
+            await prepare_proxy(tx, identity_id)
             row = await self._identity(tx, identity_id)
             await tx.put_credentials(identity_id, payload, value_fingerprint=value_fingerprint)
             if reset_auth:
                 await _reset_auth_after_credentials(self, tx, row, actor=actor)
+                await finalize_proxy(self, tx, identity_id, actor=actor, reason="credentials_reset_auth")
             await self._emit(
                 tx,
                 EventDraft(
@@ -305,7 +308,7 @@ class CredentialsMixin(SpaceBase):
         payload = self.hub._seal_stored_model(model, credential_associated_data(identity_id, kind, name))
         value_fingerprint = self.hub._value_fingerprint(model)
         async with self._tx() as tx:
-            await tx.lock_identities([identity_id])
+            await prepare_proxy(tx, identity_id)
             row = await self._identity(tx, identity_id)
             current = await tx.get_credential(identity_id, kind, name)
             if current is not None and current[1].lifecycle == REVOKED:
@@ -324,6 +327,7 @@ class CredentialsMixin(SpaceBase):
             )
             if reset_auth:
                 await _reset_auth_after_credentials(self, tx, row, actor=actor)
+                await finalize_proxy(self, tx, identity_id, actor=actor, reason="credentials_reset_auth")
             return stored
 
     async def _credential_list(self, identity_id: UUID) -> tuple[list[CredentialRow], datetime]:
